@@ -3,6 +3,37 @@ import type { Reservation, Channel, Room, CleaningStatus } from "@/types/reserva
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
+// ─── Auth: exchange long-lived token → short-lived access token ───────────────
+// Beds24 V2 uses a two-step auth: the "life-long token" (BEDS24_API_KEY) must
+// be exchanged for a short-lived access token before making API calls.
+// We cache the access token in module scope to avoid re-auth on every request.
+let cachedAccessToken: string | null = null;
+let tokenExpiresAt = 0;
+
+async function getAccessToken(refreshToken: string): Promise<string> {
+  if (cachedAccessToken && Date.now() < tokenExpiresAt) {
+    return cachedAccessToken;
+  }
+
+  const res = await fetch(`${BEDS24_API_BASE}/authentication/token`, {
+    method: "GET",
+    headers: { token: refreshToken },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Beds24 auth ${res.status}: ${text}`);
+  }
+
+  const json = await res.json();
+  // Response: { token: string, expiresIn: number (seconds) }
+  cachedAccessToken = json.token as string;
+  // Refresh 60s before expiry to avoid edge cases
+  tokenExpiresAt = Date.now() + (json.expiresIn - 60) * 1000;
+  return cachedAccessToken;
+}
+
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 // Map Beds24 unitId → your Room name.
 // To find your unit IDs: hit /api/bookings?raw=true and look at the `roomId` field.
@@ -99,7 +130,8 @@ function mapToReservation(b: Beds24Booking): Reservation {
 }
 
 // ─── Fetch all pages from Beds24 ──────────────────────────────────────────────
-async function fetchAllBookings(token: string): Promise<Beds24Booking[]> {
+async function fetchAllBookings(refreshToken: string): Promise<Beds24Booking[]> {
+  const accessToken = await getAccessToken(refreshToken);
   const all: Beds24Booking[] = [];
 
   // 1 year back → 1 year forward
@@ -118,7 +150,7 @@ async function fetchAllBookings(token: string): Promise<Beds24Booking[]> {
     if (pageToken) params.set("pageToken", pageToken);
 
     const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
     });
 
