@@ -15,13 +15,10 @@ import {
 } from "@/utils/invoiceUtils";
 import type { PaymentQRInfo } from "@/utils/invoiceUtils";
 
-// Approximate EUR → CZK for QR amount (replace with live rate or real CZK prices in production)
-const EUR_TO_CZK = 25;
-
-function buildPaymentQRInfo(reservationNumber: string, priceEur: number): PaymentQRInfo {
+function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): PaymentQRInfo {
   const invoiceNum = generateInvoiceNumber(reservationNumber);
   const vs = invoiceNum.replace(/\D/g, "");
-  const amountCZK = priceEur * EUR_TO_CZK;
+  const amountCZK = priceCZK;
   const spdString = `SPD*1.0*ACC:${PAYMENT_IBAN}*AM:${amountCZK.toFixed(2)}*CC:CZK*VS:${vs}*MSG:Baker House Apartments`;
   return { spdString, vs, amountCZK };
 }
@@ -822,7 +819,7 @@ export default function ReservationDrawer({
                       <div>
                         <span className="text-gray-400">Amount</span>
                         <p className="font-semibold text-indigo-700">
-                          {Math.round(reservation.price * EUR_TO_CZK).toLocaleString("cs-CZ")} Kč
+                          {Math.round(reservation.price).toLocaleString("cs-CZ")} Kč
                         </p>
                       </div>
                     </div>

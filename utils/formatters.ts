@@ -4,7 +4,7 @@ export function formatDate(iso: string): string {
   return `${day}/${month}/${year}`;
 }
 
-/** Format number as EUR currency string */
+/** Format number as CZK currency string */
 export function formatCurrency(amount: number): string {
-  return `€${amount.toFixed(2)}`;
+  return `${Math.round(amount).toLocaleString("cs-CZ")} Kč`;
 }
