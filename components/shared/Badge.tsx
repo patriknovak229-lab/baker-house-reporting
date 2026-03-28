@@ -11,7 +11,8 @@ interface BadgeProps {
     | "gray"
     | "gold"
     | "coral"
-    | "indigo";
+    | "indigo"
+    | "teal";
   size?: "sm" | "xs";
 }
 
@@ -24,6 +25,7 @@ const variantClasses: Record<BadgeProps["variant"], string> = {
   gold: "bg-yellow-100 text-yellow-800",
   coral: "bg-rose-100 text-rose-700",
   indigo: "bg-indigo-100 text-indigo-800",
+  teal: "bg-teal-100 text-teal-800",
 };
 
 export default function Badge({

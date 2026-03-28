@@ -31,6 +31,7 @@ const PAGE_SIZE = 10;
 function channelBadgeVariant(channel: Channel) {
   if (channel === "Booking.com") return "blue";
   if (channel === "Airbnb") return "coral";
+  if (channel === "Direct-Phone") return "teal";
   return "green";
 }
 

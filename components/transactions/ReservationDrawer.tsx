@@ -398,6 +398,7 @@ export default function ReservationDrawer({
   };
 
   const isOTAChannel = reservation.channel === "Booking.com" || reservation.channel === "Airbnb";
+  const isDirectPhone = reservation.channel === "Direct-Phone";
   const nationalityFlag = countryCodeToFlag(reservation.nationality);
   const nationalityName = countryCodeToName(reservation.nationality);
 
@@ -488,7 +489,7 @@ export default function ReservationDrawer({
 
           {/* 3. Payment */}
           <section>
-            <SectionTitle source={isOTAChannel ? reservation.channel : "Stripe"}>
+            <SectionTitle source={isOTAChannel ? reservation.channel : isDirectPhone ? "Direct" : "Stripe"}>
               Payment
             </SectionTitle>
 

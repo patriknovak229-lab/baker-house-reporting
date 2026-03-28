@@ -12,10 +12,11 @@ const UNIT_MAP: Record<number, Room> = {
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
-// Beds24 apiSource already returns the display name we need.
-function mapChannel(apiSource = ""): Channel {
+// referer "PhoneDirect." means reservation came via phone/email, not web checkout.
+function mapChannel(apiSource = "", referer = ""): Channel {
   if (apiSource === "Booking.com") return "Booking.com";
   if (apiSource === "Airbnb") return "Airbnb";
+  if (referer.toLowerCase().includes("phone")) return "Direct-Phone";
   return "Direct";
 }
 
@@ -63,6 +64,7 @@ interface Beds24Booking {
   phone: string;
   country2: string | null; // uppercase ISO 2-letter (e.g. "CZ", "UA")
   apiSource: string;    // "Booking.com" | "Airbnb" | "Direct"
+  referer: string;      // e.g. "PhoneDirect." for phone/email bookings
   bookingTime: string;  // ISO timestamp
   status: string;       // "new" | "confirmed" | "cancelled"
   comments: string;     // contains "PRE-PAID" for prepaid reservations
@@ -83,7 +85,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     reservationNumber: `BH-${b.id}`,
     firstName: b.firstName ?? "",
     lastName: b.lastName ?? "",
-    channel: mapChannel(b.apiSource),
+    channel: mapChannel(b.apiSource, b.referer),
     room: mapRoom(b.roomId),
     checkInDate: b.arrival ?? "",
     checkOutDate: b.departure ?? "",
