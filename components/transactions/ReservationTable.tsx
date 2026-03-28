@@ -189,8 +189,15 @@ export default function ReservationTable({
                     onClick={() => onRowClick(res)}
                     className="hover:bg-indigo-50 cursor-pointer transition-colors"
                   >
-                    <td className="px-3 py-3 text-gray-500 font-mono text-xs whitespace-nowrap">
-                      {res.reservationNumber}
+                    <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-500">{res.reservationNumber}</span>
+                        {res.reservationDate === new Date().toISOString().slice(0, 10) && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">
+                            New
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-3 font-medium text-gray-900 whitespace-nowrap">
                       <span className="mr-1" title={res.nationality}>
