@@ -6,7 +6,7 @@ import type { Room } from "@/types/reservation";
 export const EUR_TO_CZK = 25;
 
 // ── Rooms config ─────────────────────────────────────────────────────────────
-export const ALL_ROOMS: Room[] = ["Apartment 101", "Apartment 202", "Apartment 303"];
+export const ALL_ROOMS: Room[] = ["K.201 (2BR)", "K.202 (1BR)", "K.203 (1BR)"];
 
 // ── Channel cost config ───────────────────────────────────────────────────────
 // commissionRate: % of GBV taken by the platform as their fee

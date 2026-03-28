@@ -79,7 +79,7 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
   const [open, setOpen] = useState(false);
 
   const channels: Channel[] = ["Booking.com", "Airbnb", "Direct"];
-  const rooms: Room[] = ["Apartment 101", "Apartment 202", "Apartment 303"];
+  const rooms: Room[] = ["K.201 (2BR)", "K.202 (1BR)", "K.203 (1BR)"];
   const cleaningStatuses: CleaningStatus[] = [
     "Pending",
     "In Progress",

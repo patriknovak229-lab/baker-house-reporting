@@ -5,13 +5,10 @@ const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 // Derived from raw response inspection. Confirm in Beds24 → Properties → Rooms.
-// 648596 = K.202 confirmed from booking note "Transferred from K.203 to K.202"
-// 648772 = K.101 (the other 1-bedroom unit, by elimination)
-// 656437 = K.303 (2-bedroom with balcony, confirmed from apiMessage)
 const UNIT_MAP: Record<number, Room> = {
-  648596: "Apartment 202",
-  648772: "Apartment 101",
-  656437: "Apartment 303",
+  656437: "K.201 (2BR)",
+  648596: "K.202 (1BR)",
+  648772: "K.203 (1BR)",
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
@@ -24,7 +21,7 @@ function mapChannel(apiSource = ""): Channel {
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 function mapRoom(roomId: number): Room {
-  return UNIT_MAP[roomId] ?? "Apartment 101";
+  return UNIT_MAP[roomId] ?? "K.202 (1BR)";
 }
 
 // ─── Cleaning status (date-based until cleaning app is wired) ──────────────────
