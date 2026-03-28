@@ -30,13 +30,20 @@ function deriveCleaningStatus(departure: string): CleaningStatus {
   return departure < today ? "Completed" : "Pending";
 }
 
-// ─── Payment status — derived from Beds24 comments field ──────────────────────
-// Booking.com pre-paid reservations include "PRE-PAID" in the comments string.
-// Airbnb payouts are handled by Airbnb; treat as Paid.
-// Direct bookings default to Unpaid until Stripe is connected.
+// ─── Payment status — derived from Beds24 deposit field ───────────────────────
+// deposit reflects what has been recorded as received in Beds24 (e.g. bank transfer marked paid).
+// PRE-PAID in comments = OTA handled payment; Airbnb always pays out to host.
 function derivePayment(b: Beds24Booking): { paymentStatus: PaymentStatus; amountPaid: number } {
-  if (b.comments?.includes("PRE-PAID")) return { paymentStatus: "Paid", amountPaid: b.price };
-  if (b.apiSource === "Airbnb") return { paymentStatus: "Paid", amountPaid: b.price };
+  const price = b.price ?? 0;
+  const deposit = b.deposit ?? 0;
+
+  // OTA pre-paid: full amount collected by the channel
+  if (b.comments?.includes("PRE-PAID")) return { paymentStatus: "Paid", amountPaid: price };
+  // Airbnb: payout handled by Airbnb
+  if (b.apiSource === "Airbnb") return { paymentStatus: "Paid", amountPaid: price };
+  // Direct / other: use deposit field recorded in Beds24
+  if (deposit >= price && price > 0) return { paymentStatus: "Paid", amountPaid: deposit };
+  if (deposit > 0) return { paymentStatus: "Partially Paid", amountPaid: deposit };
   return { paymentStatus: "Unpaid", amountPaid: 0 };
 }
 
@@ -49,6 +56,7 @@ interface Beds24Booking {
   numAdult: number;
   numChild: number;
   price: number;        // total in CZK
+  deposit: number;      // amount received/recorded in Beds24 (bank transfer, etc.)
   firstName: string;
   lastName: string;
   email: string;
