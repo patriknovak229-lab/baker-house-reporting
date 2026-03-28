@@ -42,6 +42,7 @@ export interface Reservation {
   amountPaid: number; // CZK
 
   // Locally managed (editable)
+  additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)
   notes: string;
   // Flag overrides: true = force on, false = force off, missing key = follow auto rule
   manualFlagOverrides: Partial<Record<CustomerFlag, boolean>>;

@@ -101,6 +101,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     paymentStatus,
     amountPaid,
     // Locally managed — Redis will layer these in Phase 3
+    additionalEmail: "",
     notes: "",
     manualFlagOverrides: {},
     ratingStatus: "none",

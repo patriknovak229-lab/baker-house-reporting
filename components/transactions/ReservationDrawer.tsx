@@ -53,6 +53,47 @@ function SectionTitle({
   );
 }
 
+function GuestEmailInput({ onSave }: { onSave: (email: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1 text-[11px] text-indigo-500 hover:text-indigo-700"
+      >
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+        </svg>
+        Add guest email
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        autoFocus
+        type="email"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="guest@email.com"
+        className="flex-1 text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && value.trim()) { onSave(value.trim()); setOpen(false); }
+          if (e.key === "Escape") { setOpen(false); setValue(""); }
+        }}
+      />
+      <button
+        onClick={() => { if (value.trim()) { onSave(value.trim()); setOpen(false); } }}
+        className="text-xs px-2 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600"
+      >
+        Save
+      </button>
+      <button onClick={() => { setOpen(false); setValue(""); }} className="text-gray-400 hover:text-gray-600 text-xs">✕</button>
+    </div>
+  );
+}
+
 function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -473,7 +514,61 @@ export default function ReservationDrawer({
             <div className="grid grid-cols-2 gap-3">
               <ReadOnlyField label="First Name" value={reservation.firstName} />
               <ReadOnlyField label="Last Name" value={reservation.lastName} />
-              <ReadOnlyField label="Email" value={reservation.email} />
+              {/* Email — OTA conduit address with truncation + copy + additional email */}
+              <div className="col-span-2">
+                <p className="text-[11px] text-gray-400 mb-0.5">Email (channel)</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm text-gray-800 truncate max-w-[220px]" title={reservation.email}>
+                    {reservation.email || "—"}
+                  </p>
+                  {reservation.email && (
+                    <button
+                      onClick={() => navigator.clipboard.writeText(reservation.email)}
+                      title="Copy email"
+                      className="shrink-0 text-gray-400 hover:text-gray-600"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+              {/* Additional guest email */}
+              <div className="col-span-2">
+                {reservation.additionalEmail ? (
+                  <div>
+                    <p className="text-[11px] text-gray-400 mb-0.5">Guest Email</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm text-gray-800 truncate max-w-[220px]" title={reservation.additionalEmail}>
+                        {reservation.additionalEmail}
+                      </p>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(reservation.additionalEmail)}
+                        title="Copy guest email"
+                        className="shrink-0 text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => onUpdate({ ...reservation, additionalEmail: "" })}
+                        title="Remove guest email"
+                        className="shrink-0 text-gray-300 hover:text-red-400"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <GuestEmailInput
+                    onSave={(email) => onUpdate({ ...reservation, additionalEmail: email })}
+                  />
+                )}
+              </div>
               <ReadOnlyField label="Phone" value={reservation.phone} />
               <ReadOnlyField label="Guests" value={String(reservation.numberOfGuests)} />
               {reservation.nationality && (
