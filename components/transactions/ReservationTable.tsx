@@ -14,6 +14,7 @@ type SortField = keyof Pick<
   | "room"
   | "checkInDate"
   | "checkOutDate"
+  | "reservationDate"
   | "numberOfNights"
   | "price"
   | "cleaningStatus"
@@ -108,7 +109,7 @@ export default function ReservationTable({
   allReservations,
   onRowClick,
 }: ReservationTableProps) {
-  const [sortField, setSortField] = useState<SortField>("checkInDate");
+  const [sortField, setSortField] = useState<SortField>("reservationDate");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
 
@@ -139,6 +140,7 @@ export default function ReservationTable({
     { key: "firstName", label: "Guest" },
     { key: "channel", label: "Channel" },
     { key: "room", label: "Room" },
+    { key: "reservationDate", label: "Booked" },
     { key: "checkInDate", label: "Check-in" },
     { key: "checkOutDate", label: "Check-out" },
     { key: "numberOfNights", label: "Nights", align: "right" },
@@ -171,7 +173,7 @@ export default function ReservationTable({
           <tbody className="bg-white divide-y divide-gray-100">
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-gray-400 text-sm">
+                <td colSpan={12} className="px-4 py-10 text-center text-gray-400 text-sm">
                   No reservations match your filters.
                 </td>
               </tr>
@@ -207,6 +209,9 @@ export default function ReservationTable({
                       </Badge>
                     </td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{res.room}</td>
+                    <td className="px-3 py-3 text-gray-500 whitespace-nowrap text-xs">
+                      {formatDate(res.reservationDate)}
+                    </td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">
                       {formatDate(res.checkInDate)}
                     </td>
@@ -225,9 +230,14 @@ export default function ReservationTable({
                       </Badge>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      <Badge variant={paymentBadgeVariant(res.paymentStatus)} size="xs">
-                        {res.paymentStatus}
-                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant={paymentBadgeVariant(res.paymentStatusOverride ?? res.paymentStatus)} size="xs">
+                          {res.paymentStatusOverride ?? res.paymentStatus}
+                        </Badge>
+                        {res.paymentStatusOverride && (
+                          <span className="text-[10px] text-amber-500" title="Manually overridden">M</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1">

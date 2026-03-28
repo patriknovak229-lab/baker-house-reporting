@@ -53,6 +53,69 @@ function SectionTitle({
   );
 }
 
+const PAYMENT_STATUSES: Reservation["paymentStatus"][] = ["Unpaid", "Partially Paid", "Paid", "Refunded"];
+
+function paymentBadgeVariant(status: Reservation["paymentStatus"]) {
+  if (status === "Paid") return "green";
+  if (status === "Partially Paid") return "amber";
+  if (status === "Unpaid") return "red";
+  return "gray";
+}
+
+function PaymentStatusControl({
+  derived,
+  override,
+  onOverride,
+}: {
+  derived: Reservation["paymentStatus"];
+  override: Reservation["paymentStatus"] | null;
+  onOverride: (v: Reservation["paymentStatus"] | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const effective = override ?? derived;
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 mb-1">Status</p>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Badge variant={paymentBadgeVariant(effective)}>{effective}</Badge>
+        {override && (
+          <span className="text-[10px] text-amber-500 font-medium">manual</span>
+        )}
+        {!open && (
+          <button
+            onClick={() => setOpen(true)}
+            className="text-[10px] text-gray-400 hover:text-indigo-500 underline underline-offset-2"
+          >
+            override
+          </button>
+        )}
+        {open && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {PAYMENT_STATUSES.map((s) => (
+              <button
+                key={s}
+                onClick={() => { onOverride(s); setOpen(false); }}
+                className={`text-[10px] px-1.5 py-0.5 rounded border ${s === effective ? "bg-indigo-100 border-indigo-300 text-indigo-700" : "border-gray-200 text-gray-600 hover:border-indigo-300"}`}
+              >
+                {s}
+              </button>
+            ))}
+            {override && (
+              <button
+                onClick={() => { onOverride(null); setOpen(false); }}
+                className="text-[10px] text-red-400 hover:text-red-600 ml-1"
+              >
+                clear
+              </button>
+            )}
+            <button onClick={() => setOpen(false)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function GuestEmailInput({ onSave }: { onSave: (email: string) => void }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -590,23 +653,12 @@ export default function ReservationDrawer({
 
             {isOTAChannel ? (
               <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <div>
-                    <p className="text-[11px] text-gray-400 mb-1">Status</p>
-                    <Badge
-                      variant={
-                        reservation.paymentStatus === "Paid"
-                          ? "green"
-                          : reservation.paymentStatus === "Unpaid"
-                            ? "red"
-                            : reservation.paymentStatus === "Partially Paid"
-                              ? "amber"
-                              : "gray"
-                      }
-                    >
-                      {reservation.paymentStatus}
-                    </Badge>
-                  </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <PaymentStatusControl
+                    derived={reservation.paymentStatus}
+                    override={reservation.paymentStatusOverride}
+                    onOverride={(v) => onUpdate({ ...reservation, paymentStatusOverride: v })}
+                  />
                   <div>
                     <p className="text-[11px] text-gray-400 mb-1">Total</p>
                     <p className="text-sm font-medium text-gray-800">
@@ -621,22 +673,11 @@ export default function ReservationDrawer({
             ) : (
               <div className="space-y-2">
                 <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <p className="text-[11px] text-gray-400 mb-1">Status</p>
-                    <Badge
-                      variant={
-                        reservation.paymentStatus === "Paid"
-                          ? "green"
-                          : reservation.paymentStatus === "Unpaid"
-                            ? "red"
-                            : reservation.paymentStatus === "Partially Paid"
-                              ? "amber"
-                              : "gray"
-                      }
-                    >
-                      {reservation.paymentStatus}
-                    </Badge>
-                  </div>
+                  <PaymentStatusControl
+                    derived={reservation.paymentStatus}
+                    override={reservation.paymentStatusOverride}
+                    onOverride={(v) => onUpdate({ ...reservation, paymentStatusOverride: v })}
+                  />
                   <ReadOnlyField label="Total Price" value={formatCurrency(reservation.price)} />
                   <ReadOnlyField label="Amount Paid" value={formatCurrency(reservation.amountPaid)} />
                 </div>

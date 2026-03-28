@@ -43,6 +43,7 @@ export interface Reservation {
 
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)
+  paymentStatusOverride: PaymentStatus | null; // manual override; null = use derived value
   notes: string;
   // Flag overrides: true = force on, false = force off, missing key = follow auto rule
   manualFlagOverrides: Partial<Record<CustomerFlag, boolean>>;
