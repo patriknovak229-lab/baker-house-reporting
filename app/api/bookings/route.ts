@@ -3,6 +3,36 @@ import type { Reservation, Channel, Room, CleaningStatus } from "@/types/reserva
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
+// ─── Auth: refresh token → short-lived access token ──────────────────────────
+// BEDS24_REFRESH_TOKEN is the permanent token obtained via /api/beds24/setup.
+// We exchange it for a short-lived access token and cache it in module scope.
+let cachedAccessToken: string | null = null;
+let tokenExpiresAt = 0;
+
+async function getAccessToken(): Promise<string> {
+  if (cachedAccessToken && Date.now() < tokenExpiresAt) {
+    return cachedAccessToken;
+  }
+
+  const refreshToken = process.env.BEDS24_REFRESH_TOKEN;
+  if (!refreshToken) throw new Error("BEDS24_REFRESH_TOKEN not set");
+
+  const res = await fetch("https://beds24.com/api/v2/authentication/token", {
+    headers: { token: refreshToken },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Beds24 token refresh ${res.status}: ${text}`);
+  }
+
+  const json = await res.json();
+  cachedAccessToken = json.token as string;
+  tokenExpiresAt = Date.now() + (json.expiresIn - 60) * 1000;
+  return cachedAccessToken!;
+}
+
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 // Map Beds24 unitId → your Room name.
 // To find your unit IDs: hit /api/bookings?raw=true and look at the `roomId` field.
@@ -99,7 +129,8 @@ function mapToReservation(b: Beds24Booking): Reservation {
 }
 
 // ─── Fetch all pages from Beds24 ──────────────────────────────────────────────
-async function fetchAllBookings(accessToken: string): Promise<Beds24Booking[]> {
+async function fetchAllBookings(): Promise<Beds24Booking[]> {
+  const accessToken = await getAccessToken();
   const all: Beds24Booking[] = [];
 
   // 1 year back → 1 year forward
@@ -138,13 +169,8 @@ async function fetchAllBookings(accessToken: string): Promise<Beds24Booking[]> {
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
-  const token = process.env.BEDS24_API_KEY;
-  if (!token) {
-    return NextResponse.json({ error: "BEDS24_API_KEY not set" }, { status: 500 });
-  }
-
   try {
-    const raw = await fetchAllBookings(token);
+    const raw = await fetchAllBookings();
 
     // ?raw=true → return raw Beds24 response for debugging field names / unit IDs
     if (req.nextUrl.searchParams.get("raw") === "true") {
