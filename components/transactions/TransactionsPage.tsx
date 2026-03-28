@@ -1,7 +1,6 @@
 'use client';
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import type { Reservation } from "@/types/reservation";
-import { sampleReservations } from "@/data/sampleData";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
@@ -9,7 +8,33 @@ import ReservationDrawer from "./ReservationDrawer";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 
 export default function TransactionsPage() {
-  const [reservations, setReservations] = useState<Reservation[]>(sampleReservations);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
+
+  const fetchReservations = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/bookings");
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+      const data: Reservation[] = await res.json();
+      setReservations(data);
+      setLastSynced(new Date());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load reservations");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchReservations();
+  }, [fetchReservations]);
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
@@ -83,10 +108,22 @@ export default function TransactionsPage() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-400">
-            Last synced: <span className="text-gray-600">just now</span>
+            Last synced:{" "}
+            <span className="text-gray-600">
+              {lastSynced ? lastSynced.toLocaleTimeString() : "—"}
+            </span>
           </span>
-          <button className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-gray-200 bg-white text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors shadow-sm">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <button
+            onClick={fetchReservations}
+            disabled={isLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-gray-200 bg-white text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <svg
+              className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -94,10 +131,23 @@ export default function TransactionsPage() {
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
               />
             </svg>
-            Sync
+            {isLoading ? "Syncing…" : "Sync"}
           </button>
         </div>
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="mb-5 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>Failed to load reservations: {error}</span>
+          <button onClick={fetchReservations} className="ml-auto font-medium underline underline-offset-2 hover:text-red-900">
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Search + Filters */}
       <div className="space-y-3 mb-5">
@@ -112,11 +162,19 @@ export default function TransactionsPage() {
       </div>
 
       {/* Table */}
-      <ReservationTable
-        reservations={filtered}
-        allReservations={reservations}
-        onRowClick={setSelectedReservation}
-      />
+      {isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-12 rounded-lg bg-gray-100 animate-pulse" />
+          ))}
+        </div>
+      ) : (
+        <ReservationTable
+          reservations={filtered}
+          allReservations={reservations}
+          onRowClick={setSelectedReservation}
+        />
+      )}
 
       {/* Drawer */}
       <ReservationDrawer
