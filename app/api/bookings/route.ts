@@ -1,94 +1,98 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { Reservation, Channel, Room, CleaningStatus } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "@/types/reservation";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
-// Map Beds24 unitId → your Room name.
-// To find your unit IDs: hit /api/bookings?raw=true and look at the `roomId` field.
+// Derived from raw response inspection. Confirm in Beds24 → Properties → Rooms.
+// 648596 = K.202 confirmed from booking note "Transferred from K.203 to K.202"
+// 648772 = K.101 (the other 1-bedroom unit, by elimination)
+// 656437 = K.303 (2-bedroom with balcony, confirmed from apiMessage)
 const UNIT_MAP: Record<number, Room> = {
-  // TODO: fill in after first raw response
-  // 12345: "Apartment 101",
-  // 12346: "Apartment 202",
-  // 12347: "Apartment 303",
+  648596: "Apartment 202",
+  648772: "Apartment 101",
+  656437: "Apartment 303",
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
-function mapChannel(raw = ""): Channel {
-  const lower = raw.toLowerCase();
-  if (lower.includes("booking")) return "Booking.com";
-  if (lower.includes("airbnb")) return "Airbnb";
+// Beds24 apiSource already returns the display name we need.
+function mapChannel(apiSource = ""): Channel {
+  if (apiSource === "Booking.com") return "Booking.com";
+  if (apiSource === "Airbnb") return "Airbnb";
   return "Direct";
 }
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
-function mapRoom(unitId: number, roomName?: string): Room {
-  if (UNIT_MAP[unitId]) return UNIT_MAP[unitId];
-  // Fallback: try to match by name pattern
-  const name = roomName ?? "";
-  if (name.includes("101")) return "Apartment 101";
-  if (name.includes("202")) return "Apartment 202";
-  if (name.includes("303")) return "Apartment 303";
-  return "Apartment 101"; // last resort
+function mapRoom(roomId: number): Room {
+  return UNIT_MAP[roomId] ?? "Apartment 101";
 }
 
 // ─── Cleaning status (date-based until cleaning app is wired) ──────────────────
-function deriveCleaningStatus(checkOut: string): CleaningStatus {
+function deriveCleaningStatus(departure: string): CleaningStatus {
   const today = new Date().toISOString().slice(0, 10);
-  return checkOut < today ? "Completed" : "Pending";
+  return departure < today ? "Completed" : "Pending";
 }
 
-// ─── Beds24 V2 booking shape ───────────────────────────────────────────────────
-// Field names based on Beds24 V2 REST API.
-// If fields come back undefined, hit /api/bookings?raw=true to inspect the real shape.
+// ─── Payment status — derived from Beds24 comments field ──────────────────────
+// Booking.com pre-paid reservations include "PRE-PAID" in the comments string.
+// Airbnb payouts are handled by Airbnb; treat as Paid.
+// Direct bookings default to Unpaid until Stripe is connected.
+function derivePayment(b: Beds24Booking): { paymentStatus: PaymentStatus; amountPaid: number } {
+  if (b.comments?.includes("PRE-PAID")) return { paymentStatus: "Paid", amountPaid: b.price };
+  if (b.apiSource === "Airbnb") return { paymentStatus: "Paid", amountPaid: b.price };
+  return { paymentStatus: "Unpaid", amountPaid: 0 };
+}
+
+// ─── Beds24 V2 booking shape (confirmed from raw response) ────────────────────
 interface Beds24Booking {
   id: number;
   roomId: number;
-  roomName?: string;
-  checkIn: string;      // YYYY-MM-DD
-  checkOut: string;     // YYYY-MM-DD
+  arrival: string;      // YYYY-MM-DD (check-in)
+  departure: string;    // YYYY-MM-DD (check-out)
   numAdult: number;
   numChild: number;
-  price: number;        // total in property currency
-  guestFirstName: string;
-  guestLastName: string;
-  guestEmail: string;
-  guestPhone: string;
-  guestCountry: string; // ISO 2-letter
-  channel: string;      // booking source
-  created: string;      // ISO timestamp
-  status: string;       // "confirmed" | "cancelled" | ...
+  price: number;        // total in CZK
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  country2: string | null; // uppercase ISO 2-letter (e.g. "CZ", "UA")
+  apiSource: string;    // "Booking.com" | "Airbnb" | "Direct"
+  bookingTime: string;  // ISO timestamp
+  status: string;       // "new" | "confirmed" | "cancelled"
+  comments: string;     // contains "PRE-PAID" for prepaid reservations
 }
 
 // ─── Map Beds24 booking → our Reservation type ────────────────────────────────
 function mapToReservation(b: Beds24Booking): Reservation {
   const nights =
-    b.checkIn && b.checkOut
+    b.arrival && b.departure
       ? Math.round(
-          (new Date(b.checkOut).getTime() - new Date(b.checkIn).getTime()) / 86_400_000
+          (new Date(b.departure).getTime() - new Date(b.arrival).getTime()) / 86_400_000
         )
       : 0;
 
+  const { paymentStatus, amountPaid } = derivePayment(b);
+
   return {
     reservationNumber: `BH-${b.id}`,
-    firstName: b.guestFirstName ?? "",
-    lastName: b.guestLastName ?? "",
-    channel: mapChannel(b.channel),
-    room: mapRoom(b.roomId, b.roomName),
-    checkInDate: b.checkIn ?? "",
-    checkOutDate: b.checkOut ?? "",
-    reservationDate: b.created ? b.created.slice(0, 10) : "",
+    firstName: b.firstName ?? "",
+    lastName: b.lastName ?? "",
+    channel: mapChannel(b.apiSource),
+    room: mapRoom(b.roomId),
+    checkInDate: b.arrival ?? "",
+    checkOutDate: b.departure ?? "",
+    reservationDate: b.bookingTime ? b.bookingTime.slice(0, 10) : "",
     numberOfNights: nights,
     numberOfGuests: (b.numAdult ?? 0) + (b.numChild ?? 0),
-    email: b.guestEmail ?? "",
-    phone: b.guestPhone ?? "",
+    email: b.email ?? "",
+    phone: b.phone ?? "",
     price: b.price ?? 0,
-    nationality: (b.guestCountry ?? "").toUpperCase(),
+    nationality: (b.country2 ?? "").toUpperCase(),
     // Cleaning: date-derived until cleaning app is connected
-    cleaningStatus: deriveCleaningStatus(b.checkOut ?? ""),
-    // Payment: defaults until Stripe is connected
-    paymentStatus: "Unpaid",
-    amountPaid: 0,
+    cleaningStatus: deriveCleaningStatus(b.departure ?? ""),
+    paymentStatus,
+    amountPaid,
     // Locally managed — Redis will layer these in Phase 3
     notes: "",
     manualFlagOverrides: {},
@@ -109,8 +113,8 @@ async function fetchAllBookings(token: string): Promise<Beds24Booking[]> {
   to.setFullYear(to.getFullYear() + 1);
 
   const params = new URLSearchParams({
-    checkInFrom: from.toISOString().slice(0, 10),
-    checkInTo: to.toISOString().slice(0, 10),
+    arrivalFrom: from.toISOString().slice(0, 10),
+    arrivalTo: to.toISOString().slice(0, 10),
   });
 
   let pageToken: string | undefined;
@@ -146,13 +150,13 @@ export async function GET(req: NextRequest) {
   try {
     const raw = await fetchAllBookings(token);
 
-    // ?raw=true → return raw Beds24 response for debugging field names / unit IDs
+    // ?raw=true → return raw Beds24 response for debugging
     if (req.nextUrl.searchParams.get("raw") === "true") {
       return NextResponse.json(raw);
     }
 
     const reservations = raw
-      .filter((b) => b.status !== "cancelled")
+      .filter((b) => b.status !== "cancelled" && b.status !== "canceled")
       .map(mapToReservation);
 
     return NextResponse.json(reservations);

@@ -31,7 +31,7 @@ export interface Reservation {
   numberOfGuests: number;
   email: string;
   phone: string;
-  price: number; // EUR
+  price: number; // CZK
   nationality: string; // 2-letter ISO country code
 
   // From cleaning app (read-only)
@@ -39,7 +39,7 @@ export interface Reservation {
 
   // From Stripe (read-only)
   paymentStatus: PaymentStatus;
-  amountPaid: number; // EUR
+  amountPaid: number; // CZK
 
   // Locally managed (editable)
   notes: string;
