@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag } from "@/types/reservation";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
+import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
@@ -90,6 +91,28 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
+  const [issuesOpen, setIssuesOpen] = useState(false);
+
+  interface DataIssue {
+    reservation: Reservation;
+    problems: string[];
+  }
+
+  const dataIssues = useMemo<DataIssue[]>(() => {
+    return reservations
+      .filter((r) => r.paymentStatus !== "Refunded")
+      .flatMap((r) => {
+        const problems: string[] = [];
+        if (r.channel === "Booking.com") {
+          if (r.commissionAmount === 0) problems.push("Commission missing");
+          if (r.paymentChargeAmount === 0) problems.push("Payment fee missing");
+        }
+        if (r.channel === "Airbnb") {
+          if (r.commissionAmount === 0) problems.push("Host fee missing");
+        }
+        return problems.length > 0 ? [{ reservation: r, problems }] : [];
+      });
+  }, [reservations]);
 
   const filtered = useMemo(() => {
     return reservations.filter((res) => {
@@ -154,6 +177,9 @@ export default function TransactionsPage() {
 
   return (
     <div className="max-w-screen-2xl mx-auto px-6 py-6">
+      {/* Availability calendar */}
+      {!isLoading && <OccupancyCalendar reservations={reservations} />}
+
       {/* Page header */}
       <div className="flex items-center justify-between mb-5">
         <div>
@@ -202,6 +228,62 @@ export default function TransactionsPage() {
           <button onClick={fetchReservations} className="ml-auto font-medium underline underline-offset-2 hover:text-red-900">
             Retry
           </button>
+        </div>
+      )}
+
+      {/* Data issues panel */}
+      {dataIssues.length > 0 && (
+        <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+          <button
+            onClick={() => setIssuesOpen((o) => !o)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-amber-800 hover:bg-amber-100 transition-colors"
+          >
+            <svg className="w-4 h-4 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <span className="font-medium">
+              {dataIssues.length} data {dataIssues.length === 1 ? "issue" : "issues"} detected
+            </span>
+            <span className="text-amber-500 text-xs ml-1">
+              Missing commission or payment fee data from Beds24
+            </span>
+            <svg
+              className={`w-4 h-4 ml-auto text-amber-400 transition-transform ${issuesOpen ? "rotate-180" : ""}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {issuesOpen && (
+            <div className="border-t border-amber-200 px-4 pb-3">
+              <table className="w-full text-sm mt-3">
+                <thead>
+                  <tr className="border-b border-amber-200">
+                    {["Reservation", "Channel", "Check-in", "Issue"].map((h) => (
+                      <th key={h} className={`pb-2 text-xs font-medium text-amber-700 uppercase tracking-wide ${h === "Issue" ? "text-right" : "text-left"}`}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-100">
+                  {dataIssues.map(({ reservation: r, problems }) => (
+                    <tr
+                      key={r.reservationNumber}
+                      className="hover:bg-amber-100 cursor-pointer"
+                      onClick={() => { setSelectedReservation(r); setIssuesOpen(false); }}
+                    >
+                      <td className="py-2 font-medium text-amber-900">{r.reservationNumber}</td>
+                      <td className="py-2 text-amber-700">{r.channel}</td>
+                      <td className="py-2 text-amber-700">{r.checkInDate}</td>
+                      <td className="py-2 text-right text-amber-600">{problems.join(" · ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

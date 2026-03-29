@@ -79,7 +79,6 @@ export interface FixedCostItem {
 }
 
 export const FIXED_COSTS_MONTHLY: FixedCostItem[] = [
-  { label: "Property Rent", amount: 45_000 },
   { label: "Electricity & Utilities", amount: 8_000 },
   { label: "Software", amount: 2_500 },
 ];
