@@ -108,7 +108,7 @@ function CalendarMonth({ year, month, reservations, isToday }: CalendarMonthProp
                 {day}
               </div>
               {/* 3 room strips */}
-              <div className="flex flex-col gap-px px-0.5 pb-0.5">
+              <div className="flex flex-col gap-px pb-0.5 mx-auto w-[40%]">
                 {ROOMS.map((room) => {
                   const booked = bookedRooms.includes(room);
                   return (
