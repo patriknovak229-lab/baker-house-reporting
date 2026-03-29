@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+/* Explicit keyframe definitions — Tailwind v4's production scanner can miss
+   keyframes that are only referenced via animate-* utilities, causing animations
+   to silently break on Vercel while working locally in dev mode. */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

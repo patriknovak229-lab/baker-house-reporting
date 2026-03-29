@@ -394,6 +394,93 @@ function InvoicePreview({
   );
 }
 
+// ── Payment breakdown ────────────────────────────────────────────────────────
+function BreakdownRow({
+  label,
+  value,
+  bold,
+}: {
+  label: string;
+  value: number;
+  bold?: boolean;
+}) {
+  const isDeduction = value < 0;
+  return (
+    <div className={`flex justify-between items-baseline ${bold ? "font-semibold text-gray-800" : "text-gray-600"}`}>
+      <span>{label}</span>
+      <span className={isDeduction ? "text-red-500" : bold ? "text-gray-900" : ""}>
+        {isDeduction ? `−${formatCurrency(Math.abs(value))}` : formatCurrency(value)}
+      </span>
+    </div>
+  );
+}
+
+// Channels where zero fees is expected and should NOT trigger a warning
+const NO_FEE_CHANNELS: Reservation["channel"][] = ["Direct-Phone"];
+
+function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
+  const [open, setOpen] = useState(false);
+  const { price, commissionAmount, paymentChargeAmount, channel } = reservation;
+  const totalFees = commissionAmount + paymentChargeAmount;
+  const net = price - totalFees;
+  const hasBreakdown = totalFees > 0;
+  const feesAreMissing = !NO_FEE_CHANNELS.includes(channel) && totalFees === 0;
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => hasBreakdown && setOpen((v) => !v)}
+          className={`flex items-center gap-1 text-sm font-medium text-gray-800 transition-colors ${hasBreakdown ? "hover:text-indigo-600 cursor-pointer" : "cursor-default"}`}
+          title={hasBreakdown ? "Click to see fee breakdown" : undefined}
+        >
+          {formatCurrency(price)}
+          {hasBreakdown && (
+            <svg
+              className={`w-3 h-3 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          )}
+        </button>
+        {feesAreMissing && (
+          <span
+            title="Fee data not available from Beds24 for this booking"
+            className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-600 text-[10px] font-bold leading-none shrink-0"
+          >
+            !
+          </span>
+        )}
+      </div>
+      {open && hasBreakdown && (
+        <div className="mt-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2.5 space-y-1.5 text-xs">
+          <BreakdownRow label="Gross Booking Value" value={price} />
+          {commissionAmount > 0 && (
+            <BreakdownRow label={`${channel} commission`} value={-commissionAmount} />
+          )}
+          {paymentChargeAmount > 0 && (
+            <BreakdownRow label="Payment processing fee" value={-paymentChargeAmount} />
+          )}
+          <div className="border-t border-gray-200 pt-1.5">
+            <BreakdownRow label="Net Revenue" value={net} bold />
+          </div>
+          {reservation.amountPaid > 0 && reservation.amountPaid !== price && (
+            <div className="border-t border-gray-200 pt-1.5 text-gray-500">
+              <div className="flex justify-between items-baseline">
+                <span>Deposited (Beds24)</span>
+                <span>{formatCurrency(reservation.amountPaid)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main drawer ───────────────────────────────────────────────────────────────
 export default function ReservationDrawer({
   reservation,
@@ -661,9 +748,7 @@ export default function ReservationDrawer({
                   />
                   <div>
                     <p className="text-[11px] text-gray-400 mb-1">Total</p>
-                    <p className="text-sm font-medium text-gray-800">
-                      {formatCurrency(reservation.price)}
-                    </p>
+                    <PaymentBreakdown reservation={reservation} />
                   </div>
                 </div>
                 <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2.5 py-1.5">
@@ -678,7 +763,10 @@ export default function ReservationDrawer({
                     override={reservation.paymentStatusOverride}
                     onOverride={(v) => onUpdate({ ...reservation, paymentStatusOverride: v })}
                   />
-                  <ReadOnlyField label="Total Price" value={formatCurrency(reservation.price)} />
+                  <div>
+                    <p className="text-[11px] text-gray-400 mb-0.5">Total Price</p>
+                    <PaymentBreakdown reservation={reservation} />
+                  </div>
                   <ReadOnlyField label="Amount Paid" value={formatCurrency(reservation.amountPaid)} />
                 </div>
                 {reservation.paymentStatus === "Partially Paid" && (

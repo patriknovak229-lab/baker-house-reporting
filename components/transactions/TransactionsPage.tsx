@@ -1,11 +1,62 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback } from "react";
-import type { Reservation } from "@/types/reservation";
+import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag } from "@/types/reservation";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
 import { getEffectiveFlags } from "@/utils/flagUtils";
+
+// ─── Local state persistence (pre-Redis) ────────────────────────────────────
+// Locally managed fields are not stored in Beds24. We persist them in
+// localStorage so they survive page refreshes and Sync operations.
+const LOCAL_KEY = "bha-local-state";
+
+type LocalFields = {
+  additionalEmail?: string;
+  paymentStatusOverride?: PaymentStatus | null;
+  notes?: string;
+  manualFlagOverrides?: Partial<Record<CustomerFlag, boolean>>;
+  ratingStatus?: RatingStatus;
+  invoiceData?: InvoiceData | null;
+  invoiceStatus?: InvoiceStatus;
+};
+
+function loadLocal(): Record<string, LocalFields> {
+  try {
+    const stored = localStorage.getItem(LOCAL_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLocal(reservations: Reservation[]) {
+  const state: Record<string, LocalFields> = {};
+  for (const r of reservations) {
+    const local: LocalFields = {};
+    if (r.additionalEmail) local.additionalEmail = r.additionalEmail;
+    if (r.paymentStatusOverride !== null) local.paymentStatusOverride = r.paymentStatusOverride;
+    if (r.notes) local.notes = r.notes;
+    if (Object.keys(r.manualFlagOverrides).length > 0) local.manualFlagOverrides = r.manualFlagOverrides;
+    if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
+    if (r.invoiceData) local.invoiceData = r.invoiceData;
+    if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
+    if (Object.keys(local).length > 0) state[r.reservationNumber] = local;
+  }
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
+  } catch {
+    // Storage full or unavailable — fail silently
+  }
+}
+
+function mergeLocal(reservations: Reservation[], state: Record<string, LocalFields>): Reservation[] {
+  return reservations.map((r) => {
+    const local = state[r.reservationNumber];
+    return local ? { ...r, ...local } : r;
+  });
+}
 
 export default function TransactionsPage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -23,7 +74,8 @@ export default function TransactionsPage() {
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
       const data: Reservation[] = await res.json();
-      setReservations(data);
+      const localState = loadLocal();
+      setReservations(mergeLocal(data, localState));
       setLastSynced(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load reservations");
@@ -90,9 +142,13 @@ export default function TransactionsPage() {
   }, [reservations, search, filters]);
 
   function handleUpdate(updated: Reservation) {
-    setReservations((prev) =>
-      prev.map((r) => (r.reservationNumber === updated.reservationNumber ? updated : r))
-    );
+    setReservations((prev) => {
+      const next = prev.map((r) =>
+        r.reservationNumber === updated.reservationNumber ? updated : r
+      );
+      saveLocal(next);
+      return next;
+    });
     setSelectedReservation(updated);
   }
 

@@ -41,6 +41,10 @@ export interface Reservation {
   paymentStatus: PaymentStatus;
   amountPaid: number; // CZK
 
+  // From Beds24 — channel fee breakdown (read-only)
+  commissionAmount: number;    // OTA/channel commission in CZK (Booking.com, Airbnb)
+  paymentChargeAmount: number; // Payment processing fee in CZK
+
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)
   paymentStatusOverride: PaymentStatus | null; // manual override; null = use derived value

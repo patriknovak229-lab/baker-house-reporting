@@ -52,22 +52,48 @@ function derivePayment(b: Beds24Booking): { paymentStatus: PaymentStatus; amount
 interface Beds24Booking {
   id: number;
   roomId: number;
-  arrival: string;      // YYYY-MM-DD (check-in)
-  departure: string;    // YYYY-MM-DD (check-out)
+  arrival: string;        // YYYY-MM-DD (check-in)
+  departure: string;      // YYYY-MM-DD (check-out)
   numAdult: number;
   numChild: number;
-  price: number;        // total in CZK
-  deposit: number;      // amount received/recorded in Beds24 (bank transfer, etc.)
+  price: number;          // total in CZK
+  deposit: number;        // amount received/recorded in Beds24 (bank transfer, etc.)
+  commission: number;     // total channel fees in CZK (OTA commission + payment charge combined)
+  rateDescription: string; // human-readable rate breakdown; contains fee split for Booking.com/Airbnb
   firstName: string;
   lastName: string;
   email: string;
   phone: string;
   country2: string | null; // uppercase ISO 2-letter (e.g. "CZ", "UA")
-  apiSource: string;    // "Booking.com" | "Airbnb" | "Direct"
-  referer: string;      // e.g. "PhoneDirect." for phone/email bookings
-  bookingTime: string;  // ISO timestamp
-  status: string;       // "new" | "confirmed" | "cancelled"
-  comments: string;     // contains "PRE-PAID" for prepaid reservations
+  apiSource: string;      // "Booking.com" | "Airbnb" | "Direct"
+  referer: string;        // e.g. "PhoneDirect." for phone/email bookings
+  bookingTime: string;    // ISO timestamp
+  status: string;         // "new" | "confirmed" | "cancelled"
+  comments: string;       // contains "PRE-PAID" for prepaid reservations
+}
+
+// ─── Parse channel fee breakdown from rateDescription ────────────────────────
+// Booking.com format: "Total Commission: 404.07\nPayment Charge: 47.06\n"
+// Airbnb format:      "Host Fee -1635.93 CZK\n"
+// Fallback:           use top-level commission field as a single total
+function parseCommissionBreakdown(
+  rateDescription: string,
+  totalCommission: number
+): { commissionAmount: number; paymentChargeAmount: number } {
+  const commMatch = rateDescription?.match(/Total Commission:\s*([\d.]+)/);
+  const feeMatch  = rateDescription?.match(/Payment Charge:\s*([\d.]+)/);
+  if (commMatch && feeMatch) {
+    return {
+      commissionAmount: parseFloat(commMatch[1]),
+      paymentChargeAmount: parseFloat(feeMatch[1]),
+    };
+  }
+  const hostFeeMatch = rateDescription?.match(/Host Fee\s*-?([\d.]+)/);
+  if (hostFeeMatch) {
+    return { commissionAmount: parseFloat(hostFeeMatch[1]), paymentChargeAmount: 0 };
+  }
+  // Fallback: expose the top-level total with no payment-charge split
+  return { commissionAmount: totalCommission, paymentChargeAmount: 0 };
 }
 
 // ─── Map Beds24 booking → our Reservation type ────────────────────────────────
@@ -80,6 +106,10 @@ function mapToReservation(b: Beds24Booking): Reservation {
       : 0;
 
   const { paymentStatus, amountPaid } = derivePayment(b);
+  const { commissionAmount, paymentChargeAmount } = parseCommissionBreakdown(
+    b.rateDescription ?? "",
+    b.commission ?? 0
+  );
 
   return {
     reservationNumber: `BH-${b.id}`,
@@ -100,6 +130,8 @@ function mapToReservation(b: Beds24Booking): Reservation {
     cleaningStatus: deriveCleaningStatus(b.departure ?? ""),
     paymentStatus,
     amountPaid,
+    commissionAmount,
+    paymentChargeAmount,
     // Locally managed — Redis will layer these in Phase 3
     additionalEmail: "",
     paymentStatusOverride: null,
