@@ -10,9 +10,12 @@ import {
 } from "recharts";
 import { VARIABLE_COSTS } from "@/data/performanceMockData";
 import type { Reservation } from "@/types/reservation";
+import { getNightsInPeriod } from "@/utils/periodUtils";
+import type { DateRange } from "@/utils/periodUtils";
 
 interface Props {
   reservations: Reservation[];
+  dateRange: DateRange;
 }
 
 const fmt = (n: number) =>
@@ -42,7 +45,7 @@ function WaterfallTooltip({ active, payload, label }: any) {
   );
 }
 
-function computeTotals(reservations: Reservation[]) {
+function computeTotals(reservations: Reservation[], dateRange: DateRange) {
   let netSales = 0;
   let cleaning = 0;
   let laundry = 0;
@@ -50,7 +53,9 @@ function computeTotals(reservations: Reservation[]) {
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
-    netSales += r.price - r.commissionAmount - r.paymentChargeAmount;
+    const nights = getNightsInPeriod(r, dateRange);
+    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
+    netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
     const varCosts = VARIABLE_COSTS[r.reservationNumber] ?? {
       cleaning: 0,
@@ -67,7 +72,7 @@ function computeTotals(reservations: Reservation[]) {
   return { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit };
 }
 
-export default function GrossProfitBridgeView({ reservations }: Props) {
+export default function GrossProfitBridgeView({ reservations, dateRange }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -78,7 +83,7 @@ export default function GrossProfitBridgeView({ reservations }: Props) {
   }
 
   const { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit } =
-    computeTotals(reservations);
+    computeTotals(reservations, dateRange);
 
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
 

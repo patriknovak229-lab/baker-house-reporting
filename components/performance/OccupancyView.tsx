@@ -1,5 +1,5 @@
 'use client';
-import { daysBetween } from "@/utils/periodUtils";
+import { daysBetween, getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { Reservation, Room } from "@/types/reservation";
 
@@ -28,12 +28,12 @@ function OccupancyBar({ value }: { value: number }) {
 export default function OccupancyView({ reservations, dateRange, selectedRooms }: Props) {
   const daysInPeriod = daysBetween(dateRange.start, dateRange.end);
   const availableTotal = selectedRooms.length * daysInPeriod;
-  const soldTotal = reservations.reduce((sum, r) => sum + r.numberOfNights, 0);
+  const soldTotal = reservations.reduce((sum, r) => sum + getNightsInPeriod(r, dateRange), 0);
   const occupancyPct = pct(soldTotal, availableTotal);
 
   const perRoom = selectedRooms.map((room) => {
     const roomReservations = reservations.filter((r) => r.room === room);
-    const soldNights = roomReservations.reduce((sum, r) => sum + r.numberOfNights, 0);
+    const soldNights = roomReservations.reduce((sum, r) => sum + getNightsInPeriod(r, dateRange), 0);
     return { room, soldNights, available: daysInPeriod, pct: pct(soldNights, daysInPeriod) };
   });
 

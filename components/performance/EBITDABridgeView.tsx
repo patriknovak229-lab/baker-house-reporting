@@ -10,7 +10,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { VARIABLE_COSTS, FIXED_COSTS_MONTHLY } from "@/data/performanceMockData";
-import { scaleFixedCosts } from "@/utils/periodUtils";
+import { scaleFixedCosts, getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { Reservation } from "@/types/reservation";
 
@@ -47,13 +47,15 @@ function WaterfallTooltip({ active, payload, label }: any) {
   );
 }
 
-function computeGrossProfit(reservations: Reservation[]): number {
+function computeGrossProfit(reservations: Reservation[], dateRange: DateRange): number {
   let netSales = 0;
   let variableCosts = 0;
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
-    netSales += r.price - r.commissionAmount - r.paymentChargeAmount;
+    const nights = getNightsInPeriod(r, dateRange);
+    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
+    netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
     const varCosts = VARIABLE_COSTS[r.reservationNumber] ?? {
       cleaning: 0,
@@ -76,7 +78,7 @@ export default function EBITDABridgeView({ reservations, dateRange }: Props) {
     );
   }
 
-  const grossProfit = computeGrossProfit(reservations);
+  const grossProfit = computeGrossProfit(reservations, dateRange);
 
   // Scale each fixed cost to the selected period
   const scaledCosts = FIXED_COSTS_MONTHLY.map((item) => ({

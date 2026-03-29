@@ -9,9 +9,12 @@ import {
   Cell,
 } from "recharts";
 import type { Reservation } from "@/types/reservation";
+import { getNightsInPeriod } from "@/utils/periodUtils";
+import type { DateRange } from "@/utils/periodUtils";
 
 interface Props {
   reservations: Reservation[];
+  dateRange: DateRange;
 }
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -38,15 +41,16 @@ interface ChannelStat {
   color: string;
 }
 
-function buildStats(reservations: Reservation[]): ChannelStat[] {
+function buildStats(reservations: Reservation[], dateRange: DateRange): ChannelStat[] {
   const map: Record<string, { reservations: number; nights: number; gbv: number }> = {};
   for (const r of reservations) {
-    // Skip refunded reservations — no actual revenue collected
     if (r.paymentStatus === "Refunded") continue;
+    const nights = getNightsInPeriod(r, dateRange);
+    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0, gbv: 0 };
     map[r.channel].reservations += 1;
-    map[r.channel].nights += r.numberOfNights;
-    map[r.channel].gbv += r.price;
+    map[r.channel].nights += nights;
+    map[r.channel].gbv += r.price * fraction;
   }
   return Object.entries(map).map(([channel, data]) => ({
     channel,
@@ -56,8 +60,8 @@ function buildStats(reservations: Reservation[]): ChannelStat[] {
   }));
 }
 
-export default function GBVAdrView({ reservations }: Props) {
-  const stats = buildStats(reservations);
+export default function GBVAdrView({ reservations, dateRange }: Props) {
+  const stats = buildStats(reservations, dateRange);
   const totalGBV = stats.reduce((s, c) => s + c.gbv, 0);
   const totalNights = stats.reduce((s, c) => s + c.nights, 0);
   const overallADR = totalNights > 0 ? totalGBV / totalNights : 0;

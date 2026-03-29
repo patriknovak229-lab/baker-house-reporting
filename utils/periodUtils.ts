@@ -91,16 +91,31 @@ export function daysBetween(start: string, end: string): number {
   );
 }
 
-// A reservation "falls in" a period if its check-in date is within the range.
-// Using check-in date as the attribution point keeps the logic simple and consistent.
+// How many nights of a reservation physically fall within a date range.
+// Uses staythrough logic: clips the stay to the period boundary.
+// checkInDate is the first night; checkOutDate is the day of departure (exclusive).
+// Example: check-in Mar 30, check-out Apr 3 → 2 nights in March, 2 nights in April.
+export function getNightsInPeriod(
+  reservation: Reservation,
+  range: DateRange
+): number {
+  const checkIn     = new Date(reservation.checkInDate).getTime();
+  const checkOut    = new Date(reservation.checkOutDate).getTime();  // exclusive upper bound
+  const periodStart = new Date(range.start).getTime();
+  const periodEnd   = new Date(range.end).getTime() + 86_400_000;   // inclusive → exclusive
+
+  const overlapStart = Math.max(checkIn, periodStart);
+  const overlapEnd   = Math.min(checkOut, periodEnd);
+  return Math.max(0, Math.round((overlapEnd - overlapStart) / 86_400_000));
+}
+
+// A reservation overlaps a period if any of its nights fall within it.
+// Replaces the old check-in-date-only attribution model.
 export function isReservationInPeriod(
   reservation: Reservation,
   range: DateRange
 ): boolean {
-  return (
-    reservation.checkInDate >= range.start &&
-    reservation.checkInDate <= range.end
-  );
+  return getNightsInPeriod(reservation, range) > 0;
 }
 
 // Scale monthly fixed costs to a date range (proportional to days in that month/range)

@@ -1,9 +1,12 @@
 'use client';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import type { Reservation } from "@/types/reservation";
+import { getNightsInPeriod } from "@/utils/periodUtils";
+import type { DateRange } from "@/utils/periodUtils";
 
 interface Props {
   reservations: Reservation[];
+  dateRange: DateRange;
 }
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -22,12 +25,12 @@ interface ChannelStat {
   color: string;
 }
 
-function buildStats(reservations: Reservation[]): ChannelStat[] {
+function buildStats(reservations: Reservation[], dateRange: DateRange): ChannelStat[] {
   const map: Record<string, { reservations: number; nights: number }> = {};
   for (const r of reservations) {
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0 };
     map[r.channel].reservations += 1;
-    map[r.channel].nights += r.numberOfNights;
+    map[r.channel].nights += getNightsInPeriod(r, dateRange);
   }
   return Object.entries(map).map(([channel, data]) => ({
     channel,
@@ -36,8 +39,8 @@ function buildStats(reservations: Reservation[]): ChannelStat[] {
   }));
 }
 
-export default function ChannelMixView({ reservations }: Props) {
-  const stats = buildStats(reservations);
+export default function ChannelMixView({ reservations, dateRange }: Props) {
+  const stats = buildStats(reservations, dateRange);
   const totalRes = stats.reduce((s, c) => s + c.reservations, 0);
   const totalNights = stats.reduce((s, c) => s + c.nights, 0);
 

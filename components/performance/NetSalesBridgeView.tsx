@@ -9,9 +9,12 @@ import {
   Cell,
 } from "recharts";
 import type { Reservation } from "@/types/reservation";
+import { getNightsInPeriod } from "@/utils/periodUtils";
+import type { DateRange } from "@/utils/periodUtils";
 
 interface Props {
   reservations: Reservation[];
+  dateRange: DateRange;
 }
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -63,7 +66,7 @@ interface ChannelBreakdown {
   color: string;
 }
 
-function computeBreakdown(reservations: Reservation[]): {
+function computeBreakdown(reservations: Reservation[], dateRange: DateRange): {
   overall: { gbv: number; commission: number; paymentFee: number; netSales: number };
   byChannel: ChannelBreakdown[];
 } {
@@ -71,10 +74,12 @@ function computeBreakdown(reservations: Reservation[]): {
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
+    const nights = getNightsInPeriod(r, dateRange);
+    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     if (!map[r.channel]) map[r.channel] = { gbv: 0, commission: 0, paymentFee: 0 };
-    map[r.channel].gbv += r.price;
-    map[r.channel].commission += r.commissionAmount;
-    map[r.channel].paymentFee += r.paymentChargeAmount;
+    map[r.channel].gbv += r.price * fraction;
+    map[r.channel].commission += r.commissionAmount * fraction;
+    map[r.channel].paymentFee += r.paymentChargeAmount * fraction;
   }
 
   const byChannel: ChannelBreakdown[] = Object.entries(map).map(([channel, data]) => ({
@@ -97,7 +102,7 @@ function computeBreakdown(reservations: Reservation[]): {
   return { overall, byChannel };
 }
 
-export default function NetSalesBridgeView({ reservations }: Props) {
+export default function NetSalesBridgeView({ reservations, dateRange }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -107,7 +112,7 @@ export default function NetSalesBridgeView({ reservations }: Props) {
     );
   }
 
-  const { overall, byChannel } = computeBreakdown(reservations);
+  const { overall, byChannel } = computeBreakdown(reservations, dateRange);
   const totalDeductions = overall.commission + overall.paymentFee;
   const netPct = overall.gbv > 0 ? Math.round((overall.netSales / overall.gbv) * 100) : 0;
 
