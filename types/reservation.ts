@@ -26,7 +26,8 @@ export interface Reservation {
   room: Room;
   checkInDate: string; // ISO date
   checkOutDate: string; // ISO date
-  reservationDate: string; // ISO date
+  reservationDate: string;    // ISO date (YYYY-MM-DD) — used for display/sort
+  bookingTimestamp: string;   // Full ISO datetime from Beds24 bookingTime — used for "New" badge
   numberOfNights: number;
   numberOfGuests: number;
   email: string;

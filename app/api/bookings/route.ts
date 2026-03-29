@@ -120,6 +120,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     checkInDate: b.arrival ?? "",
     checkOutDate: b.departure ?? "",
     reservationDate: b.bookingTime ? b.bookingTime.slice(0, 10) : "",
+    bookingTimestamp: b.bookingTime ?? "",
     numberOfNights: nights,
     numberOfGuests: (b.numAdult ?? 0) + (b.numChild ?? 0),
     email: b.email ?? "",

@@ -192,7 +192,8 @@ export default function ReservationTable({
                     <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         <span className="text-gray-500">{res.reservationNumber}</span>
-                        {res.reservationDate === new Date().toISOString().slice(0, 10) && (
+                        {res.bookingTimestamp &&
+                          Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000 && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">
                             New
                           </span>
