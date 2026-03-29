@@ -62,7 +62,7 @@ export function getPeriodDateRange(
 
   switch (period) {
     case "current-month":
-      return { start: startOfMonth(t), end: yesterday };
+      return { start: startOfMonth(t), end: endOfMonth(t) };
 
     case "last-month": {
       const firstOfLastMonth = startOfMonth(addMonths(t, -1));
