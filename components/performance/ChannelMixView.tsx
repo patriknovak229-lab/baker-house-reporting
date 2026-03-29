@@ -10,6 +10,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   "Booking.com": "#4F46E5",
   Airbnb: "#F43F5E",
   Direct: "#10B981",
+  "Direct-Phone": "#14B8A6",
 };
 
 const FALLBACK_COLOR = "#94A3B8";

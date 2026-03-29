@@ -8,7 +8,6 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { EUR_TO_CZK, CHANNEL_COSTS } from "@/data/performanceMockData";
 import type { Reservation } from "@/types/reservation";
 
 interface Props {
@@ -19,6 +18,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   "Booking.com": "#4F46E5",
   Airbnb: "#F43F5E",
   Direct: "#10B981",
+  "Direct-Phone": "#14B8A6",
 };
 const FALLBACK_COLOR = "#94A3B8";
 
@@ -71,15 +71,10 @@ function computeBreakdown(reservations: Reservation[]): {
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
-    const gbv = r.price * EUR_TO_CZK;
-    const costs = CHANNEL_COSTS[r.channel] ?? { commissionRate: 0, paymentFeeRate: 0 };
-    const commission = gbv * costs.commissionRate;
-    const paymentFee = gbv * costs.paymentFeeRate;
-
     if (!map[r.channel]) map[r.channel] = { gbv: 0, commission: 0, paymentFee: 0 };
-    map[r.channel].gbv += gbv;
-    map[r.channel].commission += commission;
-    map[r.channel].paymentFee += paymentFee;
+    map[r.channel].gbv += r.price;
+    map[r.channel].commission += r.commissionAmount;
+    map[r.channel].paymentFee += r.paymentChargeAmount;
   }
 
   const byChannel: ChannelBreakdown[] = Object.entries(map).map(([channel, data]) => ({

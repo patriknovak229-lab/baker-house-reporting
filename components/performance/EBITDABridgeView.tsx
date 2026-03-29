@@ -9,12 +9,7 @@ import {
   Cell,
   ReferenceLine,
 } from "recharts";
-import {
-  EUR_TO_CZK,
-  CHANNEL_COSTS,
-  VARIABLE_COSTS,
-  FIXED_COSTS_MONTHLY,
-} from "@/data/performanceMockData";
+import { VARIABLE_COSTS, FIXED_COSTS_MONTHLY } from "@/data/performanceMockData";
 import { scaleFixedCosts } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { Reservation } from "@/types/reservation";
@@ -58,9 +53,7 @@ function computeGrossProfit(reservations: Reservation[]): number {
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
-    const gbv = r.price * EUR_TO_CZK;
-    const costs = CHANNEL_COSTS[r.channel] ?? { commissionRate: 0, paymentFeeRate: 0 };
-    netSales += gbv * (1 - costs.commissionRate - costs.paymentFeeRate);
+    netSales += r.price - r.commissionAmount - r.paymentChargeAmount;
 
     const varCosts = VARIABLE_COSTS[r.reservationNumber] ?? {
       cleaning: 0,

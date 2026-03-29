@@ -8,7 +8,6 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { EUR_TO_CZK, CHANNEL_COSTS } from "@/data/performanceMockData";
 import type { Reservation } from "@/types/reservation";
 
 interface Props {
@@ -19,6 +18,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   "Booking.com": "#4F46E5",
   Airbnb: "#F43F5E",
   Direct: "#10B981",
+  "Direct-Phone": "#14B8A6",
 };
 
 const FALLBACK_COLOR = "#94A3B8";
@@ -46,7 +46,7 @@ function buildStats(reservations: Reservation[]): ChannelStat[] {
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0, gbv: 0 };
     map[r.channel].reservations += 1;
     map[r.channel].nights += r.numberOfNights;
-    map[r.channel].gbv += r.price * EUR_TO_CZK;
+    map[r.channel].gbv += r.price;
   }
   return Object.entries(map).map(([channel, data]) => ({
     channel,
@@ -55,9 +55,6 @@ function buildStats(reservations: Reservation[]): ChannelStat[] {
     color: CHANNEL_COLORS[channel] ?? FALLBACK_COLOR,
   }));
 }
-
-// Unused but available for future use — channels with no reservations still appear
-const _allChannels = Object.keys(CHANNEL_COSTS);
 
 export default function GBVAdrView({ reservations }: Props) {
   const stats = buildStats(reservations);

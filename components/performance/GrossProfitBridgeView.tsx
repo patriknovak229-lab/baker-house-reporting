@@ -8,11 +8,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import {
-  EUR_TO_CZK,
-  CHANNEL_COSTS,
-  VARIABLE_COSTS,
-} from "@/data/performanceMockData";
+import { VARIABLE_COSTS } from "@/data/performanceMockData";
 import type { Reservation } from "@/types/reservation";
 
 interface Props {
@@ -54,9 +50,7 @@ function computeTotals(reservations: Reservation[]) {
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
-    const gbv = r.price * EUR_TO_CZK;
-    const costs = CHANNEL_COSTS[r.channel] ?? { commissionRate: 0, paymentFeeRate: 0 };
-    netSales += gbv * (1 - costs.commissionRate - costs.paymentFeeRate);
+    netSales += r.price - r.commissionAmount - r.paymentChargeAmount;
 
     const varCosts = VARIABLE_COSTS[r.reservationNumber] ?? {
       cleaning: 0,
@@ -216,6 +210,9 @@ export default function GrossProfitBridgeView({ reservations }: Props) {
             </tr>
           </tfoot>
         </table>
+        <p className="text-xs text-gray-400 mt-3">
+          * Variable costs pending cleaning app integration — live bookings show 0 until connected.
+        </p>
       </div>
     </div>
   );
