@@ -14,10 +14,12 @@ import NetSalesBridgeView from "./NetSalesBridgeView";
 import GrossProfitBridgeView from "./GrossProfitBridgeView";
 import EBITDABridgeView from "./EBITDABridgeView";
 import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
+import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
 
 export default function PerformancePage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [variableCosts, setVariableCosts] = useState<VariableCostsLookup>({});
+  const [fixedCosts, setFixedCosts] = useState<FixedCostEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -26,9 +28,10 @@ export default function PerformancePage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [bookingsRes, costsRes] = await Promise.all([
+      const [bookingsRes, costsRes, fixedCostsRes] = await Promise.all([
         fetch("/api/bookings"),
         fetch("/api/variable-costs"),
+        fetch("/api/fixed-costs"),
       ]);
       if (!bookingsRes.ok) {
         const json = await bookingsRes.json().catch(() => ({}));
@@ -39,6 +42,10 @@ export default function PerformancePage() {
       if (costsRes.ok) {
         const costs: VariableCostsLookup = await costsRes.json();
         setVariableCosts(costs);
+      }
+      if (fixedCostsRes.ok) {
+        const fc: FixedCostEntry[] = await fixedCostsRes.json();
+        setFixedCosts(fc);
       }
       setLastSynced(new Date());
     } catch (err) {
@@ -162,7 +169,7 @@ export default function PerformancePage() {
           <GBVAdrView reservations={filteredReservations} dateRange={dateRange} />
           <NetSalesBridgeView reservations={filteredReservations} dateRange={dateRange} />
           <GrossProfitBridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} />
-          <EBITDABridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} />
+          <EBITDABridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} fixedCosts={fixedCosts} />
         </div>
       )}
     </div>

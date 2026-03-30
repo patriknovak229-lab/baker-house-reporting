@@ -9,17 +9,25 @@ import {
   Cell,
   ReferenceLine,
 } from "recharts";
-import { FIXED_COSTS_MONTHLY } from "@/data/performanceMockData";
-import { scaleFixedCosts, getNightsInPeriod } from "@/utils/periodUtils";
+import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { Reservation } from "@/types/reservation";
 import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
 import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
+import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
 
 interface Props {
   reservations: Reservation[];
   dateRange: DateRange;
   variableCosts: VariableCostsLookup;
+  fixedCosts: FixedCostEntry[];
+}
+
+/** Count distinct calendar months touched by an inclusive date range. */
+function countMonths(start: string, end: string): number {
+  const s = new Date(start + 'T12:00:00');
+  const e = new Date(end + 'T12:00:00');
+  return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1;
 }
 
 const fmt = (n: number) =>
@@ -68,7 +76,7 @@ function computeGrossProfit(reservations: Reservation[], dateRange: DateRange, v
   return netSales - totalVariableCosts;
 }
 
-export default function EBITDABridgeView({ reservations, dateRange, variableCosts }: Props) {
+export default function EBITDABridgeView({ reservations, dateRange, variableCosts, fixedCosts }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -80,10 +88,12 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
 
   const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts);
 
-  // Scale each fixed cost to the selected period
-  const scaledCosts = FIXED_COSTS_MONTHLY.map((item) => ({
-    ...item,
-    scaled: scaleFixedCosts(item.amount, dateRange),
+  // Fixed costs: full monthly amount × number of calendar months in period
+  const months = countMonths(dateRange.start, dateRange.end);
+  const scaledCosts = fixedCosts.map((item) => ({
+    label: item.label,
+    amount: item.monthlyTotal,
+    scaled: item.monthlyTotal * months,
   }));
 
   const totalFixed = scaledCosts.reduce((s, c) => s + c.scaled, 0);
@@ -125,7 +135,7 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
         EBITDA — Provozní Zisk
       </h2>
       <p className="text-xs text-gray-400 mb-5">
-        Fixed costs scaled proportionally to the selected period
+        Fixed costs charged per calendar month ({months} month{months !== 1 ? 's' : ''} in period)
       </p>
 
       {/* KPI row */}
@@ -224,7 +234,7 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
             <tr>
               <td className="py-2 text-xs font-medium text-gray-500">Total Fixed</td>
               <td className="py-2 text-right text-xs text-gray-500">
-                {fmt(FIXED_COSTS_MONTHLY.reduce((s, c) => s + c.amount, 0))}
+                {fmt(fixedCosts.reduce((s, c) => s + c.monthlyTotal, 0))}
               </td>
               <td className="py-2 text-right text-xs font-bold text-rose-600">
                 −{fmt(totalFixed)}
@@ -233,7 +243,7 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
           </tfoot>
         </table>
         <p className="text-xs text-gray-400 mt-3">
-          * Fixed costs will be configurable in the Accounting tab.
+          Fixed costs sourced from the cleaning app. Configure amounts in Fixed Costs tab.
         </p>
       </div>
     </div>
