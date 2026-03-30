@@ -68,8 +68,10 @@ function computeGrossProfit(reservations: Reservation[], dateRange: DateRange, v
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
+    // Only attribute variable costs when checkout falls within the period (matches cleaners tab logic)
+    const checkoutInPeriod = r.checkOutDate >= dateRange.start && r.checkOutDate <= dateRange.end;
     const roomId = ROOM_TO_BEDS24_ID[r.room];
-    const varCosts = roomId ? (variableCosts[`${r.checkOutDate}|${roomId}`] ?? { cleaning: 0, laundry: 0, consumables: 0 }) : { cleaning: 0, laundry: 0, consumables: 0 };
+    const varCosts = checkoutInPeriod && roomId ? (variableCosts[`${r.checkOutDate}|${roomId}`] ?? { cleaning: 0, laundry: 0, consumables: 0 }) : { cleaning: 0, laundry: 0, consumables: 0 };
     totalVariableCosts += varCosts.cleaning + varCosts.laundry + varCosts.consumables;
   }
 
