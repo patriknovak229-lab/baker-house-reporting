@@ -11,3 +11,21 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: A4 portrait;
+  }
+
+  /* Preserve chart and badge colors in print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Prevent individual analytics cards from splitting across pages */
+  #performance-views > * {
+    break-inside: avoid;
+  }
+}

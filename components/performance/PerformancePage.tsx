@@ -1,8 +1,9 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { ALL_ROOMS } from "@/data/performanceMockData";
-import { getPeriodDateRange, isReservationInPeriod } from "@/utils/periodUtils";
+import { getPeriodDateRange, isReservationInPeriod, PERIOD_OPTIONS } from "@/utils/periodUtils";
 import type { PeriodKey, DateRange } from "@/utils/periodUtils";
+import { formatDate } from "@/utils/formatters";
 import type { Reservation, Room } from "@/types/reservation";
 
 import PeriodSelector from "./PeriodSelector";
@@ -79,6 +80,18 @@ export default function PerformancePage() {
     [reservations, dateRange, selectedRooms]
   );
 
+  const periodLabel = useMemo(() => {
+    const preset = PERIOD_OPTIONS.find((p) => p.key === period);
+    if (preset && period !== "custom") {
+      return `${preset.label} (${formatDate(dateRange.start)} – ${formatDate(dateRange.end)})`;
+    }
+    return `${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`;
+  }, [period, dateRange]);
+
+  const roomsLabel = selectedRooms.length === ALL_ROOMS.length
+    ? "All Rooms"
+    : selectedRooms.join(", ");
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Page header */}
@@ -87,7 +100,7 @@ export default function PerformancePage() {
           <h1 className="text-2xl font-bold text-gray-900">Performance</h1>
           <p className="text-sm text-gray-500 mt-0.5">Traffic Overview · Live Beds24 data</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 print:hidden">
           <span className="text-xs text-gray-400">
             Last synced:{" "}
             <span className="text-gray-600">
@@ -111,12 +124,31 @@ export default function PerformancePage() {
             </svg>
             {isLoading ? "Syncing…" : "Sync"}
           </button>
+          <button
+            onClick={() => window.print()}
+            disabled={isLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-indigo-200 bg-indigo-50 text-sm font-medium text-indigo-700 hover:bg-indigo-100 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+              />
+            </svg>
+            Export PDF
+          </button>
         </div>
+      </div>
+
+      {/* Print-only report metadata */}
+      <div className="hidden print:block mb-6 pb-4 border-b border-gray-300">
+        <p className="text-sm text-gray-700"><span className="font-medium">Period:</span> {periodLabel}</p>
+        <p className="text-sm text-gray-700"><span className="font-medium">Rooms:</span> {roomsLabel}</p>
+        <p className="text-xs text-gray-400 mt-1">Generated: {formatDate(new Date().toISOString().slice(0, 10))}</p>
       </div>
 
       {/* Error banner */}
       {error && (
-        <div className="mb-5 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="mb-5 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 print:hidden">
           <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
@@ -128,7 +160,7 @@ export default function PerformancePage() {
       )}
 
       {/* Global filters */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6 print:hidden">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
@@ -159,7 +191,7 @@ export default function PerformancePage() {
         </div>
       ) : (
         /* Traffic Overview views */
-        <div className="space-y-6">
+        <div id="performance-views" className="space-y-6">
           <OccupancyView
             reservations={filteredReservations}
             dateRange={dateRange}
