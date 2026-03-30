@@ -8,14 +8,16 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { VARIABLE_COSTS } from "@/data/performanceMockData";
 import type { Reservation } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
+import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
+import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
 
 interface Props {
   reservations: Reservation[];
   dateRange: DateRange;
+  variableCosts: VariableCostsLookup;
 }
 
 const fmt = (n: number) =>
@@ -45,7 +47,7 @@ function WaterfallTooltip({ active, payload, label }: any) {
   );
 }
 
-function computeTotals(reservations: Reservation[], dateRange: DateRange) {
+function computeTotals(reservations: Reservation[], dateRange: DateRange, variableCosts: VariableCostsLookup) {
   let netSales = 0;
   let cleaning = 0;
   let laundry = 0;
@@ -57,11 +59,9 @@ function computeTotals(reservations: Reservation[], dateRange: DateRange) {
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
-    const varCosts = VARIABLE_COSTS[r.reservationNumber] ?? {
-      cleaning: 0,
-      laundry: 0,
-      consumables: 0,
-    };
+    // Look up costs by checkout date + Beds24 roomId (attribution rule: checkout date)
+    const roomId = ROOM_TO_BEDS24_ID[r.room];
+    const varCosts = roomId ? (variableCosts[`${r.checkOutDate}|${roomId}`] ?? { cleaning: 0, laundry: 0, consumables: 0 }) : { cleaning: 0, laundry: 0, consumables: 0 };
     cleaning += varCosts.cleaning;
     laundry += varCosts.laundry;
     consumables += varCosts.consumables;
@@ -72,7 +72,7 @@ function computeTotals(reservations: Reservation[], dateRange: DateRange) {
   return { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit };
 }
 
-export default function GrossProfitBridgeView({ reservations, dateRange }: Props) {
+export default function GrossProfitBridgeView({ reservations, dateRange, variableCosts }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -83,7 +83,7 @@ export default function GrossProfitBridgeView({ reservations, dateRange }: Props
   }
 
   const { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit } =
-    computeTotals(reservations, dateRange);
+    computeTotals(reservations, dateRange, variableCosts);
 
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
 
@@ -216,7 +216,7 @@ export default function GrossProfitBridgeView({ reservations, dateRange }: Props
           </tfoot>
         </table>
         <p className="text-xs text-gray-400 mt-3">
-          * Variable costs pending cleaning app integration — live bookings show 0 until connected.
+          * Variable costs sourced from the cleaning app (checkout date attribution).
         </p>
       </div>
     </div>

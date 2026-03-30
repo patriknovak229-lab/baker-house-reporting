@@ -9,14 +9,17 @@ import {
   Cell,
   ReferenceLine,
 } from "recharts";
-import { VARIABLE_COSTS, FIXED_COSTS_MONTHLY } from "@/data/performanceMockData";
+import { FIXED_COSTS_MONTHLY } from "@/data/performanceMockData";
 import { scaleFixedCosts, getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { Reservation } from "@/types/reservation";
+import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
+import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
 
 interface Props {
   reservations: Reservation[];
   dateRange: DateRange;
+  variableCosts: VariableCostsLookup;
 }
 
 const fmt = (n: number) =>
@@ -47,9 +50,9 @@ function WaterfallTooltip({ active, payload, label }: any) {
   );
 }
 
-function computeGrossProfit(reservations: Reservation[], dateRange: DateRange): number {
+function computeGrossProfit(reservations: Reservation[], dateRange: DateRange, variableCosts: VariableCostsLookup): number {
   let netSales = 0;
-  let variableCosts = 0;
+  let totalVariableCosts = 0;
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
@@ -57,18 +60,15 @@ function computeGrossProfit(reservations: Reservation[], dateRange: DateRange): 
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
-    const varCosts = VARIABLE_COSTS[r.reservationNumber] ?? {
-      cleaning: 0,
-      laundry: 0,
-      consumables: 0,
-    };
-    variableCosts += varCosts.cleaning + varCosts.laundry + varCosts.consumables;
+    const roomId = ROOM_TO_BEDS24_ID[r.room];
+    const varCosts = roomId ? (variableCosts[`${r.checkOutDate}|${roomId}`] ?? { cleaning: 0, laundry: 0, consumables: 0 }) : { cleaning: 0, laundry: 0, consumables: 0 };
+    totalVariableCosts += varCosts.cleaning + varCosts.laundry + varCosts.consumables;
   }
 
-  return netSales - variableCosts;
+  return netSales - totalVariableCosts;
 }
 
-export default function EBITDABridgeView({ reservations, dateRange }: Props) {
+export default function EBITDABridgeView({ reservations, dateRange, variableCosts }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -78,7 +78,7 @@ export default function EBITDABridgeView({ reservations, dateRange }: Props) {
     );
   }
 
-  const grossProfit = computeGrossProfit(reservations, dateRange);
+  const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts);
 
   // Scale each fixed cost to the selected period
   const scaledCosts = FIXED_COSTS_MONTHLY.map((item) => ({

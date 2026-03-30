@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@upstash/redis": "^1.37.0",
     "next": "16.2.1",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
