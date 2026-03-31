@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
-import type { Reservation } from "@/types/reservation";
+import type { Reservation, Room } from "@/types/reservation";
 import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
 import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
 import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
@@ -21,6 +21,7 @@ interface Props {
   dateRange: DateRange;
   variableCosts: VariableCostsLookup;
   fixedCosts: FixedCostEntry[];
+  selectedRooms: Room[];
 }
 
 /** Count distinct calendar months touched by an inclusive date range. */
@@ -78,7 +79,14 @@ function computeGrossProfit(reservations: Reservation[], dateRange: DateRange, v
   return netSales - totalVariableCosts;
 }
 
-export default function EBITDABridgeView({ reservations, dateRange, variableCosts, fixedCosts }: Props) {
+function roomFilteredMonthlyTotal(entry: FixedCostEntry, selectedRooms: Room[]): number {
+  return selectedRooms.reduce((sum, room) => {
+    const beds24Id = ROOM_TO_BEDS24_ID[room];
+    return sum + (beds24Id ? (entry.rooms[beds24Id] ?? 0) : 0);
+  }, 0);
+}
+
+export default function EBITDABridgeView({ reservations, dateRange, variableCosts, fixedCosts, selectedRooms }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -90,13 +98,12 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
 
   const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts);
 
-  // Fixed costs: full monthly amount × number of calendar months in period
+  // Fixed costs: per-selected-room monthly amount × number of calendar months in period
   const months = countMonths(dateRange.start, dateRange.end);
-  const scaledCosts = fixedCosts.map((item) => ({
-    label: item.label,
-    amount: item.monthlyTotal,
-    scaled: item.monthlyTotal * months,
-  }));
+  const scaledCosts = fixedCosts.map((item) => {
+    const monthly = roomFilteredMonthlyTotal(item, selectedRooms);
+    return { label: item.label, amount: monthly, scaled: monthly * months };
+  });
 
   const totalFixed = scaledCosts.reduce((s, c) => s + c.scaled, 0);
   const ebitda = grossProfit - totalFixed;
@@ -236,7 +243,7 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
             <tr>
               <td className="py-2 text-xs font-medium text-gray-500">Total Fixed</td>
               <td className="py-2 text-right text-xs text-gray-500">
-                {fmt(fixedCosts.reduce((s, c) => s + c.monthlyTotal, 0))}
+                {fmt(scaledCosts.reduce((s, c) => s + c.amount, 0))}
               </td>
               <td className="py-2 text-right text-xs font-bold text-rose-600">
                 −{fmt(totalFixed)}

@@ -12,6 +12,7 @@ interface FixedCostItemRaw {
 export interface FixedCostEntry {
   label: string;
   monthlyTotal: number; // sum of all enabled room amounts
+  rooms: Record<string, number>; // beds24 roomId → monthlyAmount (enabled only)
 }
 
 function getRedis(): Redis | null {
@@ -31,12 +32,16 @@ export async function GET() {
   const items = (Array.isArray(raw) ? raw : []) as FixedCostItemRaw[];
 
   const result: FixedCostEntry[] = items
-    .map((item) => ({
-      label: item.label,
-      monthlyTotal: Object.values(item.rooms ?? {})
-        .filter((r) => r.enabled && r.monthlyAmount > 0)
-        .reduce((s, r) => s + r.monthlyAmount, 0),
-    }))
+    .map((item) => {
+      const enabledEntries = Object.entries(item.rooms ?? {}).filter(
+        ([, r]) => r.enabled && r.monthlyAmount > 0
+      );
+      return {
+        label: item.label,
+        monthlyTotal: enabledEntries.reduce((s, [, r]) => s + r.monthlyAmount, 0),
+        rooms: Object.fromEntries(enabledEntries.map(([id, r]) => [id, r.monthlyAmount])),
+      };
+    })
     .filter((c) => c.monthlyTotal > 0);
 
   return NextResponse.json(result);
