@@ -24,6 +24,7 @@ type SortField = keyof Pick<
 interface ReservationTableProps {
   reservations: Reservation[];
   allReservations: Reservation[];
+  unreadBookingIds: Set<number>;
   onRowClick: (reservation: Reservation) => void;
 }
 
@@ -107,6 +108,7 @@ function SortIcon({
 export default function ReservationTable({
   reservations,
   allReservations,
+  unreadBookingIds,
   onRowClick,
 }: ReservationTableProps) {
   const [sortField, setSortField] = useState<SortField>("reservationDate");
@@ -183,6 +185,9 @@ export default function ReservationTable({
                 const flag = countryCodeToFlag(res.nationality);
                 const emoji = ratingEmoji(res.ratingStatus);
 
+                const beds24Id = parseInt(res.reservationNumber.slice(3));
+                const hasUnread = unreadBookingIds.has(beds24Id);
+
                 return (
                   <tr
                     key={res.reservationNumber}
@@ -196,6 +201,22 @@ export default function ReservationTable({
                           Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000 && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">
                             New
+                          </span>
+                        )}
+                        {hasUnread && (
+                          <span
+                            title="Unread message from guest"
+                            className="relative inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white shrink-0"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                              />
+                            </svg>
+                            <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+                            </span>
                           </span>
                         )}
                       </div>

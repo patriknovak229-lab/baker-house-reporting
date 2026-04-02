@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "@/types/reservation";
+import { getAccessToken } from "@/utils/beds24Auth";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -184,9 +185,12 @@ async function fetchAllBookings(token: string): Promise<Beds24Booking[]> {
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
-  const token = process.env.BEDS24_API_KEY;
-  if (!token) {
-    return NextResponse.json({ error: "BEDS24_API_KEY not set" }, { status: 500 });
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Auth error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   try {

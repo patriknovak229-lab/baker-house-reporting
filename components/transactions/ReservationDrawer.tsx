@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus } from "@/types/reservation";
+import MessageThread from "./MessageThread";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
@@ -26,6 +27,7 @@ function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): Paymen
 interface ReservationDrawerProps {
   reservation: Reservation | null;
   allReservations: Reservation[];
+  unreadBookingIds: Set<number>;
   onClose: () => void;
   onUpdate: (updated: Reservation) => void;
 }
@@ -485,6 +487,7 @@ function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
 export default function ReservationDrawer({
   reservation,
   allReservations,
+  unreadBookingIds,
   onClose,
   onUpdate,
 }: ReservationDrawerProps) {
@@ -732,7 +735,19 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 3. Payment */}
+          {/* 3. Messaging */}
+          <section>
+            <SectionTitle source="Beds24">Messaging</SectionTitle>
+            <MessageThread
+              beds24Id={parseInt(reservation.reservationNumber.slice(3))}
+              hasUnread={unreadBookingIds.has(parseInt(reservation.reservationNumber.slice(3)))}
+              guestName={`${reservation.firstName} ${reservation.lastName}`}
+            />
+          </section>
+
+          <hr className="border-gray-100" />
+
+          {/* 4. Payment */}
           <section>
             <SectionTitle source={isOTAChannel ? reservation.channel : isDirectPhone ? "Direct" : "Stripe"}>
               Payment
@@ -780,7 +795,7 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 4. Cleaning */}
+          {/* 5. Cleaning */}
           <section>
             <SectionTitle source="Cleaning App">Cleaning</SectionTitle>
             <div>
@@ -801,7 +816,7 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 5. Rating */}
+          {/* 6. Rating */}
           <section>
             <SectionTitle>Guest Rating</SectionTitle>
             <div className="flex gap-2">
@@ -834,7 +849,7 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 6. Customer Flags */}
+          {/* 7. Customer Flags */}
           <section>
             <SectionTitle>Customer Flags</SectionTitle>
             <div className="flex flex-col gap-2">
@@ -867,7 +882,7 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 7. Notes */}
+          {/* 8. Notes */}
           <section>
             <SectionTitle>Notes</SectionTitle>
             <textarea
@@ -887,7 +902,7 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 8. Invoice */}
+          {/* 9. Invoice */}
           <section>
             <div className="flex items-center justify-between mb-3">
               <SectionTitle>Invoice</SectionTitle>

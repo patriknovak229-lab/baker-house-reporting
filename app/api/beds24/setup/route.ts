@@ -1,19 +1,18 @@
 import { NextResponse } from "next/server";
 
 // ONE-TIME setup endpoint.
-// Hit this once after adding your invite token as BEDS24_API_KEY.
+// Hit this once after adding a fresh invite token as BEDS24_INVITE_TOKEN.
 // It exchanges the invite token for a permanent refresh token.
 // Copy the refreshToken from the response and add it to Vercel as BEDS24_REFRESH_TOKEN.
-// You can then delete BEDS24_API_KEY from Vercel (the invite token is no longer needed).
 
 export async function GET() {
-  const inviteToken = process.env.BEDS24_API_KEY;
+  const inviteToken = process.env.BEDS24_INVITE_TOKEN;
   if (!inviteToken) {
-    return NextResponse.json({ error: "BEDS24_API_KEY (invite token) not set" }, { status: 500 });
+    return NextResponse.json({ error: "BEDS24_INVITE_TOKEN not set" }, { status: 500 });
   }
 
   const res = await fetch("https://beds24.com/api/v2/authentication/setup", {
-    headers: { token: inviteToken },
+    headers: { code: inviteToken },
     cache: "no-store",
   });
 

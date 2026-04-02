@@ -59,11 +59,14 @@ function mergeLocal(reservations: Reservation[], state: Record<string, LocalFiel
   });
 }
 
+const UNREAD_POLL_INTERVAL_MS = 30_000;
+
 export default function TransactionsPage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
 
   const fetchReservations = useCallback(async () => {
     setIsLoading(true);
@@ -88,6 +91,24 @@ export default function TransactionsPage() {
   useEffect(() => {
     fetchReservations();
   }, [fetchReservations]);
+
+  // Poll for unread guest messages every 30s
+  useEffect(() => {
+    async function pollUnread() {
+      try {
+        const res = await fetch('/api/messages/unread');
+        if (!res.ok) return;
+        const { bookingIds }: { bookingIds: number[] } = await res.json();
+        setUnreadBookingIds(new Set(bookingIds));
+      } catch {
+        // fail silently — badge just won't update until next poll
+      }
+    }
+    pollUnread();
+    const id = setInterval(pollUnread, UNREAD_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
+
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
@@ -310,6 +331,7 @@ export default function TransactionsPage() {
         <ReservationTable
           reservations={filtered}
           allReservations={reservations}
+          unreadBookingIds={unreadBookingIds}
           onRowClick={setSelectedReservation}
         />
       )}
@@ -318,6 +340,7 @@ export default function TransactionsPage() {
       <ReservationDrawer
         reservation={selectedReservation}
         allReservations={reservations}
+        unreadBookingIds={unreadBookingIds}
         onClose={() => setSelectedReservation(null)}
         onUpdate={handleUpdate}
       />
