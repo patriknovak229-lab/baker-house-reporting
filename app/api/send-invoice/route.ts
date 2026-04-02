@@ -19,7 +19,6 @@ async function generatePDF(html: string): Promise<Buffer> {
     process.env.CHROME_EXECUTABLE_PATH ?? await chromium.executablePath();
   const browser = await puppeteer.launch({
     args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
     executablePath,
     headless: true,
   });
