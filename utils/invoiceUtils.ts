@@ -20,11 +20,12 @@ export function generateInvoiceNumber(reservationNumber: string): string {
   return `INV-${reservationNumber.slice(3)}`;
 }
 
-function buildInvoiceHTML(
+export function buildInvoiceHTML(
   res: Reservation,
   invoiceData: InvoiceData,
   invoiceNum: string,
-  payment?: { qrDataUrl: string; info: PaymentQRInfo }
+  payment?: { qrDataUrl: string; info: PaymentQRInfo },
+  forEmail = false
 ): string {
   const today = new Date().toLocaleDateString("en-GB", {
     day: "numeric", month: "long", year: "numeric",
@@ -61,12 +62,12 @@ function buildInvoiceHTML(
     }
     @page { size: A4; margin: 14mm 18mm; }
   </style>
-  <script>
+  ${!forEmail ? `<script>
     document.fonts.ready.then(function() {
       window.print();
       window.addEventListener('afterprint', function() { window.close(); });
     });
-  </script>
+  </script>` : ''}
 </head>
 <body>
 <div class="invoice">

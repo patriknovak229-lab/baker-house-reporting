@@ -501,6 +501,8 @@ export default function ReservationDrawer({
     billingEmail: "",
   });
   const [isMounted, setIsMounted] = useState(false);
+  const [isSendingInvoice, setIsSendingInvoice] = useState(false);
+  const [sendInvoiceError, setSendInvoiceError] = useState<string | null>(null);
 
   useEffect(() => {
     if (reservation) {
@@ -548,8 +550,25 @@ export default function ReservationDrawer({
     });
   }
 
-  function handleSendInvoice() {
-    onUpdate({ ...reservation!, invoiceStatus: "Sent" });
+  async function handleSendInvoice() {
+    setSendInvoiceError(null);
+    setIsSendingInvoice(true);
+    try {
+      const res = await fetch('/api/send-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation: reservation! }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+      onUpdate({ ...reservation!, invoiceStatus: "Sent" });
+    } catch (err) {
+      setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send invoice');
+    } finally {
+      setIsSendingInvoice(false);
+    }
   }
 
   async function handleDownloadPDF() {
@@ -1067,6 +1086,11 @@ export default function ReservationDrawer({
                 )}
 
                 {/* Actions */}
+                {sendInvoiceError && (
+                  <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+                    {sendInvoiceError}
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={handleDownloadPDF}
@@ -1085,23 +1109,26 @@ export default function ReservationDrawer({
                   {reservation.invoiceStatus === "Issued" && (
                     <button
                       onClick={handleSendInvoice}
-                      className="flex-1 py-2 px-3 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors flex items-center justify-center gap-1.5"
-                      title="SMTP configuration coming soon"
+                      disabled={isSendingInvoice}
+                      className="flex-1 py-2 px-3 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
                     >
                       <svg
-                        className="w-4 h-4"
+                        className={`w-4 h-4 ${isSendingInvoice ? 'animate-spin' : ''}`}
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                        />
+                        {isSendingInvoice ? (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                          />
+                        ) : (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                          />
+                        )}
                       </svg>
-                      Send Invoice
+                      {isSendingInvoice ? 'Sending…' : 'Send Invoice'}
                     </button>
                   )}
                 </div>
