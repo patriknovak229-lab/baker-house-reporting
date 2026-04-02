@@ -28,41 +28,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'SMTP not configured (SMTP_USER / SMTP_PASS missing)' }, { status: 500 });
   }
 
-  const invoiceNum = generateInvoiceNumber(reservation.reservationNumber);
-  const vs = invoiceNum.replace(/\D/g, '');
-  const spdString = buildSPDString(PAYMENT_IBAN, reservation.price, vs);
+  try {
+    const invoiceNum = generateInvoiceNumber(reservation.reservationNumber);
+    const vs = invoiceNum.replace(/\D/g, '');
+    const spdString = buildSPDString(PAYMENT_IBAN, reservation.price, vs);
 
-  const qrDataUrl = await QRCodeLib.toDataURL(spdString, {
-    width: 200,
-    margin: 1,
-    errorCorrectionLevel: 'M',
-  });
+    const qrDataUrl = await QRCodeLib.toDataURL(spdString, {
+      width: 200,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    });
 
-  const html = buildInvoiceHTML(
-    reservation,
-    reservation.invoiceData,
-    invoiceNum,
-    { qrDataUrl, info: { spdString, vs, amountCZK: reservation.price } },
-    true // forEmail — omits the window.print() script
-  );
+    const html = buildInvoiceHTML(
+      reservation,
+      reservation.invoiceData,
+      invoiceNum,
+      { qrDataUrl, info: { spdString, vs, amountCZK: reservation.price } },
+      true // forEmail — omits the window.print() script
+    );
 
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST ?? 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT ?? '587'),
-    secure: false, // STARTTLS on port 587
-    auth: { user: smtpUser, pass: smtpPass },
-  });
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST ?? 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT ?? '587'),
+      secure: false, // STARTTLS on port 587
+      auth: { user: smtpUser, pass: smtpPass },
+    });
 
-  const from = process.env.SMTP_FROM
-    ? `"Baker House Apartments" <${process.env.SMTP_FROM}>`
-    : `"Baker House Apartments" <${smtpUser}>`;
+    const from = process.env.SMTP_FROM
+      ? `"Baker House Apartments" <${process.env.SMTP_FROM}>`
+      : `"Baker House Apartments" <${smtpUser}>`;
 
-  await transporter.sendMail({
-    from,
-    to: reservation.invoiceData.billingEmail,
-    subject: `Invoice ${invoiceNum} – Baker House Apartments`,
-    html,
-  });
+    await transporter.sendMail({
+      from,
+      to: reservation.invoiceData.billingEmail,
+      subject: `Invoice ${invoiceNum} – Baker House Apartments`,
+      html,
+    });
 
-  return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
