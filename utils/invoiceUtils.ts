@@ -116,7 +116,7 @@ export function buildInvoiceHTML(
       <span style="text-align:right;min-width:80px">Celkem</span>
     </div>
     <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:8px;border-bottom:1px solid #EFEAE4;font-size:13px">
-      <span>Ubytování / Accommodation</span>
+      <span>Ubytování / Accommodation<br/><span style="font-size:11px;color:${MID_BROWN}">${res.firstName} ${res.lastName}</span></span>
       <span style="text-align:right;min-width:40px">${res.numberOfNights}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(unitPrice)}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(res.price)}</span>
@@ -149,7 +149,7 @@ export function buildInvoiceHTML(
   <div style="border-top:1px solid #EFEAE4;padding:14px 20px 16px;text-align:center;background:#fdfaf7">
     <div style="color:${MID_BROWN};margin-bottom:2px;font-size:11px">Děkujeme za Vaši návštěvu! / Thank you for your stay!</div>
     <div style="font-family:'Great Vibes',cursive;font-size:34px;color:${GOLD};line-height:1.2">Patrik &amp; Zuzana</div>
-    <div style="font-size:10px;color:#aaa;margin-top:2px">www.bakerhouseapartments.cz</div>
+    <a href="https://www.bakerhouseapartments.cz" style="font-size:13px;color:${GOLD};font-weight:600;text-decoration:none;display:block;margin-top:4px">www.bakerhouseapartments.cz</a>
     ${invoiceData.billingEmail ? `<div style="font-size:10px;color:#aaa;margin-top:1px">Billing: ${invoiceData.billingEmail}</div>` : ""}
   </div>
 

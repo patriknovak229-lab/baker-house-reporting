@@ -340,7 +340,13 @@ function InvoicePreview({
             color: DARK_BROWN,
           }}
         >
-          <span>Ubytování / Accommodation</span>
+          <span>
+            Ubytování / Accommodation
+            <br />
+            <span style={{ fontSize: 11, color: "#6b5b4e" }}>
+              {res.firstName} {res.lastName}
+            </span>
+          </span>
           <span style={{ textAlign: "right", minWidth: 40 }}>{res.numberOfNights}</span>
           <span style={{ textAlign: "right", minWidth: 70 }}>{formatCurrency(unitPrice)}</span>
           <span style={{ textAlign: "right", minWidth: 70 }}>{formatCurrency(res.price)}</span>
@@ -383,9 +389,12 @@ function InvoicePreview({
         >
           Patrik &amp; Zuzana
         </div>
-        <div style={{ fontSize: 10, color: "#aaa", marginTop: 2 }}>
+        <a
+          href="https://www.bakerhouseapartments.cz"
+          style={{ fontSize: 13, color: "#B08D57", fontWeight: 600, textDecoration: "none", display: "block", marginTop: 4 }}
+        >
           www.bakerhouseapartments.cz
-        </div>
+        </a>
         {invoiceData.billingEmail && (
           <div style={{ fontSize: 10, color: "#aaa", marginTop: 1 }}>
             Billing: {invoiceData.billingEmail}
