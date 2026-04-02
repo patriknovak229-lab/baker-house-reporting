@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import QRCodeLib from 'qrcode';
-import puppeteer from 'puppeteer';
+import chromium from '@sparticuz/chromium';
+import puppeteer from 'puppeteer-core';
 import type { Reservation } from '@/types/reservation';
 import {
   buildInvoiceHTML,
@@ -14,7 +15,14 @@ function buildSPDString(iban: string, amountCZK: number, vs: string): string {
 }
 
 async function generatePDF(html: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({ headless: true });
+  const executablePath =
+    process.env.CHROME_EXECUTABLE_PATH ?? await chromium.executablePath();
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless: true,
+  });
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
