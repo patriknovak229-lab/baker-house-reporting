@@ -1,10 +1,11 @@
 'use client';
-
-import { useState } from "react";
-import Nav from "@/components/Nav";
-import type { Tab } from "@/components/Nav";
-import TransactionsPage from "@/components/transactions/TransactionsPage";
-import PerformancePage from "@/components/performance/PerformancePage";
+import { useState, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
+import Nav from '@/components/Nav';
+import type { Role, Tab } from '@/utils/roles';
+import { canAccessTab, getDefaultTab } from '@/utils/roles';
+import TransactionsPage from '@/components/transactions/TransactionsPage';
+import PerformancePage from '@/components/performance/PerformancePage';
 
 function ComingSoon({ tab }: { tab: string }) {
   return (
@@ -21,15 +22,34 @@ function ComingSoon({ tab }: { tab: string }) {
 }
 
 export default function AppShell() {
-  const [activeTab, setActiveTab] = useState<Tab>("transactions");
+  const { data: session, status } = useSession();
+  const role = session?.user?.role as Role | undefined;
+  const [activeTab, setActiveTab] = useState<Tab>('transactions');
+
+  // Once role is known, jump to the user's default tab
+  useEffect(() => {
+    if (role) setActiveTab(getDefaultTab(role));
+  }, [role]);
+
+  function handleTabChange(tab: Tab) {
+    if (!role || canAccessTab(role, tab)) setActiveTab(tab);
+  }
+
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Nav activeTab={activeTab} onTabChange={setActiveTab} />
+      <Nav activeTab={activeTab} onTabChange={handleTabChange} />
       <main>
-        {activeTab === "transactions" && <TransactionsPage />}
-        {activeTab === "performance" && <PerformancePage />}
-        {activeTab === "accounting" && <ComingSoon tab="Accounting" />}
+        {activeTab === 'transactions' && <TransactionsPage />}
+        {activeTab === 'performance' && <PerformancePage />}
+        {activeTab === 'accounting' && <ComingSoon tab="Accounting" />}
       </main>
     </div>
   );

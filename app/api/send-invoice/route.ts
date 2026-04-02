@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
+import { requireRole } from '@/utils/authGuard';
 import QRCodeLib from 'qrcode';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
@@ -38,6 +39,9 @@ async function generatePDF(html: string): Promise<Buffer> {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireRole(['admin', 'super']);
+  if ('error' in guard) return guard.error;
+
   const { reservation, includeQR }: { reservation: Reservation; includeQR?: boolean } = await req.json();
 
   if (!reservation.invoiceData) {

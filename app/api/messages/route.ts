@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccessToken } from '@/utils/beds24Auth';
+import { requireRole } from '@/utils/authGuard';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 
@@ -65,6 +66,9 @@ export async function GET(req: NextRequest) {
 
 // ── POST /api/messages — send a message to a guest ────────────────────────────
 export async function POST(req: NextRequest) {
+  const guard = await requireRole(['admin', 'super']);
+  if ('error' in guard) return guard.error;
+
   let token: string;
   try {
     token = await getAccessToken();

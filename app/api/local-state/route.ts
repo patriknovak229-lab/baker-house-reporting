@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
+import { requireRole } from '@/utils/authGuard';
 
 // All locally managed reservation fields (not stored in Beds24)
 // Keyed by reservationNumber (e.g. "BH-12345")
@@ -27,6 +28,9 @@ export async function GET() {
 // Body: { reservationNumber: string, fields: Record<string, unknown> }
 // Passing an empty fields object removes that reservation's entry.
 export async function POST(req: NextRequest) {
+  const guard = await requireRole(['admin', 'super']);
+  if ('error' in guard) return guard.error;
+
   const redis = getRedis();
   if (!redis) {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
