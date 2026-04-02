@@ -1,7 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  experimental: {
+    outputFileTracingIncludes: {
+      "app/api/send-invoice/route": [
+        "./node_modules/@sparticuz/chromium/bin/**/*",
+      ],
+    },
+  },
 };
 
 export default nextConfig;
