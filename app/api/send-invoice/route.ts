@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import QRCodeLib from 'qrcode';
+import puppeteer from 'puppeteer';
 import type { Reservation } from '@/types/reservation';
 import {
   buildInvoiceHTML,
@@ -12,8 +13,25 @@ function buildSPDString(iban: string, amountCZK: number, vs: string): string {
   return `SPD*1.0*ACC:${iban}*AM:${amountCZK.toFixed(2)}*CC:CZK*VS:${vs}*MSG:Baker House Apartments`;
 }
 
+async function generatePDF(html: string): Promise<Buffer> {
+  const browser = await puppeteer.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.evaluate(() => document.fonts.ready);
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '14mm', right: '18mm', bottom: '14mm', left: '18mm' },
+    });
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function POST(req: NextRequest) {
-  const { reservation }: { reservation: Reservation } = await req.json();
+  const { reservation, includeQR }: { reservation: Reservation; includeQR?: boolean } = await req.json();
 
   if (!reservation.invoiceData) {
     return NextResponse.json({ error: 'No invoice data on reservation' }, { status: 400 });
@@ -31,21 +49,27 @@ export async function POST(req: NextRequest) {
   try {
     const invoiceNum = generateInvoiceNumber(reservation.reservationNumber);
     const vs = invoiceNum.replace(/\D/g, '');
-    const spdString = buildSPDString(PAYMENT_IBAN, reservation.price, vs);
 
-    const qrDataUrl = await QRCodeLib.toDataURL(spdString, {
-      width: 200,
-      margin: 1,
-      errorCorrectionLevel: 'M',
-    });
+    let payment: { qrDataUrl: string; info: { spdString: string; vs: string; amountCZK: number } } | undefined;
+    if (includeQR) {
+      const spdString = buildSPDString(PAYMENT_IBAN, reservation.price, vs);
+      const qrDataUrl = await QRCodeLib.toDataURL(spdString, {
+        width: 200,
+        margin: 1,
+        errorCorrectionLevel: 'M',
+      });
+      payment = { qrDataUrl, info: { spdString, vs, amountCZK: reservation.price } };
+    }
 
     const html = buildInvoiceHTML(
       reservation,
       reservation.invoiceData,
       invoiceNum,
-      { qrDataUrl, info: { spdString, vs, amountCZK: reservation.price } },
+      payment,
       true // forEmail — omits the window.print() script
     );
+
+    const pdfBuffer = await generatePDF(html);
 
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST ?? 'smtp.gmail.com',
@@ -62,7 +86,14 @@ export async function POST(req: NextRequest) {
       from,
       to: reservation.invoiceData.billingEmail,
       subject: `Invoice ${invoiceNum} – Baker House Apartments`,
-      html,
+      text: `Dear guest,\n\nPlease find your invoice ${invoiceNum} attached.\n\nThank you for staying with us!\n\nPatrik & Zuzana\nBaker House Apartments\nhttps://www.bakerhouseapartments.cz`,
+      attachments: [
+        {
+          filename: `${invoiceNum}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ],
     });
 
     return NextResponse.json({ ok: true });

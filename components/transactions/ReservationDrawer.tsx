@@ -566,7 +566,7 @@ export default function ReservationDrawer({
       const res = await fetch('/api/send-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reservation: reservation! }),
+        body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR }),
       });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
