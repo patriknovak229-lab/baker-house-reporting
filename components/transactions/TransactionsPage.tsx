@@ -8,10 +8,9 @@ import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 
-// ─── Local state persistence (pre-Redis) ────────────────────────────────────
-// Locally managed fields are not stored in Beds24. We persist them in
-// localStorage so they survive page refreshes and Sync operations.
-const LOCAL_KEY = "bha-local-state";
+// ─── Local state persistence (Redis-backed) ──────────────────────────────────
+// Locally managed fields are not stored in Beds24. They are persisted in Redis
+// via /api/local-state so they are shared across devices and browsers.
 
 type LocalFields = {
   additionalEmail?: string;
@@ -23,33 +22,16 @@ type LocalFields = {
   invoiceStatus?: InvoiceStatus;
 };
 
-function loadLocal(): Record<string, LocalFields> {
-  try {
-    const stored = localStorage.getItem(LOCAL_KEY);
-    return stored ? JSON.parse(stored) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveLocal(reservations: Reservation[]) {
-  const state: Record<string, LocalFields> = {};
-  for (const r of reservations) {
-    const local: LocalFields = {};
-    if (r.additionalEmail) local.additionalEmail = r.additionalEmail;
-    if (r.paymentStatusOverride !== null) local.paymentStatusOverride = r.paymentStatusOverride;
-    if (r.notes) local.notes = r.notes;
-    if (Object.keys(r.manualFlagOverrides).length > 0) local.manualFlagOverrides = r.manualFlagOverrides;
-    if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
-    if (r.invoiceData) local.invoiceData = r.invoiceData;
-    if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
-    if (Object.keys(local).length > 0) state[r.reservationNumber] = local;
-  }
-  try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(state));
-  } catch {
-    // Storage full or unavailable — fail silently
-  }
+function extractLocalFields(r: Reservation): LocalFields {
+  const local: LocalFields = {};
+  if (r.additionalEmail) local.additionalEmail = r.additionalEmail;
+  if (r.paymentStatusOverride !== null) local.paymentStatusOverride = r.paymentStatusOverride;
+  if (r.notes) local.notes = r.notes;
+  if (Object.keys(r.manualFlagOverrides).length > 0) local.manualFlagOverrides = r.manualFlagOverrides;
+  if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
+  if (r.invoiceData) local.invoiceData = r.invoiceData;
+  if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
+  return local;
 }
 
 function mergeLocal(reservations: Reservation[], state: Record<string, LocalFields>): Reservation[] {
@@ -57,6 +39,19 @@ function mergeLocal(reservations: Reservation[], state: Record<string, LocalFiel
     const local = state[r.reservationNumber];
     return local ? { ...r, ...local } : r;
   });
+}
+
+// Fire-and-forget — UI is already updated optimistically before this resolves
+async function persistOverride(reservationNumber: string, fields: LocalFields): Promise<void> {
+  try {
+    await fetch('/api/local-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reservationNumber, fields }),
+    });
+  } catch {
+    // Non-fatal — user sees the change immediately; worst case it doesn't persist
+  }
 }
 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
@@ -72,13 +67,18 @@ export default function TransactionsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/bookings");
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error ?? `HTTP ${res.status}`);
+      const [bookingsRes, localStateRes] = await Promise.all([
+        fetch("/api/bookings"),
+        fetch("/api/local-state"),
+      ]);
+      if (!bookingsRes.ok) {
+        const json = await bookingsRes.json().catch(() => ({}));
+        throw new Error(json.error ?? `HTTP ${bookingsRes.status}`);
       }
-      const data: Reservation[] = await res.json();
-      const localState = loadLocal();
+      const data: Reservation[] = await bookingsRes.json();
+      const localState: Record<string, LocalFields> = localStateRes.ok
+        ? await localStateRes.json().catch(() => ({}))
+        : {};
       setReservations(mergeLocal(data, localState));
       setLastSynced(new Date());
     } catch (err) {
@@ -186,14 +186,11 @@ export default function TransactionsPage() {
   }, [reservations, search, filters]);
 
   function handleUpdate(updated: Reservation) {
-    setReservations((prev) => {
-      const next = prev.map((r) =>
-        r.reservationNumber === updated.reservationNumber ? updated : r
-      );
-      saveLocal(next);
-      return next;
-    });
+    setReservations((prev) =>
+      prev.map((r) => r.reservationNumber === updated.reservationNumber ? updated : r)
+    );
     setSelectedReservation(updated);
+    persistOverride(updated.reservationNumber, extractLocalFields(updated));
   }
 
   return (
