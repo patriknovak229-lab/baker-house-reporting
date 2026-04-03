@@ -5,7 +5,7 @@ interface Props {
   reservations: Reservation[];
 }
 
-const ROOMS: Room[] = ["K.201 (2BR)", "K.202 (1BR)", "K.203 (1BR)"];
+const ROOMS: Room[] = ["K.201", "K.202", "K.203"];
 const DAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
 // ISO date string YYYY-MM-DD without timezone shift
