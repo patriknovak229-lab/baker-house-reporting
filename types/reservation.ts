@@ -5,7 +5,8 @@ export type PaymentStatus = "Unpaid" | "Partially Paid" | "Paid" | "Refunded";
 export type CustomerFlag =
   | "Repeat Customer"
   | "High Value Customer"
-  | "Problematic Customer";
+  | "Problematic Customer"
+  | "VIP Customer";
 export type RatingStatus = "none" | "good" | "bad";
 export type InvoiceStatus = "Not Issued" | "Issued" | "Sent";
 

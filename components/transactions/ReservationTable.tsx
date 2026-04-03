@@ -274,19 +274,23 @@ export default function ReservationTable({
                           <Badge
                             key={flag}
                             variant={
-                              flag === "Repeat Customer"
-                                ? "indigo"
-                                : flag === "High Value Customer"
-                                  ? "gold"
-                                  : "red"
+                              flag === "VIP Customer"
+                                ? "purple"
+                                : flag === "Repeat Customer"
+                                  ? "indigo"
+                                  : flag === "High Value Customer"
+                                    ? "gold"
+                                    : "red"
                             }
                             size="xs"
                           >
-                            {flag === "Repeat Customer"
-                              ? "↩ Repeat"
-                              : flag === "High Value Customer"
-                                ? "★ High Value"
-                                : "⚠ Problem"}
+                            {flag === "VIP Customer"
+                              ? "👑 VIP"
+                              : flag === "Repeat Customer"
+                                ? "↩ Repeat"
+                                : flag === "High Value Customer"
+                                  ? "★ High Value"
+                                  : "⚠ Problem"}
                           </Badge>
                         ))}
                       </div>

@@ -590,6 +590,7 @@ export default function ReservationDrawer({
   }
 
   const ALL_FLAGS: CustomerFlag[] = [
+    "VIP Customer",
     "High Value Customer",
     "Repeat Customer",
     "Problematic Customer",
@@ -599,6 +600,12 @@ export default function ReservationDrawer({
     CustomerFlag,
     { label: string; activeClass: string; inactiveClass: string }
   > = {
+    "VIP Customer": {
+      label: "👑 VIP Customer",
+      activeClass: "bg-purple-600 text-white border-purple-600 ring-2 ring-purple-300",
+      inactiveClass:
+        "bg-white text-gray-500 border-gray-200 hover:border-purple-400 hover:text-purple-600",
+    },
     "High Value Customer": {
       label: "★ High Value Customer",
       activeClass: "bg-yellow-500 text-white border-yellow-500",
