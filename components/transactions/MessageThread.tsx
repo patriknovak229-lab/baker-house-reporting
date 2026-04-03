@@ -36,7 +36,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const fetchMessages = useCallback(async () => {
@@ -47,7 +47,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
       const data: ThreadMessage[] = await res.json();
-      setMessages(data);
+      setMessages([...data].reverse()); // oldest → newest (top → bottom)
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -67,9 +67,11 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
     return () => clearInterval(id);
   }, [open, fetchMessages]);
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom of message container (not the whole page) when messages change
   useEffect(() => {
-    if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (open && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   }, [messages, open]);
 
   const active = isConversationActive(messages);
@@ -146,7 +148,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
           </div>
 
           {/* Messages */}
-          <div className="max-h-64 overflow-y-auto px-3 py-3 space-y-2 bg-white">
+          <div ref={messagesContainerRef} className="max-h-64 overflow-y-auto px-3 py-3 space-y-2 bg-white">
             {loadError && (
               <p className="text-xs text-red-500 text-center">{loadError}</p>
             )}
@@ -174,7 +176,6 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
                 </span>
               </div>
             ))}
-            <div ref={bottomRef} />
           </div>
 
           {/* Send box */}
