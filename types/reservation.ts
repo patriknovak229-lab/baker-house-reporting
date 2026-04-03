@@ -1,5 +1,5 @@
 export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone";
-export type Room = "K.201 (2BR)" | "K.202 (1BR)" | "K.203 (1BR)";
+export type Room = "K.201" | "K.202" | "K.203";
 export type CleaningStatus = "Pending" | "In Progress" | "Completed";
 export type PaymentStatus = "Unpaid" | "Partially Paid" | "Paid" | "Refunded";
 export type CustomerFlag =

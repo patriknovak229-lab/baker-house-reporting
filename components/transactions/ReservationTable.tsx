@@ -186,7 +186,7 @@ export default function ReservationTable({
             ) : (
               paginated.map((res) => {
                 const effectiveFlags = getEffectiveFlags(res, allReservations);
-                const stayStatuses = computeStayStatus(res);
+                const stayStatuses = computeStayStatus(res, allReservations);
                 const flag = countryCodeToFlag(res.nationality);
                 const emoji = ratingEmoji(res.ratingStatus);
 
@@ -277,12 +277,21 @@ export default function ReservationTable({
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1">
                         {stayStatuses.map((status) => {
-                          if (status === "arriving-today") return (
-                            <Badge key={status} variant="amber-filled" size="xs">📅 {res.room}</Badge>
+                          if (status === "checking-in") return (
+                            <Badge key={status} variant="amber-filled" size="xs">Checking in</Badge>
                           );
                           if (status === "arriving-tomorrow") return (
-                            <Badge key={status} variant="amber" size="xs">📅 {res.room}</Badge>
+                            <Badge key={status} variant="amber" size="xs">Arriving Tomorrow</Badge>
                           );
+                          if (status === "arriving-in-x-days") {
+                            const today = new Date().toISOString().slice(0, 10);
+                            const days = Math.round(
+                              (new Date(res.checkInDate).getTime() - new Date(today).getTime()) / 86_400_000
+                            );
+                            return (
+                              <Badge key={status} variant="gray" size="xs">Arriving in {days} days</Badge>
+                            );
+                          }
                           if (status === "in-house") return (
                             <Badge key={status} variant="green-filled" size="xs">🏠 {res.room}</Badge>
                           );

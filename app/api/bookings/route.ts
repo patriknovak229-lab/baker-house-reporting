@@ -7,9 +7,9 @@ const BEDS24_API_BASE = "https://beds24.com/api/v2";
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 // Derived from raw response inspection. Confirm in Beds24 → Properties → Rooms.
 const UNIT_MAP: Record<number, Room> = {
-  656437: "K.201 (2BR)",
-  648596: "K.202 (1BR)",
-  648772: "K.203 (1BR)",
+  656437: "K.201",
+  648596: "K.202",
+  648772: "K.203",
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ function mapChannel(apiSource = "", referer = ""): Channel {
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 function mapRoom(roomId: number): Room {
-  return UNIT_MAP[roomId] ?? "K.202 (1BR)";
+  return UNIT_MAP[roomId] ?? "K.202";
 }
 
 // ─── Cleaning status (date-based until cleaning app is wired) ──────────────────
