@@ -13,7 +13,11 @@ interface BadgeProps {
     | "coral"
     | "indigo"
     | "teal"
-  | "purple";
+  | "purple"
+  | "amber-filled"
+  | "green-filled"
+  | "orange"
+  | "orange-light";
   size?: "sm" | "xs";
 }
 
@@ -28,6 +32,10 @@ const variantClasses: Record<BadgeProps["variant"], string> = {
   indigo: "bg-indigo-100 text-indigo-800",
   teal: "bg-teal-100 text-teal-800",
   purple: "bg-purple-600 text-white ring-1 ring-purple-400",
+  "amber-filled": "bg-amber-500 text-white",
+  "green-filled": "bg-green-600 text-white",
+  "orange": "bg-orange-500 text-white",
+  "orange-light": "bg-orange-100 text-orange-800",
 };
 
 export default function Badge({

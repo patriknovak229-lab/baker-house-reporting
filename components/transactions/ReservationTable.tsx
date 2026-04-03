@@ -4,6 +4,7 @@ import type { Reservation, Channel, CleaningStatus, PaymentStatus } from "@/type
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { getEffectiveFlags } from "@/utils/flagUtils";
+import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 
 type SortField = keyof Pick<
@@ -168,6 +169,9 @@ export default function ReservationTable({
                 </th>
               ))}
               <th className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide text-left">
+                Status
+              </th>
+              <th className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide text-left">
                 Flags
               </th>
             </tr>
@@ -175,13 +179,14 @@ export default function ReservationTable({
           <tbody className="bg-white divide-y divide-gray-100">
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-4 py-10 text-center text-gray-400 text-sm">
+                <td colSpan={13} className="px-4 py-10 text-center text-gray-400 text-sm">
                   No reservations match your filters.
                 </td>
               </tr>
             ) : (
               paginated.map((res) => {
                 const effectiveFlags = getEffectiveFlags(res, allReservations);
+                const stayStatuses = computeStayStatus(res);
                 const flag = countryCodeToFlag(res.nationality);
                 const emoji = ratingEmoji(res.ratingStatus);
 
@@ -268,6 +273,31 @@ export default function ReservationTable({
                         )}
                       </div>
                     </td>
+                    {/* Stay Status */}
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <div className="flex flex-wrap gap-1">
+                        {stayStatuses.map((status) => {
+                          if (status === "arriving-today") return (
+                            <Badge key={status} variant="amber-filled" size="xs">📅 {res.room}</Badge>
+                          );
+                          if (status === "arriving-tomorrow") return (
+                            <Badge key={status} variant="amber" size="xs">📅 {res.room}</Badge>
+                          );
+                          if (status === "in-house") return (
+                            <Badge key={status} variant="green-filled" size="xs">🏠 {res.room}</Badge>
+                          );
+                          if (status === "checking-out-today") return (
+                            <Badge key={status} variant="orange" size="xs">🚪 Today</Badge>
+                          );
+                          if (status === "checking-out-tomorrow") return (
+                            <Badge key={status} variant="orange-light" size="xs">🚪 Tomorrow</Badge>
+                          );
+                          return null;
+                        })}
+                      </div>
+                    </td>
+
+                    {/* Customer Flags */}
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1">
                         {effectiveFlags.map((flag) => (
