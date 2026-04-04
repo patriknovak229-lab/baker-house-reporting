@@ -36,7 +36,7 @@ function isRoomBooked(reservations: Reservation[], room: Room, date: string): bo
   );
 }
 
-function getGuestName(reservations: Reservation[], room: Room, date: string): string | null {
+function getGuest(reservations: Reservation[], room: Room, date: string): { name: string; initials: string } | null {
   const res = reservations.find(
     (r) =>
       r.room === room &&
@@ -45,7 +45,9 @@ function getGuestName(reservations: Reservation[], room: Room, date: string): st
       r.checkOutDate > date
   );
   if (!res) return null;
-  return `${res.firstName} ${res.lastName}`.trim() || null;
+  const name = `${res.firstName} ${res.lastName}`.trim();
+  const initials = [res.firstName?.[0], res.lastName?.[0]].filter(Boolean).join("").toUpperCase();
+  return name ? { name, initials } : null;
 }
 
 // Colour scale: 0% = green, 1–33% = amber, 34–66% = orange, 67–100% = red.
@@ -139,7 +141,7 @@ export default function OccupancyCalendar({ reservations }: Props) {
                   const isToday = date === todayStr;
                   const bookedCount = ROOMS.filter((r) => isRoomBooked(reservations, r, date)).length;
                   const { filled } = getOccupancyStyle(bookedCount, ROOMS.length);
-                  const guestName = booked ? getGuestName(reservations, room, date) : null;
+                  const guest = booked ? getGuest(reservations, room, date) : null;
 
                   return (
                     <td
@@ -147,9 +149,15 @@ export default function OccupancyCalendar({ reservations }: Props) {
                       className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}
                     >
                       <div
-                        className={`h-5 rounded-sm ${booked ? filled : "bg-gray-100"}`}
-                        title={booked ? `${room} — ${guestName ?? "booked"}` : `${room} — free`}
-                      />
+                        className={`h-5 rounded-sm flex items-center justify-center ${booked ? filled : "bg-gray-100"}`}
+                        title={booked ? `${room} — ${guest?.name ?? "booked"}` : `${room} — free`}
+                      >
+                        {guest?.initials && (
+                          <span className="text-[9px] font-bold text-white leading-none select-none">
+                            {guest.initials}
+                          </span>
+                        )}
+                      </div>
                     </td>
                   );
                 })}
