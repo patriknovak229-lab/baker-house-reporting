@@ -68,7 +68,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let payload: Beds24WebhookPayload;
   try {
-    payload = await req.json();
+    const raw = await req.text();
+    console.log("[webhook] raw body:", raw);
+    payload = JSON.parse(raw);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
