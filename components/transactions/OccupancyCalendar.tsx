@@ -36,6 +36,18 @@ function isRoomBooked(reservations: Reservation[], room: Room, date: string): bo
   );
 }
 
+function getGuestName(reservations: Reservation[], room: Room, date: string): string | null {
+  const res = reservations.find(
+    (r) =>
+      r.room === room &&
+      r.paymentStatus !== "Refunded" &&
+      r.checkInDate <= date &&
+      r.checkOutDate > date
+  );
+  if (!res) return null;
+  return `${res.firstName} ${res.lastName}`.trim() || null;
+}
+
 // Colour scale: 0% = green, 1–33% = amber, 34–66% = orange, 67–100% = red.
 // Scales automatically with any room count.
 function getOccupancyStyle(bookedCount: number, totalRooms: number) {
@@ -127,6 +139,7 @@ export default function OccupancyCalendar({ reservations }: Props) {
                   const isToday = date === todayStr;
                   const bookedCount = ROOMS.filter((r) => isRoomBooked(reservations, r, date)).length;
                   const { filled } = getOccupancyStyle(bookedCount, ROOMS.length);
+                  const guestName = booked ? getGuestName(reservations, room, date) : null;
 
                   return (
                     <td
@@ -135,7 +148,7 @@ export default function OccupancyCalendar({ reservations }: Props) {
                     >
                       <div
                         className={`h-5 rounded-sm ${booked ? filled : "bg-gray-100"}`}
-                        title={booked ? `${room} — booked` : `${room} — free`}
+                        title={booked ? `${room} — ${guestName ?? "booked"}` : `${room} — free`}
                       />
                     </td>
                   );
