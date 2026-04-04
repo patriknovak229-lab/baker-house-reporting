@@ -217,7 +217,9 @@ export async function POST(req: NextRequest) {
     referer: "Direct",
     apiSource: "Direct",
     comments: notes ?? "",
-    // Price set via invoiceItems — bypasses booking engine restrictions (inc. min stay)
+    // Top-level price field — shown in Beds24 UI and read by the reporting app
+    price: price ? Number(price) : 0,
+    // invoiceItems creates the charge line item in Beds24 invoicing
     invoiceItems: price
       ? [{ type: "charge", subType: 1, description: "Accommodation", qty: 1, amount: Number(price) }]
       : [],

@@ -45,7 +45,8 @@ interface Beds24Booking {
   price?: number | string;
   apiSource?: string;
   status?: string;
-  bookingTime?: string; // ISO — when the booking was originally created
+  bookingTime?: string;  // ISO — when the booking was originally created
+  modifiedTime?: string; // ISO — when the booking was last modified
 }
 
 // Beds24 wraps the booking under a "booking" key
@@ -89,12 +90,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, skipped: "cancellation" });
   }
 
-  // Skip if the booking was created more than 30 minutes ago — this is a modification
-  // (e.g. a guest message, status change) not a new booking
+  // Skip modifications to existing bookings.
+  // A true new booking has bookingTime ≈ modifiedTime (within 60s).
+  // Any later save (price edit, message, status change) will have modifiedTime > bookingTime.
   if (booking?.bookingTime) {
     const age = Date.now() - new Date(booking.bookingTime).getTime();
     if (age > NEW_BOOKING_WINDOW_MS) {
       return NextResponse.json({ ok: true, skipped: "existing booking update" });
+    }
+    // Also skip if this is a modification of a recently-created booking
+    if (booking.modifiedTime) {
+      const drift = new Date(booking.modifiedTime).getTime() - new Date(booking.bookingTime).getTime();
+      if (drift > 60_000) {
+        return NextResponse.json({ ok: true, skipped: "recent booking modification" });
+      }
     }
   }
 
