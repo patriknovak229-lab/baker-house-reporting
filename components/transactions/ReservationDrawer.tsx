@@ -778,7 +778,7 @@ export default function ReservationDrawer({
                 const cleaned = reservation.phone.replace(/[^\d+]/g, "").replace(/^\+/, "");
                 return (
                   <a
-                    href={`https://wa.me/${cleaned}`}
+                    href={`https://web.whatsapp.com/send?phone=${cleaned}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-semibold transition-colors"
