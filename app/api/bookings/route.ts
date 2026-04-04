@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
+import { requireRole } from "@/utils/authGuard";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -183,7 +184,62 @@ async function fetchAllBookings(token: string): Promise<Beds24Booking[]> {
   return all;
 }
 
-// ─── Route handler ────────────────────────────────────────────────────────────
+// ─── POST handler — create a manual direct booking ───────────────────────────
+export async function POST(req: NextRequest) {
+  const guard = await requireRole(["admin", "super"]);
+  if ("error" in guard) return guard.error;
+
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Auth error" }, { status: 500 });
+  }
+
+  const body = await req.json();
+  const { roomId, arrival, departure, numAdult, numChild, firstName, lastName, email, phone, price, notes } = body;
+
+  if (!roomId || !arrival || !departure || !firstName) {
+    return NextResponse.json({ error: "roomId, arrival, departure and firstName are required" }, { status: 400 });
+  }
+
+  const booking = {
+    roomId: Number(roomId),
+    status: "confirmed",
+    arrival,
+    departure,
+    numAdult: numAdult ?? 1,
+    numChild: numChild ?? 0,
+    firstName,
+    lastName: lastName ?? "",
+    email: email ?? "",
+    phone: phone ?? "",
+    referer: "Direct",
+    apiSource: "Direct",
+    comments: notes ?? "",
+    // Price set via invoiceItems — bypasses booking engine restrictions (inc. min stay)
+    invoiceItems: price
+      ? [{ type: "charge", subType: 1, description: "Accommodation", qty: 1, amount: Number(price) }]
+      : [],
+  };
+
+  const res = await fetch(`${BEDS24_API_BASE}/bookings`, {
+    method: "POST",
+    headers: { token, "Content-Type": "application/json" },
+    body: JSON.stringify([booking]),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    return NextResponse.json({ error: `Beds24 ${res.status}: ${text}` }, { status: res.status });
+  }
+
+  const json = await res.json();
+  return NextResponse.json({ ok: true, data: json });
+}
+
+// ─── GET handler — fetch all bookings ────────────────────────────────────────
 export async function GET(req: NextRequest) {
   let token: string;
   try {

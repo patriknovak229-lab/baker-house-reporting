@@ -6,7 +6,11 @@ import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
+import CreateBookingModal from "./CreateBookingModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
+import { useSession } from "next-auth/react";
+import { canMutate } from "@/utils/roles";
+import type { Role } from "@/utils/roles";
 
 // ─── Local state persistence (Redis-backed) ──────────────────────────────────
 // Locally managed fields are not stored in Beds24. They are persisted in Redis
@@ -57,11 +61,15 @@ async function persistOverride(reservationNumber: string, fields: LocalFields): 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
 
 export default function TransactionsPage() {
+  const { data: session } = useSession();
+  const role = (session?.user as { role?: Role } | undefined)?.role;
+
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const fetchReservations = useCallback(async () => {
     setIsLoading(true);
@@ -213,6 +221,17 @@ export default function TransactionsPage() {
               {lastSynced ? lastSynced.toLocaleTimeString() : "—"}
             </span>
           </span>
+          {canMutate(role) && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Booking
+            </button>
+          )}
           <button
             onClick={fetchReservations}
             disabled={isLoading}
@@ -341,6 +360,17 @@ export default function TransactionsPage() {
         onClose={() => setSelectedReservation(null)}
         onUpdate={handleUpdate}
       />
+
+      {/* Create booking modal */}
+      {showCreateModal && (
+        <CreateBookingModal
+          onClose={() => setShowCreateModal(false)}
+          onCreated={() => {
+            setShowCreateModal(false);
+            fetchReservations();
+          }}
+        />
+      )}
     </div>
   );
 }
