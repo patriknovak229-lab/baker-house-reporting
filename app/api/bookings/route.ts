@@ -99,20 +99,62 @@ function parseCommissionBreakdown(
   return { commissionAmount: totalCommission, paymentChargeAmount: 0 };
 }
 
+// ─── Manual group overrides ───────────────────────────────────────────────────
+// For bookings that were manually copied into Beds24 without auto-allocation,
+// masterid is not set. Hard-wire them here so they merge correctly.
+// Format: masterId → [siblingId, ...] — master's price/guest data is used;
+// all bookings in the group contribute their physical room to linkedRooms.
+const MANUAL_GROUPS: Record<number, number[]> = {
+  84883846: [84885667], // Twin Apartments — manually copied Apr 2026
+};
+
 // ─── Merge package/virtual room bookings ─────────────────────────────────────
 // When a booking arrives on a virtual room (e.g. "Twin Apartments" = K.202+K.203),
 // Beds24 creates sub-bookings for each physical room, each referencing the original
 // via `masterid`. We merge them into one reservation to avoid double-counting.
 //
-// Two cases handled:
+// Three cases handled:
+// 0. Manual group overrides (MANUAL_GROUPS) — no masterid in Beds24, hard-wired here.
 // 1. Master booking (virtual room) present + sub-bookings → use master for price/guest,
 //    subs for physical room names.
 // 2. Master booking filtered out (cancelled/virtual) but subs share a masterid →
 //    use first sub for price/guest, combine all physical room names.
 function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
+  // ── Case 0: apply manual group overrides first ──────────────────────────────
+  const manualConsumedIds = new Set<number>();
+  const manualResults: Beds24Booking[] = [];
+
+  for (const [masterIdStr, siblingIds] of Object.entries(MANUAL_GROUPS)) {
+    const masterId = Number(masterIdStr);
+    const masterBooking = all.find((b) => b.id === masterId);
+    const siblings = siblingIds
+      .map((id) => all.find((b) => b.id === id))
+      .filter((b): b is Beds24Booking => b != null);
+
+    if (!masterBooking || siblings.length === 0) continue;
+
+    const allInGroup = [masterBooking, ...siblings];
+    const physicalRooms = allInGroup
+      .map((b) => UNIT_MAP[b.roomId])
+      .filter((r): r is string => r != null);
+
+    allInGroup.forEach((b) => manualConsumedIds.add(b.id));
+
+    if (physicalRooms.length > 0) {
+      const merged = { ...masterBooking };
+      (merged as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+      manualResults.push(merged);
+    } else {
+      manualResults.push(masterBooking);
+    }
+  }
+
+  // Filter out manually consumed bookings before standard merge logic
+  const remaining = all.filter((b) => !manualConsumedIds.has(b.id));
+
   // Group sub-bookings by their masterid
   const subsByMaster = new Map<number, Beds24Booking[]>();
-  for (const b of all) {
+  for (const b of remaining) {
     if (b.masterid != null) {
       const group = subsByMaster.get(b.masterid) ?? [];
       group.push(b);
@@ -120,12 +162,12 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     }
   }
 
-  if (subsByMaster.size === 0) return all; // fast path — no grouped bookings
+  if (subsByMaster.size === 0) return [...manualResults, ...remaining]; // fast path
 
   const result: Beds24Booking[] = [];
   const consumedIds = new Set<number>();
 
-  for (const b of all) {
+  for (const b of remaining) {
     if (consumedIds.has(b.id)) continue;
 
     // Sub-booking: will be handled when its master is encountered (or below)
@@ -155,7 +197,7 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
 
   // Case 2: sub-bookings whose master was not in the fetched set (e.g. cancelled virtual booking)
   const orphanGroups = new Map<number, Beds24Booking[]>();
-  for (const b of all) {
+  for (const b of remaining) {
     if (b.masterid != null && !consumedIds.has(b.id)) {
       const group = orphanGroups.get(b.masterid) ?? [];
       group.push(b);
@@ -180,7 +222,7 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     result.push(base);
   }
 
-  return result;
+  return [...manualResults, ...result];
 }
 
 // ─── Map Beds24 booking → our Reservation type ────────────────────────────────
