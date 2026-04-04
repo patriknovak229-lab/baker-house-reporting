@@ -33,11 +33,8 @@ function formatDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
-// Beds24 sends the booking as a flat object in the POST body.
-// Fields used here are confirmed from Beds24 V2 webhook docs.
-interface Beds24WebhookPayload {
-  bookId?: number | string;
-  propId?: number | string;
+interface Beds24Booking {
+  id?: number | string;
   roomId?: number | string;
   firstName?: string;
   lastName?: string;
@@ -48,6 +45,12 @@ interface Beds24WebhookPayload {
   price?: number | string;
   apiSource?: string;
   status?: string;
+}
+
+// Beds24 wraps the booking under a "booking" key
+interface Beds24WebhookPayload {
+  timeStamp?: string;
+  booking?: Beds24Booking;
 }
 
 const ROOM_MAP: Record<string, string> = {
@@ -68,38 +71,38 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let payload: Beds24WebhookPayload;
   try {
-    const raw = await req.text();
-    console.log("[webhook] raw body:", raw);
-    payload = JSON.parse(raw);
+    payload = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  const booking = payload.booking;
+
   // Only notify on new/confirmed bookings, ignore cancellations
-  if (payload.status === "cancelled" || payload.status === "canceled") {
+  if (booking?.status === "cancelled" || booking?.status === "canceled") {
     return NextResponse.json({ ok: true, skipped: "cancellation" });
   }
 
-  const room = ROOM_MAP[String(payload.roomId ?? "")] ?? "Unknown room";
-  const firstName = payload.firstName ?? "";
-  const lastName = payload.lastName ?? "";
+  const room = ROOM_MAP[String(booking?.roomId ?? "")] ?? "Unknown room";
+  const firstName = booking?.firstName ?? "";
+  const lastName = booking?.lastName ?? "";
   const guests =
-    (Number(payload.numAdult ?? 0) + Number(payload.numChild ?? 0)) || "—";
+    (Number(booking?.numAdult ?? 0) + Number(booking?.numChild ?? 0)) || "—";
   const nights =
-    payload.arrival && payload.departure
+    booking?.arrival && booking?.departure
       ? Math.round(
-          (new Date(payload.departure).getTime() -
-            new Date(payload.arrival).getTime()) /
+          (new Date(booking.departure).getTime() -
+            new Date(booking.arrival).getTime()) /
             86_400_000
         )
       : "—";
-  const channel = payload.apiSource || "Direct";
-  const price = payload.price ? `${Number(payload.price).toLocaleString("cs-CZ")} Kč` : "—";
+  const channel = booking?.apiSource || "Direct";
+  const price = booking?.price ? `${Number(booking.price).toLocaleString("cs-CZ")} Kč` : "—";
 
   const message = [
     `🏠 <b>New Booking — ${room}</b>`,
     `👤 ${firstName} ${lastName}`.trim() || "👤 —",
-    `📅 ${formatDate(payload.arrival ?? "")} → ${formatDate(payload.departure ?? "")} (${nights} nights)`,
+    `📅 ${formatDate(booking?.arrival ?? "")} → ${formatDate(booking?.departure ?? "")} (${nights} nights)`,
     `👥 ${guests} guests`,
     `📣 ${channel}`,
     `💰 ${price}`,
