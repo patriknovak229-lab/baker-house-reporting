@@ -83,7 +83,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, skipped: "cancellation" });
   }
 
-  const room = ROOM_MAP[String(booking?.roomId ?? "")] ?? "Unknown room";
+  const roomKey = String(booking?.roomId ?? "");
+  const room = ROOM_MAP[roomKey];
+  if (!room) {
+    // Virtual or unrecognised room — skip notification, physical allocation will follow
+    return NextResponse.json({ ok: true, skipped: "virtual room" });
+  }
   const firstName = booking?.firstName ?? "";
   const lastName = booking?.lastName ?? "";
   const guests =
