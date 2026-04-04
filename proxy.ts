@@ -19,5 +19,5 @@ export default auth((req) => {
 
 export const config = {
   // Skip Next.js internals, static files, and the auth API routes themselves
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook).*)'],
 };
