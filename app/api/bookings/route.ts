@@ -54,6 +54,7 @@ function derivePayment(b: Beds24Booking): { paymentStatus: PaymentStatus; amount
 interface Beds24Booking {
   id: number;
   roomId: number;
+  masterid?: number | null; // set on sub-bookings allocated from a virtual/package room
   arrival: string;        // YYYY-MM-DD (check-in)
   departure: string;      // YYYY-MM-DD (check-out)
   numAdult: number;
@@ -98,6 +99,90 @@ function parseCommissionBreakdown(
   return { commissionAmount: totalCommission, paymentChargeAmount: 0 };
 }
 
+// ─── Merge package/virtual room bookings ─────────────────────────────────────
+// When a booking arrives on a virtual room (e.g. "Twin Apartments" = K.202+K.203),
+// Beds24 creates sub-bookings for each physical room, each referencing the original
+// via `masterid`. We merge them into one reservation to avoid double-counting.
+//
+// Two cases handled:
+// 1. Master booking (virtual room) present + sub-bookings → use master for price/guest,
+//    subs for physical room names.
+// 2. Master booking filtered out (cancelled/virtual) but subs share a masterid →
+//    use first sub for price/guest, combine all physical room names.
+function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
+  // Group sub-bookings by their masterid
+  const subsByMaster = new Map<number, Beds24Booking[]>();
+  for (const b of all) {
+    if (b.masterid != null) {
+      const group = subsByMaster.get(b.masterid) ?? [];
+      group.push(b);
+      subsByMaster.set(b.masterid, group);
+    }
+  }
+
+  if (subsByMaster.size === 0) return all; // fast path — no grouped bookings
+
+  const result: Beds24Booking[] = [];
+  const consumedIds = new Set<number>();
+
+  for (const b of all) {
+    if (consumedIds.has(b.id)) continue;
+
+    // Sub-booking: will be handled when its master is encountered (or below)
+    if (b.masterid != null) continue;
+
+    const subs = subsByMaster.get(b.id);
+    if (subs && subs.length > 0) {
+      // Master booking with sub-bookings — merge
+      const physicalRooms = subs
+        .map((s) => UNIT_MAP[s.roomId])
+        .filter((r): r is string => r != null);
+
+      consumedIds.add(b.id);
+      subs.forEach((s) => consumedIds.add(s.id));
+
+      if (physicalRooms.length === 0) {
+        result.push(b); // all subs are virtual/unknown — keep master as-is
+      } else {
+        // Attach merged room info as extra fields (read in mapToReservation)
+        (b as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+        result.push(b);
+      }
+    } else {
+      result.push(b);
+    }
+  }
+
+  // Case 2: sub-bookings whose master was not in the fetched set (e.g. cancelled virtual booking)
+  const orphanGroups = new Map<number, Beds24Booking[]>();
+  for (const b of all) {
+    if (b.masterid != null && !consumedIds.has(b.id)) {
+      const group = orphanGroups.get(b.masterid) ?? [];
+      group.push(b);
+      orphanGroups.set(b.masterid, group);
+    }
+  }
+
+  for (const subs of orphanGroups.values()) {
+    const physicalRooms = subs
+      .map((s) => UNIT_MAP[s.roomId])
+      .filter((r): r is string => r != null);
+
+    if (physicalRooms.length === 0) {
+      // All unknown rooms — add each as standalone
+      subs.forEach((s) => result.push(s));
+      continue;
+    }
+
+    // Use first sub as the base; override room with combined name
+    const base = { ...subs[0] };
+    (base as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+    result.push(base);
+  }
+
+  return result;
+}
+
 // ─── Map Beds24 booking → our Reservation type ────────────────────────────────
 function mapToReservation(b: Beds24Booking): Reservation {
   const nights =
@@ -113,12 +198,18 @@ function mapToReservation(b: Beds24Booking): Reservation {
     b.commission ?? 0
   );
 
+  const linkedRooms = (b as Beds24Booking & { _linkedRooms?: string[] })._linkedRooms;
+  const room = linkedRooms && linkedRooms.length > 0
+    ? linkedRooms.join(" + ")
+    : mapRoom(b.roomId);
+
   return {
     reservationNumber: `BH-${b.id}`,
     firstName: b.firstName ?? "",
     lastName: b.lastName ?? "",
     channel: mapChannel(b.apiSource, b.referer),
-    room: mapRoom(b.roomId),
+    room,
+    ...(linkedRooms && linkedRooms.length > 1 ? { linkedRooms } : {}),
     checkInDate: b.arrival ?? "",
     checkOutDate: b.departure ?? "",
     reservationDate: b.bookingTime ? b.bookingTime.slice(0, 10) : "",
@@ -259,9 +350,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(raw);
     }
 
-    const reservations = raw
-      .filter((b) => b.status !== "cancelled" && b.status !== "canceled")
-      .map(mapToReservation);
+    const reservations = mergeGroupedBookings(
+      raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled")
+    ).map(mapToReservation);
 
     return NextResponse.json(reservations);
   } catch (err) {

@@ -26,10 +26,14 @@ function getNext30Days(todayStr: string): string[] {
 
 // ─── Occupancy helpers ────────────────────────────────────────────────────────
 
+function roomMatches(r: Reservation, room: string): boolean {
+  return r.room === room || (r.linkedRooms?.includes(room) ?? false);
+}
+
 function isRoomBooked(reservations: Reservation[], room: Room, date: string): boolean {
   return reservations.some(
     (r) =>
-      r.room === room &&
+      roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
       r.checkOutDate > date
@@ -39,7 +43,7 @@ function isRoomBooked(reservations: Reservation[], room: Room, date: string): bo
 function getGuest(reservations: Reservation[], room: Room, date: string): { name: string; initials: string } | null {
   const res = reservations.find(
     (r) =>
-      r.room === room &&
+      roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
       r.checkOutDate > date

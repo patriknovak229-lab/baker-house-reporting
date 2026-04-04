@@ -1,5 +1,6 @@
 export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone";
-export type Room = "K.201" | "K.202" | "K.203";
+// Physical room name (e.g. "K.201") or combined for package bookings (e.g. "K.202 + K.203")
+export type Room = string;
 export type CleaningStatus = "Pending" | "In Progress" | "Completed";
 export type PaymentStatus = "Unpaid" | "Partially Paid" | "Paid" | "Refunded";
 export type CustomerFlag =
@@ -21,6 +22,9 @@ export interface InvoiceData {
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
+  // Set when this reservation spans multiple physical rooms (package/virtual room booking).
+  // Each entry is a physical room name. Used by performance views to split revenue per room.
+  linkedRooms?: string[];
   firstName: string;
   lastName: string;
   channel: Channel;

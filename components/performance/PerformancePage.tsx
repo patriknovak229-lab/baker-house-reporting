@@ -16,6 +16,7 @@ import GrossProfitBridgeView from "./GrossProfitBridgeView";
 import EBITDABridgeView from "./EBITDABridgeView";
 import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
 import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
+import { expandLinkedReservations } from "@/utils/expandReservations";
 
 export default function PerformancePage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -74,7 +75,7 @@ export default function PerformancePage() {
 
   const filteredReservations = useMemo(
     () =>
-      reservations.filter(
+      expandLinkedReservations(reservations).filter(
         (r) => isReservationInPeriod(r, dateRange) && selectedRooms.includes(r.room)
       ),
     [reservations, dateRange, selectedRooms]

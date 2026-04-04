@@ -161,8 +161,12 @@ export default function TransactionsPage() {
       // Channel filter
       if (filters.channels.length > 0 && !filters.channels.includes(res.channel)) return false;
 
-      // Room filter
-      if (filters.rooms.length > 0 && !filters.rooms.includes(res.room)) return false;
+      // Room filter — also match if any linked room (package booking) matches
+      if (
+        filters.rooms.length > 0 &&
+        !filters.rooms.includes(res.room) &&
+        !res.linkedRooms?.some((r) => filters.rooms.includes(r))
+      ) return false;
 
       // Cleaning status
       if (
