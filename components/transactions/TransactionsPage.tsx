@@ -221,7 +221,7 @@ export default function TransactionsPage() {
               {lastSynced ? lastSynced.toLocaleTimeString() : "—"}
             </span>
           </span>
-          {canMutate(role) && (
+          {canMutate(role, "transactions") && (
             <button
               onClick={() => setShowCreateModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors shadow-sm"
