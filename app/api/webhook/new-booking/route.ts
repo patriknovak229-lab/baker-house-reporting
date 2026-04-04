@@ -45,6 +45,7 @@ interface Beds24Booking {
   price?: number | string;
   apiSource?: string;
   status?: string;
+  bookingTime?: string; // ISO — when the booking was originally created
 }
 
 // Beds24 wraps the booking under a "booking" key
@@ -52,6 +53,11 @@ interface Beds24WebhookPayload {
   timeStamp?: string;
   booking?: Beds24Booking;
 }
+
+// Only notify for bookings created within this window.
+// Beds24 fires the webhook for modifications too (messages, status changes, etc.)
+// An old booking receiving a message will have a bookingTime from days/months ago.
+const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
 const ROOM_MAP: Record<string, string> = {
   "656437": "K.201",
@@ -81,6 +87,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Only notify on new/confirmed bookings, ignore cancellations
   if (booking?.status === "cancelled" || booking?.status === "canceled") {
     return NextResponse.json({ ok: true, skipped: "cancellation" });
+  }
+
+  // Skip if the booking was created more than 30 minutes ago — this is a modification
+  // (e.g. a guest message, status change) not a new booking
+  if (booking?.bookingTime) {
+    const age = Date.now() - new Date(booking.bookingTime).getTime();
+    if (age > NEW_BOOKING_WINDOW_MS) {
+      return NextResponse.json({ ok: true, skipped: "existing booking update" });
+    }
   }
 
   const roomKey = String(booking?.roomId ?? "");
