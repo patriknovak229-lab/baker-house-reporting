@@ -1285,6 +1285,12 @@ export default function ReservationDrawer({
                     </button>
                   )}
                 </div>
+                <button
+                  onClick={() => onUpdate({ ...reservation!, invoiceStatus: "Not Issued" })}
+                  className="w-full py-1.5 px-3 border border-gray-200 text-gray-500 text-xs font-medium rounded-md hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  Re-issue with new details
+                </button>
               </div>
             )}
           </section>
