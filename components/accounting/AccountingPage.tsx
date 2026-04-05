@@ -75,12 +75,19 @@ function GmailConnectionBanner({ status, onDisconnect }: { status: GmailStatus |
   );
 }
 
+interface QueueItem {
+  file: File;
+  gmailMessageId: string;
+}
+
 export default function AccountingPage() {
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [extracting, setExtracting] = useState(false);
   const [filters, setFilters] = useState({
     status: 'all' as 'all' | SupplierInvoiceStatus,
     category: 'all' as 'all' | SupplierInvoiceCategory,
@@ -124,6 +131,49 @@ export default function AccountingPage() {
     setGmailStatus({ connected: false });
   }
 
+  // Extract the next item in the queue and open the drawer for it
+  async function processNextInQueue(remaining: QueueItem[]) {
+    if (remaining.length === 0) { setExtracting(false); return; }
+    const [next, ...rest] = remaining;
+    setQueue(rest);
+    setExtracting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', next.file);
+      const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
+      const extracted = res.ok ? await res.json() as ExtractedInvoiceData : null;
+      setDrawerState({ extracted, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
+    } catch {
+      // Skip failed extraction, move to next
+      processNextInQueue(rest);
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  // Called when user clicks "Process N invoices" in the modal
+  function handleProcessBatch(items: QueueItem[]) {
+    setShowImportModal(false);
+    const [first, ...rest] = items;
+    setQueue(rest);
+    processNextInQueue([first, ...rest]);
+  }
+
+  // Called when user picks a single file from upload tab
+  async function handleFileSelected(file: File) {
+    setShowImportModal(false);
+    setExtracting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
+      const extracted = res.ok ? await res.json() as ExtractedInvoiceData : null;
+      setDrawerState({ extracted, file, existing: null, sourceType: 'upload' });
+    } finally {
+      setExtracting(false);
+    }
+  }
+
   async function handleSave(inv: SupplierInvoice) {
     const isNew = !invoices.some((e) => e.id === inv.id);
     const method = isNew ? 'POST' : 'PUT';
@@ -142,6 +192,8 @@ export default function AccountingPage() {
       );
     }
     setDrawerState(null);
+    // Process next in queue if any
+    if (queue.length > 0) processNextInQueue(queue);
   }
 
   async function handleDelete(id: string) {
@@ -152,16 +204,6 @@ export default function AccountingPage() {
     }
   }
 
-  function handleExtracted(
-    extracted: ExtractedInvoiceData,
-    file: File | null,
-    sourceType: 'upload' | 'email',
-    gmailMessageId?: string
-  ) {
-    setShowImportModal(false);
-    setDrawerState({ extracted, file, existing: null, sourceType, gmailMessageId });
-  }
-
   function handleManualEntry() {
     setShowImportModal(false);
     setDrawerState({ extracted: null, file: null, existing: null, sourceType: 'manual' });
@@ -169,6 +211,12 @@ export default function AccountingPage() {
 
   function handleEdit(inv: SupplierInvoice) {
     setDrawerState({ extracted: null, file: null, existing: inv, sourceType: inv.sourceType });
+  }
+
+  function handleDrawerClose() {
+    setDrawerState(null);
+    // Skip current item, move to next in queue
+    if (queue.length > 0) processNextInQueue(queue);
   }
 
   // Summary stats for the current month
@@ -319,10 +367,24 @@ export default function AccountingPage() {
       {/* Modals / Drawers */}
       {showImportModal && (
         <InvoiceImportModal
-          onExtracted={handleExtracted}
+          onProcessBatch={handleProcessBatch}
+          onFileSelected={handleFileSelected}
           onManual={handleManualEntry}
           onClose={() => setShowImportModal(false)}
         />
+      )}
+
+      {/* Extraction loading overlay */}
+      {extracting && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20">
+          <div className="bg-white rounded-xl shadow-lg px-8 py-6 flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm font-medium text-gray-700">Extracting with Claude…</p>
+            {queue.length > 0 && (
+              <p className="text-xs text-gray-400">{queue.length} more remaining</p>
+            )}
+          </div>
+        </div>
       )}
 
       {drawerState && (
@@ -333,7 +395,8 @@ export default function AccountingPage() {
           sourceType={drawerState.sourceType}
           gmailMessageId={drawerState.gmailMessageId}
           onSave={handleSave}
-          onClose={() => setDrawerState(null)}
+          onClose={handleDrawerClose}
+          queueRemaining={queue.length}
         />
       )}
     </div>

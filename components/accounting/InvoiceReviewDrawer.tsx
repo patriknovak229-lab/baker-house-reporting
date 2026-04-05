@@ -30,6 +30,8 @@ interface Props {
   gmailMessageId?: string;
   onSave: (inv: SupplierInvoice) => void;
   onClose: () => void;
+  /** How many more invoices are waiting in the queue after this one */
+  queueRemaining?: number;
 }
 
 function Field({
@@ -76,6 +78,7 @@ export default function InvoiceReviewDrawer({
   gmailMessageId,
   onSave,
   onClose,
+  queueRemaining = 0,
 }: Props) {
   const [supplierName, setSupplierName] = useState('');
   const [supplierICO, setSupplierICO] = useState('');
@@ -197,10 +200,15 @@ export default function InvoiceReviewDrawer({
       <div className="relative w-full max-w-lg bg-white shadow-xl flex flex-col h-full overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
-          <h2 className="text-base font-semibold text-gray-800">
-            {isEdit ? 'Edit Invoice' : 'Review & Save Invoice'}
-          </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          <div>
+            <h2 className="text-base font-semibold text-gray-800">
+              {isEdit ? 'Edit Invoice' : 'Review & Save Invoice'}
+            </h2>
+            {queueRemaining > 0 && (
+              <p className="text-xs text-indigo-500 mt-0.5">{queueRemaining} more waiting in queue</p>
+            )}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none" title={queueRemaining > 0 ? 'Skip & process next' : 'Close'}>×</button>
         </div>
 
         {/* Form */}
@@ -343,7 +351,7 @@ export default function InvoiceReviewDrawer({
             disabled={saving}
             className="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {driveUploading ? 'Uploading to Drive…' : saving ? 'Saving…' : file ? 'Save & Push to Drive' : 'Save'}
+            {driveUploading ? 'Uploading to Drive…' : saving ? 'Saving…' : file ? `Save & Push to Drive${queueRemaining > 0 ? ` (${queueRemaining} next)` : ''}` : 'Save'}
           </button>
         </div>
       </div>
