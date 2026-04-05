@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback } from "react";
-import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag } from "@/types/reservation";
+import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue } from "@/types/reservation";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -24,6 +24,7 @@ type LocalFields = {
   ratingStatus?: RatingStatus;
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
+  issues?: Issue[];
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -35,6 +36,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
   if (r.invoiceData) local.invoiceData = r.invoiceData;
   if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
+  if (r.issues && r.issues.length > 0) local.issues = r.issues;
   return local;
 }
 
@@ -121,11 +123,27 @@ export default function TransactionsPage() {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
   const [issuesOpen, setIssuesOpen] = useState(false);
+  const [taskAlertOpen, setTaskAlertOpen] = useState(false);
 
   interface DataIssue {
     reservation: Reservation;
     problems: string[];
   }
+
+  // ── Unresolved issues actionable within the next 7 days ─────────────────────
+  const upcomingUnresolved = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const in7 = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    const items: { reservation: Reservation; issue: Issue }[] = [];
+    for (const r of reservations) {
+      for (const issue of r.issues ?? []) {
+        if (!issue.resolved && issue.actionableDate >= today && issue.actionableDate <= in7) {
+          items.push({ reservation: r, issue });
+        }
+      }
+    }
+    return items.sort((a, b) => a.issue.actionableDate.localeCompare(b.issue.actionableDate));
+  }, [reservations]);
 
   const dataIssues = useMemo<DataIssue[]>(() => {
     return reservations
@@ -209,6 +227,58 @@ export default function TransactionsPage() {
     <div className="max-w-screen-2xl mx-auto px-6 py-6">
       {/* Availability calendar */}
       {!isLoading && <OccupancyCalendar reservations={reservations} />}
+
+      {/* Unresolved issues alert */}
+      {upcomingUnresolved.length > 0 && (
+        <div className="mt-5 rounded-lg border border-red-200 bg-red-50 overflow-hidden">
+          <button
+            onClick={() => setTaskAlertOpen((o) => !o)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-800 hover:bg-red-100 transition-colors"
+          >
+            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse shrink-0">!</span>
+            <span className="font-medium">
+              {upcomingUnresolved.length} unresolved {upcomingUnresolved.length === 1 ? "issue" : "issues"} in the next 7 days
+            </span>
+            <svg
+              className={`w-4 h-4 ml-auto text-red-400 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {taskAlertOpen && (
+            <div className="border-t border-red-200 px-4 pb-3">
+              <table className="w-full text-sm mt-3">
+                <thead>
+                  <tr className="border-b border-red-200">
+                    {["Guest", "Issue", "Actionable"].map((h) => (
+                      <th key={h} className="pb-2 text-xs font-medium text-red-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-100">
+                  {upcomingUnresolved.map(({ reservation, issue }) => (
+                    <tr
+                      key={issue.id}
+                      className="hover:bg-red-100 cursor-pointer"
+                      onClick={() => { setSelectedReservation(reservation); setTaskAlertOpen(false); }}
+                    >
+                      <td className="py-2 font-medium text-red-900">
+                        {reservation.firstName} {reservation.lastName}
+                      </td>
+                      <td className="py-2 text-red-700">{issue.text}</td>
+                      <td className="py-2 text-red-700 text-xs">{issue.actionableDate}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Page header */}
       <div className="flex items-center justify-between mb-5">

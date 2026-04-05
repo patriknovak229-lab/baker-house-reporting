@@ -275,7 +275,15 @@ export default function ReservationTable({
                     </td>
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">
-                      <div className="flex flex-wrap gap-1">
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {(res.issues ?? []).some((i) => !i.resolved) && (
+                          <span
+                            className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse"
+                            title="Has unresolved issues"
+                          >
+                            !
+                          </span>
+                        )}
                         {stayStatuses.map((status) => {
                           if (status === "checking-in") return (
                             <Badge key={status} variant="amber-filled" size="xs">Checking in</Badge>

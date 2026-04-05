@@ -11,6 +11,14 @@ export type CustomerFlag =
 export type RatingStatus = "none" | "good" | "bad";
 export type InvoiceStatus = "Not Issued" | "Issued" | "Sent";
 
+export interface Issue {
+  id: string;           // timestamp-based unique ID
+  text: string;         // free text description
+  actionableDate: string; // ISO date YYYY-MM-DD — when the issue becomes actionable
+  resolved: boolean;
+  createdAt: string;    // ISO timestamp
+}
+
 export interface InvoiceData {
   companyName: string;
   companyAddress: string;
@@ -60,4 +68,5 @@ export interface Reservation {
   ratingStatus: RatingStatus;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
+  issues?: Issue[]; // locally managed task/issue log; undefined = no issues
 }

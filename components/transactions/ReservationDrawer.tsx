@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue } from "@/types/reservation";
 import MessageThread from "./MessageThread";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
@@ -501,6 +501,8 @@ export default function ReservationDrawer({
   onUpdate,
 }: ReservationDrawerProps) {
   const [notes, setNotes] = useState("");
+  const [newIssueText, setNewIssueText] = useState("");
+  const [newIssueDate, setNewIssueDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [includePaymentQR, setIncludePaymentQR] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceData>({
     companyName: "",
@@ -517,6 +519,8 @@ export default function ReservationDrawer({
     if (reservation) {
       setIncludePaymentQR(false);
       setNotes(reservation.notes);
+      setNewIssueText("");
+      setNewIssueDate(new Date().toISOString().slice(0, 10));
       if (reservation.invoiceData) {
         setInvoiceForm({ ...reservation.invoiceData });
       } else {
@@ -549,6 +553,32 @@ export default function ReservationDrawer({
 
   function saveNote() {
     onUpdate({ ...reservation!, notes });
+  }
+
+  function addIssue() {
+    if (!newIssueText.trim()) return;
+    const issue: Issue = {
+      id: Date.now().toString(),
+      text: newIssueText.trim(),
+      actionableDate: newIssueDate,
+      resolved: false,
+      createdAt: new Date().toISOString(),
+    };
+    onUpdate({ ...reservation!, issues: [...(reservation!.issues ?? []), issue] });
+    setNewIssueText("");
+    setNewIssueDate(new Date().toISOString().slice(0, 10));
+  }
+
+  function toggleIssueResolved(id: string) {
+    const issues = (reservation!.issues ?? []).map((i) =>
+      i.id === id ? { ...i, resolved: !i.resolved } : i
+    );
+    onUpdate({ ...reservation!, issues });
+  }
+
+  function deleteIssue(id: string) {
+    const issues = (reservation!.issues ?? []).filter((i) => i.id !== id);
+    onUpdate({ ...reservation!, issues });
   }
 
   function handleGenerateInvoice() {
@@ -956,7 +986,95 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
-          {/* 9. Invoice */}
+          {/* 9. Issue Log */}
+          <section>
+            <SectionTitle>Issue Log</SectionTitle>
+
+            {/* Existing issues sorted by actionable date */}
+            {(reservation.issues ?? []).length > 0 && (
+              <div className="space-y-2 mb-4">
+                {[...(reservation.issues ?? [])]
+                  .sort((a, b) => a.actionableDate.localeCompare(b.actionableDate))
+                  .map((issue) => (
+                    <div
+                      key={issue.id}
+                      className={`rounded-md border px-3 py-2.5 ${
+                        issue.resolved
+                          ? "border-gray-100 bg-gray-50"
+                          : "border-red-100 bg-red-50"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm ${issue.resolved ? "line-through text-gray-400" : "text-gray-800"}`}>
+                            {issue.text}
+                          </p>
+                          <p className="text-[11px] text-gray-400 mt-0.5">
+                            Actionable: {formatDate(issue.actionableDate)}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => toggleIssueResolved(issue.id)}
+                            className={`text-[11px] px-2 py-1 rounded border font-medium transition-colors ${
+                              issue.resolved
+                                ? "border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-600"
+                                : "border-green-200 text-green-700 bg-green-50 hover:bg-green-100"
+                            }`}
+                          >
+                            {issue.resolved ? "Reopen" : "Resolve"}
+                          </button>
+                          <button
+                            onClick={() => deleteIssue(issue.id)}
+                            className="p-1 text-gray-300 hover:text-red-400 transition-colors"
+                            title="Delete issue"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* New issue form */}
+            <div className="space-y-2">
+              <textarea
+                value={newIssueText}
+                onChange={(e) => setNewIssueText(e.target.value)}
+                rows={2}
+                placeholder="Describe the issue or task (e.g. &quot;Issue invoice&quot;, &quot;Expected check-in problem&quot;)..."
+                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              />
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-[11px] text-gray-400 block mb-1">Actionable date</label>
+                  <input
+                    type="date"
+                    value={newIssueDate}
+                    onChange={(e) => setNewIssueDate(e.target.value)}
+                    className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    onClick={addIssue}
+                    disabled={!newIssueText.trim()}
+                    className="px-4 py-1.5 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Add Issue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <hr className="border-gray-100" />
+
+          {/* 10. Invoice */}
           <section>
             <div className="flex items-center justify-between mb-3">
               <SectionTitle>Invoice</SectionTitle>
