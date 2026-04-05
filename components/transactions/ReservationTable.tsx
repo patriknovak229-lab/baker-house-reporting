@@ -106,6 +106,158 @@ function SortIcon({
   );
 }
 
+// ── Mobile card ───────────────────────────────────────────────────────────────
+function ReservationCard({
+  res,
+  allReservations,
+  unreadBookingIds,
+  onClick,
+}: {
+  res: Reservation;
+  allReservations: Reservation[];
+  unreadBookingIds: Set<number>;
+  onClick: () => void;
+}) {
+  const effectiveFlags = getEffectiveFlags(res, allReservations);
+  const stayStatuses = computeStayStatus(res, allReservations);
+  const nationalityFlag = countryCodeToFlag(res.nationality);
+  const emoji = ratingEmoji(res.ratingStatus);
+  const beds24Id = parseInt(res.reservationNumber.slice(3));
+  const hasUnread = unreadBookingIds.has(beds24Id);
+  const isNew =
+    res.bookingTimestamp &&
+    Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000;
+  const hasUnresolvedIssues = (res.issues ?? []).some((i) => !i.resolved);
+  const effectivePayment = res.paymentStatusOverride ?? res.paymentStatus;
+
+  return (
+    <div
+      onClick={onClick}
+      className="rounded-lg border border-gray-200 bg-white px-4 py-3 cursor-pointer hover:bg-indigo-50 hover:border-indigo-200 transition-colors active:bg-indigo-100"
+    >
+      {/* Row 1: Guest name + indicators */}
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-base leading-none">{nationalityFlag}</span>
+          <span className="font-semibold text-gray-900 truncate">
+            {res.firstName} {res.lastName}
+          </span>
+          {emoji && <span className="text-base leading-none">{emoji}</span>}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isNew && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">
+              New
+            </span>
+          )}
+          {hasUnresolvedIssues && (
+            <span
+              className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse"
+              title="Unresolved issues"
+            >
+              !
+            </span>
+          )}
+          {hasUnread && (
+            <span
+              className="relative inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white"
+              title="Unread message"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                />
+              </svg>
+              <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+              </span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Row 2: Room · channel · res# */}
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-sm font-medium text-gray-700">{res.room}</span>
+        <span className="text-gray-300">·</span>
+        <Badge variant={channelBadgeVariant(res.channel)} size="xs">{res.channel}</Badge>
+        <span className="ml-auto font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
+      </div>
+
+      {/* Row 3: Dates */}
+      <div className="flex items-center gap-1.5 text-sm text-gray-600 mb-2">
+        <span>{formatDate(res.checkInDate)}</span>
+        <span className="text-gray-400">→</span>
+        <span>{formatDate(res.checkOutDate)}</span>
+        <span className="text-gray-400">·</span>
+        <span className="text-gray-500">{res.numberOfNights}n</span>
+      </div>
+
+      {/* Row 4: Price · payment · cleaning */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-gray-900 text-sm">{formatCurrency(res.price)}</span>
+        <div className="flex items-center gap-1">
+          <Badge variant={paymentBadgeVariant(effectivePayment)} size="xs">{effectivePayment}</Badge>
+          {res.paymentStatusOverride && (
+            <span className="text-[10px] text-amber-500">M</span>
+          )}
+        </div>
+        <Badge variant={cleaningBadgeVariant(res.cleaningStatus)} size="xs">{res.cleaningStatus}</Badge>
+      </div>
+
+      {/* Row 5: Stay status + flags (only if present) */}
+      {(stayStatuses.length > 0 || effectiveFlags.length > 0) && (
+        <div className="flex flex-wrap gap-1 mt-2">
+          {stayStatuses.map((status) => {
+            if (status === "checking-in") return (
+              <Badge key={status} variant="amber-filled" size="xs">Checking in</Badge>
+            );
+            if (status === "arriving-tomorrow") return (
+              <Badge key={status} variant="amber" size="xs">Arriving Tomorrow</Badge>
+            );
+            if (status === "arriving-in-x-days") {
+              const today = new Date().toISOString().slice(0, 10);
+              const days = Math.round(
+                (new Date(res.checkInDate).getTime() - new Date(today).getTime()) / 86_400_000
+              );
+              return <Badge key={status} variant="gray" size="xs">In {days} days</Badge>;
+            }
+            if (status === "in-house") return (
+              <Badge key={status} variant="green-filled" size="xs">🏠 {res.room}</Badge>
+            );
+            if (status === "checking-out-today") return (
+              <Badge key={status} variant="orange" size="xs">🚪 Today</Badge>
+            );
+            if (status === "checking-out-tomorrow") return (
+              <Badge key={status} variant="orange-light" size="xs">🚪 Tomorrow</Badge>
+            );
+            return null;
+          })}
+          {effectiveFlags.map((f) => (
+            <Badge
+              key={f}
+              variant={
+                f === "VIP Customer" ? "purple"
+                  : f === "Repeat Customer" ? "indigo"
+                  : f === "High Value Customer" ? "gold"
+                  : "red"
+              }
+              size="xs"
+            >
+              {f === "VIP Customer" ? "👑 VIP"
+                : f === "Repeat Customer" ? "↩ Repeat"
+                : f === "High Value Customer" ? "★ High Value"
+                : "⚠ Problem"}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Table ─────────────────────────────────────────────────────────────────────
 export default function ReservationTable({
   reservations,
   allReservations,
@@ -154,7 +306,49 @@ export default function ReservationTable({
 
   return (
     <div>
-      <div className="rounded-lg border border-gray-200 overflow-hidden">
+      {/* ── Mobile: sort dropdown + cards ─────────────────────────────────── */}
+      <div className="md:hidden">
+        <div className="flex items-center gap-2 mb-3">
+          <label className="text-xs text-gray-500 shrink-0">Sort by</label>
+          <select
+            value={`${sortField}:${sortDir}`}
+            onChange={(e) => {
+              const [f, d] = e.target.value.split(":") as [SortField, SortDir];
+              setSortField(f);
+              setSortDir(d);
+              setPage(1);
+            }}
+            className="flex-1 border border-gray-200 rounded-md px-2.5 py-1.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="reservationDate:desc">Booked (newest first)</option>
+            <option value="reservationDate:asc">Booked (oldest first)</option>
+            <option value="checkInDate:asc">Check-in (soonest first)</option>
+            <option value="checkInDate:desc">Check-in (latest first)</option>
+            <option value="price:desc">Price (highest first)</option>
+            <option value="price:asc">Price (lowest first)</option>
+          </select>
+        </div>
+        {paginated.length === 0 ? (
+          <p className="text-center text-gray-400 py-10 text-sm">
+            No reservations match your filters.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {paginated.map((res) => (
+              <ReservationCard
+                key={res.reservationNumber}
+                res={res}
+                allReservations={allReservations}
+                unreadBookingIds={unreadBookingIds}
+                onClick={() => onRowClick(res)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Desktop: table ────────────────────────────────────────────────── */}
+      <div className="hidden md:block rounded-lg border border-gray-200 overflow-hidden">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -348,9 +542,10 @@ export default function ReservationTable({
             )}
           </tbody>
         </table>
-      </div>
+      </div>{/* end table */}
+      </div>{/* end hidden md:block */}
 
-      {/* Pagination */}
+      {/* Pagination (shared by both layouts) */}
       <div className="flex items-center justify-between mt-3 text-sm text-gray-500">
         <span>
           {sorted.length === 0
