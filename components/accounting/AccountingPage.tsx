@@ -25,6 +25,7 @@ interface DrawerState {
   existing: SupplierInvoice | null;
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
+  extractionFailed?: boolean;
 }
 
 interface GmailStatus {
@@ -141,11 +142,16 @@ export default function AccountingPage() {
       const fd = new FormData();
       fd.append('file', next.file);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
-      const extracted = res.ok ? await res.json() as ExtractedInvoiceData : null;
-      setDrawerState({ extracted, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
+      if (res.ok) {
+        const extracted = await res.json() as ExtractedInvoiceData;
+        setDrawerState({ extracted, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
+      } else {
+        // Extraction failed — open drawer so user can fill in manually
+        setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
+      }
     } catch {
-      // Skip failed extraction, move to next
-      processNextInQueue(rest);
+      // Network / parse error — open drawer so user can fill in manually
+      setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
     } finally {
       setExtracting(false);
     }
@@ -167,8 +173,14 @@ export default function AccountingPage() {
       const fd = new FormData();
       fd.append('file', file);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
-      const extracted = res.ok ? await res.json() as ExtractedInvoiceData : null;
-      setDrawerState({ extracted, file, existing: null, sourceType: 'upload' });
+      if (res.ok) {
+        const extracted = await res.json() as ExtractedInvoiceData;
+        setDrawerState({ extracted, file, existing: null, sourceType: 'upload' });
+      } else {
+        setDrawerState({ extracted: null, file, existing: null, sourceType: 'upload', extractionFailed: true });
+      }
+    } catch {
+      setDrawerState({ extracted: null, file, existing: null, sourceType: 'upload', extractionFailed: true });
     } finally {
       setExtracting(false);
     }
@@ -394,6 +406,7 @@ export default function AccountingPage() {
           existing={drawerState.existing}
           sourceType={drawerState.sourceType}
           gmailMessageId={drawerState.gmailMessageId}
+          extractionFailed={drawerState.extractionFailed}
           onSave={handleSave}
           onClose={handleDrawerClose}
           queueRemaining={queue.length}

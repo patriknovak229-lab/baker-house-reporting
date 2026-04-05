@@ -28,6 +28,8 @@ interface Props {
   existing?: SupplierInvoice | null;
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
+  /** True when Claude extraction failed — shows a warning so user knows to fill manually */
+  extractionFailed?: boolean;
   onSave: (inv: SupplierInvoice) => void;
   onClose: () => void;
   /** How many more invoices are waiting in the queue after this one */
@@ -76,6 +78,7 @@ export default function InvoiceReviewDrawer({
   existing,
   sourceType,
   gmailMessageId,
+  extractionFailed = false,
   onSave,
   onClose,
   queueRemaining = 0,
@@ -213,7 +216,12 @@ export default function InvoiceReviewDrawer({
 
         {/* Form */}
         <div className="flex-1 px-6 py-5 space-y-4">
-          {!isEdit && extracted && (
+          {!isEdit && extractionFailed && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-700">
+              Claude couldn&apos;t read this document — please fill in the fields manually.
+            </div>
+          )}
+          {!isEdit && !extractionFailed && extracted && (
             <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 text-xs text-indigo-700">
               Fields were auto-filled by Claude from the document. Please review before saving.
             </div>
