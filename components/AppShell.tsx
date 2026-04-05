@@ -6,6 +6,7 @@ import type { Role, Tab } from '@/utils/roles';
 import { canAccessTab, getDefaultTab } from '@/utils/roles';
 import TransactionsPage from '@/components/transactions/TransactionsPage';
 import PerformancePage from '@/components/performance/PerformancePage';
+import AccountingPage from '@/components/accounting/AccountingPage';
 
 function ComingSoon({ tab }: { tab: string }) {
   return (
@@ -49,7 +50,7 @@ export default function AppShell() {
       <main>
         {activeTab === 'transactions' && <TransactionsPage />}
         {activeTab === 'performance' && <PerformancePage />}
-        {activeTab === 'accounting' && <ComingSoon tab="Accounting" />}
+        {activeTab === 'accounting' && <AccountingPage />}
       </main>
     </div>
   );
