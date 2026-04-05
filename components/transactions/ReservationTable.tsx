@@ -542,8 +542,7 @@ export default function ReservationTable({
             )}
           </tbody>
         </table>
-      </div>{/* end table */}
-      </div>{/* end hidden md:block */}
+      </div>{/* end hidden md:block + table wrapper */}
 
       {/* Pagination (shared by both layouts) */}
       <div className="flex items-center justify-between mt-3 text-sm text-gray-500">
