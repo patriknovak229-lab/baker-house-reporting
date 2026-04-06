@@ -54,7 +54,7 @@ function derivePayment(b: Beds24Booking): { paymentStatus: PaymentStatus; amount
 interface Beds24Booking {
   id: number;
   roomId: number;
-  masterid?: number | null; // set on sub-bookings allocated from a virtual/package room
+  masterId?: number | null; // set on sub-bookings allocated from a virtual/package room; null on the master itself
   arrival: string;        // YYYY-MM-DD (check-in)
   departure: string;      // YYYY-MM-DD (check-out)
   numAdult: number;
@@ -157,10 +157,10 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
   // to indicate "this IS the master". Exclude those — they're masters, not subs.
   const subsByMaster = new Map<number, Beds24Booking[]>();
   for (const b of remaining) {
-    if (b.masterid != null && b.masterid !== b.id) {
-      const group = subsByMaster.get(b.masterid) ?? [];
+    if (b.masterId != null && b.masterId !== b.id) {
+      const group = subsByMaster.get(b.masterId) ?? [];
       group.push(b);
-      subsByMaster.set(b.masterid, group);
+      subsByMaster.set(b.masterId, group);
     }
   }
 
@@ -174,7 +174,7 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
 
     // Sub-booking: will be handled when its master is encountered (or below)
     // Self-referencing masterid (masterid === b.id) means this IS the master — don't skip it
-    if (b.masterid != null && b.masterid !== b.id) continue;
+    if (b.masterId != null && b.masterId !== b.id) continue;
 
     const subs = subsByMaster.get(b.id);
     if (subs && subs.length > 0) {
@@ -206,10 +206,10 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
   // Case 2: sub-bookings whose master was not in the fetched set (e.g. cancelled virtual booking)
   const orphanGroups = new Map<number, Beds24Booking[]>();
   for (const b of remaining) {
-    if (b.masterid != null && !consumedIds.has(b.id)) {
-      const group = orphanGroups.get(b.masterid) ?? [];
+    if (b.masterId != null && !consumedIds.has(b.id)) {
+      const group = orphanGroups.get(b.masterId) ?? [];
       group.push(b);
-      orphanGroups.set(b.masterid, group);
+      orphanGroups.set(b.masterId, group);
     }
   }
 
