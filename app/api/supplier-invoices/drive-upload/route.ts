@@ -56,6 +56,7 @@ export async function POST(request: Request) {
   const readable = Readable.from(buffer);
 
   const res = await drive.files.create({
+    supportsAllDrives: true,
     requestBody: {
       name: fileName,
       parents: [folderId],
