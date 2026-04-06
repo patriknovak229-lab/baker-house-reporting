@@ -54,6 +54,10 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
     }
   }, [beds24Id]);
 
+  // Derived visibility — must be declared before effects that reference it
+  const active = isConversationActive(messages);
+  const showThread = open || hasUnread || active;
+
   // Auto-open when a new unread message arrives
   useEffect(() => {
     if (hasUnread) setOpen(true);
@@ -73,9 +77,6 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
   }, [messages, open]);
-
-  const active = isConversationActive(messages);
-  const showThread = open || hasUnread || active;
 
   async function handleSend() {
     if (!draft.trim() || sending) return;
