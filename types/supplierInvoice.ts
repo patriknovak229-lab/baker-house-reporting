@@ -7,6 +7,14 @@ export interface InvoiceCategory {
   label: string;
 }
 
+/** A whitelisted supplier — invoices from this supplier are auto-processed */
+export interface WhitelistedSupplier {
+  id: string;
+  supplierName: string;  // matched case-insensitively against extracted supplierName
+  category: string;      // applied automatically on save
+  addedAt: string;       // ISO timestamp
+}
+
 export type SupplierInvoiceStatus = 'pending' | 'reconciled';
 
 export type SupplierInvoiceSource = 'email' | 'upload' | 'manual';
@@ -29,6 +37,7 @@ export interface SupplierInvoice {
   driveFileName?: string;
   driveUrl?: string;
   gmailMessageId?: string;   // prevents duplicate import
+  autoProcessed?: boolean;   // true when saved automatically via whitelist
   createdAt: string;         // ISO timestamp
   // Phase 2 — bank reconciliation (unused in Phase 1)
   bankTransactionId?: string;

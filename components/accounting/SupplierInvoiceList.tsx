@@ -143,7 +143,17 @@ export default function SupplierInvoiceList({ invoices, filters, onEdit, onDelet
                   )}
                 </td>
                 <td className="py-2.5 px-3 text-center">
-                  <SourceIcon source={inv.sourceType} />
+                  <div className="flex items-center justify-center gap-1">
+                    <SourceIcon source={inv.sourceType} />
+                    {inv.autoProcessed && (
+                      <span
+                        title="Auto-processed via whitelist"
+                        className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-indigo-100 text-indigo-600 text-[9px] font-bold"
+                      >
+                        A
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="py-2.5 px-3 text-right">
                   <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

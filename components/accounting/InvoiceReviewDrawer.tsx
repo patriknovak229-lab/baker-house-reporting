@@ -17,6 +17,7 @@ interface Props {
   gmailMessageId?: string;
   extractionFailed?: boolean;
   onSave: (inv: SupplierInvoice) => void;
+  onSaveAndWhitelist?: (inv: SupplierInvoice) => void;
   onClose: () => void;
   queueRemaining?: number;
 }
@@ -57,6 +58,7 @@ export default function InvoiceReviewDrawer({
   gmailMessageId,
   extractionFailed = false,
   onSave,
+  onSaveAndWhitelist,
   onClose,
   queueRemaining = 0,
 }: Props) {
@@ -124,15 +126,17 @@ export default function InvoiceReviewDrawer({
     setManualFile(f);
   }
 
-  async function handleSave() {
-    if (!supplierName.trim()) { setError('Supplier name is required.'); return; }
-    if (!invoiceNumber.trim()) { setError('Invoice number is required.'); return; }
-    if (!invoiceDate) { setError('Invoice date is required.'); return; }
+  function validate(): boolean {
+    if (!supplierName.trim()) { setError('Supplier name is required.'); return false; }
+    if (!invoiceNumber.trim()) { setError('Invoice number is required.'); return false; }
+    if (!invoiceDate) { setError('Invoice date is required.'); return false; }
     const amount = parseFloat(amountCZK);
-    if (isNaN(amount) || amount <= 0) { setError('Amount must be a positive number.'); return; }
+    if (isNaN(amount) || amount <= 0) { setError('Amount must be a positive number.'); return false; }
+    return true;
+  }
 
-    setSaving(true);
-    setError(null);
+  async function buildInvoice(): Promise<SupplierInvoice> {
+    const amount = parseFloat(amountCZK);
 
     let driveFileId: string | undefined;
     let driveFileName: string | undefined;
@@ -159,7 +163,7 @@ export default function InvoiceReviewDrawer({
       }
     }
 
-    const invoice: SupplierInvoice = {
+    return {
       id: existing?.id ?? crypto.randomUUID(),
       supplierName: supplierName.trim(),
       supplierICO: supplierICO.trim() || undefined,
@@ -179,8 +183,24 @@ export default function InvoiceReviewDrawer({
       gmailMessageId: gmailMessageId ?? existing?.gmailMessageId,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     };
+  }
 
+  async function handleSave() {
+    if (!validate()) return;
+    setSaving(true);
+    setError(null);
+    const invoice = await buildInvoice();
     onSave(invoice);
+    setSaving(false);
+  }
+
+  async function handleSaveAndWhitelistClick() {
+    if (!validate()) return;
+    if (!onSaveAndWhitelist) return;
+    setSaving(true);
+    setError(null);
+    const invoice = await buildInvoice();
+    onSaveAndWhitelist(invoice);
     setSaving(false);
   }
 
@@ -315,12 +335,24 @@ export default function InvoiceReviewDrawer({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 sticky bottom-0 bg-white">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
-          <button onClick={handleSave} disabled={saving}
-            className="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
-            {driveUploading ? 'Uploading to Drive…' : saving ? 'Saving…' : activeFile ? `Save & Push to Drive${queueRemaining > 0 ? ` (${queueRemaining} next)` : ''}` : 'Save'}
-          </button>
+        <div className="px-6 py-4 border-t border-gray-100 sticky bottom-0 bg-white">
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+            {!isEdit && onSaveAndWhitelist && (
+              <button
+                onClick={handleSaveAndWhitelistClick}
+                disabled={saving}
+                title="Save this invoice and add this supplier to the whitelist for future auto-processing"
+                className="px-4 py-2 text-sm font-medium text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? 'Saving…' : 'Save & Whitelist'}
+              </button>
+            )}
+            <button onClick={handleSave} disabled={saving}
+              className="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
+              {driveUploading ? 'Uploading to Drive…' : saving ? 'Saving…' : activeFile ? `Save & Push to Drive${queueRemaining > 0 ? ` (${queueRemaining} next)` : ''}` : 'Save'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

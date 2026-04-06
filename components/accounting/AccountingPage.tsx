@@ -1,15 +1,17 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   SupplierInvoice,
   SupplierInvoiceStatus,
   ExtractedInvoiceData,
   SupplierInvoiceSource,
+  WhitelistedSupplier,
 } from '@/types/supplierInvoice';
 import SupplierInvoiceList from './SupplierInvoiceList';
 import InvoiceImportModal from './InvoiceImportModal';
 import InvoiceReviewDrawer from './InvoiceReviewDrawer';
 import CategoryManager from './CategoryManager';
+import WhitelistManager from './WhitelistManager';
 import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
 
@@ -35,9 +37,19 @@ interface GmailStatus {
   connectedAt?: string;
 }
 
-function GmailConnectionBanner({ status, onDisconnect }: { status: GmailStatus | null; onDisconnect: () => void }) {
-  if (status === null) return null; // still loading
+interface QueueItem {
+  file: File;
+  gmailMessageId?: string;
+}
 
+interface AutoSavedEntry {
+  supplierName: string;
+  invoiceNumber: string;
+  amountCZK: number;
+}
+
+function GmailConnectionBanner({ status, onDisconnect }: { status: GmailStatus | null; onDisconnect: () => void }) {
+  if (status === null) return null;
   if (!status.connected) {
     return (
       <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
@@ -48,16 +60,12 @@ function GmailConnectionBanner({ status, onDisconnect }: { status: GmailStatus |
             <p className="text-xs text-amber-600">Connect truthseeker.sro@gmail.com to enable Gmail sync</p>
           </div>
         </div>
-        <a
-          href="/api/accounting/connect-gmail"
-          className="px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 whitespace-nowrap"
-        >
+        <a href="/api/accounting/connect-gmail" className="px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 whitespace-nowrap">
           Connect Gmail
         </a>
       </div>
     );
   }
-
   return (
     <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
       <div className="flex items-center gap-2.5">
@@ -67,19 +75,49 @@ function GmailConnectionBanner({ status, onDisconnect }: { status: GmailStatus |
           <p className="text-xs text-green-600">{status.email}</p>
         </div>
       </div>
-      <button
-        onClick={onDisconnect}
-        className="text-xs text-green-700 hover:text-red-600 underline"
-      >
-        Disconnect
-      </button>
+      <button onClick={onDisconnect} className="text-xs text-green-700 hover:text-red-600 underline">Disconnect</button>
     </div>
   );
 }
 
-interface QueueItem {
-  file: File;
-  gmailMessageId?: string;
+function AutoSavedBanner({ entries, onDismiss }: { entries: AutoSavedEntry[]; onDismiss: () => void }) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="flex items-start justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 gap-3">
+      <div className="flex items-start gap-2.5">
+        <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0 mt-1.5" />
+        <div>
+          <p className="text-sm font-medium text-indigo-800">
+            {entries.length} invoice{entries.length !== 1 ? 's' : ''} auto-processed
+          </p>
+          <div className="text-xs text-indigo-600 mt-0.5 space-y-0.5">
+            {entries.map((e, i) => (
+              <p key={i}>{e.supplierName} · {e.invoiceNumber} · {formatCurrency(e.amountCZK)}</p>
+            ))}
+          </div>
+        </div>
+      </div>
+      <button onClick={onDismiss} className="text-indigo-400 hover:text-indigo-600 flex-shrink-0">×</button>
+    </div>
+  );
+}
+
+/** Match extracted supplier name against whitelist (case-insensitive, trimmed) */
+function matchWhitelist(supplierName: string | null, whitelist: WhitelistedSupplier[]): WhitelistedSupplier | null {
+  if (!supplierName) return null;
+  const norm = supplierName.trim().toLowerCase();
+  return whitelist.find((w) => w.supplierName.trim().toLowerCase() === norm) ?? null;
+}
+
+/** Check all required fields are present for auto-save */
+function canAutoSave(extracted: ExtractedInvoiceData): boolean {
+  return !!(
+    extracted.supplierName &&
+    extracted.invoiceNumber &&
+    extracted.invoiceDate &&
+    extracted.amountCZK != null &&
+    extracted.amountCZK > 0
+  );
 }
 
 export default function AccountingPage() {
@@ -91,6 +129,9 @@ export default function AccountingPage() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [showWhitelistManager, setShowWhitelistManager] = useState(false);
+  const [whitelist, setWhitelist] = useState<WhitelistedSupplier[]>([]);
+  const [autoSavedEntries, setAutoSavedEntries] = useState<AutoSavedEntry[]>([]);
   const { categories } = useCategories();
   const [filters, setFilters] = useState({
     status: 'all' as 'all' | SupplierInvoiceStatus,
@@ -99,6 +140,10 @@ export default function AccountingPage() {
     dateFrom: '',
     dateTo: '',
   });
+
+  // Use a ref so processNextInQueue always sees the latest whitelist
+  const whitelistRef = useRef<WhitelistedSupplier[]>([]);
+  whitelistRef.current = whitelist;
 
   const loadInvoices = useCallback(async () => {
     try {
@@ -118,16 +163,23 @@ export default function AccountingPage() {
     }
   }, []);
 
+  const loadWhitelist = useCallback(async () => {
+    try {
+      const res = await fetch('/api/supplier-invoices/whitelist');
+      if (res.ok) setWhitelist(await res.json());
+    } catch { /* non-fatal */ }
+  }, []);
+
   useEffect(() => {
     loadInvoices();
     loadGmailStatus();
-    // Show a toast if returning from a successful OAuth connection
+    loadWhitelist();
     const params = new URLSearchParams(window.location.search);
     if (params.get('gmailConnected')) {
       window.history.replaceState({}, '', window.location.pathname);
       loadGmailStatus();
     }
-  }, [loadInvoices, loadGmailStatus]);
+  }, [loadInvoices, loadGmailStatus, loadWhitelist]);
 
   async function handleDisconnectGmail() {
     if (!confirm('Disconnect the invoice Gmail account?')) return;
@@ -135,7 +187,70 @@ export default function AccountingPage() {
     setGmailStatus({ connected: false });
   }
 
-  // Extract the next item in the queue and open the drawer for it
+  /** Save an invoice directly (no drawer) — used for whitelisted auto-processing */
+  async function autoSaveInvoice(
+    extracted: ExtractedInvoiceData,
+    matched: WhitelistedSupplier,
+    file: File,
+    gmailMessageId?: string,
+  ): Promise<void> {
+    // Drive upload first
+    let driveFileId: string | undefined;
+    let driveFileName: string | undefined;
+    let driveUrl: string | undefined;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('supplierName', extracted.supplierName!);
+      fd.append('invoiceNumber', extracted.invoiceNumber!);
+      fd.append('amountCZK', String(Math.round(extracted.amountCZK!)));
+      fd.append('invoiceDate', extracted.invoiceDate!);
+      const driveRes = await fetch('/api/supplier-invoices/drive-upload', { method: 'POST', body: fd });
+      if (driveRes.ok) {
+        const d = await driveRes.json() as { fileId: string; fileName: string; driveUrl: string };
+        driveFileId = d.fileId;
+        driveFileName = d.fileName;
+        driveUrl = d.driveUrl;
+      }
+    } catch { /* non-fatal */ }
+
+    const invoice: SupplierInvoice = {
+      id: crypto.randomUUID(),
+      supplierName: extracted.supplierName!,
+      supplierICO: extracted.supplierICO ?? undefined,
+      invoiceNumber: extracted.invoiceNumber!,
+      invoiceDate: extracted.invoiceDate!,
+      dueDate: extracted.dueDate ?? undefined,
+      amountCZK: extracted.amountCZK!,
+      vatAmountCZK: extracted.vatAmountCZK ?? undefined,
+      category: matched.category,
+      status: 'pending',
+      sourceType: 'email',
+      gmailMessageId,
+      driveFileId,
+      driveFileName,
+      driveUrl,
+      autoProcessed: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    const res = await fetch('/api/supplier-invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(invoice),
+    });
+
+    if (res.ok) {
+      const saved = await res.json() as SupplierInvoice;
+      setInvoices((prev) => [saved, ...prev]);
+      setAutoSavedEntries((prev) => [...prev, {
+        supplierName: saved.supplierName,
+        invoiceNumber: saved.invoiceNumber,
+        amountCZK: saved.amountCZK,
+      }]);
+    }
+  }
+
   async function processNextInQueue(remaining: QueueItem[]) {
     if (remaining.length === 0) { setExtracting(false); return; }
     const [next, ...rest] = remaining;
@@ -147,28 +262,32 @@ export default function AccountingPage() {
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
         const extracted = await res.json() as ExtractedInvoiceData;
+        // Check whitelist
+        const matched = matchWhitelist(extracted.supplierName, whitelistRef.current);
+        if (matched && canAutoSave(extracted)) {
+          setExtracting(false);
+          await autoSaveInvoice(extracted, matched, next.file, next.gmailMessageId);
+          // Continue with next item
+          processNextInQueue(rest);
+          return;
+        }
         setDrawerState({ extracted, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
       } else {
-        // Extraction failed — open drawer so user can fill in manually
         setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
       }
     } catch {
-      // Network / parse error — open drawer so user can fill in manually
       setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
     } finally {
       setExtracting(false);
     }
   }
 
-  // Called when user clicks "Process N invoices" in the modal
   function handleProcessBatch(items: QueueItem[]) {
     setShowImportModal(false);
-    const [first, ...rest] = items;
-    setQueue(rest);
-    processNextInQueue([first, ...rest]);
+    setAutoSavedEntries([]);
+    processNextInQueue(items);
   }
 
-  // Called when user picks a single file from upload tab
   async function handleFileSelected(file: File) {
     setShowImportModal(false);
     setExtracting(true);
@@ -189,34 +308,49 @@ export default function AccountingPage() {
     }
   }
 
-  async function handleSave(inv: SupplierInvoice) {
+  async function persistInvoice(inv: SupplierInvoice): Promise<void> {
     const isNew = !invoices.some((e) => e.id === inv.id);
     const method = isNew ? 'POST' : 'PUT';
     const url = isNew ? '/api/supplier-invoices' : `/api/supplier-invoices/${inv.id}`;
-
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(inv),
     });
-
     if (res.ok) {
       const saved = await res.json() as SupplierInvoice;
-      setInvoices((prev) =>
-        isNew ? [saved, ...prev] : prev.map((e) => (e.id === saved.id ? saved : e))
-      );
+      setInvoices((prev) => isNew ? [saved, ...prev] : prev.map((e) => (e.id === saved.id ? saved : e)));
     }
+  }
+
+  async function handleSave(inv: SupplierInvoice) {
+    await persistInvoice(inv);
     setDrawerState(null);
-    // Process next in queue if any
+    if (queue.length > 0) processNextInQueue(queue);
+  }
+
+  async function handleSaveAndWhitelist(inv: SupplierInvoice) {
+    await persistInvoice(inv);
+    // Add supplier to whitelist
+    try {
+      const res = await fetch('/api/supplier-invoices/whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplierName: inv.supplierName, category: inv.category }),
+      });
+      if (res.ok) {
+        const entry = await res.json() as WhitelistedSupplier;
+        setWhitelist((prev) => [...prev, entry]);
+      }
+    } catch { /* non-fatal */ }
+    setDrawerState(null);
     if (queue.length > 0) processNextInQueue(queue);
   }
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this invoice?')) return;
     const res = await fetch(`/api/supplier-invoices/${id}`, { method: 'DELETE' });
-    if (res.ok) {
-      setInvoices((prev) => prev.filter((inv) => inv.id !== id));
-    }
+    if (res.ok) setInvoices((prev) => prev.filter((inv) => inv.id !== id));
   }
 
   function handleManualEntry() {
@@ -230,11 +364,9 @@ export default function AccountingPage() {
 
   function handleDrawerClose() {
     setDrawerState(null);
-    // Skip current item, move to next in queue
     if (queue.length > 0) processNextInQueue(queue);
   }
 
-  // Summary stats for the current month
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const monthInvoices = invoices.filter((inv) => inv.invoiceDate.startsWith(thisMonth));
@@ -246,18 +378,11 @@ export default function AccountingPage() {
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
         {PHASES.map((phase) => (
-          <div
-            key={phase.id}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
-              phase.id === 1
-                ? 'bg-white shadow-sm text-indigo-700 font-medium'
-                : 'text-gray-400 cursor-not-allowed'
-            }`}
+          <div key={phase.id}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${phase.id === 1 ? 'bg-white shadow-sm text-indigo-700 font-medium' : 'text-gray-400 cursor-not-allowed'}`}
             title={phase.id !== 1 ? 'Coming soon' : undefined}
           >
-            <span className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${
-              phase.id === 1 ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500'
-            }`}>
+            <span className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${phase.id === 1 ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500'}`}>
               {phase.id}
             </span>
             <span className="hidden sm:inline">{phase.label}</span>
@@ -272,14 +397,13 @@ export default function AccountingPage() {
           <p className="text-sm text-gray-500 mt-0.5">Track and manage costs — cleaning, utilities, services</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowCategoryManager(true)}
-            className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
-          >
+          <button onClick={() => setShowWhitelistManager(true)} className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+            Whitelist
+          </button>
+          <button onClick={() => setShowCategoryManager(true)} className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
             Categories
           </button>
-          <button
-            onClick={() => setShowImportModal(true)}
+          <button onClick={() => setShowImportModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -292,6 +416,9 @@ export default function AccountingPage() {
 
       {/* Gmail connection banner */}
       <GmailConnectionBanner status={gmailStatus} onDisconnect={handleDisconnectGmail} />
+
+      {/* Auto-saved notification */}
+      <AutoSavedBanner entries={autoSavedEntries} onDismiss={() => setAutoSavedEntries([])} />
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -315,25 +442,18 @@ export default function AccountingPage() {
       {/* Filters */}
       <div className="bg-white border border-gray-100 rounded-xl p-4">
         <div className="flex flex-wrap gap-3">
-          <input
-            type="text"
-            placeholder="Search supplier, invoice #…"
-            value={filters.search}
+          <input type="text" placeholder="Search supplier, invoice #…" value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm flex-1 min-w-40 focus:outline-none focus:ring-1 focus:ring-indigo-400"
           />
-          <select
-            value={filters.status}
-            onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as typeof filters.status }))}
+          <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as typeof filters.status }))}
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
           >
             <option value="all">All statuses</option>
             <option value="pending">Pending</option>
             <option value="reconciled">Reconciled</option>
           </select>
-          <select
-            value={filters.category}
-            onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value as typeof filters.category }))}
+          <select value={filters.category} onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
           >
             <option value="all">All categories</option>
@@ -342,25 +462,15 @@ export default function AccountingPage() {
             ))}
           </select>
           <div className="flex items-center gap-1.5">
-            <input
-              type="date"
-              value={filters.dateFrom}
-              onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
-            />
+            <input type="date" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
+              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
             <span className="text-gray-400 text-sm">–</span>
-            <input
-              type="date"
-              value={filters.dateTo}
-              onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
-              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
-            />
+            <input type="date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
+              className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
           </div>
           {(filters.status !== 'all' || filters.category !== 'all' || filters.search || filters.dateFrom || filters.dateTo) && (
-            <button
-              onClick={() => setFilters({ status: 'all', category: 'all', search: '', dateFrom: '', dateTo: '' })}
-              className="text-xs text-gray-400 hover:text-gray-600 px-2"
-            >
+            <button onClick={() => setFilters({ status: 'all', category: 'all', search: '', dateFrom: '', dateTo: '' })}
+              className="text-xs text-gray-400 hover:text-gray-600 px-2">
               Clear filters
             </button>
           )}
@@ -374,18 +484,16 @@ export default function AccountingPage() {
             <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : (
-          <SupplierInvoiceList
-            invoices={invoices}
-            filters={filters}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-          />
+          <SupplierInvoiceList invoices={invoices} filters={filters} onEdit={handleEdit} onDelete={handleDelete} />
         )}
       </div>
 
       {/* Modals / Drawers */}
-      {showCategoryManager && (
-        <CategoryManager onClose={() => setShowCategoryManager(false)} />
+      {showCategoryManager && <CategoryManager onClose={() => setShowCategoryManager(false)} />}
+      {showWhitelistManager && (
+        <WhitelistManager
+          onClose={() => { setShowWhitelistManager(false); loadWhitelist(); }}
+        />
       )}
 
       {showImportModal && (
@@ -397,15 +505,12 @@ export default function AccountingPage() {
         />
       )}
 
-      {/* Extraction loading overlay */}
       {extracting && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20">
           <div className="bg-white rounded-xl shadow-lg px-8 py-6 flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
             <p className="text-sm font-medium text-gray-700">Extracting with Claude…</p>
-            {queue.length > 0 && (
-              <p className="text-xs text-gray-400">{queue.length} more remaining</p>
-            )}
+            {queue.length > 0 && <p className="text-xs text-gray-400">{queue.length} more remaining</p>}
           </div>
         </div>
       )}
@@ -419,6 +524,7 @@ export default function AccountingPage() {
           gmailMessageId={drawerState.gmailMessageId}
           extractionFailed={drawerState.extractionFailed}
           onSave={handleSave}
+          onSaveAndWhitelist={drawerState.existing ? undefined : handleSaveAndWhitelist}
           onClose={handleDrawerClose}
           queueRemaining={queue.length}
         />
