@@ -59,13 +59,13 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
     if (hasUnread) setOpen(true);
   }, [hasUnread]);
 
-  // Fetch + poll while open
+  // Fetch + poll whenever thread is visible (open OR active OR unread)
   useEffect(() => {
-    if (!open) return;
+    if (!showThread) return;
     fetchMessages();
     const id = setInterval(fetchMessages, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [open, fetchMessages]);
+  }, [showThread, fetchMessages]);
 
   // Scroll to bottom of message container (not the whole page) when messages change
   useEffect(() => {
@@ -92,7 +92,18 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
       setDraft('');
-      await fetchMessages();
+      // Optimistic update — show sent bubble immediately without waiting for Beds24
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(), // temporary; overwritten when server re-fetch resolves
+          source: 'host' as const,
+          text: draft.trim(),
+          time: new Date().toISOString(),
+        },
+      ]);
+      // Re-sync after Beds24 write propagation (~1–2 s)
+      setTimeout(fetchMessages, 2000);
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'Failed to send');
     } finally {
