@@ -152,10 +152,12 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
   // Filter out manually consumed bookings before standard merge logic
   const remaining = all.filter((b) => !manualConsumedIds.has(b.id));
 
-  // Group sub-bookings by their masterid
+  // Group sub-bookings by their masterid.
+  // Beds24 sometimes sets masterid = b.id on the master booking itself (self-reference)
+  // to indicate "this IS the master". Exclude those — they're masters, not subs.
   const subsByMaster = new Map<number, Beds24Booking[]>();
   for (const b of remaining) {
-    if (b.masterid != null) {
+    if (b.masterid != null && b.masterid !== b.id) {
       const group = subsByMaster.get(b.masterid) ?? [];
       group.push(b);
       subsByMaster.set(b.masterid, group);
@@ -171,14 +173,20 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     if (consumedIds.has(b.id)) continue;
 
     // Sub-booking: will be handled when its master is encountered (or below)
-    if (b.masterid != null) continue;
+    // Self-referencing masterid (masterid === b.id) means this IS the master — don't skip it
+    if (b.masterid != null && b.masterid !== b.id) continue;
 
     const subs = subsByMaster.get(b.id);
     if (subs && subs.length > 0) {
-      // Master booking with sub-bookings — merge
-      const physicalRooms = subs
-        .map((s) => UNIT_MAP[s.roomId])
-        .filter((r): r is string => r != null);
+      // Master booking with sub-bookings — merge.
+      // Include the master's own room if it maps to a known physical room
+      // (happens when Beds24 uses a physical room booking as master instead of a
+      // separate virtual-room booking). Virtual-room masters won't be in UNIT_MAP
+      // so UNIT_MAP[b.roomId] returns undefined and is filtered out — safe either way.
+      const physicalRooms = [
+        UNIT_MAP[b.roomId],
+        ...subs.map((s) => UNIT_MAP[s.roomId]),
+      ].filter((r): r is string => r != null);
 
       consumedIds.add(b.id);
       subs.forEach((s) => consumedIds.add(s.id));
