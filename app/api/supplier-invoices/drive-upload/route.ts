@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { PDFDocument } from 'pdf-lib';
+import sharp from 'sharp';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
@@ -80,23 +81,37 @@ export async function POST(request: Request) {
   let buffer = Buffer.from(bytes);
 
   // Convert images to PDF so everything in Drive is a consistent PDF
-  if (file.type.startsWith('image/')) {
+  if (file.type.startsWith('image/') || file.type === 'image/heic' || file.type === 'image/heif' ||
+      /\.(heic|heif)$/i.test(file.name)) {
     try {
-      const pdfDoc = await PDFDocument.create();
-      let embeddedImage;
+      // Step 1: normalise to JPEG/PNG using sharp
+      // This handles HEIC, HEIF, oversized images, and any format pdf-lib can't embed directly
+      let imageBuffer: Buffer;
+      let isPng = false;
       if (file.type === 'image/png') {
-        embeddedImage = await pdfDoc.embedPng(buffer);
+        // Keep PNG lossless; sharp pass-through
+        imageBuffer = await sharp(buffer).png().toBuffer();
+        isPng = true;
       } else {
-        // JPEG (and JPEG-derived formats like HEIC converted to JPEG client-side)
-        embeddedImage = await pdfDoc.embedJpg(buffer);
+        // HEIC, JPEG, WebP, TIFF, etc. → JPEG
+        imageBuffer = await sharp(buffer).jpeg({ quality: 90 }).toBuffer();
       }
+
+      // Step 2: embed in a single-page PDF via pdf-lib
+      const pdfDoc = await PDFDocument.create();
+      const embeddedImage = isPng
+        ? await pdfDoc.embedPng(imageBuffer)
+        : await pdfDoc.embedJpg(imageBuffer);
       const { width, height } = embeddedImage;
       const page = pdfDoc.addPage([width, height]);
       page.drawImage(embeddedImage, { x: 0, y: 0, width, height });
       buffer = Buffer.from(await pdfDoc.save());
     } catch (err) {
-      console.error('Image→PDF conversion failed, uploading raw:', err);
-      // Fall through — upload the raw image rather than failing entirely
+      console.error('Image→PDF conversion failed:', err);
+      return NextResponse.json(
+        { error: 'Could not convert image to PDF. Please try a JPEG or PNG file.' },
+        { status: 422 },
+      );
     }
   }
 

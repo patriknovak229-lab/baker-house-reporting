@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import sharp from 'sharp';
 import { requireRole } from '@/utils/authGuard';
 import type { ExtractedInvoiceData } from '@/types/supplierInvoice';
 
@@ -18,6 +19,14 @@ Return ONLY valid JSON, no other text:
 amountCZK should be the total amount payable (including VAT if present).
 If a field cannot be determined, use null.`;
 
+const CLAUDE_MAX_BYTES = 4.5 * 1024 * 1024; // 4.5 MB — leave headroom under the 5 MB API limit
+
+function isHeic(mimeType: string, fileName: string): boolean {
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') return true;
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  return ext === 'heic' || ext === 'heif';
+}
+
 export async function POST(request: Request) {
   const guard = await requireRole(['admin']);
   if ('error' in guard) return guard.error;
@@ -31,39 +40,57 @@ export async function POST(request: Request) {
   if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
 
   const bytes = await file.arrayBuffer();
-  const buffer = Buffer.from(bytes);
+  // eslint-disable-next-line prefer-const
+  let buffer: Buffer = Buffer.from(bytes);
+  let mediaType = file.type || 'application/octet-stream';
+
+  // ── HEIC/HEIF → JPEG (server-side, using sharp's pre-built libvips binaries) ──
+  if (isHeic(mediaType, file.name)) {
+    try {
+      buffer = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
+      mediaType = 'image/jpeg';
+    } catch (err) {
+      console.error('HEIC→JPEG conversion failed:', err);
+      return NextResponse.json(
+        { error: 'Could not convert HEIC image. Please export as JPEG from Photos and try again.' },
+        { status: 415 },
+      );
+    }
+  }
+
+  // ── Large image → compress to fit Claude's 5 MB limit ──
+  if (mediaType.startsWith('image/') && buffer.length > CLAUDE_MAX_BYTES) {
+    try {
+      buffer = await sharp(buffer)
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      mediaType = 'image/jpeg';
+      // If still too large, shrink dimensions
+      if (buffer.length > CLAUDE_MAX_BYTES) {
+        buffer = await sharp(buffer)
+          .resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 75 })
+          .toBuffer();
+      }
+    } catch { /* leave buffer as-is — Claude will reject if truly too large */ }
+  }
+
   const base64 = buffer.toString('base64');
-  const mediaType = file.type || 'application/octet-stream';
-
   const client = new Anthropic({ apiKey });
-
   let content: Anthropic.MessageParam['content'];
 
   if (mediaType === 'application/pdf') {
     content = [
-      {
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: base64 },
-      },
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
       { type: 'text', text: EXTRACTION_PROMPT },
     ];
-  } else if (mediaType === 'image/heic' || mediaType === 'image/heif') {
-    // HEIC/HEIF should be converted to JPEG client-side before reaching here.
-    // If it still arrives as HEIC, return a clear error rather than a cryptic 502.
-    return NextResponse.json(
-      { error: 'HEIC/HEIF images must be converted to JPEG before upload. This should happen automatically — please try again.' },
-      { status: 415 }
-    );
   } else if (mediaType.startsWith('image/')) {
     const SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     const imgType = SUPPORTED.includes(mediaType)
       ? (mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp')
-      : 'image/jpeg'; // treat unknown image subtypes as JPEG (e.g. image/jpg)
+      : 'image/jpeg';
     content = [
-      {
-        type: 'image',
-        source: { type: 'base64', media_type: imgType, data: base64 },
-      },
+      { type: 'image', source: { type: 'base64', media_type: imgType, data: base64 } },
       { type: 'text', text: EXTRACTION_PROMPT },
     ];
   } else {
@@ -83,7 +110,6 @@ export async function POST(request: Request) {
 
   let extracted: ExtractedInvoiceData;
   try {
-    // Strip markdown code fences if present
     const jsonText = rawText.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
     const parsed = JSON.parse(jsonText) as Record<string, unknown>;
     extracted = {
