@@ -36,8 +36,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (token.role) {
         (session.user as unknown as Record<string, unknown>).role = token.role;
       }
-      // Expose access token for server-side Gmail API calls
+      // Expose tokens for server-side API calls (Drive upload, etc.)
       (session as unknown as Record<string, unknown>).accessToken = token.accessToken;
+      (session as unknown as Record<string, unknown>).refreshToken = token.refreshToken;
       return session;
     },
   },

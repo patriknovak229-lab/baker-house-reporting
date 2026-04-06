@@ -15,12 +15,14 @@ export async function POST(request: Request) {
   const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
   if (!folderId) return NextResponse.json({ error: 'GOOGLE_DRIVE_FOLDER_ID not configured' }, { status: 503 });
 
-  // Use the admin's own Google OAuth token — no service account needed
+  // Use the admin's own Google OAuth tokens — no service account needed
   const session = await auth();
-  const accessToken = (session as unknown as Record<string, unknown>)?.accessToken as string | undefined;
-  if (!accessToken) {
+  const s = session as unknown as Record<string, unknown>;
+  const accessToken = s?.accessToken as string | undefined;
+  const refreshToken = s?.refreshToken as string | undefined;
+  if (!refreshToken && !accessToken) {
     return NextResponse.json(
-      { error: 'No Google access token. Please sign out and sign in again to grant Drive access.' },
+      { error: 'No Google token. Please sign out and sign in again to grant Drive access.' },
       { status: 401 }
     );
   }
@@ -40,8 +42,14 @@ export async function POST(request: Request) {
   // Build filename: YYYY-MM-DD_SupplierName_InvNo_AmountCZK.pdf
   const fileName = `${invoiceDate}_${safe(supplierName)}_${safe(invoiceNumber)}_${amountCZK}CZK.pdf`;
 
-  const oauth2 = new google.auth.OAuth2();
-  oauth2.setCredentials({ access_token: accessToken });
+  const oauth2 = new google.auth.OAuth2(
+    process.env.AUTH_GOOGLE_ID,
+    process.env.AUTH_GOOGLE_SECRET,
+  );
+  oauth2.setCredentials({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  });
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
   const { Readable } = await import('stream');
