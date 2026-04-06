@@ -20,6 +20,8 @@ export async function POST(request: Request) {
   const s = session as unknown as Record<string, unknown>;
   const accessToken = s?.accessToken as string | undefined;
   const refreshToken = s?.refreshToken as string | undefined;
+  console.log('[drive-upload] accessToken:', accessToken ? `present (${accessToken.slice(0,10)}...)` : 'MISSING');
+  console.log('[drive-upload] refreshToken:', refreshToken ? `present (${refreshToken.slice(0,10)}...)` : 'MISSING');
   if (!refreshToken && !accessToken) {
     return NextResponse.json(
       { error: 'No Google token. Please sign out and sign in again to grant Drive access.' },
@@ -42,16 +44,20 @@ export async function POST(request: Request) {
   // Build filename: YYYY-MM-DD_SupplierName_InvNo_AmountCZK.pdf
   const fileName = `${invoiceDate}_${safe(supplierName)}_${safe(invoiceNumber)}_${amountCZK}CZK.pdf`;
 
+  if (!refreshToken) {
+    return NextResponse.json(
+      { error: 'No refresh token in session. Please sign out and sign in again.' },
+      { status: 401 }
+    );
+  }
+
   const oauth2 = new google.auth.OAuth2(
     process.env.AUTH_GOOGLE_ID,
     process.env.AUTH_GOOGLE_SECRET,
   );
-  oauth2.setCredentials({
-    access_token: accessToken,
-    refresh_token: refreshToken,
-  });
+  // Set only the refresh token — forces getAccessToken() to always fetch a fresh access token
+  oauth2.setCredentials({ refresh_token: refreshToken });
 
-  // Force-refresh the access token so we always have a valid one
   const { token: freshToken } = await oauth2.getAccessToken();
   if (!freshToken) {
     return NextResponse.json(
@@ -59,7 +65,7 @@ export async function POST(request: Request) {
       { status: 401 }
     );
   }
-  oauth2.setCredentials({ access_token: freshToken, refresh_token: refreshToken });
+  oauth2.setCredentials({ access_token: freshToken });
 
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
