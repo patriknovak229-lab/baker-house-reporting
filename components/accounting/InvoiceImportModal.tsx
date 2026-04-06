@@ -1,6 +1,5 @@
 'use client';
 import { useState, useRef } from 'react';
-import type { ExtractedInvoiceData } from '@/types/supplierInvoice';
 
 interface GmailAttachment {
   messageId: string;
@@ -14,7 +13,7 @@ interface GmailAttachment {
 
 interface Props {
   onProcessBatch: (
-    items: Array<{ file: File; gmailMessageId: string }>
+    items: Array<{ file: File; gmailMessageId?: string }>
   ) => void;
   onFileSelected: (file: File) => void;
   onManual: () => void;
@@ -38,16 +37,37 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
   const [error, setError] = useState<string | null>(null);
   const [gmailAttachments, setGmailAttachments] = useState<GmailAttachment[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    const file = files[0];
-    if (file.type !== 'application/pdf' && !file.type.startsWith('image/')) {
+    const valid = Array.from(files).filter(
+      (f) => f.type === 'application/pdf' || f.type.startsWith('image/')
+    );
+    if (valid.length === 0) {
       setError('Only PDF or image files are supported.');
       return;
     }
-    onFileSelected(file);
+    setError(null);
+    if (valid.length === 1) {
+      // Single file — go directly to extraction drawer
+      onFileSelected(valid[0]);
+    } else {
+      // Multiple files — show queue preview
+      setUploadFiles((prev) => {
+        const existingNames = new Set(prev.map((f) => f.name));
+        return [...prev, ...valid.filter((f) => !existingNames.has(f.name))];
+      });
+    }
+  }
+
+  function removeUploadFile(name: string) {
+    setUploadFiles((prev) => prev.filter((f) => f.name !== name));
+  }
+
+  function handleProcessUploadFiles() {
+    onProcessBatch(uploadFiles.map((file) => ({ file })));
   }
 
   async function handleGmailScan() {
@@ -139,26 +159,43 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
 
           {/* ── Upload tab ── */}
           {tab === 'upload' && (
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center py-12 cursor-pointer transition-colors ${
-                dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
-              }`}
-            >
-              <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
-                <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
+            <div className="space-y-3">
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center py-10 cursor-pointer transition-colors ${
+                  dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
+                }`}
+              >
+                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+                  <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-gray-700">Drop PDFs or photos here</p>
+                <p className="text-xs text-gray-400 mt-1">or click to browse · multiple files supported</p>
+                <p className="text-xs text-gray-400">PDF, JPG, PNG, HEIC</p>
               </div>
-              <p className="text-sm font-medium text-gray-700">Drop PDF or image here</p>
-              <p className="text-xs text-gray-400 mt-1">or click to browse</p>
-              <p className="text-xs text-gray-400">Supports: PDF, JPG, PNG</p>
+
+              {/* Multi-file queue preview */}
+              {uploadFiles.length > 0 && (
+                <div className="space-y-1.5">
+                  {uploadFiles.map((f) => (
+                    <div key={f.name} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-sm text-gray-800 truncate">{f.name}</p>
+                        <p className="text-xs text-gray-400">{Math.round(f.size / 1024)} KB</p>
+                      </div>
+                      <button onClick={() => removeUploadFile(f.name)} className="text-gray-300 hover:text-red-500 ml-2 flex-shrink-0">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
-          <input ref={fileInputRef} type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
+          <input ref={fileInputRef} type="file" accept=".pdf,image/*,.heic,.heif" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
 
           {/* ── Gmail tab ── */}
           {tab === 'gmail' && (
@@ -236,6 +273,14 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
             <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-700">
               Cancel
             </button>
+            {tab === 'upload' && uploadFiles.length > 0 && (
+              <button
+                onClick={handleProcessUploadFiles}
+                className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+              >
+                Process {uploadFiles.length} file{uploadFiles.length !== 1 ? 's' : ''}
+              </button>
+            )}
             {tab === 'gmail' && selected.size > 0 && (
               <button
                 onClick={handleProcessSelected}

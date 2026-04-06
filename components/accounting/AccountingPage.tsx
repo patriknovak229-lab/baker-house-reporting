@@ -2,7 +2,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type {
   SupplierInvoice,
-  SupplierInvoiceCategory,
   SupplierInvoiceStatus,
   ExtractedInvoiceData,
   SupplierInvoiceSource,
@@ -10,6 +9,8 @@ import type {
 import SupplierInvoiceList from './SupplierInvoiceList';
 import InvoiceImportModal from './InvoiceImportModal';
 import InvoiceReviewDrawer from './InvoiceReviewDrawer';
+import CategoryManager from './CategoryManager';
+import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
 
 const PHASES = [
@@ -78,7 +79,7 @@ function GmailConnectionBanner({ status, onDisconnect }: { status: GmailStatus |
 
 interface QueueItem {
   file: File;
-  gmailMessageId: string;
+  gmailMessageId?: string;
 }
 
 export default function AccountingPage() {
@@ -89,9 +90,11 @@ export default function AccountingPage() {
   const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [extracting, setExtracting] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const { categories } = useCategories();
   const [filters, setFilters] = useState({
     status: 'all' as 'all' | SupplierInvoiceStatus,
-    category: 'all' as 'all' | SupplierInvoiceCategory,
+    category: 'all' as string,
     search: '',
     dateFrom: '',
     dateTo: '',
@@ -268,15 +271,23 @@ export default function AccountingPage() {
           <h1 className="text-xl font-semibold text-gray-900">Supplier Invoices</h1>
           <p className="text-sm text-gray-500 mt-0.5">Track and manage costs — cleaning, utilities, services</p>
         </div>
-        <button
-          onClick={() => setShowImportModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Add Invoice
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCategoryManager(true)}
+            className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            Categories
+          </button>
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Add Invoice
+          </button>
+        </div>
       </div>
 
       {/* Gmail connection banner */}
@@ -326,13 +337,9 @@ export default function AccountingPage() {
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
           >
             <option value="all">All categories</option>
-            <option value="cleaning">Cleaning</option>
-            <option value="laundry">Laundry</option>
-            <option value="consumables">Consumables</option>
-            <option value="utilities">Utilities</option>
-            <option value="software">Software</option>
-            <option value="maintenance">Maintenance</option>
-            <option value="other">Other</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.label}</option>
+            ))}
           </select>
           <div className="flex items-center gap-1.5">
             <input
@@ -377,6 +384,10 @@ export default function AccountingPage() {
       </div>
 
       {/* Modals / Drawers */}
+      {showCategoryManager && (
+        <CategoryManager onClose={() => setShowCategoryManager(false)} />
+      )}
+
       {showImportModal && (
         <InvoiceImportModal
           onProcessBatch={handleProcessBatch}

@@ -1,11 +1,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { requireRole } from '@/utils/authGuard';
-import type { ExtractedInvoiceData, SupplierInvoiceCategory } from '@/types/supplierInvoice';
-
-const VALID_CATEGORIES: SupplierInvoiceCategory[] = [
-  'cleaning', 'laundry', 'consumables', 'utilities', 'software', 'maintenance', 'other',
-];
+import type { ExtractedInvoiceData } from '@/types/supplierInvoice';
 
 const EXTRACTION_PROMPT = `Extract structured data from this supplier invoice (Czech or English).
 Return ONLY valid JSON, no other text:
@@ -88,11 +84,7 @@ export async function POST(request: Request) {
       dueDate: typeof parsed.dueDate === 'string' ? parsed.dueDate : null,
       amountCZK: typeof parsed.amountCZK === 'number' ? parsed.amountCZK : null,
       vatAmountCZK: typeof parsed.vatAmountCZK === 'number' ? parsed.vatAmountCZK : null,
-      suggestedCategory:
-        typeof parsed.suggestedCategory === 'string' &&
-        VALID_CATEGORIES.includes(parsed.suggestedCategory as SupplierInvoiceCategory)
-          ? (parsed.suggestedCategory as SupplierInvoiceCategory)
-          : null,
+      suggestedCategory: typeof parsed.suggestedCategory === 'string' ? parsed.suggestedCategory : null,
     };
   } catch {
     return NextResponse.json({ error: 'Failed to parse extraction response', raw: rawText }, { status: 502 });

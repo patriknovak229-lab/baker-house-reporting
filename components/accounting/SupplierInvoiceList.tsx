@@ -1,26 +1,6 @@
 'use client';
-import type { SupplierInvoice, SupplierInvoiceCategory, SupplierInvoiceStatus } from '@/types/supplierInvoice';
+import type { SupplierInvoice, SupplierInvoiceStatus } from '@/types/supplierInvoice';
 import { formatCurrency } from '@/utils/formatters';
-
-const CATEGORY_LABELS: Record<SupplierInvoiceCategory, string> = {
-  cleaning: 'Cleaning',
-  laundry: 'Laundry',
-  consumables: 'Consumables',
-  utilities: 'Utilities',
-  software: 'Software',
-  maintenance: 'Maintenance',
-  other: 'Other',
-};
-
-const CATEGORY_COLORS: Record<SupplierInvoiceCategory, string> = {
-  cleaning: 'bg-blue-50 text-blue-700',
-  laundry: 'bg-cyan-50 text-cyan-700',
-  consumables: 'bg-orange-50 text-orange-700',
-  utilities: 'bg-yellow-50 text-yellow-700',
-  software: 'bg-purple-50 text-purple-700',
-  maintenance: 'bg-red-50 text-red-700',
-  other: 'bg-gray-100 text-gray-600',
-};
 
 function StatusBadge({ status }: { status: SupplierInvoiceStatus }) {
   return (
@@ -56,7 +36,7 @@ function SourceIcon({ source }: { source: SupplierInvoice['sourceType'] }) {
 
 interface Filters {
   status: 'all' | SupplierInvoiceStatus;
-  category: 'all' | SupplierInvoiceCategory;
+  category: string;
   search: string;
   dateFrom: string;
   dateTo: string;
@@ -131,8 +111,8 @@ export default function SupplierInvoiceList({ invoices, filters, onEdit, onDelet
                 </td>
                 <td className="py-2.5 px-3 text-gray-600 font-mono text-xs">{inv.invoiceNumber}</td>
                 <td className="py-2.5 px-3">
-                  <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${CATEGORY_COLORS[inv.category]}`}>
-                    {CATEGORY_LABELS[inv.category]}
+                  <span className="inline-block text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">
+                    {inv.category}
                   </span>
                 </td>
                 <td className="py-2.5 px-3 text-xs text-gray-500">

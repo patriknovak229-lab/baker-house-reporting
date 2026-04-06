@@ -1,11 +1,11 @@
-export type SupplierInvoiceCategory =
-  | 'cleaning'
-  | 'laundry'
-  | 'consumables'
-  | 'utilities'
-  | 'software'
-  | 'maintenance'
-  | 'other';
+/** Category is now a dynamic string — managed via the categories API */
+export type SupplierInvoiceCategory = string;
+
+/** A user-defined invoice category stored in Redis */
+export interface InvoiceCategory {
+  id: string;
+  label: string;
+}
 
 export type SupplierInvoiceStatus = 'pending' | 'reconciled';
 
@@ -44,5 +44,5 @@ export interface ExtractedInvoiceData {
   dueDate: string | null;
   amountCZK: number | null;
   vatAmountCZK: number | null;
-  suggestedCategory: SupplierInvoiceCategory | null;
+  suggestedCategory: string | null;
 }
