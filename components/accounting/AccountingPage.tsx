@@ -14,7 +14,7 @@ import CategoryManager from './CategoryManager';
 import WhitelistManager from './WhitelistManager';
 import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
-import { compressImageIfNeeded } from '@/utils/imageCompressor';
+import { prepareImageFile } from '@/utils/imageCompressor';
 
 const PHASES = [
   { id: 1, label: 'Costs', description: 'Supplier invoices' },
@@ -258,7 +258,7 @@ export default function AccountingPage() {
     setQueue(rest);
     setExtracting(true);
     try {
-      const compressed = await compressImageIfNeeded(next.file);
+      const compressed = await prepareImageFile(next.file);
       const fd = new FormData();
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
@@ -295,7 +295,7 @@ export default function AccountingPage() {
     setExtracting(true);
     let compressed = file;
     try {
-      compressed = await compressImageIfNeeded(file);
+      compressed = await prepareImageFile(file);
       const fd = new FormData();
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
@@ -363,7 +363,7 @@ export default function AccountingPage() {
   }
 
   async function handleReuploadDrive(inv: SupplierInvoice, file: File) {
-    const compressed = await compressImageIfNeeded(file);
+    const compressed = await prepareImageFile(file);
     const fd = new FormData();
     fd.append('file', compressed);
     fd.append('supplierName', inv.supplierName);

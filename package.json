@@ -14,6 +14,7 @@
     "@types/nodemailer": "^7.0.11",
     "@upstash/redis": "^1.37.0",
     "googleapis": "^171.4.0",
+    "heic2any": "^0.0.4",
     "next": "16.2.1",
     "next-auth": "^5.0.0-beta.30",
     "nodemailer": "^8.0.4",

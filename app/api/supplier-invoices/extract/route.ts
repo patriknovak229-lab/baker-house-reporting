@@ -47,8 +47,18 @@ export async function POST(request: Request) {
       },
       { type: 'text', text: EXTRACTION_PROMPT },
     ];
+  } else if (mediaType === 'image/heic' || mediaType === 'image/heif') {
+    // HEIC/HEIF should be converted to JPEG client-side before reaching here.
+    // If it still arrives as HEIC, return a clear error rather than a cryptic 502.
+    return NextResponse.json(
+      { error: 'HEIC/HEIF images must be converted to JPEG before upload. This should happen automatically — please try again.' },
+      { status: 415 }
+    );
   } else if (mediaType.startsWith('image/')) {
-    const imgType = mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+    const SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    const imgType = SUPPORTED.includes(mediaType)
+      ? (mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp')
+      : 'image/jpeg'; // treat unknown image subtypes as JPEG (e.g. image/jpg)
     content = [
       {
         type: 'image',
