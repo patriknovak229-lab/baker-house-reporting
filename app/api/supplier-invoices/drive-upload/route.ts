@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
+import { PDFDocument } from 'pdf-lib';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
@@ -76,7 +77,28 @@ export async function POST(request: Request) {
   if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
 
   const bytes = await file.arrayBuffer();
-  const buffer = Buffer.from(bytes);
+  let buffer = Buffer.from(bytes);
+
+  // Convert images to PDF so everything in Drive is a consistent PDF
+  if (file.type.startsWith('image/')) {
+    try {
+      const pdfDoc = await PDFDocument.create();
+      let embeddedImage;
+      if (file.type === 'image/png') {
+        embeddedImage = await pdfDoc.embedPng(buffer);
+      } else {
+        // JPEG (and JPEG-derived formats like HEIC converted to JPEG client-side)
+        embeddedImage = await pdfDoc.embedJpg(buffer);
+      }
+      const { width, height } = embeddedImage;
+      const page = pdfDoc.addPage([width, height]);
+      page.drawImage(embeddedImage, { x: 0, y: 0, width, height });
+      buffer = Buffer.from(await pdfDoc.save());
+    } catch (err) {
+      console.error('Image→PDF conversion failed, uploading raw:', err);
+      // Fall through — upload the raw image rather than failing entirely
+    }
+  }
 
   // Build filename: YYYY-MM-DD_SupplierName_InvNo_AmountCZK.pdf
   const fileName = `${invoiceDate}_${safe(supplierName)}_${safe(invoiceNumber)}_${amountCZK}CZK.pdf`;

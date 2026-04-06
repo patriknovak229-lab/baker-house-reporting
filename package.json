@@ -17,6 +17,7 @@
     "next": "16.2.1",
     "next-auth": "^5.0.0-beta.30",
     "nodemailer": "^8.0.4",
+    "pdf-lib": "^1.17.1",
     "puppeteer-core": "^24.40.0",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",

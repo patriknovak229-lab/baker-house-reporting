@@ -1,4 +1,5 @@
 'use client';
+import { useRef, useState } from 'react';
 import type { SupplierInvoice, SupplierInvoiceStatus } from '@/types/supplierInvoice';
 import { formatCurrency } from '@/utils/formatters';
 
@@ -47,9 +48,31 @@ interface Props {
   filters: Filters;
   onEdit: (inv: SupplierInvoice) => void;
   onDelete: (id: string) => void;
+  onReuploadDrive?: (inv: SupplierInvoice, file: File) => void;
 }
 
-export default function SupplierInvoiceList({ invoices, filters, onEdit, onDelete }: Props) {
+export default function SupplierInvoiceList({ invoices, filters, onEdit, onDelete, onReuploadDrive }: Props) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingReupload, setPendingReupload] = useState<SupplierInvoice | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+
+  function triggerReupload(inv: SupplierInvoice) {
+    setPendingReupload(inv);
+    fileInputRef.current?.click();
+  }
+
+  async function handleReuploadFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !pendingReupload || !onReuploadDrive) return;
+    setUploadingId(pendingReupload.id);
+    try {
+      await onReuploadDrive(pendingReupload, file);
+    } finally {
+      setUploadingId(null);
+      setPendingReupload(null);
+    }
+  }
   const filtered = invoices.filter((inv) => {
     if (filters.status !== 'all' && inv.status !== filters.status) return false;
     if (filters.category !== 'all' && inv.category !== filters.category) return false;
@@ -78,6 +101,13 @@ export default function SupplierInvoiceList({ invoices, filters, onEdit, onDelet
 
   return (
     <div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,image/*"
+        className="hidden"
+        onChange={handleReuploadFileChange}
+      />
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -138,6 +168,16 @@ export default function SupplierInvoiceList({ invoices, filters, onEdit, onDelet
                     >
                       View
                     </a>
+                  ) : uploadingId === inv.id ? (
+                    <span className="text-xs text-gray-400 animate-pulse">Uploading…</span>
+                  ) : onReuploadDrive ? (
+                    <button
+                      onClick={() => triggerReupload(inv)}
+                      title="Upload file to Drive"
+                      className="text-xs text-amber-500 hover:text-indigo-600 font-medium"
+                    >
+                      ↑ Upload
+                    </button>
                   ) : (
                     <span className="text-gray-300 text-xs">—</span>
                   )}

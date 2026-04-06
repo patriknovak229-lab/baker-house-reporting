@@ -14,6 +14,7 @@ import CategoryManager from './CategoryManager';
 import WhitelistManager from './WhitelistManager';
 import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
+import { compressImageIfNeeded } from '@/utils/imageCompressor';
 
 const PHASES = [
   { id: 1, label: 'Costs', description: 'Supplier invoices' },
@@ -257,8 +258,9 @@ export default function AccountingPage() {
     setQueue(rest);
     setExtracting(true);
     try {
+      const compressed = await compressImageIfNeeded(next.file);
       const fd = new FormData();
-      fd.append('file', next.file);
+      fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
         const extracted = await res.json() as ExtractedInvoiceData;
@@ -266,14 +268,14 @@ export default function AccountingPage() {
         const matched = matchWhitelist(extracted.supplierName, whitelistRef.current);
         if (matched && canAutoSave(extracted)) {
           setExtracting(false);
-          await autoSaveInvoice(extracted, matched, next.file, next.gmailMessageId);
+          await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId);
           // Continue with next item
           processNextInQueue(rest);
           return;
         }
-        setDrawerState({ extracted, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
+        setDrawerState({ extracted, file: compressed, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
       } else {
-        setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
+        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
       }
     } catch {
       setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
@@ -291,18 +293,20 @@ export default function AccountingPage() {
   async function handleFileSelected(file: File) {
     setShowImportModal(false);
     setExtracting(true);
+    let compressed = file;
     try {
+      compressed = await compressImageIfNeeded(file);
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
         const extracted = await res.json() as ExtractedInvoiceData;
-        setDrawerState({ extracted, file, existing: null, sourceType: 'upload' });
+        setDrawerState({ extracted, file: compressed, existing: null, sourceType: 'upload' });
       } else {
-        setDrawerState({ extracted: null, file, existing: null, sourceType: 'upload', extractionFailed: true });
+        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'upload', extractionFailed: true });
       }
     } catch {
-      setDrawerState({ extracted: null, file, existing: null, sourceType: 'upload', extractionFailed: true });
+      setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'upload', extractionFailed: true });
     } finally {
       setExtracting(false);
     }
@@ -356,6 +360,34 @@ export default function AccountingPage() {
   function handleManualEntry() {
     setShowImportModal(false);
     setDrawerState({ extracted: null, file: null, existing: null, sourceType: 'manual' });
+  }
+
+  async function handleReuploadDrive(inv: SupplierInvoice, file: File) {
+    const compressed = await compressImageIfNeeded(file);
+    const fd = new FormData();
+    fd.append('file', compressed);
+    fd.append('supplierName', inv.supplierName);
+    fd.append('invoiceNumber', inv.invoiceNumber);
+    fd.append('amountCZK', String(Math.round(inv.amountCZK)));
+    fd.append('invoiceDate', inv.invoiceDate);
+    const driveRes = await fetch('/api/supplier-invoices/drive-upload', { method: 'POST', body: fd });
+    if (!driveRes.ok) return;
+    const d = await driveRes.json() as { fileId: string; fileName: string; driveUrl: string };
+    const updated: SupplierInvoice = {
+      ...inv,
+      driveFileId: d.fileId,
+      driveFileName: d.fileName,
+      driveUrl: d.driveUrl,
+    };
+    const res = await fetch(`/api/supplier-invoices/${inv.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    });
+    if (res.ok) {
+      const saved = await res.json() as SupplierInvoice;
+      setInvoices((prev) => prev.map((e) => (e.id === saved.id ? saved : e)));
+    }
   }
 
   function handleEdit(inv: SupplierInvoice) {
@@ -484,7 +516,7 @@ export default function AccountingPage() {
             <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : (
-          <SupplierInvoiceList invoices={invoices} filters={filters} onEdit={handleEdit} onDelete={handleDelete} />
+          <SupplierInvoiceList invoices={invoices} filters={filters} onEdit={handleEdit} onDelete={handleDelete} onReuploadDrive={handleReuploadDrive} />
         )}
       </div>
 
