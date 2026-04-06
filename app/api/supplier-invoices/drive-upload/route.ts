@@ -20,9 +20,7 @@ export async function POST(request: Request) {
   const s = session as unknown as Record<string, unknown>;
   const accessToken = s?.accessToken as string | undefined;
   const refreshToken = s?.refreshToken as string | undefined;
-  console.log('[drive-upload] accessToken:', accessToken ? `present (${accessToken.slice(0,10)}...)` : 'MISSING');
-  console.log('[drive-upload] refreshToken:', refreshToken ? `present (${refreshToken.slice(0,10)}...)` : 'MISSING');
-  if (!refreshToken && !accessToken) {
+if (!refreshToken && !accessToken) {
     return NextResponse.json(
       { error: 'No Google token. Please sign out and sign in again to grant Drive access.' },
       { status: 401 }
@@ -76,7 +74,7 @@ export async function POST(request: Request) {
     supportsAllDrives: true,
     requestBody: {
       name: fileName,
-      // parents: [folderId],  // temporarily disabled to test base upload
+      parents: [folderId],
       mimeType: 'application/pdf',
     },
     media: {
