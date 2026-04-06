@@ -50,6 +50,17 @@ export async function POST(request: Request) {
     access_token: accessToken,
     refresh_token: refreshToken,
   });
+
+  // Force-refresh the access token so we always have a valid one
+  const { token: freshToken } = await oauth2.getAccessToken();
+  if (!freshToken) {
+    return NextResponse.json(
+      { error: 'Could not refresh Google token. Please sign out and sign in again.' },
+      { status: 401 }
+    );
+  }
+  oauth2.setCredentials({ access_token: freshToken, refresh_token: refreshToken });
+
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
   const { Readable } = await import('stream');
