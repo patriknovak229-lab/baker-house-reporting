@@ -400,6 +400,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(raw);
     }
 
+    // ?debugId=<id> → return raw fields for a single booking (masterid diagnosis)
+    const debugId = req.nextUrl.searchParams.get("debugId");
+    if (debugId) {
+      const booking = raw.find((b) => b.id === Number(debugId));
+      return NextResponse.json(booking ?? { error: `Booking ${debugId} not found in fetched set` });
+    }
+
     const reservations = mergeGroupedBookings(
       raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled")
     ).map(mapToReservation);
