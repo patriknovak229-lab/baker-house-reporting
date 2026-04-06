@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     supportsAllDrives: true,
     requestBody: {
       name: fileName,
-      parents: [folderId],
+      // parents: [folderId],  // temporarily disabled to test base upload
       mimeType: 'application/pdf',
     },
     media: {
