@@ -268,6 +268,7 @@ export default function AccountingPage() {
       dueDate: extracted.dueDate ?? undefined,
       amountCZK: extracted.amountCZK!,
       vatAmountCZK: extracted.vatAmountCZK ?? undefined,
+      invoiceCurrency: extracted.invoiceCurrency && extracted.invoiceCurrency !== 'CZK' ? extracted.invoiceCurrency : undefined,
       category: matched.category,
       status: 'pending',
       sourceType: invoiceSourceType,

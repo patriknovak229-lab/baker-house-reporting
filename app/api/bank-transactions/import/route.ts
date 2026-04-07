@@ -245,7 +245,9 @@ function normStr(s: string): string {
  *   (counterparty name contains supplier name OR VS matches invoice number)
  */
 function isConfidentMatch(tx: BankTransaction, inv: SupplierInvoice): boolean {
-  if (Math.abs(tx.amount - inv.amountCZK) >= 1) return false;
+  const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
+  const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
+  if (Math.abs(compareTo - inv.amountCZK) >= 1) return false;
 
   const nameMatch =
     tx.counterpartyName &&

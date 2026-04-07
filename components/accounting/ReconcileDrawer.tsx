@@ -3,7 +3,7 @@ import { useState, useMemo } from 'react';
 import type { BankTransaction, IgnoreCategoryId } from '@/types/bankTransaction';
 import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import { formatCurrency, formatDate } from '@/utils/formatters';
+import { formatAmount, formatDate } from '@/utils/formatters';
 
 interface Props {
   transaction: BankTransaction;
@@ -17,7 +17,9 @@ function findSuggestion(tx: BankTransaction, invoices: SupplierInvoice[]): Suppl
   const pending = invoices.filter((inv) => inv.status === 'pending' && !inv.bankTransactionId);
   const norm = (s: string) => s.toLowerCase().trim();
   const matches = pending.filter((inv) => {
-    if (Math.abs(tx.amount - inv.amountCZK) >= 1) return false;
+    const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
+    const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
+    if (Math.abs(compareTo - inv.amountCZK) >= 1) return false;
     const nameMatch = tx.counterpartyName && norm(tx.counterpartyName).includes(norm(inv.supplierName));
     const vsMatch   = tx.variableSymbol  && norm(tx.variableSymbol) === norm(inv.invoiceNumber);
     return !!(nameMatch || vsMatch);
@@ -130,7 +132,7 @@ export default function ReconcileDrawer({ transaction: tx, invoices, onSave, onC
             </div>
             <div className="text-right flex-shrink-0 ml-3">
               <p className={`text-lg font-semibold ${isCredit ? 'text-green-700' : 'text-gray-900'}`}>
-                {amountLabel}{formatCurrency(tx.amount)}
+                {amountLabel}{formatAmount(tx.amount)}
               </p>
               {tx.originalCurrency && tx.originalAmount != null && (
                 <p className="text-xs text-indigo-500">
@@ -212,7 +214,7 @@ export default function ReconcileDrawer({ transaction: tx, invoices, onSave, onC
                           <div>
                             <p className="text-sm font-medium text-gray-800">{suggestion.supplierName}</p>
                             <p className="text-xs text-gray-500">{suggestion.invoiceNumber} · {formatDate(suggestion.invoiceDate)}</p>
-                            <p className="text-sm font-semibold text-gray-800 mt-0.5">{formatCurrency(suggestion.amountCZK)}</p>
+                            <p className="text-sm font-semibold text-gray-800 mt-0.5">{formatAmount(suggestion.amountCZK, suggestion.invoiceCurrency)}</p>
                           </div>
                         </label>
                       </div>
@@ -234,7 +236,7 @@ export default function ReconcileDrawer({ transaction: tx, invoices, onSave, onC
                             <p className="text-sm font-medium text-gray-800 truncate">{inv.supplierName}</p>
                             <p className="text-xs text-gray-500">{inv.invoiceNumber} · {formatDate(inv.invoiceDate)}</p>
                           </div>
-                          <p className="text-sm font-medium text-gray-800 whitespace-nowrap flex-shrink-0">{formatCurrency(inv.amountCZK)}</p>
+                          <p className="text-sm font-medium text-gray-800 whitespace-nowrap flex-shrink-0">{formatAmount(inv.amountCZK, inv.invoiceCurrency)}</p>
                         </label>
                       ))}
                     </div>

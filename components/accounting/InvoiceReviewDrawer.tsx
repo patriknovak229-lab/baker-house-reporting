@@ -94,6 +94,7 @@ export default function InvoiceReviewDrawer({
       setDueDate(existing.dueDate ?? '');
       setAmountCZK(String(existing.amountCZK));
       setVatAmountCZK(existing.vatAmountCZK != null ? String(existing.vatAmountCZK) : '');
+      setInvoiceCurrency(existing.invoiceCurrency ?? 'CZK');
       setCategory(existing.category);
       setRooms(existing.rooms ?? []);
       setDescription(existing.description ?? '');
@@ -188,6 +189,7 @@ export default function InvoiceReviewDrawer({
       dueDate: dueDate || undefined,
       amountCZK: amount,
       vatAmountCZK: vatAmountCZK ? parseFloat(vatAmountCZK) : undefined,
+      invoiceCurrency: invoiceCurrency !== 'CZK' ? invoiceCurrency : undefined,
       category,
       rooms: rooms.length > 0 ? rooms : undefined,
       description: description.trim() || undefined,

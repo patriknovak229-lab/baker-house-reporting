@@ -40,6 +40,7 @@ export interface SupplierInvoice {
   gmailMessageId?: string;   // prevents duplicate import
   autoProcessed?: boolean;   // true when saved automatically via whitelist
   createdAt: string;         // ISO timestamp
+  invoiceCurrency?: string;      // e.g. 'USD', 'EUR' — absent or 'CZK' means CZK
   // Phase 2 — bank reconciliation (unused in Phase 1)
   bankTransactionId?: string;
   reconciledAt?: string;

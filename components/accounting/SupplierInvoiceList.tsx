@@ -1,7 +1,7 @@
 'use client';
 import { useRef, useState } from 'react';
 import type { SupplierInvoice, SupplierInvoiceStatus } from '@/types/supplierInvoice';
-import { formatCurrency } from '@/utils/formatters';
+import { formatCurrency, formatAmount } from '@/utils/formatters';
 import { useCategories } from './useCategories';
 import { textColorFor } from '@/utils/categoryColors';
 
@@ -127,7 +127,11 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
     );
   }
 
-  const total = sorted.reduce((s, inv) => s + inv.amountCZK, 0);
+  // Only sum CZK invoices for the footer total; flag mixed currencies
+  const hasForeignCurrency = sorted.some((inv) => inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK');
+  const totalCZK = sorted
+    .filter((inv) => !inv.invoiceCurrency || inv.invoiceCurrency === 'CZK')
+    .reduce((s, inv) => s + inv.amountCZK, 0);
 
   return (
     <div>
@@ -187,7 +191,7 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
                   })()}
                 </td>
                 <td className="py-2.5 px-3 text-right font-medium text-gray-800 whitespace-nowrap">
-                  {formatCurrency(inv.amountCZK)}
+                  {formatAmount(inv.amountCZK, inv.invoiceCurrency)}
                 </td>
                 <td className="py-2.5 px-3 text-center">
                   <StatusBadge status={inv.status} />
@@ -235,7 +239,9 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
               <td colSpan={5} className="py-2.5 px-3 text-xs text-gray-500 font-medium">
                 {sorted.length} invoice{sorted.length !== 1 ? 's' : ''}
               </td>
-              <td className="py-2.5 px-3 text-right font-semibold text-gray-800">{formatCurrency(total)}</td>
+              <td className="py-2.5 px-3 text-right font-semibold text-gray-800">
+                {formatCurrency(totalCZK)}{hasForeignCurrency && <span className="ml-1 text-xs font-normal text-gray-400">+ foreign</span>}
+              </td>
               <td colSpan={4} />
             </tr>
           </tfoot>

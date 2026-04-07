@@ -17,7 +17,9 @@ function getRedis(): Redis | null {
 function normStr(s: string) { return s.toLowerCase().trim(); }
 
 function isConfidentMatch(tx: BankTransaction, inv: SupplierInvoice): boolean {
-  if (Math.abs(tx.amount - inv.amountCZK) >= 1) return false;
+  const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
+  const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
+  if (Math.abs(compareTo - inv.amountCZK) >= 1) return false;
   const nameMatch = tx.counterpartyName && normStr(tx.counterpartyName).includes(normStr(inv.supplierName));
   const vsMatch   = tx.variableSymbol   && normStr(tx.variableSymbol) === normStr(inv.invoiceNumber);
   return !!(nameMatch || vsMatch);
