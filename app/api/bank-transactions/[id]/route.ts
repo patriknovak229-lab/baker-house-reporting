@@ -14,10 +14,11 @@ function getRedis(): Redis | null {
   return new Redis({ url, token });
 }
 
-type ReconcileBody = { action: 'reconcile'; invoiceId: string };
-type IgnoreBody    = { action: 'ignore'; ignoreCategory: IgnoreCategoryId; ignoreNote?: string };
-type UnmatchBody   = { action: 'unmatch' };
-type PutBody = ReconcileBody | IgnoreBody | UnmatchBody;
+type ReconcileBody   = { action: 'reconcile'; invoiceId: string };
+type IgnoreBody      = { action: 'ignore'; ignoreCategory: IgnoreCategoryId; ignoreNote?: string };
+type UnmatchBody     = { action: 'unmatch' };
+type NoteBody        = { action: 'note'; note: string };
+type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody;
 
 export async function PUT(
   request: Request,
@@ -97,6 +98,9 @@ export async function PUT(
     tx.ignoreCategory = body.ignoreCategory;
     tx.ignoreNote = body.ignoreNote || undefined;
     tx.ignoredAt = now;
+
+  } else if (body.action === 'note') {
+    tx.ignoreNote = body.note || undefined;
 
   } else if (body.action === 'unmatch') {
     if (tx.invoiceId) {

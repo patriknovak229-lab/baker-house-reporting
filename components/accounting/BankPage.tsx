@@ -23,16 +23,17 @@ type FilterState = 'all' | BankTransactionState;
 
 const FILTERS: { value: FilterState; label: string }[] = [
   { value: 'all',        label: 'All' },
-  { value: 'unmatched',  label: 'Unmatched' },
+  { value: 'unmatched',  label: 'Unmatched costs' },
+  { value: 'revenue',    label: 'Unmatched revenue' },
   { value: 'reconciled', label: 'Reconciled' },
   { value: 'ignored',    label: 'Ignored' },
-  { value: 'revenue',    label: 'Revenue' },
 ];
 
 export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
   const [transactions, setTransactions] = useState<BankTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterState>('all');
+  const [search, setSearch] = useState('');
   const [drawerTx, setDrawerTx] = useState<BankTransaction | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [importBanner, setImportBanner] = useState<ImportResult | null>(null);
@@ -52,7 +53,6 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
     setTransactions(result.transactions);
     setShowImport(false);
     setImportBanner(result);
-    // Bubble up any auto-reconciled invoice changes
     for (const tx of result.transactions) {
       if (tx.state === 'reconciled' && tx.invoiceId) {
         const inv = invoices.find((i) => i.id === tx.invoiceId);
@@ -65,53 +65,52 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
 
   function handleDrawerSave(updated: BankTransaction) {
     setTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-    setDrawerTx(updated);
 
-    // Reflect reconciliation change in the supplier invoice list
     if (updated.state === 'reconciled' && updated.invoiceId) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);
-      if (inv) {
-        onInvoiceUpdate({
-          ...inv,
-          status: 'reconciled',
-          bankTransactionId: updated.id,
-          reconciledAt: updated.reconciledAt,
-        });
-      }
-    } else if ((updated.state === 'unmatched' || updated.state === 'ignored')) {
-      // Find previously linked invoice and revert it
+      if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
+    } else if (updated.state === 'unmatched' || updated.state === 'ignored') {
       const prev = transactions.find((t) => t.id === updated.id);
       if (prev?.invoiceId) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
-        if (inv) {
-          onInvoiceUpdate({
-            ...inv,
-            status: 'pending',
-            bankTransactionId: undefined,
-            reconciledAt: undefined,
-          });
-        }
+        if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
       }
     }
 
     setDrawerTx(null);
   }
 
-  const filtered = useMemo(
-    () => filter === 'all' ? transactions : transactions.filter((t) => t.state === filter),
-    [transactions, filter],
-  );
+  const filtered = useMemo(() => {
+    let result = filter === 'all' ? transactions : transactions.filter((t) => t.state === filter);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      result = result.filter((t) =>
+        (t.counterpartyName ?? '').toLowerCase().includes(q) ||
+        (t.counterpartyAccount ?? '').toLowerCase().includes(q) ||
+        (t.variableSymbol ?? '').toLowerCase().includes(q) ||
+        (t.description ?? '').toLowerCase().includes(q) ||
+        (t.myDescription ?? '').toLowerCase().includes(q) ||
+        (t.ignoreNote ?? '').toLowerCase().includes(q),
+      );
+    }
+    return result;
+  }, [transactions, filter, search]);
 
-  // Summary stats
+  // ── Summary stats ──────────────────────────────────────────────────────────
   const now = new Date();
   const thisMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const yearStart = `${now.getFullYear()}-01-01`;
 
-  const debits = transactions.filter((t) => t.direction === 'debit');
-  const monthSpend   = debits.filter((t) => t.date.startsWith(thisMonthPrefix)).reduce((s, t) => s + t.amount, 0);
-  const yearSpend    = debits.filter((t) => t.date >= yearStart).reduce((s, t) => s + t.amount, 0);
-  const unmatched    = debits.filter((t) => t.state === 'unmatched').length;
-  const revenueCount = transactions.filter((t) => t.state === 'revenue').length;
+  const debits  = transactions.filter((t) => t.direction === 'debit');
+  const credits = transactions.filter((t) => t.direction === 'credit');
+
+  const monthOut  = debits .filter((t) => t.date.startsWith(thisMonthPrefix)).reduce((s, t) => s + t.amount, 0);
+  const yearOut   = debits .filter((t) => t.date >= yearStart).reduce((s, t) => s + t.amount, 0);
+  const monthIn   = credits.filter((t) => t.date.startsWith(thisMonthPrefix)).reduce((s, t) => s + t.amount, 0);
+  const yearIn    = credits.filter((t) => t.date >= yearStart).reduce((s, t) => s + t.amount, 0);
+
+  const unmatchedCosts   = debits .filter((t) => t.state === 'unmatched').length;
+  const unmatchedRevenue = credits.filter((t) => t.state === 'revenue').length;
 
   return (
     <div className="space-y-6">
@@ -119,7 +118,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Bank Reconciliation</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Match bank payments to supplier invoices</p>
+          <p className="text-sm text-gray-500 mt-0.5">Match bank payments to supplier invoices and incoming revenue</p>
         </div>
         <button
           onClick={() => setShowImport(true)}
@@ -149,47 +148,70 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">This month</p>
-          <p className="text-xl font-semibold text-gray-800">{formatCurrency(monthSpend)}</p>
-          <p className="text-xs text-gray-400 mt-0.5">outgoing</p>
+          <p className="text-xs text-gray-500 mb-1">Out · this month</p>
+          <p className="text-lg font-semibold text-gray-800">{formatCurrency(monthOut)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">This year</p>
-          <p className="text-xl font-semibold text-gray-800">{formatCurrency(yearSpend)}</p>
-          <p className="text-xs text-gray-400 mt-0.5">outgoing</p>
+          <p className="text-xs text-gray-500 mb-1">Out · this year</p>
+          <p className="text-lg font-semibold text-gray-800">{formatCurrency(yearOut)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Unreconciled</p>
-          <p className={`text-xl font-semibold ${unmatched > 0 ? 'text-amber-600' : 'text-gray-800'}`}>{unmatched}</p>
-          <p className="text-xs text-gray-400 mt-0.5">payments to match</p>
+          <p className="text-xs text-gray-500 mb-1">In · this month</p>
+          <p className="text-lg font-semibold text-green-700">{formatCurrency(monthIn)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Revenue</p>
-          <p className="text-xl font-semibold text-indigo-400">{revenueCount}</p>
-          <p className="text-xs text-gray-400 mt-0.5">incoming · Phase 3</p>
+          <p className="text-xs text-gray-500 mb-1">In · this year</p>
+          <p className="text-lg font-semibold text-green-700">{formatCurrency(yearIn)}</p>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Unmatched costs</p>
+          <p className={`text-lg font-semibold ${unmatchedCosts > 0 ? 'text-amber-600' : 'text-gray-800'}`}>{unmatchedCosts}</p>
+          <p className="text-xs text-gray-400 mt-0.5">payments</p>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Unmatched revenue</p>
+          <p className={`text-lg font-semibold ${unmatchedRevenue > 0 ? 'text-indigo-500' : 'text-gray-800'}`}>{unmatchedRevenue}</p>
+          <p className="text-xs text-gray-400 mt-0.5">receipts</p>
         </div>
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
-        {FILTERS.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => setFilter(f.value)}
-            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              filter === f.value
-                ? 'bg-white shadow-sm text-indigo-700 font-medium'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {f.label}
-            {f.value === 'unmatched' && unmatched > 0 && (
-              <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{unmatched}</span>
-            )}
+      {/* Filter tabs + search */}
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit flex-shrink-0">
+          {FILTERS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => setFilter(f.value)}
+              className={`px-3 py-1.5 rounded-lg text-sm transition-colors whitespace-nowrap ${
+                filter === f.value
+                  ? 'bg-white shadow-sm text-indigo-700 font-medium'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {f.label}
+              {f.value === 'unmatched' && unmatchedCosts > 0 && (
+                <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{unmatchedCosts}</span>
+              )}
+              {f.value === 'revenue' && unmatchedRevenue > 0 && (
+                <span className="ml-1.5 text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full">{unmatchedRevenue}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Search counterparty, VS, description…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        {search && (
+          <button onClick={() => setSearch('')} className="text-xs text-gray-400 hover:text-gray-600 whitespace-nowrap">
+            Clear
           </button>
-        ))}
+        )}
       </div>
 
       {/* Transaction list */}
