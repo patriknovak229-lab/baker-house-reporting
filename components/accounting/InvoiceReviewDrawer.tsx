@@ -318,7 +318,13 @@ export default function InvoiceReviewDrawer({
 
           {activeFile && (
             <div className="bg-gray-50 rounded-lg px-4 py-3 text-xs text-gray-600 flex items-center justify-between">
-              <span><span className="font-medium">File:</span> {activeFile.name} · Will be uploaded to Drive on save.</span>
+              <span>
+                <span className="font-medium">File:</span> {activeFile.name}
+                {' · '}
+                {activeFile.type === 'application/pdf'
+                  ? 'Will be uploaded to Drive on save.'
+                  : 'Will be converted to PDF and uploaded to Drive on save.'}
+              </span>
               {isManual && (
                 <button onClick={() => setManualFile(null)} className="text-gray-400 hover:text-red-500 ml-2">×</button>
               )}
