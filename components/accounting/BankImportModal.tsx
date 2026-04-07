@@ -38,8 +38,12 @@ export default function BankImportModal({ onImported, onClose }: Props) {
       const fd = new FormData();
       fd.append('file', file);
       const res = await fetch('/api/bank-transactions/import', { method: 'POST', body: fd });
-      const data = await res.json() as ImportResult & { error?: string };
-      if (!res.ok) throw new Error(data.error ?? 'Import failed');
+      const data = await res.json() as ImportResult & { error?: string; preview?: string };
+      if (!res.ok) {
+        const msg = data.error ?? 'Import failed';
+        const detail = data.preview ? `\n\nFile preview:\n${data.preview}` : '';
+        throw new Error(msg + detail);
+      }
       onImported(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Import failed.');
@@ -65,7 +69,7 @@ export default function BankImportModal({ onImported, onClose }: Props) {
           </p>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-700">
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-700 whitespace-pre-wrap font-mono break-all max-h-40 overflow-y-auto">
               {error}
             </div>
           )}

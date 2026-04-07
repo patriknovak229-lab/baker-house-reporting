@@ -80,19 +80,30 @@ function buildColMap(headers: string[]): ColMap {
   const map: ColMap = {};
   headers.forEach((h, i) => {
     const n = norm(h);
-    if (n.includes('datum pohybu') || n === 'datum') map.date = i;
-    else if (n.includes('datum splatnosti') || n.includes('splatnosti')) map.valueDate = i;
-    else if (n === 'objem' || n === 'castka' || n === 'amount') map.amount = i;
-    else if (n === 'mena' || n === 'mena' || n === 'currency') map.currency = i;
-    else if (n.includes('protiucet') || n.includes('counterparty account')) map.counterpartyAccount = i;
-    else if (n.includes('nazev protistrany') || n.includes('protistrany')) map.counterpartyName = i;
-    else if (n.includes('variabilni') || n.includes('variable')) map.vs = i;
-    else if (n.includes('konstantni') || n.includes('constant')) map.ks = i;
-    else if (n.includes('specificky') || n.includes('specific')) map.ss = i;
-    else if (n.includes('zprava pro prijemce') || n.includes('message')) map.description = i;
-    else if (n.includes('popis pro me')) map.myDescription = i;
-    else if (n.includes('popis') && map.description === undefined) map.description = i;
-    else if (n.includes('typ pohybu') || n.includes('transaction type')) map.type = i;
+    // Date columns — first 'datum' → accounting date, second → value/execution date
+    if (n.includes('datum')) {
+      if (map.date === undefined) map.date = i;
+      else if (map.valueDate === undefined) map.valueDate = i;
+      return;
+    }
+    // Amount — castka (KB+), objem (older KB), partial matches
+    if (map.amount === undefined && (n === 'castka' || n === 'objem' || n.startsWith('castka') || n.startsWith('objem'))) { map.amount = i; return; }
+    // Currency
+    if (map.currency === undefined && (n === 'mena' || n.startsWith('mena'))) { map.currency = i; return; }
+    // Counterparty account — "Protistrana", "Protiucet", "Protiúčet"
+    if (map.counterpartyAccount === undefined && (n.includes('protistrana') || n.includes('protiucet') || n.includes('ucet protistrany'))) { map.counterpartyAccount = i; return; }
+    // Counterparty name — "Nazev protiustrany", "Nazev protistrany", "Nazev protiuctu"
+    if (map.counterpartyName === undefined && (n.includes('nazev') || n.includes('protistrany') || n.includes('protiustrany'))) { map.counterpartyName = i; return; }
+    // Variable / constant / specific symbol
+    if (map.vs === undefined && (n.includes('variabilni') || n.includes('variable') || n === 'vs')) { map.vs = i; return; }
+    if (map.ks === undefined && (n.includes('konstantni') || n.includes('constant') || n === 'ks')) { map.ks = i; return; }
+    if (map.ss === undefined && (n.includes('specificky') || n.includes('specific') || n === 'ss')) { map.ss = i; return; }
+    // Description
+    if (map.description === undefined && (n.includes('zprava') || n.includes('message') || n.includes('remittance') || n.includes('poznamka'))) { map.description = i; return; }
+    if (map.myDescription === undefined && (n.includes('popis pro me') || n.includes('popis pro') || n.includes('my description'))) { map.myDescription = i; return; }
+    if (map.description === undefined && n.includes('popis')) { map.description = i; return; }
+    // Transaction type / direction
+    if (map.type === undefined && (n.includes('typ') || n.includes('smer') || n.includes('transaction type'))) { map.type = i; return; }
   });
   return map;
 }
@@ -115,30 +126,50 @@ function makeTxId(
 }
 
 function parseKbCsv(csvText: string): BankTransaction[] {
-  const lines = csvText
+  // Strip UTF-8 BOM if present
+  const text = csvText.charCodeAt(0) === 0xfeff ? csvText.slice(1) : csvText;
+
+  const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
   if (lines.length < 2) return [];
 
-  // Find header line — first line that contains a recognisable column keyword
-  let headerIdx = 0;
-  for (let i = 0; i < Math.min(5, lines.length); i++) {
+  // Auto-detect separator by counting ; vs , in first few lines
+  const sample = lines.slice(0, Math.min(5, lines.length)).join('\n');
+  const sep = (sample.split(';').length >= sample.split(',').length) ? ';' : ',';
+
+  // Find header line — look up to 20 lines deep (KB+ has 16 metadata rows at top)
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(20, lines.length); i++) {
     const n = norm(lines[i]);
-    if (n.includes('datum') || n.includes('objem') || n.includes('castka')) {
+    // Must contain a date-like column AND at least one amount/counterparty column
+    const hasDate = n.includes('datum');
+    const hasAmount = n.includes('castka') || n.includes('objem');
+    const hasCounterparty = n.includes('protistrana') || n.includes('protiucet') || n.includes('protistrany');
+    if (hasDate && (hasAmount || hasCounterparty)) {
       headerIdx = i;
       break;
     }
   }
+  // Fallback: pick the line with the most separator-delimited columns
+  if (headerIdx === -1) {
+    let maxCols = 0;
+    for (let i = 0; i < Math.min(20, lines.length); i++) {
+      const cols = splitCsvLine(lines[i], sep).length;
+      if (cols > maxCols) { maxCols = cols; headerIdx = i; }
+    }
+  }
+  if (headerIdx === -1) return [];
 
-  const headers = splitCsvLine(lines[headerIdx]);
+  const headers = splitCsvLine(lines[headerIdx], sep);
   const colMap = buildColMap(headers);
   const now = new Date().toISOString();
   const results: BankTransaction[] = [];
 
   for (let i = headerIdx + 1; i < lines.length; i++) {
-    const cols = splitCsvLine(lines[i]);
+    const cols = splitCsvLine(lines[i], sep);
     if (cols.length < 2) continue;
 
     const dateStr = cell(cols, colMap.date);
@@ -233,7 +264,12 @@ export async function POST(request: Request) {
 
   const parsed = parseKbCsv(csvText);
   if (parsed.length === 0) {
-    return NextResponse.json({ error: 'No transactions found — check the file format' }, { status: 422 });
+    // Return first few lines to help diagnose format issues
+    const preview = csvText.slice(0, 500).replace(/\r/g, '');
+    return NextResponse.json(
+      { error: 'No transactions found — check the file format', preview },
+      { status: 422 },
+    );
   }
 
   // Load existing transactions to deduplicate
