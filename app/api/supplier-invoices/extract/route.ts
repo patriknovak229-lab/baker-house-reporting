@@ -12,11 +12,13 @@ Return ONLY valid JSON, no other text:
   "invoiceNumber": string or null,
   "invoiceDate": "YYYY-MM-DD" or null,
   "dueDate": "YYYY-MM-DD" or null,
-  "amountCZK": number or null,
-  "vatAmountCZK": number or null,
+  "totalAmount": number or null,
+  "invoiceCurrency": "CZK"|"USD"|"EUR"|"GBP" or null,
+  "vatAmount": number or null,
   "suggestedCategory": one of "cleaning"|"laundry"|"consumables"|"utilities"|"software"|"maintenance"|"other" or null
 }
-amountCZK should be the total amount payable (including VAT if present).
+totalAmount: the total amount payable (including VAT if present). Extract the number as shown on the invoice regardless of currency.
+invoiceCurrency: the currency of the invoice (CZK, USD, EUR, GBP, etc.).
 If a field cannot be determined, use null.`;
 
 const CLAUDE_MAX_BYTES = 4.5 * 1024 * 1024; // 4.5 MB — leave headroom under the 5 MB API limit
@@ -130,8 +132,9 @@ export async function POST(request: Request) {
       invoiceNumber: typeof parsed.invoiceNumber === 'string' ? parsed.invoiceNumber : null,
       invoiceDate: typeof parsed.invoiceDate === 'string' ? parsed.invoiceDate : null,
       dueDate: typeof parsed.dueDate === 'string' ? parsed.dueDate : null,
-      amountCZK: typeof parsed.amountCZK === 'number' ? parsed.amountCZK : null,
-      vatAmountCZK: typeof parsed.vatAmountCZK === 'number' ? parsed.vatAmountCZK : null,
+      amountCZK: typeof parsed.totalAmount === 'number' ? parsed.totalAmount : null,
+      vatAmountCZK: typeof parsed.vatAmount === 'number' ? parsed.vatAmount : null,
+      invoiceCurrency: typeof parsed.invoiceCurrency === 'string' ? parsed.invoiceCurrency : null,
       suggestedCategory: typeof parsed.suggestedCategory === 'string' ? parsed.suggestedCategory : null,
     };
   } catch {

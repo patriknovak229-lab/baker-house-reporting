@@ -71,6 +71,7 @@ export default function InvoiceReviewDrawer({
   const [dueDate, setDueDate] = useState('');
   const [amountCZK, setAmountCZK] = useState('');
   const [vatAmountCZK, setVatAmountCZK] = useState('');
+  const [invoiceCurrency, setInvoiceCurrency] = useState('CZK');
   const [category, setCategory] = useState('other');
   const [rooms, setRooms] = useState<string[]>([]);
   const [description, setDescription] = useState('');
@@ -103,6 +104,7 @@ export default function InvoiceReviewDrawer({
       if (extracted.dueDate) setDueDate(extracted.dueDate);
       if (extracted.amountCZK != null) setAmountCZK(String(extracted.amountCZK));
       if (extracted.vatAmountCZK != null) setVatAmountCZK(String(extracted.vatAmountCZK));
+      if (extracted.invoiceCurrency) setInvoiceCurrency(extracted.invoiceCurrency);
       if (extracted.suggestedCategory) setCategory(extracted.suggestedCategory);
 
       // Invoice number: use extracted value, or generate a fallback
@@ -272,10 +274,10 @@ export default function InvoiceReviewDrawer({
             <Field label="Due Date">
               <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </Field>
-            <Field label="Total Amount (CZK) *">
+            <Field label={`Total Amount (${invoiceCurrency}) *`}>
               <Input type="number" min="0" step="0.01" value={amountCZK} onChange={(e) => setAmountCZK(e.target.value)} placeholder="1500" />
             </Field>
-            <Field label="VAT Amount (CZK)">
+            <Field label={`VAT Amount (${invoiceCurrency})`}>
               <Input type="number" min="0" step="0.01" value={vatAmountCZK} onChange={(e) => setVatAmountCZK(e.target.value)} placeholder="0" />
             </Field>
 

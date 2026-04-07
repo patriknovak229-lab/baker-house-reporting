@@ -52,7 +52,8 @@ export interface ExtractedInvoiceData {
   invoiceNumber: string | null;
   invoiceDate: string | null;   // YYYY-MM-DD
   dueDate: string | null;
-  amountCZK: number | null;
+  amountCZK: number | null;     // amount in the invoice's original currency (may not be CZK)
   vatAmountCZK: number | null;
+  invoiceCurrency: string | null; // e.g. 'CZK', 'USD', 'EUR'
   suggestedCategory: string | null;
 }
