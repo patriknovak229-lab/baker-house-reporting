@@ -37,6 +37,8 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
   const [drawerTx, setDrawerTx] = useState<BankTransaction | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [importBanner, setImportBanner] = useState<ImportResult | null>(null);
+  const [matching, setMatching] = useState(false);
+  const [matchBanner, setMatchBanner] = useState<number | null>(null);
 
   const loadTransactions = useCallback(async () => {
     try {
@@ -48,6 +50,29 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
   }, []);
 
   useEffect(() => { loadTransactions(); }, [loadTransactions]);
+
+  async function handleAutoMatch() {
+    setMatching(true);
+    setMatchBanner(null);
+    try {
+      const res = await fetch('/api/bank-transactions/reconcile', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json() as { matched: number; transactions: BankTransaction[] };
+        setTransactions(data.transactions);
+        setMatchBanner(data.matched);
+        for (const tx of data.transactions) {
+          if (tx.state === 'reconciled' && tx.invoiceId) {
+            const inv = invoices.find((i) => i.id === tx.invoiceId);
+            if (inv && inv.status !== 'reconciled') {
+              onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: tx.id, reconciledAt: tx.reconciledAt });
+            }
+          }
+        }
+      }
+    } finally {
+      setMatching(false);
+    }
+  }
 
   function handleImported(result: ImportResult) {
     setTransactions(result.transactions);
@@ -120,15 +145,29 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
           <h2 className="text-lg font-semibold text-gray-900">Bank Reconciliation</h2>
           <p className="text-sm text-gray-500 mt-0.5">Match bank payments to supplier invoices and incoming revenue</p>
         </div>
-        <button
-          onClick={() => setShowImport(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-          </svg>
-          Import CSV
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleAutoMatch}
+            disabled={matching || unmatchedCosts === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            title={unmatchedCosts === 0 ? 'No unmatched costs to process' : 'Re-run auto-matching against pending invoices'}
+          >
+            {matching
+              ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            }
+            Auto-match
+          </button>
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            Import CSV
+          </button>
+        </div>
       </div>
 
       {/* Import result banner */}
@@ -144,6 +183,22 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
             </div>
           </div>
           <button onClick={() => setImportBanner(null)} className="text-green-400 hover:text-green-600 flex-shrink-0">×</button>
+        </div>
+      )}
+
+      {/* Auto-match result banner */}
+      {matchBanner !== null && (
+        <div className="flex items-start justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 gap-3">
+          <div className="flex items-start gap-2.5">
+            <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0 mt-1.5" />
+            <div>
+              <p className="text-sm font-medium text-indigo-800">Auto-match complete</p>
+              <p className="text-xs text-indigo-600 mt-0.5">
+                {matchBanner > 0 ? `${matchBanner} transaction${matchBanner !== 1 ? 's' : ''} matched` : 'No confident matches found'}
+              </p>
+            </div>
+          </div>
+          <button onClick={() => setMatchBanner(null)} className="text-indigo-400 hover:text-indigo-600 flex-shrink-0">×</button>
         </div>
       )}
 
