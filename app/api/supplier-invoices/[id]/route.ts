@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
+import { google } from 'googleapis';
+import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 
@@ -52,11 +54,34 @@ export async function DELETE(
   const raw = await redis.get(KEY);
   const invoices = (Array.isArray(raw) ? raw : []) as SupplierInvoice[];
 
-  const filtered = invoices.filter((inv) => inv.id !== id);
-  if (filtered.length === invoices.length) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const invoice = invoices.find((inv) => inv.id === id);
+  if (!invoice) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  // Delete the PDF from Drive if one exists
+  if (invoice.driveFileId) {
+    try {
+      const session = await auth();
+      const s = session as unknown as Record<string, unknown>;
+      const refreshToken = s?.refreshToken as string | undefined;
+      if (refreshToken) {
+        const oauth2 = new google.auth.OAuth2(
+          process.env.AUTH_GOOGLE_ID,
+          process.env.AUTH_GOOGLE_SECRET,
+        );
+        oauth2.setCredentials({ refresh_token: refreshToken });
+        const { token: freshToken } = await oauth2.getAccessToken();
+        if (freshToken) {
+          oauth2.setCredentials({ access_token: freshToken });
+          const drive = google.drive({ version: 'v3', auth: oauth2 });
+          await drive.files.delete({ fileId: invoice.driveFileId });
+        }
+      }
+    } catch (err) {
+      // Non-fatal: log but still delete from Redis
+      console.error('Drive file deletion failed:', err);
+    }
   }
 
-  await redis.set(KEY, filtered);
+  await redis.set(KEY, invoices.filter((inv) => inv.id !== id));
   return NextResponse.json({ ok: true });
 }

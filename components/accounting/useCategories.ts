@@ -3,13 +3,13 @@ import { useState, useEffect } from 'react';
 import type { InvoiceCategory } from '@/types/supplierInvoice';
 
 const DEFAULT_CATEGORIES: InvoiceCategory[] = [
-  { id: 'cleaning', label: 'Cleaning' },
-  { id: 'laundry', label: 'Laundry' },
-  { id: 'consumables', label: 'Consumables' },
-  { id: 'utilities', label: 'Utilities' },
-  { id: 'software', label: 'Software' },
-  { id: 'maintenance', label: 'Maintenance' },
-  { id: 'other', label: 'Other' },
+  { id: 'cleaning',    label: 'Cleaning',    color: '#DBEAFE' },
+  { id: 'laundry',     label: 'Laundry',     color: '#EDE9FE' },
+  { id: 'consumables', label: 'Consumables', color: '#DCFCE7' },
+  { id: 'utilities',   label: 'Utilities',   color: '#FEF9C3' },
+  { id: 'software',    label: 'Software',    color: '#CFFAFE' },
+  { id: 'maintenance', label: 'Maintenance', color: '#FFEDD5' },
+  { id: 'other',       label: 'Other',       color: '#F3F4F6' },
 ];
 
 export function useCategories() {
@@ -27,11 +27,11 @@ export function useCategories() {
 
   useEffect(() => { load(); }, []);
 
-  async function addCategory(label: string): Promise<boolean> {
+  async function addCategory(label: string, color?: string): Promise<boolean> {
     const res = await fetch('/api/supplier-invoices/categories', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, color }),
     });
     if (res.ok) {
       await load();

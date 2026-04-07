@@ -5,6 +5,7 @@ export type SupplierInvoiceCategory = string;
 export interface InvoiceCategory {
   id: string;
   label: string;
+  color: string; // background hex, e.g. '#DBEAFE' — paired text colour via textColorFor()
 }
 
 /** A whitelisted supplier — invoices from this supplier are auto-processed */

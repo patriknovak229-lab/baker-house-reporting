@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type {
   SupplierInvoice,
   SupplierInvoiceStatus,
@@ -7,6 +7,7 @@ import type {
   SupplierInvoiceSource,
   WhitelistedSupplier,
 } from '@/types/supplierInvoice';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import SupplierInvoiceList from './SupplierInvoiceList';
 import InvoiceImportModal from './InvoiceImportModal';
 import InvoiceReviewDrawer from './InvoiceReviewDrawer';
@@ -15,6 +16,7 @@ import WhitelistManager from './WhitelistManager';
 import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
 import { prepareImageFile } from '@/utils/imageCompressor';
+import { textColorFor } from '@/utils/categoryColors';
 
 const PHASES = [
   { id: 1, label: 'Costs', description: 'Supplier invoices' },
@@ -162,6 +164,23 @@ export default function AccountingPage() {
     dateFrom: '',
     dateTo: '',
   });
+
+  const isFiltered = filters.status !== 'all' || filters.category !== 'all' ||
+    !!filters.search || !!filters.dateFrom || !!filters.dateTo;
+
+  const filteredInvoices = useMemo(() => invoices.filter((inv) => {
+    if (filters.status !== 'all' && inv.status !== filters.status) return false;
+    if (filters.category !== 'all' && inv.category !== filters.category) return false;
+    if (filters.dateFrom && inv.invoiceDate < filters.dateFrom) return false;
+    if (filters.dateTo && inv.invoiceDate > filters.dateTo) return false;
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      if (!inv.supplierName.toLowerCase().includes(q) &&
+          !inv.invoiceNumber.toLowerCase().includes(q) &&
+          !(inv.description ?? '').toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }), [invoices, filters]);
 
   // Use a ref so processNextInQueue always sees the latest whitelist
   const whitelistRef = useRef<WhitelistedSupplier[]>([]);
@@ -421,10 +440,31 @@ export default function AccountingPage() {
   }
 
   const now = new Date();
-  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const monthInvoices = invoices.filter((inv) => inv.invoiceDate.startsWith(thisMonth));
-  const monthTotal = monthInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const pendingCount = invoices.filter((inv) => inv.status === 'pending').length;
+
+  // Time-period helpers (applied to filteredInvoices so category/status/search filters are respected)
+  const thisMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const quarterMonth = Math.floor(now.getMonth() / 3) * 3;
+  const quarterStart = new Date(now.getFullYear(), quarterMonth, 1).toISOString().slice(0, 10);
+  const yearStart = `${now.getFullYear()}-01-01`;
+
+  const monthInvoices   = filteredInvoices.filter((inv) => inv.invoiceDate.startsWith(thisMonthPrefix));
+  const quarterInvoices = filteredInvoices.filter((inv) => inv.invoiceDate >= quarterStart);
+  const yearInvoices    = filteredInvoices.filter((inv) => inv.invoiceDate >= yearStart);
+
+  const monthTotal   = monthInvoices.reduce((s, inv)   => s + inv.amountCZK, 0);
+  const quarterTotal = quarterInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
+  const yearTotal    = yearInvoices.reduce((s, inv)    => s + inv.amountCZK, 0);
+  const pendingCount = filteredInvoices.filter((inv) => inv.status === 'pending').length;
+
+  // Category pie data (by amount, filtered)
+  const categoryPieData = categories
+    .map((cat) => ({
+      name: cat.label,
+      value: filteredInvoices.filter((inv) => inv.category === cat.id).reduce((s, inv) => s + inv.amountCZK, 0),
+      color: cat.color,
+    }))
+    .filter((d) => d.value > 0)
+    .sort((a, b) => b.value - a.value);
 
   return (
     <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-6">
@@ -474,23 +514,71 @@ export default function AccountingPage() {
       <AutoSavedBanner entries={autoSavedEntries} onDismiss={() => setAutoSavedEntries([])} />
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+      {isFiltered && (
+        <p className="text-xs text-indigo-600 font-medium -mb-2">
+          ⚡ Filters active — dashboard reflects filtered results
+        </p>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white border border-gray-100 rounded-xl p-4">
           <p className="text-xs text-gray-500 mb-1">This month</p>
           <p className="text-xl font-semibold text-gray-800">{formatCurrency(monthTotal)}</p>
           <p className="text-xs text-gray-400 mt-0.5">{monthInvoices.length} invoice{monthInvoices.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">This quarter</p>
+          <p className="text-xl font-semibold text-gray-800">{formatCurrency(quarterTotal)}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{quarterInvoices.length} invoice{quarterInvoices.length !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">This year</p>
+          <p className="text-xl font-semibold text-gray-800">{formatCurrency(yearTotal)}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{yearInvoices.length} invoice{yearInvoices.length !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-xl p-4">
           <p className="text-xs text-gray-500 mb-1">Pending reconciliation</p>
           <p className="text-xl font-semibold text-amber-600">{pendingCount}</p>
           <p className="text-xs text-gray-400 mt-0.5">invoice{pendingCount !== 1 ? 's' : ''} to match</p>
         </div>
-        <div className="bg-white border border-gray-100 rounded-xl p-4 col-span-2 sm:col-span-1">
-          <p className="text-xs text-gray-500 mb-1">Total invoices</p>
-          <p className="text-xl font-semibold text-gray-800">{invoices.length}</p>
-          <p className="text-xs text-gray-400 mt-0.5">all time</p>
-        </div>
       </div>
+
+      {/* Category breakdown */}
+      {categoryPieData.length > 0 && (
+        <div className="bg-white border border-gray-100 rounded-xl p-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            Spend by category{isFiltered ? ' · filtered' : ''}
+          </p>
+          <div className="flex flex-col sm:flex-row gap-4 items-center">
+            <div className="w-full sm:w-64 h-48 flex-shrink-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={categoryPieData} dataKey="value" nameKey="name"
+                    cx="50%" cy="50%" innerRadius="55%" outerRadius="80%"
+                    paddingAngle={2}>
+                    {categoryPieData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} stroke={textColorFor(entry.color)} strokeWidth={0.5} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v) => typeof v === 'number' ? formatCurrency(v) : v} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-6 w-full">
+              {categoryPieData.map((entry) => {
+                const pct = yearTotal > 0 ? Math.round((entry.value / yearTotal) * 100) : 0;
+                return (
+                  <div key={entry.name} className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
+                    <span className="text-sm text-gray-700 flex-1 truncate">{entry.name}</span>
+                    <span className="text-sm font-medium text-gray-800 whitespace-nowrap">{formatCurrency(entry.value)}</span>
+                    <span className="text-xs text-gray-400 w-8 text-right">{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white border border-gray-100 rounded-xl p-4">
@@ -537,7 +625,7 @@ export default function AccountingPage() {
             <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : (
-          <SupplierInvoiceList invoices={invoices} filters={filters} onEdit={handleEdit} onDelete={handleDelete} onReuploadDrive={handleReuploadDrive} />
+          <SupplierInvoiceList invoices={filteredInvoices} onEdit={handleEdit} onDelete={handleDelete} onReuploadDrive={handleReuploadDrive} />
         )}
       </div>
 

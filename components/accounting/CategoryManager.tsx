@@ -1,10 +1,12 @@
 'use client';
 import { useState } from 'react';
 import { useCategories } from './useCategories';
+import { CATEGORY_PALETTE, textColorFor } from '@/utils/categoryColors';
 
 export default function CategoryManager({ onClose }: { onClose: () => void }) {
   const { categories, addCategory, removeCategory } = useCategories();
   const [newLabel, setNewLabel] = useState('');
+  const [newColor, setNewColor] = useState(CATEGORY_PALETTE[0].bg);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -12,9 +14,13 @@ export default function CategoryManager({ onClose }: { onClose: () => void }) {
     if (!newLabel.trim()) return;
     setAdding(true);
     setError(null);
-    const ok = await addCategory(newLabel.trim());
+    const ok = await addCategory(newLabel.trim(), newColor);
     if (ok) {
       setNewLabel('');
+      // Advance to the next unused palette colour
+      const usedColors = categories.map((c) => c.color);
+      const next = CATEGORY_PALETTE.find((p) => !usedColors.includes(p.bg));
+      setNewColor(next?.bg ?? CATEGORY_PALETTE[0].bg);
     } else {
       setError('Category already exists or is invalid.');
     }
@@ -51,16 +57,54 @@ export default function CategoryManager({ onClose }: { onClose: () => void }) {
               Add
             </button>
           </div>
+
+          {/* Colour picker */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-gray-400 mr-0.5">Colour:</span>
+            {CATEGORY_PALETTE.map((p) => (
+              <button
+                key={p.bg}
+                onClick={() => setNewColor(p.bg)}
+                title={p.bg}
+                className="w-5 h-5 rounded-full border-2 transition-transform hover:scale-110"
+                style={{
+                  backgroundColor: p.bg,
+                  borderColor: newColor === p.bg ? p.text : 'transparent',
+                }}
+              />
+            ))}
+          </div>
+
+          {/* Preview badge */}
+          {newLabel.trim() && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">Preview:</span>
+              <span
+                className="inline-block text-xs font-medium px-2 py-0.5 rounded-full"
+                style={{ backgroundColor: newColor, color: textColorFor(newColor) }}
+              >
+                {newLabel.trim()}
+              </span>
+            </div>
+          )}
+
           {error && <p className="text-xs text-red-600">{error}</p>}
 
           {/* List */}
-          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+          <div className="space-y-1.5 max-h-60 overflow-y-auto">
             {categories.map((cat) => (
               <div
                 key={cat.id}
                 className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg"
               >
-                <span className="text-sm text-gray-700">{cat.label}</span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block text-xs font-medium px-2 py-0.5 rounded-full"
+                    style={{ backgroundColor: cat.color, color: textColorFor(cat.color) }}
+                  >
+                    {cat.label}
+                  </span>
+                </div>
                 <button
                   onClick={() => removeCategory(cat.id)}
                   className="text-gray-300 hover:text-red-500 text-lg leading-none ml-2"
