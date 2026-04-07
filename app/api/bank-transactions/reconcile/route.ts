@@ -20,8 +20,10 @@ function isConfidentMatch(tx: BankTransaction, inv: SupplierInvoice): boolean {
   const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
   const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
   if (Math.abs(compareTo - inv.amountCZK) >= 1) return false;
-  const nameMatch = tx.counterpartyName && normStr(tx.counterpartyName).includes(normStr(inv.supplierName));
-  const vsMatch   = tx.variableSymbol   && normStr(tx.variableSymbol) === normStr(inv.invoiceNumber);
+  const txName  = tx.counterpartyName ? normStr(tx.counterpartyName) : '';
+  const invName = normStr(inv.supplierName);
+  const nameMatch = txName && (txName.includes(invName) || invName.includes(txName));
+  const vsMatch   = tx.variableSymbol && normStr(tx.variableSymbol) === normStr(inv.invoiceNumber);
   return !!(nameMatch || vsMatch);
 }
 

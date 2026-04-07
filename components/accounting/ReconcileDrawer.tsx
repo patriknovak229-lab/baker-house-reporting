@@ -20,8 +20,10 @@ function findSuggestion(tx: BankTransaction, invoices: SupplierInvoice[]): Suppl
     const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
     const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
     if (Math.abs(compareTo - inv.amountCZK) >= 1) return false;
-    const nameMatch = tx.counterpartyName && norm(tx.counterpartyName).includes(norm(inv.supplierName));
-    const vsMatch   = tx.variableSymbol  && norm(tx.variableSymbol) === norm(inv.invoiceNumber);
+    const txName  = tx.counterpartyName ? norm(tx.counterpartyName) : '';
+    const invName = norm(inv.supplierName);
+    const nameMatch = txName && (txName.includes(invName) || invName.includes(txName));
+    const vsMatch   = tx.variableSymbol && norm(tx.variableSymbol) === norm(inv.invoiceNumber);
     return !!(nameMatch || vsMatch);
   });
   return matches.length === 1 ? matches[0] : null;
