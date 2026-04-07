@@ -43,6 +43,7 @@ interface GmailStatus {
 interface QueueItem {
   file: File;
   gmailMessageId?: string;
+  sourceType?: SupplierInvoiceSource;
 }
 
 interface AutoSavedEntry {
@@ -234,6 +235,7 @@ export default function AccountingPage() {
     matched: WhitelistedSupplier,
     file: File,
     gmailMessageId?: string,
+    invoiceSourceType: SupplierInvoiceSource = 'email',
   ): Promise<void> {
     // Drive upload first
     let driveFileId: string | undefined;
@@ -266,7 +268,7 @@ export default function AccountingPage() {
       vatAmountCZK: extracted.vatAmountCZK ?? undefined,
       category: matched.category,
       status: 'pending',
-      sourceType: 'email',
+      sourceType: invoiceSourceType,
       gmailMessageId,
       driveFileId,
       driveFileName,
@@ -308,17 +310,17 @@ export default function AccountingPage() {
         const matched = matchWhitelist(extracted.supplierName, whitelistRef.current);
         if (matched && canAutoSave(extracted)) {
           setExtracting(false);
-          await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId);
+          await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId, next.sourceType ?? 'email');
           // Continue with next item
           processNextInQueue(rest);
           return;
         }
-        setDrawerState({ extracted, file: compressed, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId });
+        setDrawerState({ extracted, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId });
       } else {
-        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
+        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
       }
     } catch {
-      setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
+      setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, extractionFailed: true });
     } finally {
       setExtracting(false);
     }
@@ -330,7 +332,7 @@ export default function AccountingPage() {
     processNextInQueue(items);
   }
 
-  async function handleFileSelected(file: File) {
+  async function handleFileSelected(file: File, sourceType: SupplierInvoiceSource = 'upload') {
     setShowImportModal(false);
     setExtracting(true);
     let compressed = file;
@@ -341,12 +343,12 @@ export default function AccountingPage() {
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
         const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices);
-        setDrawerState({ extracted, file: compressed, existing: null, sourceType: 'upload' });
+        setDrawerState({ extracted, file: compressed, existing: null, sourceType });
       } else {
-        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'upload', extractionFailed: true });
+        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType, extractionFailed: true });
       }
     } catch {
-      setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'upload', extractionFailed: true });
+      setDrawerState({ extracted: null, file: compressed, existing: null, sourceType, extractionFailed: true });
     } finally {
       setExtracting(false);
     }

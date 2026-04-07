@@ -18,7 +18,7 @@ export interface WhitelistedSupplier {
 
 export type SupplierInvoiceStatus = 'pending' | 'reconciled';
 
-export type SupplierInvoiceSource = 'email' | 'upload' | 'manual';
+export type SupplierInvoiceSource = 'email' | 'upload' | 'portal' | 'manual';
 
 export interface SupplierInvoice {
   id: string;

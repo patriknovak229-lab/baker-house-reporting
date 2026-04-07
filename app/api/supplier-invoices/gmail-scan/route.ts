@@ -25,6 +25,70 @@ interface GmailAttachment {
   attachmentSize: number;
   /** base64url-encoded bytes of the attachment */
   data: string;
+  /** 'email' for real attachments, 'portal' for PDFs fetched from a body link */
+  sourceType: 'email' | 'portal';
+}
+
+type MessagePart = {
+  mimeType?: string | null;
+  body?: { data?: string | null; attachmentId?: string | null; size?: number | null } | null;
+  filename?: string | null;
+  parts?: MessagePart[] | null;
+};
+
+/** Recursively decode email body text (HTML preferred over plain text) */
+function extractBodyText(part: MessagePart): string {
+  if (part.body?.data) {
+    try {
+      const b64 = part.body.data.replace(/-/g, '+').replace(/_/g, '/');
+      return Buffer.from(b64, 'base64').toString('utf-8');
+    } catch { return ''; }
+  }
+  const sub = part.parts ?? [];
+  const html = sub.find((p) => p.mimeType === 'text/html');
+  if (html) return extractBodyText(html);
+  const plain = sub.find((p) => p.mimeType === 'text/plain');
+  if (plain) return extractBodyText(plain);
+  for (const p of sub) {
+    const text = extractBodyText(p);
+    if (text) return text;
+  }
+  return '';
+}
+
+/**
+ * Extract candidate PDF URLs from HTML/text body.
+ * Matches URLs ending in .pdf (optionally with query string) or containing
+ * well-known query parameters that trigger PDF downloads.
+ */
+function extractPdfUrls(body: string): string[] {
+  const PATTERN =
+    /https?:\/\/[^\s"'<>)\\]+(?:\.pdf(?:[?#][^\s"'<>)\\]*)?|[?&][^=\s"'<>)\\]*=(?:pdf|download)[^\s"'<>)\\]*)/gi;
+  return [...new Set(body.match(PATTERN) ?? [])];
+}
+
+/**
+ * Attempt to HTTP-GET a URL and return its bytes if the response is a valid PDF.
+ * Returns null for auth-gated pages, non-PDF responses, or network errors.
+ */
+async function tryFetchPdf(url: string): Promise<Buffer | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; InvoiceBot/1.0)' },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    // Verify PDF magic bytes — rejects HTML login pages that return 200
+    if (buf.slice(0, 4).toString('ascii') !== '%PDF') return null;
+    return buf;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST() {
@@ -46,7 +110,6 @@ export async function POST() {
     );
   }
 
-  // Use the stored refresh token to get a fresh access token
   const clientId = process.env.AUTH_GOOGLE_ID;
   const clientSecret = process.env.AUTH_GOOGLE_SECRET;
   if (!clientId || !clientSecret) {
@@ -56,7 +119,6 @@ export async function POST() {
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret);
   oauth2.setCredentials({ refresh_token: stored.refreshToken });
 
-  // Refresh the access token
   try {
     await oauth2.getAccessToken();
   } catch {
@@ -73,11 +135,11 @@ export async function POST() {
   const existing = (Array.isArray(raw) ? raw : []) as SupplierInvoice[];
   const importedIds = new Set(existing.map((inv) => inv.gmailMessageId).filter(Boolean));
 
-  // Search for emails in the configured label with PDF attachments
-  const query = `label:${label} has:attachment filename:*.pdf`;
+  // Fetch all emails in the configured label (not just those with PDF attachments —
+  // portal-notification emails have no attachment but contain a download link in the body)
   const listRes = await gmail.users.messages.list({
     userId: 'me',
-    q: query,
+    q: `label:${label}`,
     maxResults: 50,
   });
 
@@ -104,7 +166,10 @@ export async function POST() {
     const from = headers.find((h) => h.name === 'From')?.value ?? '';
     const dateHeader = headers.find((h) => h.name === 'Date')?.value ?? '';
 
-    const parts = msgRes.data.payload?.parts ?? [];
+    // ── Layer 1: look for PDF attachments (original behaviour) ──────────────
+    let foundAttachment = false;
+    const parts = (msgRes.data.payload?.parts ?? []) as MessagePart[];
+
     for (const part of parts) {
       if (
         part.filename &&
@@ -126,9 +191,47 @@ export async function POST() {
           attachmentName: part.filename,
           attachmentSize: part.body.size ?? 0,
           data: attRes.data.data ?? '',
+          sourceType: 'email',
         });
+        foundAttachment = true;
       }
     }
+
+    if (foundAttachment) continue;
+
+    // ── Layer 2: no attachment — scan body for PDF download links ────────────
+    const bodyText = extractBodyText((msgRes.data.payload ?? {}) as MessagePart);
+    const urls = extractPdfUrls(bodyText);
+
+    for (const url of urls.slice(0, 5)) {
+      const pdfBuf = await tryFetchPdf(url);
+      if (!pdfBuf) continue;
+
+      // Derive a filename from the URL path component
+      const rawName = url.split('/').pop()?.split('?')[0]?.split('#')[0] ?? '';
+      const fileName = /\.pdf$/i.test(rawName) ? rawName : `invoice-${msg.id}.pdf`;
+
+      // Encode as base64url to match the format that base64UrlToFile() on the client expects
+      const data = pdfBuf
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      attachments.push({
+        messageId: msg.id,
+        subject,
+        from,
+        date: dateHeader,
+        attachmentId: '',
+        attachmentName: fileName,
+        attachmentSize: pdfBuf.length,
+        data,
+        sourceType: 'portal',
+      });
+      break; // one PDF per email
+    }
+    // If no URL yielded a valid PDF: email is silently skipped
   }
 
   return NextResponse.json({ attachments });

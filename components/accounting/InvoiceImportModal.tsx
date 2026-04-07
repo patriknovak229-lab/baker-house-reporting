@@ -1,5 +1,6 @@
 'use client';
 import { useState, useRef } from 'react';
+import type { SupplierInvoiceSource } from '@/types/supplierInvoice';
 
 interface GmailAttachment {
   messageId: string;
@@ -9,13 +10,14 @@ interface GmailAttachment {
   attachmentName: string;
   attachmentSize: number;
   data: string; // base64url
+  sourceType: 'email' | 'portal';
 }
 
 interface Props {
   onProcessBatch: (
-    items: Array<{ file: File; gmailMessageId?: string }>
+    items: Array<{ file: File; gmailMessageId?: string; sourceType?: SupplierInvoiceSource }>
   ) => void;
-  onFileSelected: (file: File) => void;
+  onFileSelected: (file: File, sourceType: SupplierInvoiceSource) => void;
   onManual: () => void;
   onClose: () => void;
 }
@@ -38,6 +40,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
   const [gmailAttachments, setGmailAttachments] = useState<GmailAttachment[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadSourceType, setUploadSourceType] = useState<'upload' | 'portal'>('upload');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFiles(files: FileList | null) {
@@ -52,7 +55,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
     setError(null);
     if (valid.length === 1) {
       // Single file — go directly to extraction drawer
-      onFileSelected(valid[0]);
+      onFileSelected(valid[0], uploadSourceType);
     } else {
       // Multiple files — show queue preview
       setUploadFiles((prev) => {
@@ -67,7 +70,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
   }
 
   function handleProcessUploadFiles() {
-    onProcessBatch(uploadFiles.map((file) => ({ file })));
+    onProcessBatch(uploadFiles.map((file) => ({ file, sourceType: uploadSourceType })));
   }
 
   async function handleGmailScan() {
@@ -117,6 +120,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
       .map((a) => ({
         file: base64UrlToFile(a.data, a.attachmentName),
         gmailMessageId: a.messageId,
+        sourceType: a.sourceType as SupplierInvoiceSource,
       }));
     onProcessBatch(items);
   }
@@ -160,6 +164,30 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
           {/* ── Upload tab ── */}
           {tab === 'upload' && (
             <div className="space-y-3">
+              {/* Source type toggle */}
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                <button
+                  onClick={() => setUploadSourceType('upload')}
+                  className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
+                    uploadSourceType === 'upload'
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  📷 Photo receipt
+                </button>
+                <button
+                  onClick={() => setUploadSourceType('portal')}
+                  className={`flex-1 py-1.5 text-xs font-medium transition-colors border-l border-gray-200 ${
+                    uploadSourceType === 'portal'
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  🌐 Portal download
+                </button>
+              </div>
+
               <div
                 onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
                 onDragLeave={() => setDragging(false)}
@@ -174,9 +202,13 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
                 </div>
-                <p className="text-sm font-medium text-gray-700">Drop PDFs or photos here</p>
+                <p className="text-sm font-medium text-gray-700">
+                  {uploadSourceType === 'portal' ? 'Drop portal PDF here' : 'Drop PDFs or photos here'}
+                </p>
                 <p className="text-xs text-gray-400 mt-1">or click to browse · multiple files supported</p>
-                <p className="text-xs text-gray-400">PDF, JPG, PNG, HEIC</p>
+                <p className="text-xs text-gray-400">
+                  {uploadSourceType === 'portal' ? 'PDF' : 'PDF, JPG, PNG, HEIC'}
+                </p>
               </div>
 
               {/* Multi-file queue preview */}
@@ -249,8 +281,13 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
                             onChange={() => toggleItem(key)}
                             className="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 flex-shrink-0"
                           />
-                          <div className="min-w-0">
-                            <div className="font-medium text-sm text-gray-800 truncate">{att.attachmentName}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-sm text-gray-800 truncate">{att.attachmentName}</span>
+                              {att.sourceType === 'portal' && (
+                                <span className="flex-shrink-0 text-[10px] font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-full">portal</span>
+                              )}
+                            </div>
                             <div className="text-xs text-gray-500 truncate">{att.from}</div>
                             <div className="text-xs text-gray-400">{att.date} · {Math.round(att.attachmentSize / 1024)} KB</div>
                           </div>
