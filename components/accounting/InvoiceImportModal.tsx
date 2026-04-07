@@ -45,9 +45,12 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
 
   function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    const valid = Array.from(files).filter(
-      (f) => f.type === 'application/pdf' || f.type.startsWith('image/')
-    );
+    const valid = Array.from(files).filter((f) => {
+      if (f.type === 'application/pdf' || f.type.startsWith('image/')) return true;
+      // iOS/mobile Safari sends HEIC files with an empty MIME type — allow by extension
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      return ext === 'heic' || ext === 'heif';
+    });
     if (valid.length === 0) {
       setError('Only PDF or image files are supported.');
       return;
