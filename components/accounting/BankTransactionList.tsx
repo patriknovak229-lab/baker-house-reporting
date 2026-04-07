@@ -67,6 +67,11 @@ export default function BankTransactionList({ transactions, invoices, onSelect }
                   <span className={tx.direction === 'debit' ? 'text-gray-800' : 'text-green-600'}>
                     {tx.direction === 'debit' ? '−' : '+'}{formatCurrency(tx.amount)}
                   </span>
+                  {tx.originalCurrency && tx.originalAmount != null && (
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {tx.direction === 'debit' ? '−' : '+'}{tx.originalAmount.toLocaleString('cs-CZ', { style: 'currency', currency: tx.originalCurrency, maximumFractionDigits: 2 })}
+                    </p>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
                   {tx.variableSymbol ?? '—'}

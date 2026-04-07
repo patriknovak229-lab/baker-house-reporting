@@ -33,6 +33,10 @@ export interface BankTransaction {
   description?: string;
   myDescription?: string;
   transactionType?: string;
+  /** Original amount before currency conversion (set when transaction was in a foreign currency) */
+  originalAmount?: number;
+  /** Original currency code, e.g. 'USD', 'EUR' (set when different from account currency) */
+  originalCurrency?: string;
   state: BankTransactionState;
   /** SupplierInvoice.id — set when state === 'reconciled' */
   invoiceId?: string;

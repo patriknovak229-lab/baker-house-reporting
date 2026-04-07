@@ -134,6 +134,11 @@ export default function ReconcileDrawer({ transaction: tx, invoices, onSave, onC
             </div>
             <div className="text-right flex-shrink-0">
               <p className="text-lg font-semibold text-gray-900">−{formatCurrency(tx.amount)}</p>
+              {tx.originalCurrency && tx.originalAmount != null && (
+                <p className="text-xs text-indigo-500">
+                  {tx.originalAmount.toLocaleString('cs-CZ', { style: 'currency', currency: tx.originalCurrency, maximumFractionDigits: 2 })}
+                </p>
+              )}
               <p className="text-xs text-gray-400">{formatDate(tx.date)}</p>
             </div>
           </div>

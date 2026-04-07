@@ -74,6 +74,8 @@ interface ColMap {
   description?: number;
   myDescription?: number;
   type?: number;
+  originalAmount?: number;
+  originalCurrency?: number;
 }
 
 function buildColMap(headers: string[]): ColMap {
@@ -86,10 +88,14 @@ function buildColMap(headers: string[]): ColMap {
       else if (map.valueDate === undefined) map.valueDate = i;
       return;
     }
-    // Amount — castka (KB+), objem (older KB), partial matches
-    if (map.amount === undefined && (n === 'castka' || n === 'objem' || n.startsWith('castka') || n.startsWith('objem'))) { map.amount = i; return; }
-    // Currency
-    if (map.currency === undefined && (n === 'mena' || n.startsWith('mena'))) { map.currency = i; return; }
+    // Amount — castka (KB+), objem (older KB). Must be exact or start with the word to avoid
+    // matching 'Originalni castka' before the primary amount column is set.
+    if (map.amount === undefined && (n === 'castka' || n === 'objem')) { map.amount = i; return; }
+    // Currency — exact 'mena' only; 'Originalni mena' handled separately below
+    if (map.currency === undefined && n === 'mena') { map.currency = i; return; }
+    // Original (foreign currency) amount and currency
+    if (map.originalAmount === undefined && n.includes('originalni') && n.includes('castka')) { map.originalAmount = i; return; }
+    if (map.originalCurrency === undefined && n.includes('originalni') && n.includes('mena')) { map.originalCurrency = i; return; }
     // Counterparty account — "Protistrana", "Protiucet", "Protiúčet"
     if (map.counterpartyAccount === undefined && (n.includes('protistrana') || n.includes('protiucet') || n.includes('ucet protistrany'))) { map.counterpartyAccount = i; return; }
     // Counterparty name — "Nazev protiustrany", "Nazev protistrany", "Nazev protiuctu"
@@ -195,6 +201,9 @@ function parseKbCsv(csvText: string): BankTransaction[] {
     const myDescription = cell(cols, colMap.myDescription);
     const currency = cell(cols, colMap.currency) || 'CZK';
     const transactionType = cell(cols, colMap.type);
+    const rawOriginalAmount = cell(cols, colMap.originalAmount);
+    const originalAmountRaw = rawOriginalAmount ? parseCzechNumber(rawOriginalAmount) : 0;
+    const originalCurrencyRaw = cell(cols, colMap.originalCurrency);
 
     const id = makeTxId(date, amount, direction, counterpartyAccount, vs);
     const state: BankTransactionState = direction === 'credit' ? 'revenue' : 'unmatched';
@@ -214,6 +223,8 @@ function parseKbCsv(csvText: string): BankTransaction[] {
       description: description || undefined,
       myDescription: myDescription || undefined,
       transactionType: transactionType || undefined,
+      originalAmount: originalAmountRaw !== 0 ? Math.abs(originalAmountRaw) : undefined,
+      originalCurrency: (originalCurrencyRaw && originalCurrencyRaw !== currency) ? originalCurrencyRaw : undefined,
       state,
       importedAt: now,
     });
