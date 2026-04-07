@@ -17,6 +17,7 @@ import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
 import { prepareImageFile } from '@/utils/imageCompressor';
 import { textColorFor } from '@/utils/categoryColors';
+import BankPage from './BankPage';
 
 const PHASES = [
   { id: 1, label: 'Costs', description: 'Supplier invoices' },
@@ -146,6 +147,7 @@ function canAutoSave(extracted: ExtractedInvoiceData): boolean {
 }
 
 export default function AccountingPage() {
+  const [activePhase, setActivePhase] = useState(1);
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -441,6 +443,10 @@ export default function AccountingPage() {
     if (queue.length > 0) processNextInQueue(queue);
   }
 
+  function handleInvoiceUpdate(updated: SupplierInvoice) {
+    setInvoices((prev) => prev.map((inv) => (inv.id === updated.id ? updated : inv)));
+  }
+
   const now = new Date();
 
   // Time-period helpers (applied to filteredInvoices so category/status/search filters are respected)
@@ -472,18 +478,39 @@ export default function AccountingPage() {
     <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
-        {PHASES.map((phase) => (
-          <div key={phase.id}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${phase.id === 1 ? 'bg-white shadow-sm text-indigo-700 font-medium' : 'text-gray-400 cursor-not-allowed'}`}
-            title={phase.id !== 1 ? 'Coming soon' : undefined}
-          >
-            <span className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${phase.id === 1 ? 'bg-indigo-600 text-white' : 'bg-gray-300 text-gray-500'}`}>
-              {phase.id}
-            </span>
-            <span className="hidden sm:inline">{phase.label}</span>
-          </div>
-        ))}
+        {PHASES.map((phase) => {
+          const enabled = phase.id <= 2;
+          const active = activePhase === phase.id;
+          return (
+            <div key={phase.id}
+              onClick={() => enabled && setActivePhase(phase.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors ${
+                active ? 'bg-white shadow-sm text-indigo-700 font-medium' :
+                enabled ? 'text-gray-500 hover:text-gray-700 cursor-pointer' :
+                'text-gray-400 cursor-not-allowed'
+              }`}
+              title={!enabled ? 'Coming soon' : undefined}
+            >
+              <span className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${
+                active ? 'bg-indigo-600 text-white' :
+                enabled ? 'bg-gray-400 text-white' :
+                'bg-gray-300 text-gray-500'
+              }`}>
+                {phase.id}
+              </span>
+              <span className="hidden sm:inline">{phase.label}</span>
+            </div>
+          );
+        })}
       </div>
+
+      {/* Phase 2 — Bank */}
+      {activePhase === 2 && (
+        <BankPage invoices={invoices} onInvoiceUpdate={handleInvoiceUpdate} />
+      )}
+
+      {/* Phase 1 — Costs */}
+      {activePhase === 1 && (<>
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -633,6 +660,8 @@ export default function AccountingPage() {
           <SupplierInvoiceList invoices={filteredInvoices} onEdit={handleEdit} onDelete={handleDelete} onReuploadDrive={handleReuploadDrive} />
         )}
       </div>
+
+      </>)}
 
       {/* Modals / Drawers */}
       {showCategoryManager && <CategoryManager onClose={() => setShowCategoryManager(false)} />}
