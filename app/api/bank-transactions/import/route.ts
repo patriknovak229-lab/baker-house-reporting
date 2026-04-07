@@ -136,9 +136,13 @@ function parseKbCsv(csvText: string): BankTransaction[] {
 
   if (lines.length < 2) return [];
 
-  // Auto-detect separator by counting ; vs , in first few lines
+  // Auto-detect separator: count ; vs , vs \t in first few lines
   const sample = lines.slice(0, Math.min(5, lines.length)).join('\n');
-  const sep = (sample.split(';').length >= sample.split(',').length) ? ';' : ',';
+  const countSemi  = sample.split(';').length - 1;
+  const countComma = sample.split(',').length - 1;
+  const countTab   = sample.split('\t').length - 1;
+  const sep = countTab >= countSemi && countTab >= countComma ? '\t'
+            : countSemi >= countComma ? ';' : ',';
 
   // Find header line — look up to 20 lines deep (KB+ has 16 metadata rows at top)
   let headerIdx = -1;
