@@ -103,6 +103,27 @@ function AutoSavedBanner({ entries, onDismiss }: { entries: AutoSavedEntry[]; on
   );
 }
 
+/**
+ * Enrich extracted data with ICO / category pulled from the most recent
+ * invoice for the same supplier (case-insensitive name match).
+ * Only fills fields that extraction left as null.
+ */
+function enrichFromHistory(
+  extracted: ExtractedInvoiceData,
+  invoices: SupplierInvoice[],
+): ExtractedInvoiceData {
+  if (!extracted.supplierName) return extracted;
+  const norm = extracted.supplierName.trim().toLowerCase();
+  // Most-recent first (invoices are prepended on save)
+  const match = invoices.find((inv) => inv.supplierName.trim().toLowerCase() === norm);
+  if (!match) return extracted;
+  return {
+    ...extracted,
+    supplierICO: extracted.supplierICO ?? match.supplierICO ?? null,
+    suggestedCategory: extracted.suggestedCategory ?? match.category ?? null,
+  };
+}
+
 /** Match extracted supplier name against whitelist (case-insensitive, trimmed) */
 function matchWhitelist(supplierName: string | null, whitelist: WhitelistedSupplier[]): WhitelistedSupplier | null {
   if (!supplierName) return null;
@@ -263,7 +284,7 @@ export default function AccountingPage() {
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
-        const extracted = await res.json() as ExtractedInvoiceData;
+        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices);
         // Check whitelist
         const matched = matchWhitelist(extracted.supplierName, whitelistRef.current);
         if (matched && canAutoSave(extracted)) {
@@ -300,7 +321,7 @@ export default function AccountingPage() {
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
-        const extracted = await res.json() as ExtractedInvoiceData;
+        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices);
         setDrawerState({ extracted, file: compressed, existing: null, sourceType: 'upload' });
       } else {
         setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: 'upload', extractionFailed: true });

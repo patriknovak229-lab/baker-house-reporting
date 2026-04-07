@@ -99,12 +99,26 @@ export default function InvoiceReviewDrawer({
     } else if (extracted) {
       if (extracted.supplierName) setSupplierName(extracted.supplierName);
       if (extracted.supplierICO) setSupplierICO(extracted.supplierICO);
-      if (extracted.invoiceNumber) setInvoiceNumber(extracted.invoiceNumber);
       if (extracted.invoiceDate) setInvoiceDate(extracted.invoiceDate);
       if (extracted.dueDate) setDueDate(extracted.dueDate);
       if (extracted.amountCZK != null) setAmountCZK(String(extracted.amountCZK));
       if (extracted.vatAmountCZK != null) setVatAmountCZK(String(extracted.vatAmountCZK));
       if (extracted.suggestedCategory) setCategory(extracted.suggestedCategory);
+
+      // Invoice number: use extracted value, or generate a fallback
+      if (extracted.invoiceNumber) {
+        setInvoiceNumber(extracted.invoiceNumber);
+      } else {
+        // INV-SUPPLIERNAME-DDMM  (day + month from the invoice date or today)
+        const ref = extracted.invoiceDate ? new Date(extracted.invoiceDate) : new Date();
+        const dd = String(ref.getDate()).padStart(2, '0');
+        const mm = String(ref.getMonth() + 1).padStart(2, '0');
+        const safeName = (extracted.supplierName ?? 'UNKNOWN')
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .slice(0, 12)
+          .toUpperCase();
+        setInvoiceNumber(`INV-${safeName}-${dd}${mm}`);
+      }
     }
   }, [extracted, existing]);
 

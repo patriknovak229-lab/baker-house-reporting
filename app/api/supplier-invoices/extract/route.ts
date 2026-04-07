@@ -58,19 +58,31 @@ export async function POST(request: Request) {
     }
   }
 
-  // ── Large image → compress to fit Claude's 5 MB limit ──
+  // ── Large image → fit within Claude's 5 MB limit ──
+  // Strategy: reduce JPEG quality first (keeps full resolution, text stays sharp).
+  // Only shrink dimensions as a last resort — scaling down a receipt makes text unreadable.
   if (mediaType.startsWith('image/') && buffer.length > CLAUDE_MAX_BYTES) {
     try {
-      buffer = await sharp(buffer)
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      mediaType = 'image/jpeg';
-      // If still too large, shrink dimensions
-      if (buffer.length > CLAUDE_MAX_BYTES) {
-        buffer = await sharp(buffer)
-          .resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 75 })
+      let compressed: Buffer | null = null;
+      for (const quality of [75, 60, 45]) {
+        const candidate = await sharp(buffer).jpeg({ quality }).toBuffer();
+        if (candidate.length <= CLAUDE_MAX_BYTES) {
+          compressed = candidate;
+          break;
+        }
+      }
+      if (!compressed) {
+        // Extreme fallback: cap longest edge at 3500 px then re-try quality steps
+        // 3500 px keeps ~300 DPI for an A4-sized document — still very readable
+        const resized = await sharp(buffer)
+          .resize({ width: 3500, height: 3500, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 60 })
           .toBuffer();
+        compressed = resized.length <= CLAUDE_MAX_BYTES ? resized : null;
+      }
+      if (compressed) {
+        buffer = compressed;
+        mediaType = 'image/jpeg';
       }
     } catch { /* leave buffer as-is — Claude will reject if truly too large */ }
   }
