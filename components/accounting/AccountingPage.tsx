@@ -564,8 +564,10 @@ export default function AccountingPage() {
               </ResponsiveContainer>
             </div>
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-6 w-full">
-              {categoryPieData.map((entry) => {
-                const pct = yearTotal > 0 ? Math.round((entry.value / yearTotal) * 100) : 0;
+              {(() => {
+              const pieTotal = categoryPieData.reduce((s, d) => s + d.value, 0);
+              return categoryPieData.map((entry) => {
+                const pct = pieTotal > 0 ? Math.round((entry.value / pieTotal) * 100) : 0;
                 return (
                   <div key={entry.name} className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
@@ -574,7 +576,8 @@ export default function AccountingPage() {
                     <span className="text-xs text-gray-400 w-8 text-right">{pct}%</span>
                   </div>
                 );
-              })}
+              });
+            })()}
             </div>
           </div>
         </div>
