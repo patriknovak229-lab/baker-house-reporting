@@ -14,11 +14,13 @@ function getRedis(): Redis | null {
   return new Redis({ url, token });
 }
 
-type ReconcileBody   = { action: 'reconcile'; invoiceId: string };
-type IgnoreBody      = { action: 'ignore'; ignoreCategory: IgnoreCategoryId; ignoreNote?: string };
-type UnmatchBody     = { action: 'unmatch' };
-type NoteBody        = { action: 'note'; note: string };
-type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody;
+type ReconcileBody      = { action: 'reconcile'; invoiceId: string };
+type IgnoreBody         = { action: 'ignore'; ignoreCategory: IgnoreCategoryId; ignoreNote?: string };
+type UnmatchBody        = { action: 'unmatch' };
+type NoteBody           = { action: 'note'; note: string };
+type RefundBody         = { action: 'refund'; linkedTransactionId?: string; partial: boolean };
+type NonDeductibleBody  = { action: 'non_deductible'; ignoreNote?: string };
+type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody;
 
 export async function PUT(
   request: Request,
@@ -66,6 +68,7 @@ export async function PUT(
 
     tx.state = 'reconciled';
     tx.invoiceId = body.invoiceId;
+    tx.linkedTransactionId = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = undefined;
     tx.ignoredAt = undefined;
@@ -94,10 +97,41 @@ export async function PUT(
 
     tx.state = 'ignored';
     tx.invoiceId = undefined;
+    tx.linkedTransactionId = undefined;
     tx.reconciledAt = undefined;
     tx.ignoreCategory = body.ignoreCategory;
     tx.ignoreNote = body.ignoreNote || undefined;
     tx.ignoredAt = now;
+
+  } else if (body.action === 'non_deductible') {
+    // Un-link any previously matched invoice
+    if (tx.invoiceId) {
+      const prevIdx = invoices.findIndex((i) => i.id === tx.invoiceId);
+      if (prevIdx !== -1) {
+        invoices[prevIdx] = {
+          ...invoices[prevIdx],
+          status: 'pending',
+          bankTransactionId: undefined,
+          reconciledAt: undefined,
+        };
+      }
+    }
+
+    tx.state = 'non_deductible';
+    tx.invoiceId = undefined;
+    tx.linkedTransactionId = undefined;
+    tx.reconciledAt = undefined;
+    tx.ignoreCategory = undefined;
+    tx.ignoreNote = body.ignoreNote || undefined;
+    tx.ignoredAt = now;
+
+  } else if (body.action === 'refund') {
+    tx.state = body.partial ? 'partial_refund' : 'refund';
+    tx.linkedTransactionId = body.linkedTransactionId || undefined;
+    tx.invoiceId = undefined;
+    tx.ignoreCategory = undefined;
+    tx.ignoredAt = undefined;
+    tx.reconciledAt = now;
 
   } else if (body.action === 'note') {
     tx.ignoreNote = body.note || undefined;
@@ -115,8 +149,9 @@ export async function PUT(
       }
     }
 
-    tx.state = 'unmatched';
+    tx.state = 'revenue'; // credit transactions reset to revenue, not unmatched
     tx.invoiceId = undefined;
+    tx.linkedTransactionId = undefined;
     tx.reconciledAt = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = undefined;

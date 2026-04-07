@@ -613,6 +613,50 @@ export default function AccountingPage() {
         </div>
       )}
 
+      {/* Period presets */}
+      {(() => {
+        type PeriodPreset = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'this_year';
+        const PERIOD_PRESETS: { value: PeriodPreset; label: string }[] = [
+          { value: 'all',          label: 'All time' },
+          { value: 'this_month',   label: 'This month' },
+          { value: 'last_month',   label: 'Last month' },
+          { value: 'this_quarter', label: 'This quarter' },
+          { value: 'this_year',    label: 'This year' },
+        ];
+        function applyPreset(p: PeriodPreset) {
+          if (p === 'all') { setFilters((f) => ({ ...f, dateFrom: '', dateTo: '' })); return; }
+          const n = new Date(); const y = n.getFullYear(); const m = n.getMonth();
+          const pad = (v: number) => String(v).padStart(2, '0');
+          if (p === 'this_month')   { setFilters((f) => ({ ...f, dateFrom: `${y}-${pad(m+1)}-01`, dateTo: `${y}-${pad(m+1)}-31` })); }
+          if (p === 'last_month')   { const lm = m === 0 ? 11 : m-1; const ly = m === 0 ? y-1 : y; setFilters((f) => ({ ...f, dateFrom: `${ly}-${pad(lm+1)}-01`, dateTo: `${ly}-${pad(lm+1)}-31` })); }
+          if (p === 'this_quarter') { const q = Math.floor(m/3); setFilters((f) => ({ ...f, dateFrom: `${y}-${pad(q*3+1)}-01`, dateTo: `${y}-${pad(q*3+3)}-31` })); }
+          if (p === 'this_year')    { setFilters((f) => ({ ...f, dateFrom: `${y}-01-01`, dateTo: `${y}-12-31` })); }
+        }
+        const activePreset = (): PeriodPreset => {
+          if (!filters.dateFrom && !filters.dateTo) return 'all';
+          const n = new Date(); const y = n.getFullYear(); const m = n.getMonth();
+          const pad = (v: number) => String(v).padStart(2, '0');
+          if (filters.dateFrom === `${y}-${pad(m+1)}-01`) return 'this_month';
+          const lm = m === 0 ? 11 : m-1; const ly = m === 0 ? y-1 : y;
+          if (filters.dateFrom === `${ly}-${pad(lm+1)}-01`) return 'last_month';
+          const q = Math.floor(m/3);
+          if (filters.dateFrom === `${y}-${pad(q*3+1)}-01`) return 'this_quarter';
+          if (filters.dateFrom === `${y}-01-01`) return 'this_year';
+          return 'all';
+        };
+        const active = activePreset();
+        return (
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+            {PERIOD_PRESETS.map((p) => (
+              <button key={p.value} onClick={() => applyPreset(p.value)}
+                className={`px-3 py-1.5 rounded-lg text-sm transition-colors whitespace-nowrap ${active === p.value ? 'bg-white shadow-sm text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
       {/* Filters */}
       <div className="bg-white border border-gray-100 rounded-xl p-4">
         <div className="flex flex-wrap gap-3">

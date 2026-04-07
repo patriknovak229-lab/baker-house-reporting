@@ -20,19 +20,60 @@ interface Props {
 }
 
 type FilterState = 'all' | BankTransactionState;
+type PeriodPreset = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'this_year';
 
 const FILTERS: { value: FilterState; label: string }[] = [
-  { value: 'all',        label: 'All' },
-  { value: 'unmatched',  label: 'Unmatched costs' },
-  { value: 'revenue',    label: 'Unmatched revenue' },
-  { value: 'reconciled', label: 'Reconciled' },
-  { value: 'ignored',    label: 'Ignored' },
+  { value: 'all',           label: 'All' },
+  { value: 'unmatched',     label: 'Unmatched costs' },
+  { value: 'revenue',       label: 'Unmatched revenue' },
+  { value: 'reconciled',    label: 'Reconciled' },
+  { value: 'refund',        label: 'Refunds' },
+  { value: 'partial_refund',label: 'Partial refunds' },
+  { value: 'ignored',       label: 'Ignored' },
+  { value: 'non_deductible',label: 'Non-deductible' },
 ];
+
+const PERIOD_PRESETS: { value: PeriodPreset; label: string }[] = [
+  { value: 'all',          label: 'All time' },
+  { value: 'this_month',   label: 'This month' },
+  { value: 'last_month',   label: 'Last month' },
+  { value: 'this_quarter', label: 'This quarter' },
+  { value: 'this_year',    label: 'This year' },
+];
+
+function getPeriodRange(preset: PeriodPreset): { from: string; to: string } | null {
+  if (preset === 'all') return null;
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth(); // 0-indexed
+
+  if (preset === 'this_month') {
+    const mm = String(m + 1).padStart(2, '0');
+    return { from: `${y}-${mm}-01`, to: `${y}-${mm}-31` };
+  }
+  if (preset === 'last_month') {
+    const lm = m === 0 ? 11 : m - 1;
+    const ly = m === 0 ? y - 1 : y;
+    const mm = String(lm + 1).padStart(2, '0');
+    return { from: `${ly}-${mm}-01`, to: `${ly}-${mm}-31` };
+  }
+  if (preset === 'this_quarter') {
+    const q = Math.floor(m / 3);
+    const qm = String(q * 3 + 1).padStart(2, '0');
+    const qe = String(q * 3 + 3).padStart(2, '0');
+    return { from: `${y}-${qm}-01`, to: `${y}-${qe}-31` };
+  }
+  if (preset === 'this_year') {
+    return { from: `${y}-01-01`, to: `${y}-12-31` };
+  }
+  return null;
+}
 
 export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
   const [transactions, setTransactions] = useState<BankTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterState>('all');
+  const [period, setPeriod] = useState<PeriodPreset>('all');
   const [search, setSearch] = useState('');
   const [drawerTx, setDrawerTx] = useState<BankTransaction | null>(null);
   const [showImport, setShowImport] = useState(false);
@@ -94,7 +135,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
     if (updated.state === 'reconciled' && updated.invoiceId) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);
       if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
-    } else if (updated.state === 'unmatched' || updated.state === 'ignored') {
+    } else if (updated.state === 'unmatched' || updated.state === 'ignored' || updated.state === 'non_deductible' || updated.state === 'revenue') {
       const prev = transactions.find((t) => t.id === updated.id);
       if (prev?.invoiceId) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
@@ -105,8 +146,15 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
     setDrawerTx(null);
   }
 
+  const periodRange = useMemo(() => getPeriodRange(period), [period]);
+
   const filtered = useMemo(() => {
     let result = filter === 'all' ? transactions : transactions.filter((t) => t.state === filter);
+
+    if (periodRange) {
+      result = result.filter((t) => t.date >= periodRange.from && t.date <= periodRange.to);
+    }
+
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter((t) =>
@@ -119,7 +167,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       );
     }
     return result;
-  }, [transactions, filter, search]);
+  }, [transactions, filter, periodRange, search]);
 
   // ── Summary stats ──────────────────────────────────────────────────────────
   const now = new Date();
@@ -232,9 +280,26 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         </div>
       </div>
 
+      {/* Period presets */}
+      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+        {PERIOD_PRESETS.map((p) => (
+          <button
+            key={p.value}
+            onClick={() => setPeriod(p.value)}
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors whitespace-nowrap ${
+              period === p.value
+                ? 'bg-white shadow-sm text-gray-900 font-medium'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
       {/* Filter tabs + search */}
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit flex-shrink-0">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit flex-shrink-0 flex-wrap">
           {FILTERS.map((f) => (
             <button
               key={f.value}
@@ -278,6 +343,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         ) : (
           <BankTransactionList
             transactions={filtered}
+            allTransactions={transactions}
             invoices={invoices}
             onSelect={setDrawerTx}
           />
@@ -292,6 +358,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       {drawerTx && (
         <ReconcileDrawer
           transaction={drawerTx}
+          transactions={transactions}
           invoices={invoices}
           onSave={handleDrawerSave}
           onClose={() => setDrawerTx(null)}

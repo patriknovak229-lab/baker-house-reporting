@@ -10,15 +10,19 @@ type SortDir = 'asc' | 'desc';
 
 interface Props {
   transactions: BankTransaction[];
+  allTransactions: BankTransaction[];
   invoices: SupplierInvoice[];
   onSelect: (tx: BankTransaction) => void;
 }
 
 const STATE_BADGE: Record<BankTransactionState, { label: string; className: string }> = {
-  unmatched:  { label: 'Unmatched',  className: 'bg-amber-100 text-amber-700'   },
-  reconciled: { label: 'Reconciled', className: 'bg-green-100 text-green-700'   },
-  ignored:    { label: 'Ignored',    className: 'bg-gray-100 text-gray-500'     },
-  revenue:    { label: 'Revenue',    className: 'bg-indigo-100 text-indigo-600' },
+  unmatched:      { label: 'Unmatched',      className: 'bg-amber-100 text-amber-700'    },
+  reconciled:     { label: 'Reconciled',     className: 'bg-green-100 text-green-700'    },
+  ignored:        { label: 'Ignored',        className: 'bg-gray-100 text-gray-500'      },
+  non_deductible: { label: 'Non-deductible', className: 'bg-rose-100 text-rose-600'      },
+  revenue:        { label: 'Revenue',        className: 'bg-indigo-100 text-indigo-600'  },
+  refund:         { label: 'Refund',         className: 'bg-teal-100 text-teal-700'      },
+  partial_refund: { label: 'Part. refund',   className: 'bg-teal-50 text-teal-600'       },
 };
 
 function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: SortDir }) {
@@ -26,7 +30,7 @@ function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: So
   return <span className="ml-1 text-indigo-500">{dir === 'asc' ? '↑' : '↓'}</span>;
 }
 
-export default function BankTransactionList({ transactions, invoices, onSelect }: Props) {
+export default function BankTransactionList({ transactions, allTransactions, invoices, onSelect }: Props) {
   const [sortCol, setSortCol] = useState<SortCol>('date');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -39,9 +43,9 @@ export default function BankTransactionList({ transactions, invoices, onSelect }
     const arr = [...transactions];
     arr.sort((a, b) => {
       let cmp = 0;
-      if (sortCol === 'date')         cmp = a.date.localeCompare(b.date);
+      if (sortCol === 'date')              cmp = a.date.localeCompare(b.date);
       else if (sortCol === 'counterparty') cmp = (a.counterpartyName ?? '').localeCompare(b.counterpartyName ?? '');
-      else if (sortCol === 'amount')  cmp = a.amount - b.amount;
+      else if (sortCol === 'amount')       cmp = a.amount - b.amount;
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return arr;
@@ -56,6 +60,7 @@ export default function BankTransactionList({ transactions, invoices, onSelect }
   }
 
   const invoiceMap = new Map(invoices.map((inv) => [inv.id, inv]));
+  const txMap      = new Map(allTransactions.map((t) => [t.id, t]));
 
   const thClass = 'px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide select-none cursor-pointer hover:text-gray-700 whitespace-nowrap';
 
@@ -82,7 +87,8 @@ export default function BankTransactionList({ transactions, invoices, onSelect }
           {sorted.map((tx) => {
             const badge = STATE_BADGE[tx.state];
             const linkedInvoice = tx.invoiceId ? invoiceMap.get(tx.invoiceId) : undefined;
-            const ignoreCat = tx.ignoreCategory
+            const linkedTx      = tx.linkedTransactionId ? txMap.get(tx.linkedTransactionId) : undefined;
+            const ignoreCat     = tx.ignoreCategory
               ? IGNORE_CATEGORIES.find((c) => c.id === tx.ignoreCategory)?.label
               : undefined;
 
@@ -116,6 +122,10 @@ export default function BankTransactionList({ transactions, invoices, onSelect }
                   {linkedInvoice ? (
                     <span className="text-xs text-gray-700">
                       {linkedInvoice.invoiceNumber} · {linkedInvoice.supplierName}
+                    </span>
+                  ) : linkedTx ? (
+                    <span className="text-xs text-teal-700">
+                      {linkedTx.counterpartyName ?? '—'} · {formatCurrency(linkedTx.amount)}
                     </span>
                   ) : ignoreCat ? (
                     <span className="text-xs text-gray-400">{ignoreCat}{tx.ignoreNote ? ` · ${tx.ignoreNote}` : ''}</span>

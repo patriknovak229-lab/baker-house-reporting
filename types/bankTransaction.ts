@@ -1,10 +1,13 @@
 export type BankTransactionDirection = 'debit' | 'credit';
 
 export type BankTransactionState =
-  | 'unmatched'   // outgoing, not yet linked to a supplier invoice
-  | 'reconciled'  // linked to a SupplierInvoice
-  | 'ignored'     // tagged as non-invoice cost (salary, tax, etc.)
-  | 'revenue';    // incoming payment — reserved for Phase 3
+  | 'unmatched'      // outgoing, not yet linked to a supplier invoice
+  | 'reconciled'     // linked to a SupplierInvoice
+  | 'ignored'        // tagged as non-invoice cost (salary, tax, etc.)
+  | 'non_deductible' // cost that does not qualify for tax deduction / receipt lost
+  | 'revenue'        // incoming payment — not yet categorised
+  | 'refund'         // incoming payment that fully refunds a prior debit
+  | 'partial_refund';// incoming payment that partially refunds a prior debit
 
 export const IGNORE_CATEGORIES = [
   { id: 'salary',   label: 'Salary / wages' },
@@ -40,6 +43,8 @@ export interface BankTransaction {
   state: BankTransactionState;
   /** SupplierInvoice.id — set when state === 'reconciled' */
   invoiceId?: string;
+  /** BankTransaction.id of the debit being refunded — set when state === 'refund' | 'partial_refund' */
+  linkedTransactionId?: string;
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
   ignoreCategory?: IgnoreCategoryId;
   ignoreNote?: string;
