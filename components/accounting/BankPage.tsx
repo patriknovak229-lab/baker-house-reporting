@@ -159,6 +159,10 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       return next;
     });
 
+    // Helper: is a given invoice still covered by another net_settlement tx (other than `updatedId`)?
+    const isStillSettledElsewhere = (invId: string, updatedId: string) =>
+      transactions.some((t) => t.id !== updatedId && (t.deductedInvoiceIds ?? []).includes(invId));
+
     if (updated.state === 'reconciled' && updated.invoiceId) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);
       if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
@@ -168,10 +172,10 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         const inv = invoices.find((i) => i.id === invId);
         if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
       }
-      // Un-reconcile any invoices that were previously deducted but are no longer
+      // Un-reconcile invoices that were previously deducted but are no longer in the list
       const prev = transactions.find((t) => t.id === updated.id);
       for (const prevId of prev?.deductedInvoiceIds ?? []) {
-        if (!(updated.deductedInvoiceIds ?? []).includes(prevId)) {
+        if (!(updated.deductedInvoiceIds ?? []).includes(prevId) && !isStillSettledElsewhere(prevId, updated.id)) {
           const inv = invoices.find((i) => i.id === prevId);
           if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
         }
@@ -182,10 +186,12 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
         if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
       }
-      // Also un-reconcile previously deducted invoices
+      // Un-reconcile previously deducted invoices — but only if no other settlement still covers them
       for (const prevId of prev?.deductedInvoiceIds ?? []) {
-        const inv = invoices.find((i) => i.id === prevId);
-        if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+        if (!isStillSettledElsewhere(prevId, updated.id)) {
+          const inv = invoices.find((i) => i.id === prevId);
+          if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+        }
       }
     }
 

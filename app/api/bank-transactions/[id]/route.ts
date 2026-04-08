@@ -131,14 +131,27 @@ export async function PUT(
     if (tx.invoiceId) {
       const prevIdx = invoices.findIndex((i) => i.id === tx.invoiceId);
       if (prevIdx !== -1) {
-        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined };
       }
     }
-    // Un-reconcile any previously deducted invoices
+
+    // Remove this tx from invoices that were previously deducted but are no longer in the new list
     for (const prevInvId of tx.deductedInvoiceIds ?? []) {
-      const prevIdx = invoices.findIndex((i) => i.id === prevInvId);
-      if (prevIdx !== -1) {
-        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+      if (!body.deductedInvoiceIds.includes(prevInvId)) {
+        const prevIdx = invoices.findIndex((i) => i.id === prevInvId);
+        if (prevIdx !== -1) {
+          const remaining = (invoices[prevIdx].settlementTransactionIds ?? []).filter((tid) => tid !== id);
+          if (remaining.length > 0) {
+            invoices[prevIdx] = {
+              ...invoices[prevIdx],
+              settlementTransactionIds: remaining,
+              // if bankTransactionId pointed to this tx, update to the first remaining settlement
+              bankTransactionId: invoices[prevIdx].bankTransactionId === id ? remaining[0] : invoices[prevIdx].bankTransactionId,
+            };
+          } else {
+            invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined };
+          }
+        }
       }
     }
 
@@ -152,11 +165,19 @@ export async function PUT(
     tx.ignoredAt = undefined;
     tx.reconciledAt = now;
 
-    // Mark each deducted invoice as reconciled
+    // Add this tx to each deducted invoice's settlementTransactionIds
     for (const invId of body.deductedInvoiceIds) {
       const invIdx = invoices.findIndex((i) => i.id === invId);
       if (invIdx !== -1) {
-        invoices[invIdx] = { ...invoices[invIdx], status: 'reconciled', bankTransactionId: id, reconciledAt: now };
+        const existing = invoices[invIdx].settlementTransactionIds ?? [];
+        const updated  = existing.includes(id) ? existing : [...existing, id];
+        invoices[invIdx] = {
+          ...invoices[invIdx],
+          status: 'reconciled',
+          bankTransactionId: invoices[invIdx].bankTransactionId ?? id,
+          reconciledAt: invoices[invIdx].reconciledAt ?? now,
+          settlementTransactionIds: updated,
+        };
       }
     }
 
@@ -206,10 +227,20 @@ export async function PUT(
       }
     }
     // Un-reconcile all deducted invoices (net_settlement path)
+    // Remove this tx from each invoice's settlementTransactionIds; only reset to pending if no other settlements remain
     for (const prevInvId of tx.deductedInvoiceIds ?? []) {
       const prevIdx = invoices.findIndex((i) => i.id === prevInvId);
       if (prevIdx !== -1) {
-        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+        const remaining = (invoices[prevIdx].settlementTransactionIds ?? []).filter((tid) => tid !== id);
+        if (remaining.length > 0) {
+          invoices[prevIdx] = {
+            ...invoices[prevIdx],
+            settlementTransactionIds: remaining,
+            bankTransactionId: invoices[prevIdx].bankTransactionId === id ? remaining[0] : invoices[prevIdx].bankTransactionId,
+          };
+        } else {
+          invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined };
+        }
       }
     }
     // Reset linked debit (refund/partial_refund path)

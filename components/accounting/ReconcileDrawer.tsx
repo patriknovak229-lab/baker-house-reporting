@@ -120,8 +120,13 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   [invoices, tx.invoiceId, invoiceSearch]);
 
   // ── Candidate invoices for net settlement ────────────────────────────────
+  // Show: pending invoices + invoices already in this tx + invoices partially settled by OTHER credits
   const settlementCandidates = useMemo(() => invoices
-    .filter((inv) => inv.status === 'pending' || (tx.deductedInvoiceIds ?? []).includes(inv.id))
+    .filter((inv) =>
+      inv.status === 'pending' ||
+      (tx.deductedInvoiceIds ?? []).includes(inv.id) ||
+      (inv.settlementTransactionIds?.length ?? 0) > 0,
+    )
     .filter((inv) => {
       if (!settlementSearch) return true;
       const q = settlementSearch.toLowerCase();
@@ -314,6 +319,8 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                         <p className="text-xs text-gray-400 text-center py-4">No pending invoices found.</p>
                       ) : settlementCandidates.map((inv) => {
                         const checked = settlementInvoiceIds.has(inv.id);
+                        // Other settlements for this invoice (excluding this tx)
+                        const otherSettlements = (inv.settlementTransactionIds ?? []).filter((tid) => tid !== tx.id);
                         return (
                           <label key={inv.id}
                             className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${checked ? 'border-cyan-300 bg-cyan-50' : 'border-gray-200 hover:border-gray-300'}`}>
@@ -328,6 +335,11 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-gray-800 truncate">{inv.supplierName}</p>
                               <p className="text-xs text-gray-500">{inv.invoiceNumber} · {inv.invoiceDate}</p>
+                              {otherSettlements.length > 0 && (
+                                <p className="text-xs text-cyan-600 mt-0.5">
+                                  {otherSettlements.length} other settlement{otherSettlements.length !== 1 ? 's' : ''} already linked
+                                </p>
+                              )}
                             </div>
                             <p className="text-sm font-medium text-gray-800 whitespace-nowrap flex-shrink-0">
                               {formatAmount(inv.amountCZK, inv.invoiceCurrency)}
@@ -498,7 +510,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
         {/* Footer */}
         <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
           <div>
-            {(tx.state === 'reconciled' || tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'refund' || tx.state === 'partial_refund') && (
+            {(tx.state === 'reconciled' || tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'refund' || tx.state === 'partial_refund' || tx.state === 'net_settlement') && (
               <button onClick={handleUnmatch} disabled={saving} className="text-xs text-gray-400 hover:text-red-500">
                 Reset to {isCredit ? 'revenue' : 'unmatched'}
               </button>

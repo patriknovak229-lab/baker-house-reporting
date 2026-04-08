@@ -44,6 +44,8 @@ export interface SupplierInvoice {
   // Phase 2 — bank reconciliation (unused in Phase 1)
   bankTransactionId?: string;
   reconciledAt?: string;
+  /** For OTA net-settlement: IDs of credit bank transactions that collectively cover this invoice */
+  settlementTransactionIds?: string[];
 }
 
 /** Shape returned by the Claude extraction endpoint */
