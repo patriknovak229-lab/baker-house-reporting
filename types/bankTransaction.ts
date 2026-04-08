@@ -6,8 +6,9 @@ export type BankTransactionState =
   | 'ignored'        // tagged as non-invoice cost (salary, tax, etc.)
   | 'non_deductible' // cost that does not qualify for tax deduction / receipt lost
   | 'revenue'        // incoming payment — not yet categorised
-  | 'refund'         // incoming payment that fully refunds a prior debit
-  | 'partial_refund';// incoming payment that partially refunds a prior debit
+  | 'refund'          // incoming payment that fully refunds a prior debit
+  | 'partial_refund'  // incoming payment that partially refunds a prior debit
+  | 'net_settlement'; // incoming payment where OTA/platform deducted fees before remitting
 
 export const IGNORE_CATEGORIES = [
   { id: 'salary',   label: 'Salary / wages' },
@@ -45,6 +46,10 @@ export interface BankTransaction {
   invoiceId?: string;
   /** BankTransaction.id of the debit being refunded — set when state === 'refund' | 'partial_refund' */
   linkedTransactionId?: string;
+  /** Total guest-facing amount before OTA deducted fees — set when state === 'net_settlement' */
+  grossAmount?: number;
+  /** SupplierInvoice ids deducted from this settlement — set when state === 'net_settlement' */
+  deductedInvoiceIds?: string[];
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
   ignoreCategory?: IgnoreCategoryId;
   ignoreNote?: string;

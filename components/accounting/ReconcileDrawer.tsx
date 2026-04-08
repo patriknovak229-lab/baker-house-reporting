@@ -74,7 +74,7 @@ function Detail({ label, value }: { label: string; value?: string | null }) {
 }
 
 type DebitMode  = 'match' | 'ignore' | 'non_deductible';
-type CreditMode = 'note' | 'refund' | 'partial_refund';
+type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement';
 
 export default function ReconcileDrawer({ transaction: tx, transactions, invoices, onSave, onClose }: Props) {
   const isCredit  = tx.direction === 'credit';
@@ -90,13 +90,21 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
 
   // ── Credit state ──────────────────────────────────────────────────────────
   const initialCreditMode: CreditMode =
-    tx.state === 'refund' ? 'refund' :
-    tx.state === 'partial_refund' ? 'partial_refund' : 'note';
+    tx.state === 'refund'          ? 'refund' :
+    tx.state === 'partial_refund'  ? 'partial_refund' :
+    tx.state === 'net_settlement'  ? 'net_settlement' : 'note';
 
   const [creditMode, setCreditMode]            = useState<CreditMode>(initialCreditMode);
   const [revenueNote, setRevenueNote]          = useState(tx.ignoreNote ?? '');
   const [selectedDebitId, setSelectedDebitId]  = useState(tx.linkedTransactionId ?? '');
   const [debitSearch, setDebitSearch]          = useState('');
+  const [settlementInvoiceIds, setSettlementInvoiceIds] = useState<Set<string>>(
+    new Set(tx.deductedInvoiceIds ?? []),
+  );
+  const [settlementGross, setSettlementGross]  = useState(
+    tx.grossAmount != null ? String(tx.grossAmount) : String(tx.amount),
+  );
+  const [settlementSearch, setSettlementSearch] = useState('');
 
   const [saving, setSaving] = useState(false);
 
@@ -110,6 +118,17 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
     })
     .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate)),
   [invoices, tx.invoiceId, invoiceSearch]);
+
+  // ── Candidate invoices for net settlement ────────────────────────────────
+  const settlementCandidates = useMemo(() => invoices
+    .filter((inv) => inv.status === 'pending' || (tx.deductedInvoiceIds ?? []).includes(inv.id))
+    .filter((inv) => {
+      if (!settlementSearch) return true;
+      const q = settlementSearch.toLowerCase();
+      return inv.supplierName.toLowerCase().includes(q) || inv.invoiceNumber.toLowerCase().includes(q);
+    })
+    .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate)),
+  [invoices, tx.deductedInvoiceIds, settlementSearch]);
 
   // ── Candidate debits for refund linking ──────────────────────────────────
   const candidateDebits = useMemo(() => transactions
@@ -143,6 +162,12 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
       if (isCredit) {
         if (creditMode === 'note') {
           body = { action: 'note', note: revenueNote };
+        } else if (creditMode === 'net_settlement') {
+          body = {
+            action: 'net_settlement',
+            deductedInvoiceIds: [...settlementInvoiceIds],
+            grossAmount: parseFloat(settlementGross) || undefined,
+          };
         } else {
           body = {
             action: 'refund',
@@ -247,12 +272,78 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
           {isCredit && (
             <>
               <div className="flex border-b border-gray-100 flex-shrink-0">
-                <button onClick={() => setCreditMode('note')}          className={tabClass(creditMode === 'note')}>Note</button>
-                <button onClick={() => setCreditMode('refund')}        className={tabClass(creditMode === 'refund')}>Refund</button>
-                <button onClick={() => setCreditMode('partial_refund')}className={tabClass(creditMode === 'partial_refund')}>Partial refund</button>
+                <button onClick={() => setCreditMode('note')}           className={tabClass(creditMode === 'note')}>Note</button>
+                <button onClick={() => setCreditMode('net_settlement')} className={tabClass(creditMode === 'net_settlement')}>Net settlement</button>
+                <button onClick={() => setCreditMode('refund')}         className={tabClass(creditMode === 'refund')}>Refund</button>
+                <button onClick={() => setCreditMode('partial_refund')} className={tabClass(creditMode === 'partial_refund')}>Partial</button>
               </div>
 
               <div className="px-5 py-4 space-y-4">
+                {creditMode === 'net_settlement' && (
+                  <>
+                    <p className="text-xs text-gray-500">
+                      Use when an OTA (Booking.com, Airbnb, etc.) deducts their commission before remitting.
+                      Select the fee invoices that were deducted — they will be marked reconciled against this payment.
+                    </p>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Gross amount received from guests (optional)
+                      </label>
+                      <input
+                        type="number"
+                        value={settlementGross}
+                        onChange={(e) => setSettlementGross(e.target.value)}
+                        placeholder={String(tx.amount)}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                      <p className="text-xs text-gray-400 mt-1">
+                        Net received: {formatAmount(tx.amount)} · Fees: {formatAmount(
+                          Math.max(0, (parseFloat(settlementGross) || tx.amount) - tx.amount)
+                        )}
+                      </p>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Search fee invoice…"
+                      value={settlementSearch}
+                      onChange={(e) => setSettlementSearch(e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                    <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                      {settlementCandidates.length === 0 ? (
+                        <p className="text-xs text-gray-400 text-center py-4">No pending invoices found.</p>
+                      ) : settlementCandidates.map((inv) => {
+                        const checked = settlementInvoiceIds.has(inv.id);
+                        return (
+                          <label key={inv.id}
+                            className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${checked ? 'border-cyan-300 bg-cyan-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                            <input type="checkbox"
+                              checked={checked}
+                              onChange={() => setSettlementInvoiceIds((prev) => {
+                                const next = new Set(prev);
+                                checked ? next.delete(inv.id) : next.add(inv.id);
+                                return next;
+                              })}
+                              className="mt-0.5 text-cyan-600 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-gray-800 truncate">{inv.supplierName}</p>
+                              <p className="text-xs text-gray-500">{inv.invoiceNumber} · {inv.invoiceDate}</p>
+                            </div>
+                            <p className="text-sm font-medium text-gray-800 whitespace-nowrap flex-shrink-0">
+                              {formatAmount(inv.amountCZK, inv.invoiceCurrency)}
+                            </p>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {settlementInvoiceIds.size > 0 && (
+                      <p className="text-xs text-cyan-700 font-medium">
+                        {settlementInvoiceIds.size} invoice{settlementInvoiceIds.size !== 1 ? 's' : ''} selected
+                      </p>
+                    )}
+                  </>
+                )}
+
                 {creditMode === 'note' && (
                   <>
                     <p className="text-xs text-gray-500">

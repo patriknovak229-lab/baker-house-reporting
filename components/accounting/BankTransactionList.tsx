@@ -23,6 +23,7 @@ const STATE_BADGE: Record<BankTransactionState, { label: string; className: stri
   revenue:        { label: 'Revenue',        className: 'bg-indigo-100 text-indigo-600'  },
   refund:         { label: 'Refund',         className: 'bg-teal-100 text-teal-700'      },
   partial_refund: { label: 'Part. refund',   className: 'bg-teal-50 text-teal-600'       },
+  net_settlement: { label: 'Net settlement', className: 'bg-cyan-100 text-cyan-700'      },
 };
 
 function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: SortDir }) {
@@ -119,7 +120,12 @@ export default function BankTransactionList({ transactions, allTransactions, inv
                   {tx.variableSymbol ?? '—'}
                 </td>
                 <td className="px-4 py-3 hidden md:table-cell">
-                  {linkedInvoice ? (
+                  {tx.state === 'net_settlement' ? (
+                    <span className="text-xs text-cyan-700">
+                      {(tx.deductedInvoiceIds?.length ?? 0)} fee{(tx.deductedInvoiceIds?.length ?? 0) !== 1 ? 's' : ''} deducted
+                      {tx.grossAmount != null && <span className="text-gray-400"> · gross {formatCurrency(tx.grossAmount)}</span>}
+                    </span>
+                  ) : linkedInvoice ? (
                     <span className="text-xs text-gray-700">
                       {linkedInvoice.invoiceNumber} · {linkedInvoice.supplierName}
                     </span>

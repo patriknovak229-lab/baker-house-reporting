@@ -27,6 +27,7 @@ const FILTERS: { value: FilterState; label: string }[] = [
   { value: 'unmatched',     label: 'Unmatched costs' },
   { value: 'revenue',       label: 'Unmatched revenue' },
   { value: 'reconciled',    label: 'Reconciled' },
+  { value: 'net_settlement',label: 'Net settlements' },
   { value: 'refund',        label: 'Refunds' },
   { value: 'partial_refund',label: 'Partial refunds' },
   { value: 'ignored',       label: 'Ignored' },
@@ -135,10 +136,29 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
     if (updated.state === 'reconciled' && updated.invoiceId) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);
       if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
+    } else if (updated.state === 'net_settlement') {
+      // Mark each deducted invoice as reconciled in parent state
+      for (const invId of updated.deductedInvoiceIds ?? []) {
+        const inv = invoices.find((i) => i.id === invId);
+        if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
+      }
+      // Un-reconcile any invoices that were previously deducted but are no longer
+      const prev = transactions.find((t) => t.id === updated.id);
+      for (const prevId of prev?.deductedInvoiceIds ?? []) {
+        if (!(updated.deductedInvoiceIds ?? []).includes(prevId)) {
+          const inv = invoices.find((i) => i.id === prevId);
+          if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+        }
+      }
     } else if (updated.state === 'unmatched' || updated.state === 'ignored' || updated.state === 'non_deductible' || updated.state === 'revenue') {
       const prev = transactions.find((t) => t.id === updated.id);
       if (prev?.invoiceId) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
+        if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+      }
+      // Also un-reconcile previously deducted invoices
+      for (const prevId of prev?.deductedInvoiceIds ?? []) {
+        const inv = invoices.find((i) => i.id === prevId);
         if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
       }
     }

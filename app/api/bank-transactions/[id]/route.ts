@@ -20,7 +20,8 @@ type UnmatchBody        = { action: 'unmatch' };
 type NoteBody           = { action: 'note'; note: string };
 type RefundBody         = { action: 'refund'; linkedTransactionId?: string; partial: boolean };
 type NonDeductibleBody  = { action: 'non_deductible'; ignoreNote?: string };
-type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody;
+type NetSettlementBody  = { action: 'net_settlement'; deductedInvoiceIds: string[]; grossAmount?: number };
+type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody;
 
 export async function PUT(
   request: Request,
@@ -125,6 +126,40 @@ export async function PUT(
     tx.ignoreNote = body.ignoreNote || undefined;
     tx.ignoredAt = now;
 
+  } else if (body.action === 'net_settlement') {
+    // Un-reconcile any previously linked invoices (reconcile action path)
+    if (tx.invoiceId) {
+      const prevIdx = invoices.findIndex((i) => i.id === tx.invoiceId);
+      if (prevIdx !== -1) {
+        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+      }
+    }
+    // Un-reconcile any previously deducted invoices
+    for (const prevInvId of tx.deductedInvoiceIds ?? []) {
+      const prevIdx = invoices.findIndex((i) => i.id === prevInvId);
+      if (prevIdx !== -1) {
+        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+      }
+    }
+
+    tx.state = 'net_settlement';
+    tx.grossAmount = body.grossAmount ?? undefined;
+    tx.deductedInvoiceIds = body.deductedInvoiceIds.length > 0 ? body.deductedInvoiceIds : undefined;
+    tx.invoiceId = undefined;
+    tx.linkedTransactionId = undefined;
+    tx.ignoreCategory = undefined;
+    tx.ignoreNote = undefined;
+    tx.ignoredAt = undefined;
+    tx.reconciledAt = now;
+
+    // Mark each deducted invoice as reconciled
+    for (const invId of body.deductedInvoiceIds) {
+      const invIdx = invoices.findIndex((i) => i.id === invId);
+      if (invIdx !== -1) {
+        invoices[invIdx] = { ...invoices[invIdx], status: 'reconciled', bankTransactionId: id, reconciledAt: now };
+      }
+    }
+
   } else if (body.action === 'refund') {
     tx.state = body.partial ? 'partial_refund' : 'refund';
     tx.linkedTransactionId = body.linkedTransactionId || undefined;
@@ -137,21 +172,26 @@ export async function PUT(
     tx.ignoreNote = body.note || undefined;
 
   } else if (body.action === 'unmatch') {
+    // Un-reconcile single linked invoice (reconcile path)
     if (tx.invoiceId) {
       const prevIdx = invoices.findIndex((i) => i.id === tx.invoiceId);
       if (prevIdx !== -1) {
-        invoices[prevIdx] = {
-          ...invoices[prevIdx],
-          status: 'pending',
-          bankTransactionId: undefined,
-          reconciledAt: undefined,
-        };
+        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+      }
+    }
+    // Un-reconcile all deducted invoices (net_settlement path)
+    for (const prevInvId of tx.deductedInvoiceIds ?? []) {
+      const prevIdx = invoices.findIndex((i) => i.id === prevInvId);
+      if (prevIdx !== -1) {
+        invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
       }
     }
 
-    tx.state = 'revenue'; // credit transactions reset to revenue, not unmatched
+    tx.state = tx.direction === 'credit' ? 'revenue' : 'unmatched';
     tx.invoiceId = undefined;
     tx.linkedTransactionId = undefined;
+    tx.grossAmount = undefined;
+    tx.deductedInvoiceIds = undefined;
     tx.reconciledAt = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = undefined;
