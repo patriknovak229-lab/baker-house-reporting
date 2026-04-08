@@ -131,7 +131,33 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
   }
 
   function handleDrawerSave(updated: BankTransaction) {
-    setTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    setTransactions((prev) => {
+      const next = prev.map((t) => (t.id === updated.id ? updated : t));
+
+      // When a refund links to a debit, also update that debit in local state
+      if ((updated.state === 'refund' || updated.state === 'partial_refund') && updated.linkedTransactionId) {
+        return next.map((t) =>
+          t.id === updated.linkedTransactionId
+            ? { ...t, linkedTransactionId: updated.id, state: 'reconciled' as const, reconciledAt: updated.reconciledAt }
+            : t,
+        );
+      }
+      // When resetting a refund, restore the previously linked debit to unmatched
+      const prev_ = prev.find((t) => t.id === updated.id);
+      if (
+        (updated.state === 'revenue' || updated.state === 'unmatched') &&
+        prev_?.linkedTransactionId &&
+        (prev_?.state === 'refund' || prev_?.state === 'partial_refund')
+      ) {
+        return next.map((t) =>
+          t.id === prev_.linkedTransactionId
+            ? { ...t, linkedTransactionId: undefined, state: 'unmatched' as const, reconciledAt: undefined }
+            : t,
+        );
+      }
+
+      return next;
+    });
 
     if (updated.state === 'reconciled' && updated.invoiceId) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);

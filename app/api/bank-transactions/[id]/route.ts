@@ -161,12 +161,38 @@ export async function PUT(
     }
 
   } else if (body.action === 'refund') {
+    // If previously linked to a different debit, reset that debit first
+    if (tx.linkedTransactionId && tx.linkedTransactionId !== body.linkedTransactionId) {
+      const prevDebitIdx = transactions.findIndex((t) => t.id === tx.linkedTransactionId);
+      if (prevDebitIdx !== -1) {
+        transactions[prevDebitIdx] = {
+          ...transactions[prevDebitIdx],
+          linkedTransactionId: undefined,
+          state: 'unmatched',
+          reconciledAt: undefined,
+        };
+      }
+    }
+
     tx.state = body.partial ? 'partial_refund' : 'refund';
     tx.linkedTransactionId = body.linkedTransactionId || undefined;
     tx.invoiceId = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoredAt = undefined;
     tx.reconciledAt = now;
+
+    // Mark the linked debit as reconciled (bi-directional)
+    if (body.linkedTransactionId) {
+      const debitIdx = transactions.findIndex((t) => t.id === body.linkedTransactionId);
+      if (debitIdx !== -1) {
+        transactions[debitIdx] = {
+          ...transactions[debitIdx],
+          linkedTransactionId: id,
+          state: 'reconciled',
+          reconciledAt: now,
+        };
+      }
+    }
 
   } else if (body.action === 'note') {
     tx.ignoreNote = body.note || undefined;
@@ -184,6 +210,18 @@ export async function PUT(
       const prevIdx = invoices.findIndex((i) => i.id === prevInvId);
       if (prevIdx !== -1) {
         invoices[prevIdx] = { ...invoices[prevIdx], status: 'pending', bankTransactionId: undefined, reconciledAt: undefined };
+      }
+    }
+    // Reset linked debit (refund/partial_refund path)
+    if (tx.linkedTransactionId && (tx.state === 'refund' || tx.state === 'partial_refund')) {
+      const debitIdx = transactions.findIndex((t) => t.id === tx.linkedTransactionId);
+      if (debitIdx !== -1) {
+        transactions[debitIdx] = {
+          ...transactions[debitIdx],
+          linkedTransactionId: undefined,
+          state: 'unmatched',
+          reconciledAt: undefined,
+        };
       }
     }
 
