@@ -9,6 +9,7 @@ export interface RevenueInvoice {
   status: RevenueInvoiceStatus;
   invoiceNumber: string;       // e.g. INV-2026-001
   invoiceDate: string;         // YYYY-MM-DD
+  dueDate?: string;            // YYYY-MM-DD; falls back to invoiceDate when not set
   amountCZK: number;
 
   // issued source (from Transactions tab)

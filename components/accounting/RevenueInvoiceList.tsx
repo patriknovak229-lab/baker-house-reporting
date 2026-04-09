@@ -45,7 +45,11 @@ export default function RevenueInvoiceList({ invoices, transactions, onSelect, o
     const arr = [...invoices];
     arr.sort((a, b) => {
       let cmp = 0;
-      if (sortCol === 'date')   cmp = a.invoiceDate.localeCompare(b.invoiceDate);
+      if (sortCol === 'date') {
+        const da = a.dueDate ?? a.invoiceDate;
+        const db = b.dueDate ?? b.invoiceDate;
+        cmp = da.localeCompare(db);
+      }
       if (sortCol === 'amount') cmp = a.amountCZK - b.amountCZK;
       if (sortCol === 'client') {
         const na = (a.guestName ?? a.clientName ?? '').toLowerCase();
@@ -85,7 +89,7 @@ export default function RevenueInvoiceList({ invoices, transactions, onSelect, o
             <thead>
               <tr className="border-b border-gray-100">
                 <th className={`text-left ${thClass}`} onClick={() => toggleSort('date')}>
-                  Date <SortIcon col="date" active={sortCol} dir={sortDir} />
+                  Due date <SortIcon col="date" active={sortCol} dir={sortDir} />
                 </th>
                 <th className={`text-left ${thClass} hidden sm:table-cell`}>Invoice #</th>
                 <th className={`text-left ${thClass}`} onClick={() => toggleSort('client')}>
@@ -112,7 +116,7 @@ export default function RevenueInvoiceList({ invoices, transactions, onSelect, o
                     onClick={() => onSelect(inv)}
                     className="cursor-pointer hover:bg-gray-50 transition-colors"
                   >
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.invoiceDate)}</td>
+                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.dueDate ?? inv.invoiceDate)}</td>
                     <td className="px-4 py-3 text-gray-700 hidden sm:table-cell font-mono text-xs">{inv.invoiceNumber}</td>
                     <td className="px-4 py-3 max-w-[180px]">
                       <p className="text-gray-800 truncate">{clientLabel}</p>

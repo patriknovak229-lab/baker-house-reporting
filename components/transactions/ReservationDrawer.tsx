@@ -514,6 +514,9 @@ export default function ReservationDrawer({
   const [isMounted, setIsMounted] = useState(false);
   const [isSendingInvoice, setIsSendingInvoice] = useState(false);
   const [sendInvoiceError, setSendInvoiceError] = useState<string | null>(null);
+  const [isSavingToDrive, setIsSavingToDrive] = useState(false);
+  const [driveSaveResult, setDriveSaveResult] = useState<{ url: string; name: string } | null>(null);
+  const [driveSaveError, setDriveSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (reservation) {
@@ -521,6 +524,8 @@ export default function ReservationDrawer({
       setNotes(reservation.notes);
       setNewIssueText("");
       setNewIssueDate(new Date().toISOString().slice(0, 10));
+      setDriveSaveResult(null);
+      setDriveSaveError(null);
       if (reservation.invoiceData) {
         setInvoiceForm({ ...reservation.invoiceData });
       } else {
@@ -644,6 +649,28 @@ export default function ReservationDrawer({
         ? buildPaymentQRInfo(reservation!.reservationNumber, reservation!.price)
         : undefined;
       await printInvoice(reservation!, reservation!.invoiceData, qrInfo);
+    }
+  }
+
+  async function handleSaveToDrive() {
+    setDriveSaveError(null);
+    setIsSavingToDrive(true);
+    try {
+      const res = await fetch('/api/transactions/invoice-to-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { driveUrl: string; driveFileName: string };
+      setDriveSaveResult({ url: data.driveUrl, name: data.driveFileName });
+    } catch (err) {
+      setDriveSaveError(err instanceof Error ? err.message : 'Failed to save to Drive');
+    } finally {
+      setIsSavingToDrive(false);
     }
   }
 
@@ -1317,6 +1344,49 @@ export default function ReservationDrawer({
                     </button>
                   )}
                 </div>
+                {/* Save to Drive */}
+                <button
+                  onClick={handleSaveToDrive}
+                  disabled={isSavingToDrive}
+                  className="w-full py-2 px-3 border border-gray-200 text-gray-700 text-sm font-medium rounded-md hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+                >
+                  {isSavingToDrive ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Saving to Drive…
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                      Save to Drive
+                    </>
+                  )}
+                </button>
+                {driveSaveError && (
+                  <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+                    {driveSaveError}
+                  </p>
+                )}
+                {driveSaveResult && (
+                  <a
+                    href={driveSaveResult.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2.5 py-1.5 hover:underline"
+                  >
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span className="truncate">Saved — {driveSaveResult.name}</span>
+                  </a>
+                )}
+
                 <button
                   onClick={() => onUpdate({ ...reservation!, invoiceStatus: "Not Issued" })}
                   className="w-full py-1.5 px-3 border border-gray-200 text-gray-500 text-xs font-medium rounded-md hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors"
