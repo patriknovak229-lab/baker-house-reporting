@@ -167,17 +167,38 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);
       if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
     } else if (updated.state === 'net_settlement') {
-      // Mark each deducted invoice as reconciled in parent state
+      // Add this tx to each deducted invoice's client-side settlementTransactionIds
       for (const invId of updated.deductedInvoiceIds ?? []) {
         const inv = invoices.find((i) => i.id === invId);
-        if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
+        if (inv) {
+          const existing = inv.settlementTransactionIds ?? [];
+          const merged   = existing.includes(updated.id) ? existing : [...existing, updated.id];
+          onInvoiceUpdate({
+            ...inv,
+            status: 'reconciled',
+            bankTransactionId: inv.bankTransactionId ?? updated.id,
+            reconciledAt: inv.reconciledAt ?? updated.reconciledAt,
+            settlementTransactionIds: merged,
+          });
+        }
       }
-      // Un-reconcile invoices that were previously deducted but are no longer in the list
+      // Un-reconcile invoices removed from the list
       const prev = transactions.find((t) => t.id === updated.id);
       for (const prevId of prev?.deductedInvoiceIds ?? []) {
-        if (!(updated.deductedInvoiceIds ?? []).includes(prevId) && !isStillSettledElsewhere(prevId, updated.id)) {
+        if (!(updated.deductedInvoiceIds ?? []).includes(prevId)) {
           const inv = invoices.find((i) => i.id === prevId);
-          if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+          if (!inv) continue;
+          const remaining = (inv.settlementTransactionIds ?? []).filter((tid) => tid !== updated.id);
+          if (remaining.length > 0) {
+            // Still covered by other settlements — just remove this tx from the array
+            onInvoiceUpdate({
+              ...inv,
+              settlementTransactionIds: remaining,
+              bankTransactionId: inv.bankTransactionId === updated.id ? remaining[0] : inv.bankTransactionId,
+            });
+          } else if (!isStillSettledElsewhere(prevId, updated.id)) {
+            onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined });
+          }
         }
       }
     } else if (updated.state === 'unmatched' || updated.state === 'ignored' || updated.state === 'non_deductible' || updated.state === 'revenue') {
@@ -186,11 +207,19 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
         if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
       }
-      // Un-reconcile previously deducted invoices — but only if no other settlement still covers them
+      // Un-reconcile previously deducted invoices — only reset to pending if no other settlement covers them
       for (const prevId of prev?.deductedInvoiceIds ?? []) {
-        if (!isStillSettledElsewhere(prevId, updated.id)) {
-          const inv = invoices.find((i) => i.id === prevId);
-          if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+        const inv = invoices.find((i) => i.id === prevId);
+        if (!inv) continue;
+        const remaining = (inv.settlementTransactionIds ?? []).filter((tid) => tid !== updated.id);
+        if (remaining.length > 0) {
+          onInvoiceUpdate({
+            ...inv,
+            settlementTransactionIds: remaining,
+            bankTransactionId: inv.bankTransactionId === updated.id ? remaining[0] : inv.bankTransactionId,
+          });
+        } else if (!isStillSettledElsewhere(prevId, updated.id)) {
+          onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined });
         }
       }
     }
