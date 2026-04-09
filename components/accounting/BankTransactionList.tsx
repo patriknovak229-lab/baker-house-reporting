@@ -26,6 +26,11 @@ const STATE_BADGE: Record<BankTransactionState, { label: string; className: stri
   net_settlement: { label: 'Net settlement', className: 'bg-cyan-100 text-cyan-700'      },
 };
 
+function getRevenueBadgeLabel(tx: { state: string; revenueInvoiceId?: string }): string {
+  if (tx.state === 'revenue' && tx.revenueInvoiceId) return 'Revenue (linked)';
+  return STATE_BADGE['revenue'].label;
+}
+
 function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: SortDir }) {
   if (col !== active) return <span className="ml-1 text-gray-300">↕</span>;
   return <span className="ml-1 text-indigo-500">{dir === 'asc' ? '↑' : '↓'}</span>;
@@ -93,6 +98,10 @@ export default function BankTransactionList({ transactions, allTransactions, inv
               ? IGNORE_CATEGORIES.find((c) => c.id === tx.ignoreCategory)?.label
               : undefined;
 
+            const isRevenuLinked = tx.state === 'revenue' && !!tx.revenueInvoiceId;
+            const revenueBadgeLabel = tx.state === 'revenue' ? getRevenueBadgeLabel(tx) : badge.label;
+            const revenueBadgeClass = isRevenuLinked ? 'bg-indigo-200 text-indigo-700' : badge.className;
+
             return (
               <tr
                 key={tx.id}
@@ -125,6 +134,10 @@ export default function BankTransactionList({ transactions, allTransactions, inv
                       {(tx.deductedInvoiceIds?.length ?? 0)} fee{(tx.deductedInvoiceIds?.length ?? 0) !== 1 ? 's' : ''} deducted
                       {tx.grossAmount != null && <span className="text-gray-400"> · gross {formatCurrency(tx.grossAmount)}</span>}
                     </span>
+                  ) : tx.revenueInvoiceId ? (
+                    <span className="text-xs text-indigo-600 font-medium">
+                      Revenue invoice linked
+                    </span>
                   ) : linkedInvoice ? (
                     <span className="text-xs text-gray-700">
                       {linkedInvoice.invoiceNumber} · {linkedInvoice.supplierName}
@@ -142,8 +155,8 @@ export default function BankTransactionList({ transactions, allTransactions, inv
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${badge.className}`}>
-                    {badge.label}
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${tx.state === 'revenue' ? revenueBadgeClass : badge.className}`}>
+                    {tx.state === 'revenue' ? revenueBadgeLabel : badge.label}
                   </span>
                 </td>
               </tr>

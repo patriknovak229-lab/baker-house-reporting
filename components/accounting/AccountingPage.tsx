@@ -18,6 +18,8 @@ import { formatCurrency } from '@/utils/formatters';
 import { prepareImageFile } from '@/utils/imageCompressor';
 import { textColorFor } from '@/utils/categoryColors';
 import BankPage from './BankPage';
+import RevenuePage from './RevenuePage';
+import type { BankTransaction } from '@/types/bankTransaction';
 
 const PHASES = [
   { id: 1, label: 'Costs', description: 'Supplier invoices' },
@@ -33,6 +35,7 @@ interface DrawerState {
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
   extractionFailed?: boolean;
+  duplicateOf?: SupplierInvoice;   // set when API returned 409 Conflict
 }
 
 interface GmailStatus {
@@ -149,6 +152,7 @@ function canAutoSave(extracted: ExtractedInvoiceData): boolean {
 export default function AccountingPage() {
   const [activePhase, setActivePhase] = useState(1);
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
@@ -159,6 +163,8 @@ export default function AccountingPage() {
   const [showWhitelistManager, setShowWhitelistManager] = useState(false);
   const [whitelist, setWhitelist] = useState<WhitelistedSupplier[]>([]);
   const [autoSavedEntries, setAutoSavedEntries] = useState<AutoSavedEntry[]>([]);
+  const [queueRunning, setQueueRunning] = useState(false);
+  const abortQueueRef = useRef(false);
   const { categories } = useCategories();
   const [filters, setFilters] = useState({
     status: 'all' as 'all' | SupplierInvoiceStatus,
@@ -214,16 +220,24 @@ export default function AccountingPage() {
     } catch { /* non-fatal */ }
   }, []);
 
+  const loadBankTransactions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/bank-transactions');
+      if (res.ok) setBankTransactions(await res.json());
+    } catch { /* non-fatal */ }
+  }, []);
+
   useEffect(() => {
     loadInvoices();
     loadGmailStatus();
     loadWhitelist();
+    loadBankTransactions();
     const params = new URLSearchParams(window.location.search);
     if (params.get('gmailConnected')) {
       window.history.replaceState({}, '', window.location.pathname);
       loadGmailStatus();
     }
-  }, [loadInvoices, loadGmailStatus, loadWhitelist]);
+  }, [loadInvoices, loadGmailStatus, loadWhitelist, loadBankTransactions]);
 
   async function handleDisconnectGmail() {
     if (!confirm('Disconnect the invoice Gmail account?')) return;
@@ -286,6 +300,20 @@ export default function AccountingPage() {
       body: JSON.stringify(invoice),
     });
 
+    if (res.status === 409) {
+      // Duplicate detected — open drawer so user can review
+      const data = await res.json() as { code: string; existing: SupplierInvoice };
+      setDrawerState({
+        extracted,
+        file,
+        existing: null,
+        sourceType: invoiceSourceType,
+        gmailMessageId,
+        duplicateOf: data.existing,
+      });
+      return;
+    }
+
     if (res.ok) {
       const saved = await res.json() as SupplierInvoice;
       setInvoices((prev) => [saved, ...prev]);
@@ -298,7 +326,15 @@ export default function AccountingPage() {
   }
 
   async function processNextInQueue(remaining: QueueItem[]) {
-    if (remaining.length === 0) { setExtracting(false); return; }
+    if (remaining.length === 0) { setExtracting(false); setQueueRunning(false); return; }
+    // Abort requested: clear queue and stop
+    if (abortQueueRef.current) {
+      abortQueueRef.current = false;
+      setQueueRunning(false);
+      setQueue([]);
+      setExtracting(false);
+      return;
+    }
     const [next, ...rest] = remaining;
     setQueue(rest);
     setExtracting(true);
@@ -332,6 +368,8 @@ export default function AccountingPage() {
   function handleProcessBatch(items: QueueItem[]) {
     setShowImportModal(false);
     setAutoSavedEntries([]);
+    abortQueueRef.current = false;
+    setQueueRunning(true);
     processNextInQueue(items);
   }
 
@@ -357,23 +395,34 @@ export default function AccountingPage() {
     }
   }
 
-  async function persistInvoice(inv: SupplierInvoice): Promise<void> {
+  async function persistInvoice(inv: SupplierInvoice, force = false): Promise<{ ok: boolean; dupOf?: SupplierInvoice }> {
     const isNew = !invoices.some((e) => e.id === inv.id);
     const method = isNew ? 'POST' : 'PUT';
     const url = isNew ? '/api/supplier-invoices' : `/api/supplier-invoices/${inv.id}`;
+    const body = force ? { ...inv, force: true } : inv;
     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(inv),
+      body: JSON.stringify(body),
     });
+    if (res.status === 409) {
+      const data = await res.json() as { code: string; existing: SupplierInvoice };
+      return { ok: false, dupOf: data.existing };
+    }
     if (res.ok) {
       const saved = await res.json() as SupplierInvoice;
       setInvoices((prev) => isNew ? [saved, ...prev] : prev.map((e) => (e.id === saved.id ? saved : e)));
     }
+    return { ok: res.ok };
   }
 
-  async function handleSave(inv: SupplierInvoice) {
-    await persistInvoice(inv);
+  async function handleSave(inv: SupplierInvoice, force = false) {
+    const result = await persistInvoice(inv, force);
+    if (!result.ok && result.dupOf) {
+      // Keep drawer open, show duplicate warning
+      setDrawerState((prev) => prev ? { ...prev, duplicateOf: result.dupOf } : prev);
+      return;
+    }
     setDrawerState(null);
     if (queue.length > 0) processNextInQueue(queue);
   }
@@ -448,6 +497,10 @@ export default function AccountingPage() {
     setInvoices((prev) => prev.map((inv) => (inv.id === updated.id ? updated : inv)));
   }
 
+  function handleBankTxUpdate(updated: BankTransaction) {
+    setBankTransactions((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+  }
+
   const now = new Date();
 
   // Time-period helpers (applied to filteredInvoices so category/status/search filters are respected)
@@ -480,7 +533,7 @@ export default function AccountingPage() {
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
         {PHASES.map((phase) => {
-          const enabled = phase.id <= 2;
+          const enabled = phase.id <= 3;
           const active = activePhase === phase.id;
           return (
             <div key={phase.id}
@@ -508,6 +561,11 @@ export default function AccountingPage() {
       {/* Phase 2 — Bank */}
       {activePhase === 2 && (
         <BankPage invoices={invoices} onInvoiceUpdate={handleInvoiceUpdate} />
+      )}
+
+      {/* Phase 3 — Revenue */}
+      {activePhase === 3 && (
+        <RevenuePage bankTransactions={bankTransactions} onBankTxUpdate={handleBankTxUpdate} />
       )}
 
       {/* Phase 1 — Costs */}
@@ -731,6 +789,14 @@ export default function AccountingPage() {
             <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
             <p className="text-sm font-medium text-gray-700">Extracting with Claude…</p>
             {queue.length > 0 && <p className="text-xs text-gray-400">{queue.length} more remaining</p>}
+            {queueRunning && (
+              <button
+                onClick={() => { abortQueueRef.current = true; }}
+                className="text-xs text-red-500 hover:text-red-700 underline mt-1"
+              >
+                Stop after current file
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -743,6 +809,7 @@ export default function AccountingPage() {
           sourceType={drawerState.sourceType}
           gmailMessageId={drawerState.gmailMessageId}
           extractionFailed={drawerState.extractionFailed}
+          duplicateOf={drawerState.duplicateOf}
           onSave={handleSave}
           onSaveAndWhitelist={drawerState.existing ? undefined : handleSaveAndWhitelist}
           onClose={handleDrawerClose}

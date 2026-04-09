@@ -517,7 +517,7 @@ export default function ReservationDrawer({
 
   useEffect(() => {
     if (reservation) {
-      setIncludePaymentQR(false);
+      setIncludePaymentQR(reservation.includeQR ?? false);
       setNotes(reservation.notes);
       setNewIssueText("");
       setNewIssueDate(new Date().toISOString().slice(0, 10));
@@ -581,12 +581,38 @@ export default function ReservationDrawer({
     onUpdate({ ...reservation!, issues });
   }
 
+  /** Upsert a revenue invoice for a QR-enabled issued invoice */
+  async function upsertRevenueInvoice(res: typeof reservation) {
+    if (!res || !res.includeQR) return;
+    try {
+      // Deterministic id: one revenue invoice per reservation
+      const id = `rev-${res.reservationNumber}`;
+      const invoiceNumber = generateInvoiceNumber(res.reservationNumber);
+      await fetch('/api/revenue-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          sourceType: 'issued',
+          category: 'accommodation_direct',
+          invoiceNumber,
+          invoiceDate: new Date().toISOString().slice(0, 10),
+          amountCZK: res.price,
+          reservationNumber: res.reservationNumber,
+          guestName: `${res.firstName} ${res.lastName}`.trim(),
+        }),
+      });
+    } catch { /* non-fatal */ }
+  }
+
   function handleGenerateInvoice() {
-    onUpdate({
+    const updated = {
       ...reservation!,
       invoiceData: invoiceForm,
-      invoiceStatus: "Issued",
-    });
+      invoiceStatus: "Issued" as const,
+    };
+    onUpdate(updated);
+    upsertRevenueInvoice(updated);
   }
 
   async function handleSendInvoice() {
@@ -602,7 +628,9 @@ export default function ReservationDrawer({
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
-      onUpdate({ ...reservation!, invoiceStatus: "Sent" });
+      const updated = { ...reservation!, invoiceStatus: "Sent" as const };
+      onUpdate(updated);
+      upsertRevenueInvoice(updated);
     } catch (err) {
       setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send invoice');
     } finally {
@@ -1165,7 +1193,11 @@ export default function ReservationDrawer({
 
                 {/* Payment QR toggle */}
                 <button
-                  onClick={() => setIncludePaymentQR((v) => !v)}
+                  onClick={() => {
+                    const next = !includePaymentQR;
+                    setIncludePaymentQR(next);
+                    onUpdate({ ...reservation!, includeQR: next });
+                  }}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
                     includePaymentQR
                       ? "bg-indigo-50 border-indigo-300 text-indigo-700"

@@ -16,7 +16,8 @@ interface Props {
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
   extractionFailed?: boolean;
-  onSave: (inv: SupplierInvoice) => void;
+  duplicateOf?: SupplierInvoice | null;   // set when server returned 409
+  onSave: (inv: SupplierInvoice, force?: boolean) => void;
   onSaveAndWhitelist?: (inv: SupplierInvoice) => void;
   onClose: () => void;
   queueRemaining?: number;
@@ -57,6 +58,7 @@ export default function InvoiceReviewDrawer({
   sourceType,
   gmailMessageId,
   extractionFailed = false,
+  duplicateOf = null,
   onSave,
   onSaveAndWhitelist,
   onClose,
@@ -203,12 +205,12 @@ export default function InvoiceReviewDrawer({
     };
   }
 
-  async function handleSave() {
+  async function handleSave(force = false) {
     if (!validate()) return;
     setSaving(true);
     setError(null);
     const invoice = await buildInvoice();
-    onSave(invoice);
+    onSave(invoice, force);
     setSaving(false);
   }
 
@@ -244,6 +246,20 @@ export default function InvoiceReviewDrawer({
 
         {/* Form */}
         <div className="flex-1 px-6 py-5 space-y-4">
+          {duplicateOf && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 space-y-2">
+              <p className="font-semibold">Duplicate detected</p>
+              <p>An invoice from <span className="font-medium">{duplicateOf.supplierName}</span> #{duplicateOf.invoiceNumber} already exists (saved {new Date(duplicateOf.createdAt).toLocaleDateString('cs-CZ')}).</p>
+              <div className="flex gap-2 mt-1">
+                <button onClick={onClose} className="px-3 py-1.5 text-xs font-medium border border-amber-300 rounded-md hover:bg-amber-100">
+                  Skip
+                </button>
+                <button onClick={() => handleSave(true)} disabled={saving} className="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50">
+                  Save anyway
+                </button>
+              </div>
+            </div>
+          )}
           {!isEdit && extractionFailed && (
             <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-700">
               Claude couldn&apos;t read this document — please fill in the fields manually.

@@ -68,5 +68,6 @@ export interface Reservation {
   ratingStatus: RatingStatus;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
+  includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this
   issues?: Issue[]; // locally managed task/issue log; undefined = no issues
 }

@@ -35,15 +35,29 @@ export async function POST(request: Request) {
   const redis = getRedis();
   if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
-  const body = await request.json() as SupplierInvoice;
+  const body = await request.json() as SupplierInvoice & { force?: boolean };
   if (!body.id || !body.supplierName || !body.invoiceNumber) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
   const raw = await redis.get(KEY);
   const invoices = (Array.isArray(raw) ? raw : []) as SupplierInvoice[];
-  invoices.push(body);
+
+  // Duplicate check (skipped when force === true or when updating an existing invoice by same id)
+  if (!body.force) {
+    const norm = (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ');
+    const dup = invoices.find(
+      (i) => i.id !== body.id &&
+             norm(i.invoiceNumber) === norm(body.invoiceNumber) &&
+             norm(i.supplierName)  === norm(body.supplierName),
+    );
+    if (dup) return NextResponse.json({ code: 'duplicate', existing: dup }, { status: 409 });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { force: _force, ...invoiceBody } = body;
+  invoices.push(invoiceBody as SupplierInvoice);
   await redis.set(KEY, invoices);
 
-  return NextResponse.json(body, { status: 201 });
+  return NextResponse.json(invoiceBody, { status: 201 });
 }

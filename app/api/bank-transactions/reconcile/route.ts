@@ -14,17 +14,28 @@ function getRedis(): Redis | null {
   return new Redis({ url, token });
 }
 
-function normStr(s: string) { return s.toLowerCase().trim(); }
+/** Word-overlap name score (0–4): 4=exact, 3=mutual substring, 2=one-directional, 1=word overlap */
+function calcNameScore(txCounterparty: string, invSupplier: string): number {
+  const a = txCounterparty.toLowerCase().trim();
+  const b = invSupplier.toLowerCase().trim();
+  if (!a || !b) return 0;
+  if (a === b) return 4;
+  if (a.includes(b) && b.includes(a)) return 3;
+  if (a.includes(b) || b.includes(a)) return 2;
+  const aw = a.split(/\s+/), bw = b.split(/\s+/);
+  const overlap = aw.filter((w) => bw.some((bwi) => bwi.includes(w) || w.includes(bwi))).length;
+  return overlap > 0 ? 1 : 0;
+}
 
 function isConfidentMatch(tx: BankTransaction, inv: SupplierInvoice): boolean {
   const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
   const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
-  if (Math.abs(compareTo - inv.amountCZK) >= 1) return false;
-  const txName  = tx.counterpartyName ? normStr(tx.counterpartyName) : '';
-  const invName = normStr(inv.supplierName);
-  const nameMatch = txName && (txName.includes(invName) || invName.includes(txName));
-  const vsMatch   = tx.variableSymbol && normStr(tx.variableSymbol) === normStr(inv.invoiceNumber);
-  return !!(nameMatch || vsMatch);
+  const tolerance = Math.max(2, inv.amountCZK * 0.01);
+  if (Math.abs(compareTo - inv.amountCZK) > tolerance) return false;
+  const ns = calcNameScore(tx.counterpartyName ?? '', inv.supplierName);
+  const vsMatch = tx.variableSymbol &&
+    tx.variableSymbol.toLowerCase().trim() === inv.invoiceNumber.toLowerCase().trim();
+  return ns >= 2 || !!vsMatch;
 }
 
 export async function POST(request: Request) {

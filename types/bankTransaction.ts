@@ -50,6 +50,8 @@ export interface BankTransaction {
   grossAmount?: number;
   /** SupplierInvoice ids deducted from this settlement — set when state === 'net_settlement' */
   deductedInvoiceIds?: string[];
+  /** RevenueInvoice.id — set when this credit is linked to a revenue invoice */
+  revenueInvoiceId?: string;
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
   ignoreCategory?: IgnoreCategoryId;
   ignoreNote?: string;
