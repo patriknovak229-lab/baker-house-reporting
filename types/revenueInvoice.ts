@@ -23,5 +23,10 @@ export interface RevenueInvoice {
   bankTransactionId?: string;
   reconciledAt?: string;       // ISO timestamp
 
+  // Google Drive (manual uploads)
+  driveFileId?: string;
+  driveFileName?: string;
+  driveUrl?: string;
+
   createdAt: string;           // ISO timestamp
 }

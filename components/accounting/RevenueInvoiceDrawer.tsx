@@ -1,8 +1,9 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import type { RevenueInvoice, RevenueInvoiceCategory } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
 import { formatCurrency, formatDate } from '@/utils/formatters';
+import { prepareImageFile } from '@/utils/imageCompressor';
 
 interface Props {
   /** null = add manual mode */
@@ -29,6 +30,9 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
     description:   '',
     category:      'other_services' as RevenueInvoiceCategory,
   });
+  const [file, setFile] = useState<File | null>(null);
+  const [driveUploading, setDriveUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
 
@@ -67,8 +71,9 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
 
     setSaving(true);
     try {
+      const id = crypto.randomUUID();
       const body = {
-        id: crypto.randomUUID(),
+        id,
         sourceType: 'manual' as const,
         category: form.category,
         invoiceNumber: form.invoiceNumber.trim(),
@@ -86,7 +91,30 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
         setFormError('Failed to save — please try again');
         return;
       }
-      const saved = await res.json() as RevenueInvoice;
+      let saved = await res.json() as RevenueInvoice;
+
+      // Drive upload (non-blocking error — invoice is already saved)
+      if (file) {
+        setDriveUploading(true);
+        try {
+          const compressed = await prepareImageFile(file);
+          const fd = new FormData();
+          fd.append('file', compressed);
+          fd.append('invoiceId', id);
+          fd.append('clientName', form.clientName.trim());
+          fd.append('invoiceNumber', form.invoiceNumber.trim());
+          fd.append('amountCZK', String(Math.round(amount)));
+          fd.append('invoiceDate', form.invoiceDate);
+          const driveRes = await fetch('/api/revenue-invoices/drive-upload', { method: 'POST', body: fd });
+          if (driveRes.ok) {
+            const d = await driveRes.json() as { invoice?: RevenueInvoice };
+            if (d.invoice) saved = d.invoice;
+          }
+        } catch { /* non-fatal */ } finally {
+          setDriveUploading(false);
+        }
+      }
+
       onUpdate(saved);
       onClose();
     } finally {
@@ -249,6 +277,44 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
                   />
                 </div>
+
+                {/* File upload */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Invoice document (optional — PDF or image)
+                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,image/*,.heic,.heif"
+                    className="hidden"
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  />
+                  {file ? (
+                    <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg">
+                      <span className="text-xs text-indigo-700 truncate max-w-[220px]">{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
+                        className="text-xs text-gray-400 hover:text-gray-600 ml-2 flex-shrink-0"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-dashed border-gray-300 rounded-lg text-sm text-gray-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                      </svg>
+                      Attach document
+                    </button>
+                  )}
+                </div>
               </div>
 
               {formError && (
@@ -298,6 +364,20 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
                     <div className="col-span-2">
                       <p className="text-xs text-gray-400">Description</p>
                       <p className="text-gray-600 text-xs">{invoice.description}</p>
+                    </div>
+                  )}
+                  {invoice.driveUrl && (
+                    <div className="col-span-2">
+                      <p className="text-xs text-gray-400">Document</p>
+                      <a
+                        href={invoice.driveUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-indigo-600 hover:underline truncate block"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        📄 {invoice.driveFileName ?? 'View in Drive'}
+                      </a>
                     </div>
                   )}
                 </div>
@@ -402,10 +482,10 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
             </button>
             <button
               onClick={handleAddManual}
-              disabled={saving}
+              disabled={saving || driveUploading}
               className="flex-1 px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
             >
-              {saving ? 'Saving…' : 'Save invoice'}
+              {driveUploading ? 'Uploading to Drive…' : saving ? 'Saving…' : file ? 'Save & push to Drive' : 'Save invoice'}
             </button>
           </div>
         )}

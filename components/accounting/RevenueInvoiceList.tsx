@@ -136,6 +136,17 @@ export default function RevenueInvoiceList({ invoices, transactions, onSelect, o
                       ) : (
                         <span className="text-gray-300 text-xs">—</span>
                       )}
+                      {inv.driveUrl && (
+                        <a
+                          href={inv.driveUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="block mt-0.5 text-xs text-indigo-500 hover:underline"
+                        >
+                          📄 Drive
+                        </a>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge.className}`}>
