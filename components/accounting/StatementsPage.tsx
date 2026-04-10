@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/utils/formatters';
-import type { PLData } from '@/app/api/statements/profit-loss/route';
+import type { PLData, PLBankTx } from '@/app/api/statements/profit-loss/route';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 
@@ -80,7 +80,10 @@ interface SectionRowProps {
   label: string;
   sublabel?: string;
   amount: number;
-  invoiceCount: number;
+  /** Number of items (invoices or transactions) for the expand indicator */
+  itemCount: number;
+  /** Label suffix for the count column, e.g. "inv." or "tx." */
+  countLabel?: string;
   expanded: boolean;
   onToggle: () => void;
   children?: React.ReactNode;
@@ -89,8 +92,8 @@ interface SectionRowProps {
   colorClass?: string;
 }
 
-function SectionRow({ code, label, sublabel, amount, invoiceCount, expanded, onToggle, children, indent, bold, colorClass }: SectionRowProps) {
-  const hasDetail = invoiceCount > 0;
+function SectionRow({ code, label, sublabel, amount, itemCount, countLabel = 'inv.', expanded, onToggle, children, indent, bold, colorClass }: SectionRowProps) {
+  const hasDetail = itemCount > 0;
   return (
     <>
       <tr
@@ -113,7 +116,7 @@ function SectionRow({ code, label, sublabel, amount, invoiceCount, expanded, onT
           {formatCurrency(amount)}
         </td>
         <td className="px-4 py-3 text-right text-xs text-gray-400 whitespace-nowrap w-24">
-          {hasDetail ? `${invoiceCount} inv.` : ''}
+          {hasDetail ? `${itemCount} ${countLabel}` : ''}
         </td>
       </tr>
       {expanded && children}
@@ -151,6 +154,29 @@ function RevenueDetailRows({ rows }: { rows: RevenueRow[] }) {
   );
 }
 
+function OtaDetailRows({ txs }: { txs: PLBankTx[] }) {
+  return (
+    <>
+      {txs.map((tx) => (
+        <tr key={tx.id} className="bg-indigo-50/30 text-xs border-b border-gray-50">
+          <td className="px-4 py-2 text-gray-400 pl-16">{tx.date}</td>
+          <td className="px-4 py-2 text-gray-600">
+            {tx.counterpartyName ?? '—'}
+            {tx.grossAmount != null && (
+              <span className="text-gray-400"> · gross {formatCurrency(tx.grossAmount)}</span>
+            )}
+            <span className="ml-1 text-gray-400 italic">
+              ({tx.state === 'net_settlement' ? 'net settlement' : 'settlement group'})
+            </span>
+          </td>
+          <td className="px-4 py-2 text-right text-gray-700">{formatCurrency(tx.amount)}</td>
+          <td />
+        </tr>
+      ))}
+    </>
+  );
+}
+
 // ─── CSV export ───────────────────────────────────────────────────────────────
 
 function exportCSV(data: PLData) {
@@ -163,6 +189,9 @@ function exportCSV(data: PLData) {
   }
   for (const inv of data.revenue.otherServicesInvoices) {
     rows.push([inv.invoiceDate, 'Revenue', 'II. Tržby — Ostatní služby', inv.guestName ?? inv.clientName ?? '', inv.invoiceNumber, String(inv.amountCZK)]);
+  }
+  for (const tx of data.revenue.otaTransactions) {
+    rows.push([tx.date, 'Revenue', 'II. Tržby — OTA čistá plnění', tx.counterpartyName ?? '', tx.id, String(tx.amount)]);
   }
   for (const inv of data.costs.materialsInvoices) {
     rows.push([inv.invoiceDate, 'Cost', 'B. Spotřeba materiálu a energie', inv.supplierName, inv.invoiceNumber, String(inv.amountCZK)]);
@@ -334,7 +363,7 @@ export default function StatementsPage() {
                 label="Ubytování"
                 sublabel="accommodation_direct"
                 amount={data.revenue.accommodation}
-                invoiceCount={data.revenue.accommodationInvoices.length}
+                itemCount={data.revenue.accommodationInvoices.length}
                 expanded={expanded.has('accommodation')}
                 onToggle={() => toggle('accommodation')}
                 indent
@@ -348,12 +377,27 @@ export default function StatementsPage() {
                 label="Ostatní služby"
                 sublabel="other_services"
                 amount={data.revenue.otherServices}
-                invoiceCount={data.revenue.otherServicesInvoices.length}
+                itemCount={data.revenue.otherServicesInvoices.length}
                 expanded={expanded.has('other_services')}
                 onToggle={() => toggle('other_services')}
                 indent
               >
                 <RevenueDetailRows rows={revenueRows(data.revenue.otherServicesInvoices)} />
+              </SectionRow>
+
+              {/* OTA net settlements sub-row */}
+              <SectionRow
+                code=""
+                label="OTA čistá plnění"
+                sublabel="Booking.com · Airbnb (net)"
+                amount={data.revenue.otaSettlements}
+                itemCount={data.revenue.otaTransactions.length}
+                countLabel="tx."
+                expanded={expanded.has('ota')}
+                onToggle={() => toggle('ota')}
+                indent
+              >
+                <OtaDetailRows txs={data.revenue.otaTransactions} />
               </SectionRow>
 
               {/* spacer */}
@@ -364,7 +408,7 @@ export default function StatementsPage() {
                 code="B."
                 label="Spotřeba materiálu a energie"
                 amount={data.costs.materialsEnergy}
-                invoiceCount={data.costs.materialsInvoices.length}
+                itemCount={data.costs.materialsInvoices.length}
                 expanded={expanded.has('materials')}
                 onToggle={() => toggle('materials')}
               >
@@ -375,7 +419,7 @@ export default function StatementsPage() {
                 code="C."
                 label="Osobní náklady (služby)"
                 amount={data.costs.personnelServices}
-                invoiceCount={data.costs.personnelInvoices.length}
+                itemCount={data.costs.personnelInvoices.length}
                 expanded={expanded.has('personnel')}
                 onToggle={() => toggle('personnel')}
               >
@@ -386,7 +430,7 @@ export default function StatementsPage() {
                 code="E."
                 label="Ostatní provozní náklady"
                 amount={data.costs.otherOperating}
-                invoiceCount={data.costs.otherInvoices.length}
+                itemCount={data.costs.otherInvoices.length}
                 expanded={expanded.has('other')}
                 onToggle={() => toggle('other')}
               >
