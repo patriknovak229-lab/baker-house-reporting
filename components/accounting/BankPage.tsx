@@ -19,6 +19,9 @@ interface ImportResult {
 interface Props {
   invoices: SupplierInvoice[];
   onInvoiceUpdate: (inv: SupplierInvoice) => void;
+  /** Shared transactions from AccountingPage — keeps Bank and Revenue tabs in sync */
+  transactions: BankTransaction[];
+  onTransactionsChange: (txs: BankTransaction[]) => void;
 }
 
 type FilterState = 'all' | BankTransactionState;
@@ -73,8 +76,7 @@ function getPeriodRange(preset: PeriodPreset): { from: string; to: string } | nu
   return null;
 }
 
-export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
-  const [transactions, setTransactions]   = useState<BankTransaction[]>([]);
+export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTransactionsChange }: Props) {
   const [groups, setGroups]               = useState<SettlementGroup[]>([]);
   const [loading, setLoading]             = useState(true);
   const [filter, setFilter]               = useState<FilterState>('all');
@@ -90,11 +92,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
 
   const loadData = useCallback(async () => {
     try {
-      const [txRes, grpRes] = await Promise.all([
-        fetch('/api/bank-transactions'),
-        fetch('/api/settlement-groups'),
-      ]);
-      if (txRes.ok)  setTransactions(await txRes.json());
+      const grpRes = await fetch('/api/settlement-groups');
       if (grpRes.ok) setGroups(await grpRes.json());
     } finally {
       setLoading(false);
@@ -102,6 +100,12 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
   }, []);
 
   useEffect(() => { void loadData(); }, [loadData]);
+
+  // Thin wrapper so internal code can still call setTransactions
+  function setTransactions(updater: BankTransaction[] | ((prev: BankTransaction[]) => BankTransaction[])) {
+    const next = typeof updater === 'function' ? updater(transactions) : updater;
+    onTransactionsChange(next);
+  }
 
   async function handleAutoMatch() {
     setMatching(true);

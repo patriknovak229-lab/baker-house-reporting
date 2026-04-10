@@ -560,7 +560,12 @@ export default function AccountingPage() {
 
       {/* Phase 2 — Bank */}
       {activePhase === 2 && (
-        <BankPage invoices={invoices} onInvoiceUpdate={handleInvoiceUpdate} />
+        <BankPage
+          invoices={invoices}
+          onInvoiceUpdate={handleInvoiceUpdate}
+          transactions={bankTransactions}
+          onTransactionsChange={setBankTransactions}
+        />
       )}
 
       {/* Phase 3 — Revenue */}
