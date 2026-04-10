@@ -19,6 +19,7 @@ import { prepareImageFile } from '@/utils/imageCompressor';
 import { textColorFor } from '@/utils/categoryColors';
 import BankPage from './BankPage';
 import RevenuePage from './RevenuePage';
+import StatementsPage from './StatementsPage';
 import type { BankTransaction } from '@/types/bankTransaction';
 
 const PHASES = [
@@ -538,7 +539,7 @@ export default function AccountingPage() {
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
         {PHASES.map((phase) => {
-          const enabled = phase.id <= 3;
+          const enabled = phase.id <= 4;
           const active = activePhase === phase.id;
           return (
             <div key={phase.id}
@@ -576,6 +577,11 @@ export default function AccountingPage() {
       {/* Phase 3 — Revenue */}
       {activePhase === 3 && (
         <RevenuePage bankTransactions={bankTransactions} onBankTxUpdate={handleBankTxUpdate} />
+      )}
+
+      {/* Phase 4 — Statements */}
+      {activePhase === 4 && (
+        <StatementsPage />
       )}
 
       {/* Phase 1 — Costs */}
