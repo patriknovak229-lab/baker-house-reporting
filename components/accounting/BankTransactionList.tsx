@@ -33,8 +33,9 @@ const STATE_BADGE: Record<BankTransactionState, { label: string; className: stri
 };
 
 function getRevenueBadgeInfo(tx: { state: string; revenueInvoiceId?: string }): { label: string; className: string } | null {
-  if (tx.revenueInvoiceId) return { label: 'Revenue (linked)', className: 'bg-indigo-200 text-indigo-700' };
-  return null;
+  if (!tx.revenueInvoiceId) return null;
+  if (tx.state === 'reconciled') return STATE_BADGE.reconciled;
+  return { label: 'Revenue (linked)', className: 'bg-indigo-200 text-indigo-700' };
 }
 
 function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: SortDir }) {
