@@ -3,6 +3,7 @@ import { useState, useMemo } from 'react';
 import type { BankTransaction, BankTransactionState } from '@/types/bankTransaction';
 import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
+import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatCurrency, formatDate } from '@/utils/formatters';
 
 type SortCol = 'date' | 'counterparty' | 'amount';
@@ -12,7 +13,11 @@ interface Props {
   transactions: BankTransaction[];
   allTransactions: BankTransaction[];
   invoices: SupplierInvoice[];
+  groups: SettlementGroup[];
+  expandedGroups: Set<string>;
   onSelect: (tx: BankTransaction) => void;
+  onToggleGroup: (id: string) => void;
+  onOpenGroup: (group: SettlementGroup) => void;
 }
 
 const STATE_BADGE: Record<BankTransactionState, { label: string; className: string }> = {
@@ -24,6 +29,7 @@ const STATE_BADGE: Record<BankTransactionState, { label: string; className: stri
   refund:         { label: 'Refund',         className: 'bg-teal-100 text-teal-700'      },
   partial_refund: { label: 'Part. refund',   className: 'bg-teal-50 text-teal-600'       },
   net_settlement: { label: 'Net settlement', className: 'bg-cyan-100 text-cyan-700'      },
+  grouped:        { label: 'Settlement',     className: 'bg-violet-100 text-violet-700'  },
 };
 
 function getRevenueBadgeLabel(tx: { state: string; revenueInvoiceId?: string }): string {
@@ -36,7 +42,13 @@ function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: So
   return <span className="ml-1 text-indigo-500">{dir === 'asc' ? '↑' : '↓'}</span>;
 }
 
-export default function BankTransactionList({ transactions, allTransactions, invoices, onSelect }: Props) {
+type DisplayRow =
+  | { type: 'group_header'; group: SettlementGroup; groupTxs: BankTransaction[] }
+  | { type: 'transaction'; tx: BankTransaction; inGroup: boolean };
+
+export default function BankTransactionList({
+  transactions, allTransactions, invoices, groups, expandedGroups, onSelect, onToggleGroup, onOpenGroup,
+}: Props) {
   const [sortCol, setSortCol] = useState<SortCol>('date');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -57,7 +69,38 @@ export default function BankTransactionList({ transactions, allTransactions, inv
     return arr;
   }, [transactions, sortCol, sortDir]);
 
-  if (sorted.length === 0) {
+  // Build display rows: inject group_header rows and collapse grouped txs when unexpanded
+  const displayRows = useMemo((): DisplayRow[] => {
+    const groupMap = new Map(groups.map((g) => [g.id, g]));
+    const seenGroupIds = new Set<string>();
+    const rows: DisplayRow[] = [];
+
+    for (const tx of sorted) {
+      if (tx.state === 'grouped' && tx.settlementGroupId) {
+        const gid   = tx.settlementGroupId;
+        const group = groupMap.get(gid);
+        if (!group) {
+          // Group missing — show as plain row
+          rows.push({ type: 'transaction', tx, inGroup: false });
+          continue;
+        }
+        if (!seenGroupIds.has(gid)) {
+          seenGroupIds.add(gid);
+          const groupTxs = allTransactions.filter((t) => group.transactionIds.includes(t.id));
+          rows.push({ type: 'group_header', group, groupTxs });
+        }
+        if (expandedGroups.has(gid)) {
+          rows.push({ type: 'transaction', tx, inGroup: true });
+        }
+        // If collapsed — skip individual row
+      } else {
+        rows.push({ type: 'transaction', tx, inGroup: false });
+      }
+    }
+    return rows;
+  }, [sorted, groups, allTransactions, expandedGroups]);
+
+  if (displayRows.length === 0) {
     return (
       <div className="text-center py-16 text-gray-400 text-sm">
         No transactions match — try adjusting your filters.
@@ -90,7 +133,61 @@ export default function BankTransactionList({ transactions, allTransactions, inv
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-50">
-          {sorted.map((tx) => {
+          {displayRows.map((row, i) => {
+            if (row.type === 'group_header') {
+              const { group, groupTxs } = row;
+              const cumulative     = groupTxs.reduce((s, t) => s + t.amount, 0);
+              const isExpanded     = expandedGroups.has(group.id);
+              const invoiceCount   = group.invoiceIds.length;
+              return (
+                <tr key={`group-${group.id}`} className="bg-violet-50 hover:bg-violet-100 transition-colors cursor-pointer">
+                  {/* Chevron + name */}
+                  <td className="px-4 py-3" colSpan={1}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onToggleGroup(group.id); }}
+                      className="text-violet-500 hover:text-violet-700 mr-2 text-base leading-none"
+                    >
+                      {isExpanded ? '▾' : '▸'}
+                    </button>
+                  </td>
+                  <td
+                    className="px-2 py-3 cursor-pointer"
+                    colSpan={2}
+                    onClick={() => onOpenGroup(group)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-violet-800 truncate">{group.name}</p>
+                        <p className="text-xs text-violet-500">
+                          {groupTxs.length} payment{groupTxs.length !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                      <p className="text-sm font-bold text-green-700 whitespace-nowrap">
+                        +{formatCurrency(cumulative)}
+                      </p>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 hidden sm:table-cell" onClick={() => onOpenGroup(group)} />
+                  <td className="px-4 py-3 hidden md:table-cell" onClick={() => onOpenGroup(group)}>
+                    {invoiceCount > 0 ? (
+                      <span className="text-xs text-violet-600 font-medium">
+                        {invoiceCount} invoice{invoiceCount !== 1 ? 's' : ''} attached
+                      </span>
+                    ) : (
+                      <span className="text-xs text-amber-500 font-medium">No invoices</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3" onClick={() => onOpenGroup(group)}>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-700">
+                      Settlement group
+                    </span>
+                  </td>
+                </tr>
+              );
+            }
+
+            // Normal transaction row
+            const { tx, inGroup } = row;
             const badge = STATE_BADGE[tx.state];
             const linkedInvoice = tx.invoiceId ? invoiceMap.get(tx.invoiceId) : undefined;
             const linkedTx      = tx.linkedTransactionId ? txMap.get(tx.linkedTransactionId) : undefined;
@@ -106,9 +203,11 @@ export default function BankTransactionList({ transactions, allTransactions, inv
               <tr
                 key={tx.id}
                 onClick={() => onSelect(tx)}
-                className="cursor-pointer hover:bg-gray-50 transition-colors"
+                className={`cursor-pointer hover:bg-gray-50 transition-colors ${inGroup ? 'bg-violet-50/30' : ''}`}
               >
-                <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(tx.date)}</td>
+                <td className={`px-4 py-3 text-gray-600 whitespace-nowrap ${inGroup ? 'pl-10' : ''}`}>
+                  {formatDate(tx.date)}
+                </td>
                 <td className="px-4 py-3 max-w-[200px]">
                   <p className="text-gray-800 truncate">{tx.counterpartyName ?? '—'}</p>
                   {tx.counterpartyAccount && (
@@ -133,6 +232,10 @@ export default function BankTransactionList({ transactions, allTransactions, inv
                     <span className="text-xs text-cyan-700">
                       {(tx.deductedInvoiceIds?.length ?? 0)} fee{(tx.deductedInvoiceIds?.length ?? 0) !== 1 ? 's' : ''} deducted
                       {tx.grossAmount != null && <span className="text-gray-400"> · gross {formatCurrency(tx.grossAmount)}</span>}
+                    </span>
+                  ) : tx.state === 'grouped' && tx.settlementGroupId ? (
+                    <span className="text-xs text-violet-600 font-medium">
+                      {groups.find((g) => g.id === tx.settlementGroupId)?.name ?? 'Settlement group'}
                     </span>
                   ) : tx.revenueInvoiceId ? (
                     <span className="text-xs text-indigo-600 font-medium">

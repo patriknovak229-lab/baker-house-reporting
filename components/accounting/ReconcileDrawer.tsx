@@ -3,13 +3,16 @@ import { useState, useMemo } from 'react';
 import type { BankTransaction, IgnoreCategoryId } from '@/types/bankTransaction';
 import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import { formatAmount, formatDate } from '@/utils/formatters';
+import type { SettlementGroup } from '@/types/settlementGroup';
+import { formatAmount, formatDate, formatCurrency } from '@/utils/formatters';
 
 interface Props {
   transaction: BankTransaction;
   transactions: BankTransaction[];
   invoices: SupplierInvoice[];
+  groups: SettlementGroup[];
   onSave: (tx: BankTransaction) => void;
+  onGroupSave: (group: SettlementGroup | null, isNew: boolean) => void;
   onClose: () => void;
 }
 
@@ -74,9 +77,9 @@ function Detail({ label, value }: { label: string; value?: string | null }) {
 }
 
 type DebitMode  = 'match' | 'ignore' | 'non_deductible';
-type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement';
+type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement' | 'settlement_group';
 
-export default function ReconcileDrawer({ transaction: tx, transactions, invoices, onSave, onClose }: Props) {
+export default function ReconcileDrawer({ transaction: tx, transactions, invoices, groups, onSave, onGroupSave, onClose }: Props) {
   const isCredit  = tx.direction === 'credit';
   const suggestion = useMemo(() => (!isCredit ? findSuggestion(tx, invoices) : null), [tx, invoices, isCredit]);
 
@@ -92,7 +95,8 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   const initialCreditMode: CreditMode =
     tx.state === 'refund'          ? 'refund' :
     tx.state === 'partial_refund'  ? 'partial_refund' :
-    tx.state === 'net_settlement'  ? 'net_settlement' : 'note';
+    tx.state === 'net_settlement'  ? 'net_settlement' :
+    tx.state === 'grouped'         ? 'settlement_group' : 'note';
 
   const [creditMode, setCreditMode]            = useState<CreditMode>(initialCreditMode);
   const [revenueNote, setRevenueNote]          = useState(tx.ignoreNote ?? '');
@@ -105,6 +109,14 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
     tx.grossAmount != null ? String(tx.grossAmount) : String(tx.amount),
   );
   const [settlementSearch, setSettlementSearch] = useState('');
+
+  // ── Settlement group state ────────────────────────────────────────────────
+  const [groupMode, setGroupMode]              = useState<'existing' | 'new'>(
+    tx.settlementGroupId ? 'existing' : 'existing',
+  );
+  const [groupSearch, setGroupSearch]          = useState('');
+  const [selectedGroupId, setSelectedGroupId]  = useState(tx.settlementGroupId ?? '');
+  const [newGroupName, setNewGroupName]        = useState('');
 
   const [saving, setSaving] = useState(false);
 
@@ -120,7 +132,6 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   [invoices, tx.invoiceId, invoiceSearch]);
 
   // ── Candidate invoices for net settlement ────────────────────────────────
-  // Show: pending invoices + invoices already in this tx + invoices partially settled by OTHER credits
   const settlementCandidates = useMemo(() => invoices
     .filter((inv) =>
       inv.status === 'pending' ||
@@ -150,6 +161,14 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
     .sort((a, b) => b.date.localeCompare(a.date)),
   [transactions, tx.id, debitSearch]);
 
+  // ── Candidate groups for settlement group ────────────────────────────────
+  const filteredGroups = useMemo(() => {
+    const q = groupSearch.toLowerCase();
+    return groups
+      .filter((g) => !q || g.name.toLowerCase().includes(q))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [groups, groupSearch]);
+
   // ── Helpers ───────────────────────────────────────────────────────────────
   async function put(body: object): Promise<BankTransaction | null> {
     const res = await fetch(`/api/bank-transactions/${tx.id}`, {
@@ -163,6 +182,37 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   async function handleSave() {
     setSaving(true);
     try {
+      if (isCredit && creditMode === 'settlement_group') {
+        if (groupMode === 'new') {
+          if (!newGroupName.trim()) return;
+          const res = await fetch('/api/settlement-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newGroupName.trim(), transactionId: tx.id }),
+          });
+          if (res.ok) {
+            const data = await res.json() as { group: SettlementGroup; transaction: BankTransaction };
+            onGroupSave(data.group, true);
+            onSave(data.transaction);
+          }
+        } else {
+          if (!selectedGroupId) return;
+          const res = await fetch(`/api/settlement-groups/${selectedGroupId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_transaction', transactionId: tx.id }),
+          });
+          if (res.ok) {
+            const data = await res.json() as { group: SettlementGroup };
+            onGroupSave(data.group, false);
+            // Also update local tx state
+            const updatedTx = { ...tx, state: 'grouped' as const, settlementGroupId: selectedGroupId };
+            onSave(updatedTx);
+          }
+        }
+        return;
+      }
+
       let body: object;
       if (isCredit) {
         if (creditMode === 'note') {
@@ -198,6 +248,21 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   async function handleUnmatch() {
     setSaving(true);
     try {
+      // For grouped transactions, remove from group via group API
+      if (tx.state === 'grouped' && tx.settlementGroupId) {
+        const res = await fetch(`/api/settlement-groups/${tx.settlementGroupId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'remove_transaction', transactionId: tx.id }),
+        });
+        if (res.ok) {
+          const data = await res.json() as { group: SettlementGroup | null; deleted: boolean };
+          onGroupSave(data.group, false);
+          const updatedTx = { ...tx, state: 'revenue' as const, settlementGroupId: undefined };
+          onSave(updatedTx);
+        }
+        return;
+      }
       const updated = await put({ action: 'unmatch' });
       if (updated) onSave(updated);
     } finally {
@@ -206,15 +271,17 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   }
 
   const canSave = isCredit
-    ? true
+    ? creditMode === 'settlement_group'
+      ? groupMode === 'new' ? !!newGroupName.trim() : !!selectedGroupId
+      : true
     : debitMode === 'match' ? !!selectedInvoiceId
     : debitMode === 'ignore' ? !!ignoreCategory
-    : true; // non_deductible always saveable
+    : true;
 
   const amountLabel = tx.direction === 'debit' ? '−' : '+';
 
   const tabClass = (active: boolean) =>
-    `flex-1 py-2.5 text-sm font-medium transition-colors ${
+    `flex-1 py-2.5 text-xs font-medium transition-colors ${
       active ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500 hover:text-gray-700'
     }`;
 
@@ -267,6 +334,9 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             {(tx.state === 'ignored' || tx.state === 'non_deductible') && tx.ignoredAt && (
               <Detail label="Tagged at" value={new Date(tx.ignoredAt).toLocaleString('cs-CZ')} />
             )}
+            {tx.state === 'grouped' && tx.settlementGroupId && (
+              <Detail label="Settlement group" value={groups.find((g) => g.id === tx.settlementGroupId)?.name ?? tx.settlementGroupId} />
+            )}
           </div>
         </div>
 
@@ -277,13 +347,98 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
           {isCredit && (
             <>
               <div className="flex border-b border-gray-100 flex-shrink-0">
-                <button onClick={() => setCreditMode('note')}           className={tabClass(creditMode === 'note')}>Note</button>
-                <button onClick={() => setCreditMode('net_settlement')} className={tabClass(creditMode === 'net_settlement')}>Net settlement</button>
-                <button onClick={() => setCreditMode('refund')}         className={tabClass(creditMode === 'refund')}>Refund</button>
-                <button onClick={() => setCreditMode('partial_refund')} className={tabClass(creditMode === 'partial_refund')}>Partial</button>
+                <button onClick={() => setCreditMode('note')}              className={tabClass(creditMode === 'note')}>Note</button>
+                <button onClick={() => setCreditMode('settlement_group')}  className={tabClass(creditMode === 'settlement_group')}>Group</button>
+                <button onClick={() => setCreditMode('net_settlement')}    className={tabClass(creditMode === 'net_settlement')}>Net settlement</button>
+                <button onClick={() => setCreditMode('refund')}            className={tabClass(creditMode === 'refund')}>Refund</button>
+                <button onClick={() => setCreditMode('partial_refund')}    className={tabClass(creditMode === 'partial_refund')}>Partial</button>
               </div>
 
               <div className="px-5 py-4 space-y-4">
+
+                {/* ── Settlement group tab ─────────────────────────────────── */}
+                {creditMode === 'settlement_group' && (
+                  <>
+                    <p className="text-xs text-gray-500">
+                      Group multiple credit transactions together (e.g. weekly Airbnb payouts) and attach supplier invoices to the group.
+                    </p>
+
+                    {/* Mode toggle */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setGroupMode('existing')}
+                        className={`flex-1 py-2 text-xs font-medium rounded-lg border transition-colors ${groupMode === 'existing' ? 'border-violet-400 bg-violet-50 text-violet-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                      >
+                        Add to existing group
+                      </button>
+                      <button
+                        onClick={() => setGroupMode('new')}
+                        className={`flex-1 py-2 text-xs font-medium rounded-lg border transition-colors ${groupMode === 'new' ? 'border-violet-400 bg-violet-50 text-violet-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                      >
+                        New group
+                      </button>
+                    </div>
+
+                    {groupMode === 'new' && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1.5">Group name</label>
+                        <input
+                          type="text"
+                          value={newGroupName}
+                          onChange={(e) => setNewGroupName(e.target.value)}
+                          placeholder="e.g. Airbnb April 2026"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-violet-400"
+                          autoFocus
+                        />
+                      </div>
+                    )}
+
+                    {groupMode === 'existing' && (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Search groups…"
+                          value={groupSearch}
+                          onChange={(e) => setGroupSearch(e.target.value)}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-violet-400"
+                        />
+                        {filteredGroups.length === 0 ? (
+                          <div className="text-xs text-gray-400 text-center py-6">
+                            No groups yet — switch to "New group" to create one.
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                            {filteredGroups.map((g) => {
+                              const groupTxs    = transactions.filter((t) => g.transactionIds.includes(t.id));
+                              const cumulative  = groupTxs.reduce((s, t) => s + t.amount, 0);
+                              const isSelected  = selectedGroupId === g.id;
+                              return (
+                                <label key={g.id}
+                                  className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${isSelected ? 'border-violet-300 bg-violet-50' : 'border-gray-200 hover:border-gray-300'}`}
+                                >
+                                  <input type="radio" name="group" value={g.id}
+                                    checked={isSelected}
+                                    onChange={() => setSelectedGroupId(g.id)}
+                                    className="mt-0.5 text-violet-600 flex-shrink-0" />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-gray-800 truncate">{g.name}</p>
+                                    <p className="text-xs text-gray-500">
+                                      {g.transactionIds.length} payment{g.transactionIds.length !== 1 ? 's' : ''} · {g.invoiceIds.length} invoice{g.invoiceIds.length !== 1 ? 's' : ''}
+                                    </p>
+                                  </div>
+                                  <p className="text-sm font-semibold text-green-700 whitespace-nowrap flex-shrink-0">
+                                    +{formatCurrency(cumulative)}
+                                  </p>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+
                 {creditMode === 'net_settlement' && (
                   <>
                     <p className="text-xs text-gray-500">
@@ -319,7 +474,6 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                         <p className="text-xs text-gray-400 text-center py-4">No pending invoices found.</p>
                       ) : settlementCandidates.map((inv) => {
                         const checked = settlementInvoiceIds.has(inv.id);
-                        // Other settlements for this invoice (excluding this tx)
                         const otherSettlements = (inv.settlementTransactionIds ?? []).filter((tid) => tid !== tx.id);
                         return (
                           <label key={inv.id}
@@ -510,18 +664,18 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
         {/* Footer */}
         <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
           <div>
-            {(tx.state === 'reconciled' || tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'refund' || tx.state === 'partial_refund' || tx.state === 'net_settlement') && (
+            {(tx.state === 'reconciled' || tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'refund' || tx.state === 'partial_refund' || tx.state === 'net_settlement' || tx.state === 'grouped') && (
               <button onClick={handleUnmatch} disabled={saving} className="text-xs text-gray-400 hover:text-red-500">
-                Reset to {isCredit ? 'revenue' : 'unmatched'}
+                {tx.state === 'grouped' ? 'Remove from group' : `Reset to ${isCredit ? 'revenue' : 'unmatched'}`}
               </button>
             )}
           </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
-            <button onClick={handleSave} disabled={!canSave || saving}
+            <button onClick={() => { void handleSave(); }} disabled={!canSave || saving}
               className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
               {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {isCredit ? 'Save' : 'Save'}
+              Save
             </button>
           </div>
         </div>

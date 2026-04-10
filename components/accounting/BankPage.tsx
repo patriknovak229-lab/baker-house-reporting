@@ -2,10 +2,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { BankTransaction, BankTransactionState } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
+import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatCurrency } from '@/utils/formatters';
 import BankImportModal from './BankImportModal';
 import BankTransactionList from './BankTransactionList';
 import ReconcileDrawer from './ReconcileDrawer';
+import SettlementGroupDrawer from './SettlementGroupDrawer';
 
 interface ImportResult {
   imported: number;
@@ -27,6 +29,7 @@ const FILTERS: { value: FilterState; label: string }[] = [
   { value: 'unmatched',     label: 'Unmatched costs' },
   { value: 'revenue',       label: 'Unmatched revenue' },
   { value: 'reconciled',    label: 'Reconciled' },
+  { value: 'grouped',       label: 'Settlement groups' },
   { value: 'net_settlement',label: 'Net settlements' },
   { value: 'refund',        label: 'Refunds' },
   { value: 'partial_refund',label: 'Partial refunds' },
@@ -71,27 +74,34 @@ function getPeriodRange(preset: PeriodPreset): { from: string; to: string } | nu
 }
 
 export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
-  const [transactions, setTransactions] = useState<BankTransaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<FilterState>('all');
-  const [period, setPeriod] = useState<PeriodPreset>('all');
-  const [search, setSearch] = useState('');
-  const [drawerTx, setDrawerTx] = useState<BankTransaction | null>(null);
-  const [showImport, setShowImport] = useState(false);
-  const [importBanner, setImportBanner] = useState<ImportResult | null>(null);
-  const [matching, setMatching] = useState(false);
-  const [matchBanner, setMatchBanner] = useState<number | null>(null);
+  const [transactions, setTransactions]   = useState<BankTransaction[]>([]);
+  const [groups, setGroups]               = useState<SettlementGroup[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [filter, setFilter]               = useState<FilterState>('all');
+  const [period, setPeriod]               = useState<PeriodPreset>('all');
+  const [search, setSearch]               = useState('');
+  const [drawerTx, setDrawerTx]           = useState<BankTransaction | null>(null);
+  const [drawerGroup, setDrawerGroup]     = useState<SettlementGroup | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [showImport, setShowImport]       = useState(false);
+  const [importBanner, setImportBanner]   = useState<ImportResult | null>(null);
+  const [matching, setMatching]           = useState(false);
+  const [matchBanner, setMatchBanner]     = useState<number | null>(null);
 
-  const loadTransactions = useCallback(async () => {
+  const loadData = useCallback(async () => {
     try {
-      const res = await fetch('/api/bank-transactions');
-      if (res.ok) setTransactions(await res.json());
+      const [txRes, grpRes] = await Promise.all([
+        fetch('/api/bank-transactions'),
+        fetch('/api/settlement-groups'),
+      ]);
+      if (txRes.ok)  setTransactions(await txRes.json());
+      if (grpRes.ok) setGroups(await grpRes.json());
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { loadTransactions(); }, [loadTransactions]);
+  useEffect(() => { void loadData(); }, [loadData]);
 
   async function handleAutoMatch() {
     setMatching(true);
@@ -134,7 +144,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
     setTransactions((prev) => {
       const next = prev.map((t) => (t.id === updated.id ? updated : t));
 
-      // When a refund links to a debit, also update that debit in local state
+      // Refund — also update linked debit
       if ((updated.state === 'refund' || updated.state === 'partial_refund') && updated.linkedTransactionId) {
         return next.map((t) =>
           t.id === updated.linkedTransactionId
@@ -142,7 +152,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
             : t,
         );
       }
-      // When resetting a refund, restore the previously linked debit to unmatched
+      // Reset refund — restore linked debit
       const prev_ = prev.find((t) => t.id === updated.id);
       if (
         (updated.state === 'revenue' || updated.state === 'unmatched') &&
@@ -155,11 +165,9 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
             : t,
         );
       }
-
       return next;
     });
 
-    // Helper: is a given invoice still covered by another net_settlement tx (other than `updatedId`)?
     const isStillSettledElsewhere = (invId: string, updatedId: string) =>
       transactions.some((t) => t.id !== updatedId && (t.deductedInvoiceIds ?? []).includes(invId));
 
@@ -167,22 +175,19 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
       const inv = invoices.find((i) => i.id === updated.invoiceId);
       if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
     } else if (updated.state === 'net_settlement') {
-      // Add this tx to each deducted invoice's client-side settlementTransactionIds
       for (const invId of updated.deductedInvoiceIds ?? []) {
         const inv = invoices.find((i) => i.id === invId);
         if (inv) {
           const existing = inv.settlementTransactionIds ?? [];
           const merged   = existing.includes(updated.id) ? existing : [...existing, updated.id];
           onInvoiceUpdate({
-            ...inv,
-            status: 'reconciled',
+            ...inv, status: 'reconciled',
             bankTransactionId: inv.bankTransactionId ?? updated.id,
             reconciledAt: inv.reconciledAt ?? updated.reconciledAt,
             settlementTransactionIds: merged,
           });
         }
       }
-      // Un-reconcile invoices removed from the list
       const prev = transactions.find((t) => t.id === updated.id);
       for (const prevId of prev?.deductedInvoiceIds ?? []) {
         if (!(updated.deductedInvoiceIds ?? []).includes(prevId)) {
@@ -190,12 +195,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
           if (!inv) continue;
           const remaining = (inv.settlementTransactionIds ?? []).filter((tid) => tid !== updated.id);
           if (remaining.length > 0) {
-            // Still covered by other settlements — just remove this tx from the array
-            onInvoiceUpdate({
-              ...inv,
-              settlementTransactionIds: remaining,
-              bankTransactionId: inv.bankTransactionId === updated.id ? remaining[0] : inv.bankTransactionId,
-            });
+            onInvoiceUpdate({ ...inv, settlementTransactionIds: remaining, bankTransactionId: inv.bankTransactionId === updated.id ? remaining[0] : inv.bankTransactionId });
           } else if (!isStillSettledElsewhere(prevId, updated.id)) {
             onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined });
           }
@@ -207,17 +207,12 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
         if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
       }
-      // Un-reconcile previously deducted invoices — only reset to pending if no other settlement covers them
       for (const prevId of prev?.deductedInvoiceIds ?? []) {
         const inv = invoices.find((i) => i.id === prevId);
         if (!inv) continue;
         const remaining = (inv.settlementTransactionIds ?? []).filter((tid) => tid !== updated.id);
         if (remaining.length > 0) {
-          onInvoiceUpdate({
-            ...inv,
-            settlementTransactionIds: remaining,
-            bankTransactionId: inv.bankTransactionId === updated.id ? remaining[0] : inv.bankTransactionId,
-          });
+          onInvoiceUpdate({ ...inv, settlementTransactionIds: remaining, bankTransactionId: inv.bankTransactionId === updated.id ? remaining[0] : inv.bankTransactionId });
         } else if (!isStillSettledElsewhere(prevId, updated.id)) {
           onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined, settlementTransactionIds: undefined });
         }
@@ -225,6 +220,43 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
     }
 
     setDrawerTx(null);
+  }
+
+  // Called when ReconcileDrawer creates or updates a settlement group
+  function handleGroupSave(group: SettlementGroup | null, isNew: boolean) {
+    if (!group) return;
+    if (isNew) {
+      setGroups((prev) => [group, ...prev]);
+    } else {
+      setGroups((prev) => prev.map((g) => (g.id === group.id ? group : g)));
+    }
+  }
+
+  // Called by SettlementGroupDrawer when group is mutated or deleted
+  function handleGroupUpdate(updated: SettlementGroup | null) {
+    if (!updated) {
+      setGroups((prev) => prev.filter((g) => g.id !== drawerGroup?.id));
+      setDrawerGroup(null);
+    } else {
+      setGroups((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+      setDrawerGroup(updated);
+    }
+  }
+
+  function handleTxUpdateFromGroup(tx: BankTransaction) {
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id ? tx : t)));
+  }
+
+  function handleInvoiceUpdateFromGroup(inv: SupplierInvoice) {
+    onInvoiceUpdate(inv);
+  }
+
+  function handleToggleGroup(id: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
   }
 
   const periodRange = useMemo(() => getPeriodRange(period), [period]);
@@ -265,6 +297,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
 
   const unmatchedCosts   = debits .filter((t) => t.state === 'unmatched').length;
   const unmatchedRevenue = credits.filter((t) => t.state === 'revenue').length;
+  const groupCount       = groups.length;
 
   return (
     <div className="space-y-6">
@@ -276,7 +309,7 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleAutoMatch}
+            onClick={() => { void handleAutoMatch(); }}
             disabled={matching || unmatchedCosts === 0}
             className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50"
             title={unmatchedCosts === 0 ? 'No unmatched costs to process' : 'Re-run auto-matching against pending invoices'}
@@ -355,9 +388,9 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
           <p className="text-xs text-gray-400 mt-0.5">payments</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Unmatched revenue</p>
-          <p className={`text-lg font-semibold ${unmatchedRevenue > 0 ? 'text-indigo-500' : 'text-gray-800'}`}>{unmatchedRevenue}</p>
-          <p className="text-xs text-gray-400 mt-0.5">receipts</p>
+          <p className="text-xs text-gray-500 mb-1">Settlement groups</p>
+          <p className={`text-lg font-semibold ${groupCount > 0 ? 'text-violet-600' : 'text-gray-800'}`}>{groupCount}</p>
+          <p className="text-xs text-gray-400 mt-0.5">active</p>
         </div>
       </div>
 
@@ -398,6 +431,9 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
               {f.value === 'revenue' && unmatchedRevenue > 0 && (
                 <span className="ml-1.5 text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full">{unmatchedRevenue}</span>
               )}
+              {f.value === 'grouped' && groupCount > 0 && (
+                <span className="ml-1.5 text-xs bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded-full">{groupCount}</span>
+              )}
             </button>
           ))}
         </div>
@@ -426,12 +462,16 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
             transactions={filtered}
             allTransactions={transactions}
             invoices={invoices}
+            groups={groups}
+            expandedGroups={expandedGroups}
             onSelect={setDrawerTx}
+            onToggleGroup={handleToggleGroup}
+            onOpenGroup={setDrawerGroup}
           />
         )}
       </div>
 
-      {/* Modals */}
+      {/* Modals / drawers */}
       {showImport && (
         <BankImportModal onImported={handleImported} onClose={() => setShowImport(false)} />
       )}
@@ -441,8 +481,22 @@ export default function BankPage({ invoices, onInvoiceUpdate }: Props) {
           transaction={drawerTx}
           transactions={transactions}
           invoices={invoices}
+          groups={groups}
           onSave={handleDrawerSave}
+          onGroupSave={handleGroupSave}
           onClose={() => setDrawerTx(null)}
+        />
+      )}
+
+      {drawerGroup && (
+        <SettlementGroupDrawer
+          group={drawerGroup}
+          transactions={transactions}
+          invoices={invoices}
+          onClose={() => setDrawerGroup(null)}
+          onGroupUpdate={handleGroupUpdate}
+          onTxUpdate={handleTxUpdateFromGroup}
+          onInvoiceUpdate={handleInvoiceUpdateFromGroup}
         />
       )}
     </div>

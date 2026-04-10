@@ -50,7 +50,15 @@ function SourceIcon({ source }: { source: SupplierInvoice['sourceType'] }) {
   );
 }
 
-function StatusBadge({ status }: { status: SupplierInvoiceStatus }) {
+function StatusBadge({ status, settlementGroupId }: { status: SupplierInvoiceStatus; settlementGroupId?: string }) {
+  if (status === 'reconciled' && settlementGroupId) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+        Settlement group
+      </span>
+    );
+  }
   return (
     <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
       status === 'reconciled' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
@@ -194,7 +202,7 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
                   {formatAmount(inv.amountCZK, inv.invoiceCurrency)}
                 </td>
                 <td className="py-2.5 px-3 text-center">
-                  <StatusBadge status={inv.status} />
+                  <StatusBadge status={inv.status} settlementGroupId={inv.settlementGroupId} />
                 </td>
                 <td className="py-2.5 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                   {inv.driveUrl ? (

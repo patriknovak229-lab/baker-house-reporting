@@ -46,6 +46,8 @@ export interface SupplierInvoice {
   reconciledAt?: string;
   /** For OTA net-settlement: IDs of credit bank transactions that collectively cover this invoice */
   settlementTransactionIds?: string[];
+  /** SettlementGroup.id — set when this invoice is attached to a settlement group */
+  settlementGroupId?: string;
 }
 
 /** Shape returned by the Claude extraction endpoint */

@@ -8,7 +8,8 @@ export type BankTransactionState =
   | 'revenue'        // incoming payment — not yet categorised
   | 'refund'          // incoming payment that fully refunds a prior debit
   | 'partial_refund'  // incoming payment that partially refunds a prior debit
-  | 'net_settlement'; // incoming payment where OTA/platform deducted fees before remitting
+  | 'net_settlement' // incoming payment where OTA/platform deducted fees before remitting
+  | 'grouped';       // credit transaction is part of a named settlement group
 
 export const IGNORE_CATEGORIES = [
   { id: 'salary',   label: 'Salary / wages' },
@@ -52,6 +53,8 @@ export interface BankTransaction {
   deductedInvoiceIds?: string[];
   /** RevenueInvoice.id — set when this credit is linked to a revenue invoice */
   revenueInvoiceId?: string;
+  /** SettlementGroup.id — set when state === 'grouped' */
+  settlementGroupId?: string;
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
   ignoreCategory?: IgnoreCategoryId;
   ignoreNote?: string;
