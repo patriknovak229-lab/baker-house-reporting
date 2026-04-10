@@ -32,9 +32,9 @@ const STATE_BADGE: Record<BankTransactionState, { label: string; className: stri
   grouped:        { label: 'Settlement',     className: 'bg-violet-100 text-violet-700'  },
 };
 
-function getRevenueBadgeLabel(tx: { state: string; revenueInvoiceId?: string }): string {
-  if (tx.state === 'revenue' && tx.revenueInvoiceId) return 'Revenue (linked)';
-  return STATE_BADGE['revenue'].label;
+function getRevenueBadgeInfo(tx: { state: string; revenueInvoiceId?: string }): { label: string; className: string } | null {
+  if (tx.revenueInvoiceId) return { label: 'Revenue (linked)', className: 'bg-indigo-200 text-indigo-700' };
+  return null;
 }
 
 function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: SortDir }) {
@@ -195,9 +195,7 @@ export default function BankTransactionList({
               ? IGNORE_CATEGORIES.find((c) => c.id === tx.ignoreCategory)?.label
               : undefined;
 
-            const isRevenuLinked = tx.state === 'revenue' && !!tx.revenueInvoiceId;
-            const revenueBadgeLabel = tx.state === 'revenue' ? getRevenueBadgeLabel(tx) : badge.label;
-            const revenueBadgeClass = isRevenuLinked ? 'bg-indigo-200 text-indigo-700' : badge.className;
+            const revenueBadgeOverride = getRevenueBadgeInfo(tx);
 
             return (
               <tr
@@ -258,8 +256,8 @@ export default function BankTransactionList({
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${tx.state === 'revenue' ? revenueBadgeClass : badge.className}`}>
-                    {tx.state === 'revenue' ? revenueBadgeLabel : badge.label}
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${revenueBadgeOverride ? revenueBadgeOverride.className : badge.className}`}>
+                    {revenueBadgeOverride ? revenueBadgeOverride.label : badge.label}
                   </span>
                 </td>
               </tr>

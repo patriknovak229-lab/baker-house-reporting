@@ -56,7 +56,7 @@ export async function PUT(
     if (inv.bankTransactionId && inv.bankTransactionId !== body.bankTransactionId) {
       const oldTxIdx = transactions.findIndex((t) => t.id === inv.bankTransactionId);
       if (oldTxIdx !== -1) {
-        transactions[oldTxIdx] = { ...transactions[oldTxIdx], revenueInvoiceId: undefined };
+        transactions[oldTxIdx] = { ...transactions[oldTxIdx], revenueInvoiceId: undefined, state: 'revenue', reconciledAt: undefined };
       }
     }
 
@@ -70,6 +70,8 @@ export async function PUT(
     transactions[txIdx] = {
       ...transactions[txIdx],
       revenueInvoiceId: id,
+      state: 'reconciled',
+      reconciledAt: now,
     };
 
     await Promise.all([redis.set(REV_KEY, invoices), redis.set(TX_KEY, transactions)]);
@@ -81,7 +83,7 @@ export async function PUT(
     if (inv.bankTransactionId) {
       const txIdx = transactions.findIndex((t) => t.id === inv.bankTransactionId);
       if (txIdx !== -1) {
-        transactions[txIdx] = { ...transactions[txIdx], revenueInvoiceId: undefined };
+        transactions[txIdx] = { ...transactions[txIdx], revenueInvoiceId: undefined, state: 'revenue', reconciledAt: undefined };
       }
     }
 
