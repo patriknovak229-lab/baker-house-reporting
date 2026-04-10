@@ -4,6 +4,7 @@ import type {
   SupplierInvoice,
   SupplierInvoiceSource,
   ExtractedInvoiceData,
+  ExtractedLineItem,
 } from '@/types/supplierInvoice';
 import { useCategories } from './useCategories';
 
@@ -15,6 +16,7 @@ interface Props {
   existing?: SupplierInvoice | null;
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
+  icloudFileName?: string;
   extractionFailed?: boolean;
   duplicateOf?: SupplierInvoice | null;   // set when server returned 409
   onSave: (inv: SupplierInvoice, force?: boolean) => void;
@@ -51,12 +53,56 @@ function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   );
 }
 
+function LineItemsBreakdown({
+  lineItems,
+  currency,
+  expanded,
+  onToggle,
+}: {
+  lineItems: ExtractedLineItem[];
+  currency: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const total = lineItems.reduce((s, i) => s + i.amount, 0);
+  return (
+    <div className="border border-violet-200 rounded-lg overflow-hidden text-xs">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-3 py-2 bg-violet-50 hover:bg-violet-100 transition-colors text-violet-700 font-medium"
+      >
+        <span>{lineItems.length} reservations · fees summed</span>
+        <span className="flex items-center gap-2">
+          <span className="text-violet-600">
+            {total.toLocaleString('cs-CZ', { style: 'currency', currency, maximumFractionDigits: 2 })}
+          </span>
+          <span className="text-violet-400">{expanded ? '▾' : '▸'}</span>
+        </span>
+      </button>
+      {expanded && (
+        <div className="divide-y divide-violet-100 max-h-48 overflow-y-auto">
+          {lineItems.map((item, i) => (
+            <div key={i} className="flex justify-between items-center px-3 py-1.5 text-gray-700">
+              <span className="truncate mr-4 text-gray-600">{item.description}</span>
+              <span className="whitespace-nowrap font-medium">
+                {item.amount.toLocaleString('cs-CZ', { style: 'currency', currency, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function InvoiceReviewDrawer({
   extracted,
   file: fileProp,
   existing,
   sourceType,
   gmailMessageId,
+  icloudFileName,
   extractionFailed = false,
   duplicateOf = null,
   onSave,
@@ -80,6 +126,7 @@ export default function InvoiceReviewDrawer({
   const [saving, setSaving] = useState(false);
   const [driveUploading, setDriveUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lineItemsExpanded, setLineItemsExpanded] = useState(false);
 
   // For manual entry: allow attaching a file directly in the drawer
   const [manualFile, setManualFile] = useState<File | null>(null);
@@ -109,6 +156,9 @@ export default function InvoiceReviewDrawer({
       if (extracted.vatAmountCZK != null) setVatAmountCZK(String(extracted.vatAmountCZK));
       if (extracted.invoiceCurrency) setInvoiceCurrency(extracted.invoiceCurrency);
       if (extracted.suggestedCategory) setCategory(extracted.suggestedCategory);
+      if (extracted.lineItems && extracted.lineItems.length > 0) {
+        setDescription(`Service fees — ${extracted.lineItems.length} reservations`);
+      }
 
       // Invoice number: use extracted value, or generate a fallback
       if (extracted.invoiceNumber) {
@@ -201,6 +251,7 @@ export default function InvoiceReviewDrawer({
       driveFileName: driveFileName ?? existing?.driveFileName,
       driveUrl: driveUrl ?? existing?.driveUrl,
       gmailMessageId: gmailMessageId ?? existing?.gmailMessageId,
+      icloudFileName: icloudFileName ?? existing?.icloudFileName,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     };
   }
@@ -298,6 +349,16 @@ export default function InvoiceReviewDrawer({
             <Field label={`VAT Amount (${invoiceCurrency})`}>
               <Input type="number" min="0" step="0.01" value={vatAmountCZK} onChange={(e) => setVatAmountCZK(e.target.value)} placeholder="0" />
             </Field>
+            {extracted?.lineItems && extracted.lineItems.length > 0 && (
+              <div className="col-span-2">
+                <LineItemsBreakdown
+                  lineItems={extracted.lineItems}
+                  currency={invoiceCurrency}
+                  expanded={lineItemsExpanded}
+                  onToggle={() => setLineItemsExpanded((v) => !v)}
+                />
+              </div>
+            )}
 
             <div className="col-span-2">
               <Field label="Category *">

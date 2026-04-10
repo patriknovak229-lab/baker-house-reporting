@@ -13,16 +13,23 @@ interface GmailAttachment {
   sourceType: 'email' | 'portal';
 }
 
+interface ICloudFile {
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  data: string; // base64url
+}
+
 interface Props {
   onProcessBatch: (
-    items: Array<{ file: File; gmailMessageId?: string; sourceType?: SupplierInvoiceSource }>
+    items: Array<{ file: File; gmailMessageId?: string; icloudFileName?: string; sourceType?: SupplierInvoiceSource }>
   ) => void;
   onFileSelected: (file: File, sourceType: SupplierInvoiceSource) => void;
   onManual: () => void;
   onClose: () => void;
 }
 
-type ActiveTab = 'upload' | 'gmail';
+type ActiveTab = 'upload' | 'gmail' | 'icloud';
 
 function base64UrlToFile(data: string, name: string): File {
   const b64 = data.replace(/-/g, '+').replace(/_/g, '/');
@@ -41,6 +48,8 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadSourceType, setUploadSourceType] = useState<'upload' | 'portal'>('upload');
+  const [icloudFiles, setIcloudFiles] = useState<ICloudFile[]>([]);
+  const [icloudSelected, setIcloudSelected] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFiles(files: FileList | null) {
@@ -128,7 +137,58 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
     onProcessBatch(items);
   }
 
+  async function handleICloudScan() {
+    setScanning(true);
+    setError(null);
+    setIcloudFiles([]);
+    setIcloudSelected(new Set());
+    try {
+      const res = await fetch('/api/supplier-invoices/icloud-scan', { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        throw new Error(err.error ?? 'iCloud scan failed');
+      }
+      const data = await res.json() as { files: ICloudFile[] };
+      setIcloudFiles(data.files);
+      setIcloudSelected(new Set(data.files.map((f) => f.fileName)));
+      if (data.files.length === 0) {
+        setError('No new files found in your iCloud folder.');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'iCloud scan failed.');
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function toggleICloudItem(fileName: string) {
+    setIcloudSelected((prev) => {
+      const next = new Set(prev);
+      next.has(fileName) ? next.delete(fileName) : next.add(fileName);
+      return next;
+    });
+  }
+
+  function toggleAllICloud() {
+    if (icloudSelected.size === icloudFiles.length) {
+      setIcloudSelected(new Set());
+    } else {
+      setIcloudSelected(new Set(icloudFiles.map((f) => f.fileName)));
+    }
+  }
+
+  function handleProcessICloudFiles() {
+    const items = icloudFiles
+      .filter((f) => icloudSelected.has(f.fileName))
+      .map((f) => {
+        const file = base64UrlToFile(f.data, f.fileName);
+        return { file, sourceType: 'upload' as SupplierInvoiceSource, icloudFileName: f.fileName };
+      });
+    onProcessBatch(items);
+  }
+
   const allSelected = gmailAttachments.length > 0 && selected.size === gmailAttachments.length;
+  const allICloudSelected = icloudFiles.length > 0 && icloudSelected.size === icloudFiles.length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -143,15 +203,15 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
 
         {/* Tabs */}
         <div className="flex border-b border-gray-100 flex-shrink-0">
-          {(['upload', 'gmail'] as const).map((t) => (
+          {(['upload', 'gmail', 'icloud'] as const).map((t) => (
             <button
               key={t}
-              onClick={() => { setTab(t); setError(null); setGmailAttachments([]); setSelected(new Set()); }}
+              onClick={() => { setTab(t); setError(null); setGmailAttachments([]); setSelected(new Set()); setIcloudFiles([]); setIcloudSelected(new Set()); }}
               className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
                 tab === t ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              {t === 'upload' ? 'Upload File' : 'Scan Gmail'}
+              {t === 'upload' ? 'Upload File' : t === 'gmail' ? 'Scan Gmail' : 'iCloud Folder'}
             </button>
           ))}
         </div>
@@ -231,6 +291,66 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
             </div>
           )}
           <input ref={fileInputRef} type="file" accept=".pdf,image/*,.heic,.heif" multiple className="hidden" onChange={(e) => handleFiles(e.target.files)} />
+
+          {/* ── iCloud tab ── */}
+          {tab === 'icloud' && (
+            <div className="space-y-4">
+              <button
+                onClick={handleICloudScan}
+                disabled={scanning}
+                className="w-full py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {scanning ? (
+                  <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Scanning…</>
+                ) : 'Scan iCloud Folder'}
+              </button>
+
+              {icloudFiles.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={allICloudSelected}
+                        onChange={toggleAllICloud}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
+                      />
+                      <span className="text-xs font-medium text-gray-600">
+                        {icloudSelected.size} of {icloudFiles.length} selected
+                      </span>
+                    </label>
+                    <button onClick={toggleAllICloud} className="text-xs text-indigo-600 hover:underline">
+                      {allICloudSelected ? 'Deselect all' : 'Select all'}
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                    {icloudFiles.map((f) => (
+                      <label
+                        key={f.fileName}
+                        className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${
+                          icloudSelected.has(f.fileName)
+                            ? 'border-indigo-300 bg-indigo-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={icloudSelected.has(f.fileName)}
+                          onChange={() => toggleICloudItem(f.fileName)}
+                          className="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 flex-shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-sm text-gray-800 truncate">{f.fileName}</p>
+                          <p className="text-xs text-gray-400">{Math.round(f.fileSize / 1024)} KB · {f.mimeType}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Gmail tab ── */}
           {tab === 'gmail' && (
@@ -327,6 +447,14 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
                 className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
               >
                 Process {selected.size} invoice{selected.size !== 1 ? 's' : ''}
+              </button>
+            )}
+            {tab === 'icloud' && icloudSelected.size > 0 && (
+              <button
+                onClick={handleProcessICloudFiles}
+                className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+              >
+                Process {icloudSelected.size} file{icloudSelected.size !== 1 ? 's' : ''}
               </button>
             )}
           </div>

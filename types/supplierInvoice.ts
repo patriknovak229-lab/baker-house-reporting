@@ -37,7 +37,8 @@ export interface SupplierInvoice {
   driveFileId?: string;
   driveFileName?: string;
   driveUrl?: string;
-  gmailMessageId?: string;   // prevents duplicate import
+  gmailMessageId?: string;   // prevents duplicate Gmail import
+  icloudFileName?: string;   // prevents duplicate iCloud folder import
   autoProcessed?: boolean;   // true when saved automatically via whitelist
   createdAt: string;         // ISO timestamp
   invoiceCurrency?: string;      // e.g. 'USD', 'EUR' — absent or 'CZK' means CZK
@@ -48,6 +49,12 @@ export interface SupplierInvoice {
   settlementTransactionIds?: string[];
   /** SettlementGroup.id — set when this invoice is attached to a settlement group */
   settlementGroupId?: string;
+}
+
+/** A single fee row extracted from a multi-reservation fee statement (e.g. Airbnb monthly) */
+export interface ExtractedLineItem {
+  description: string;  // reservation ref or guest name
+  amount: number;       // fee for that row
 }
 
 /** Shape returned by the Claude extraction endpoint */
@@ -61,4 +68,6 @@ export interface ExtractedInvoiceData {
   vatAmountCZK: number | null;
   invoiceCurrency: string | null; // e.g. 'CZK', 'USD', 'EUR'
   suggestedCategory: string | null;
+  /** Per-reservation fee rows from multi-row fee statements; null for single-total invoices */
+  lineItems?: ExtractedLineItem[] | null;
 }

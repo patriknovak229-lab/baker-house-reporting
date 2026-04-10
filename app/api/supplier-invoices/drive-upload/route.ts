@@ -81,8 +81,7 @@ export async function POST(request: Request) {
   let buffer = Buffer.from(bytes);
 
   // Convert images to PDF so everything in Drive is a consistent PDF
-  if (file.type.startsWith('image/') || file.type === 'image/heic' || file.type === 'image/heif' ||
-      /\.(heic|heif)$/i.test(file.name)) {
+  if (file.type.startsWith('image/') || /\.(heic|heif)$/i.test(file.name)) {
     try {
       // Step 1: normalise to JPEG/PNG using sharp
       // This handles HEIC, HEIF, oversized images, and any format pdf-lib can't embed directly
