@@ -18,6 +18,7 @@ import type { Role } from "@/utils/roles";
 
 type LocalFields = {
   additionalEmail?: string;
+  phone?: string;
   paymentStatusOverride?: PaymentStatus | null;
   notes?: string;
   manualFlagOverrides?: Partial<Record<CustomerFlag, boolean>>;
@@ -30,6 +31,7 @@ type LocalFields = {
 function extractLocalFields(r: Reservation): LocalFields {
   const local: LocalFields = {};
   if (r.additionalEmail) local.additionalEmail = r.additionalEmail;
+  if (r.phone) local.phone = r.phone;
   if (r.paymentStatusOverride !== null) local.paymentStatusOverride = r.paymentStatusOverride;
   if (r.notes) local.notes = r.notes;
   if (Object.keys(r.manualFlagOverrides).length > 0) local.manualFlagOverrides = r.manualFlagOverrides;

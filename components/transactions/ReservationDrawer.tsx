@@ -159,6 +159,73 @@ function GuestEmailInput({ onSave }: { onSave: (email: string) => void }) {
   );
 }
 
+function PhoneEditField({
+  value,
+  onSave,
+}: {
+  value: string;
+  onSave: (phone: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  // Keep draft in sync if reservation changes
+  useEffect(() => { setDraft(value); }, [value]);
+
+  if (!editing) {
+    return (
+      <div>
+        <p className="text-[11px] text-gray-400 mb-0.5">Phone</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm text-gray-800">{value || <span className="text-gray-400">—</span>}</p>
+          <button
+            onClick={() => { setDraft(value); setEditing(true); }}
+            title="Edit phone"
+            className="shrink-0 text-gray-400 hover:text-indigo-500"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 mb-0.5">Phone</p>
+      <div className="flex items-center gap-1.5">
+        <input
+          autoFocus
+          type="tel"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="+420 000 000 000"
+          className="flex-1 text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { onSave(draft.trim()); setEditing(false); }
+            if (e.key === "Escape") { setEditing(false); setDraft(value); }
+          }}
+        />
+        <button
+          onClick={() => { onSave(draft.trim()); setEditing(false); }}
+          className="text-xs px-2 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600"
+        >
+          Save
+        </button>
+        <button
+          onClick={() => { setEditing(false); setDraft(value); }}
+          className="text-gray-400 hover:text-gray-600 text-xs"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -723,7 +790,7 @@ export default function ReservationDrawer({
 
       {/* Drawer */}
       <div
-        className={`fixed top-0 right-0 h-full w-[480px] bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300 ${
+        className={`fixed top-0 right-0 h-full w-full sm:w-[480px] bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300 ${
           isMounted ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -842,7 +909,10 @@ export default function ReservationDrawer({
                   />
                 )}
               </div>
-              <ReadOnlyField label="Phone" value={reservation.phone} />
+              <PhoneEditField
+                value={reservation.phone}
+                onSave={(phone) => onUpdate({ ...reservation, phone })}
+              />
               <ReadOnlyField label="Guests" value={String(reservation.numberOfGuests)} />
               {reservation.nationality && (
                 <ReadOnlyField
@@ -877,11 +947,18 @@ export default function ReservationDrawer({
                 );
               })()}
             </div>
-            <MessageThread
-              beds24Id={parseInt(reservation.reservationNumber.slice(3))}
-              hasUnread={unreadBookingIds.has(parseInt(reservation.reservationNumber.slice(3)))}
-              guestName={`${reservation.firstName} ${reservation.lastName}`}
-            />
+            {isOTAChannel ? (
+              <MessageThread
+                beds24Id={parseInt(reservation.reservationNumber.slice(3))}
+                hasUnread={unreadBookingIds.has(parseInt(reservation.reservationNumber.slice(3)))}
+                guestName={`${reservation.firstName} ${reservation.lastName}`}
+              />
+            ) : (
+              <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded px-3 py-2.5">
+                In-app messaging is only available for Booking.com and Airbnb reservations.
+                Use WhatsApp{reservation.phone ? "" : " (add a phone number above)"} or email to contact this guest directly.
+              </p>
+            )}
           </section>
 
           <hr className="border-gray-100" />
