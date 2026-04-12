@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
 
 const TELEGRAM_API = "https://api.telegram.org";
+
+// ─── Redis helper ─────────────────────────────────────────────────────────────
+function getRedis(): Redis | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
 
 async function sendTelegram(message: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -60,6 +69,9 @@ interface Beds24WebhookPayload {
 // An old booking receiving a message will have a bookingTime from days/months ago.
 const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
+// Redis key TTL — once notified, suppress all further webhook calls for this ID
+const NOTIFIED_TTL_SECONDS = 2 * 60 * 60; // 2 hours
+
 const ROOM_MAP: Record<string, string> = {
   "656437": "K.201",
   "648596": "K.202",
@@ -90,20 +102,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, skipped: "cancellation" });
   }
 
+  // Skip sub-bookings: virtual-room allocations always carry price = 0;
+  // the master booking holds the real price and is notified separately.
+  // This prevents duplicate notifications for Twin Apartments bookings.
+  if (Number(booking?.price ?? 0) === 0) {
+    return NextResponse.json({ ok: true, skipped: "sub-booking (price=0)" });
+  }
+
   // Skip modifications to existing bookings.
-  // A true new booking has bookingTime ≈ modifiedTime (within 60s).
-  // Any later save (price edit, message, status change) will have modifiedTime > bookingTime.
+  // A true new booking has bookingTime ≈ now (within 30 min window).
   if (booking?.bookingTime) {
     const age = Date.now() - new Date(booking.bookingTime).getTime();
     if (age > NEW_BOOKING_WINDOW_MS) {
       return NextResponse.json({ ok: true, skipped: "existing booking update" });
-    }
-    // Also skip if this is a modification of a recently-created booking
-    if (booking.modifiedTime) {
-      const drift = new Date(booking.modifiedTime).getTime() - new Date(booking.bookingTime).getTime();
-      if (drift > 60_000) {
-        return NextResponse.json({ ok: true, skipped: "recent booking modification" });
-      }
     }
   }
 
@@ -113,6 +124,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Virtual or unrecognised room — skip notification, physical allocation will follow
     return NextResponse.json({ ok: true, skipped: "virtual room" });
   }
+
+  // ── Redis dedup — one notification per booking ID, regardless of how many
+  // webhook calls Beds24 fires for the same booking (retries, rapid updates, etc.)
+  const bookingId = String(booking?.id ?? "");
+  if (bookingId) {
+    const redis = getRedis();
+    if (redis) {
+      const redisKey = `notified:booking:${bookingId}`;
+      const alreadySent = await redis.get(redisKey);
+      if (alreadySent) {
+        return NextResponse.json({ ok: true, skipped: "already notified" });
+      }
+      // Mark as notified before sending — prevents race on parallel invocations
+      await redis.set(redisKey, "1", { ex: NOTIFIED_TTL_SECONDS });
+    }
+  }
+
   const firstName = booking?.firstName ?? "";
   const lastName = booking?.lastName ?? "";
   const guests =
