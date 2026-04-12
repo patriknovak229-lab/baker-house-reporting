@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo } from "react";
-import type { Reservation, Channel, CleaningStatus, PaymentStatus } from "@/types/reservation";
+import type { Reservation, Channel, CleaningStatus, PaymentStatus, IssueCategory } from "@/types/reservation";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { getEffectiveFlags } from "@/utils/flagUtils";
@@ -106,6 +106,62 @@ function SortIcon({
   );
 }
 
+// ── Issue category config (icons + colours for table badges) ─────────────────
+const CAT_CFG: Record<IssueCategory, { bg: string; icon: React.ReactNode }> = {
+  problem: {
+    bg: "bg-red-500",
+    icon: <span className="font-bold text-[10px] leading-none">!</span>,
+  },
+  invoice: {
+    bg: "bg-amber-500",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  cleaning: {
+    bg: "bg-blue-500",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+      </svg>
+    ),
+  },
+  special: {
+    bg: "bg-purple-500",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+      </svg>
+    ),
+  },
+};
+
+// Renders a coloured badge with a CSS-hover tooltip showing the issue text.
+function IssueBadge({ category, texts }: { category: IssueCategory; texts: string[] }) {
+  const { bg, icon } = CAT_CFG[category];
+  return (
+    <span className="relative group/badge inline-flex">
+      <span
+        className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-white animate-pulse ${bg}`}
+      >
+        {icon}
+      </span>
+      {/* Tooltip */}
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/badge:flex flex-col gap-0.5 z-30 min-w-[160px] max-w-[240px]">
+        <span className="bg-gray-900 text-white text-[11px] rounded px-2.5 py-1.5 shadow-lg whitespace-normal">
+          {texts.map((t, i) => <span key={i} className="block">{t}</span>)}
+        </span>
+        <span className="self-center border-4 border-transparent border-t-gray-900 w-0 h-0" />
+      </span>
+    </span>
+  );
+}
+
 // ── Mobile card ───────────────────────────────────────────────────────────────
 function ReservationCard({
   res,
@@ -150,14 +206,20 @@ function ReservationCard({
               New
             </span>
           )}
-          {hasUnresolvedIssues && (
-            <span
-              className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse"
-              title="Unresolved issues"
-            >
-              !
-            </span>
-          )}
+          {([] as IssueCategory[])
+            .concat(...(Object.keys(CAT_CFG) as IssueCategory[]).map((cat) =>
+              (res.issues ?? []).filter((i) => !i.resolved && (i.category ?? "problem") === cat).length > 0
+                ? [cat] : []
+            ))
+            .map((cat) => (
+              <IssueBadge
+                key={cat}
+                category={cat}
+                texts={(res.issues ?? [])
+                  .filter((i) => !i.resolved && (i.category ?? "problem") === cat)
+                  .map((i) => i.text)}
+              />
+            ))}
           {hasUnread && (
             <span
               className="relative inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white"
@@ -470,14 +532,13 @@ export default function ReservationTable({
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1 items-center">
-                        {(res.issues ?? []).some((i) => !i.resolved) && (
-                          <span
-                            className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse"
-                            title="Has unresolved issues"
-                          >
-                            !
-                          </span>
-                        )}
+                        {(Object.keys(CAT_CFG) as IssueCategory[]).map((cat) => {
+                          const texts = (res.issues ?? [])
+                            .filter((i) => !i.resolved && (i.category ?? "problem") === cat)
+                            .map((i) => i.text);
+                          if (texts.length === 0) return null;
+                          return <IssueBadge key={cat} category={cat} texts={texts} />;
+                        })}
                         {stayStatuses.map((status) => {
                           if (status === "checking-in") return (
                             <Badge key={status} variant="amber-filled" size="xs">Checking in</Badge>

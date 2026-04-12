@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback } from "react";
-import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue } from "@/types/reservation";
+import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -230,57 +230,7 @@ export default function TransactionsPage() {
       {/* Availability calendar */}
       {!isLoading && <OccupancyCalendar reservations={reservations} />}
 
-      {/* Unresolved issues alert */}
-      {upcomingUnresolved.length > 0 && (
-        <div className="mt-5 rounded-lg border border-red-200 bg-red-50 overflow-hidden">
-          <button
-            onClick={() => setTaskAlertOpen((o) => !o)}
-            className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-800 hover:bg-red-100 transition-colors"
-          >
-            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse shrink-0">!</span>
-            <span className="font-medium">
-              {upcomingUnresolved.length} unresolved {upcomingUnresolved.length === 1 ? "issue" : "issues"} in the next 7 days
-            </span>
-            <svg
-              className={`w-4 h-4 ml-auto text-red-400 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-
-          {taskAlertOpen && (
-            <div className="border-t border-red-200 px-4 pb-3">
-              <table className="w-full text-sm mt-3">
-                <thead>
-                  <tr className="border-b border-red-200">
-                    {["Guest", "Issue", "Actionable"].map((h) => (
-                      <th key={h} className="pb-2 text-xs font-medium text-red-700 uppercase tracking-wide text-left">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-red-100">
-                  {upcomingUnresolved.map(({ reservation, issue }) => (
-                    <tr
-                      key={issue.id}
-                      className="hover:bg-red-100 cursor-pointer"
-                      onClick={() => { setSelectedReservation(reservation); setTaskAlertOpen(false); }}
-                    >
-                      <td className="py-2 font-medium text-red-900">
-                        {reservation.firstName} {reservation.lastName}
-                      </td>
-                      <td className="py-2 text-red-700">{issue.text}</td>
-                      <td className="py-2 text-red-700 text-xs">{issue.actionableDate}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+{/* large banner removed — compact pill lives above the filter instead */}
 
       {/* Page header */}
       <div className="flex items-center justify-between mb-5">
@@ -393,6 +343,66 @@ export default function TransactionsPage() {
                       <td className="py-2 text-right text-amber-600">{problems.join(" · ")}</td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pending tasks/issues pill — compact, sits above the search bar */}
+      {upcomingUnresolved.length > 0 && (
+        <div className="mb-3">
+          <button
+            onClick={() => setTaskAlertOpen((o) => !o)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
+          >
+            <span className="flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold animate-pulse shrink-0">!</span>
+            {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"} · next 7 days
+            <svg
+              className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {taskAlertOpen && (
+            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-red-200">
+                    {["Guest", "Type", "Task / Issue", "Date"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-red-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-100">
+                  {upcomingUnresolved.map(({ reservation, issue }) => {
+                    const cat = (issue.category ?? "problem") as IssueCategory;
+                    const catLabels: Record<IssueCategory, string> = {
+                      problem: "Problem",
+                      invoice: "Send Invoice",
+                      cleaning: "Mid-stay Cleaning",
+                      special: "Special Treatment",
+                    };
+                    return (
+                      <tr
+                        key={issue.id}
+                        className="hover:bg-red-100 cursor-pointer"
+                        onClick={() => { setSelectedReservation(reservation); setTaskAlertOpen(false); }}
+                      >
+                        <td className="px-4 py-2 font-medium text-red-900 whitespace-nowrap">
+                          {reservation.firstName} {reservation.lastName}
+                        </td>
+                        <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">{catLabels[cat]}</td>
+                        <td className="px-4 py-2 text-red-700">{issue.text}</td>
+                        <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">{issue.actionableDate}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

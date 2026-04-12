@@ -11,12 +11,19 @@ export type CustomerFlag =
 export type RatingStatus = "none" | "good" | "bad";
 export type InvoiceStatus = "Not Issued" | "Issued" | "Sent";
 
+export type IssueCategory =
+  | "problem"   // General problem/issue — red !
+  | "invoice"   // Send invoice task — amber envelope
+  | "cleaning"  // Mid-stay cleaning task — blue sparkles
+  | "special";  // Special treatment / VIP — purple gift
+
 export interface Issue {
-  id: string;           // timestamp-based unique ID
-  text: string;         // free text description
-  actionableDate: string; // ISO date YYYY-MM-DD — when the issue becomes actionable
+  id: string;              // timestamp-based unique ID
+  category?: IssueCategory; // defaults to "problem" when absent (backwards compat)
+  text: string;            // free text description
+  actionableDate: string;  // ISO date YYYY-MM-DD — when the issue becomes actionable
   resolved: boolean;
-  createdAt: string;    // ISO timestamp
+  createdAt: string;       // ISO timestamp
 }
 
 export interface InvoiceData {

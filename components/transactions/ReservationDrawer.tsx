@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory } from "@/types/reservation";
 import MessageThread from "./MessageThread";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
@@ -234,6 +234,64 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+// ── Issue category config ─────────────────────────────────────────────────────
+const CATEGORY_CONFIG: Record<IssueCategory, {
+  label: string;
+  badgeBg: string;
+  cardBg: string;
+  cardBorder: string;
+  buttonBg: string;
+  icon: React.ReactNode;
+}> = {
+  problem: {
+    label: "Problem",
+    badgeBg: "bg-red-500",
+    cardBg: "bg-red-50",
+    cardBorder: "border-red-100",
+    buttonBg: "bg-red-600 hover:bg-red-700",
+    icon: <span className="font-bold leading-none">!</span>,
+  },
+  invoice: {
+    label: "Send Invoice",
+    badgeBg: "bg-amber-500",
+    cardBg: "bg-amber-50",
+    cardBorder: "border-amber-100",
+    buttonBg: "bg-amber-500 hover:bg-amber-600",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    ),
+  },
+  cleaning: {
+    label: "Mid-stay Cleaning",
+    badgeBg: "bg-blue-500",
+    cardBg: "bg-blue-50",
+    cardBorder: "border-blue-100",
+    buttonBg: "bg-blue-600 hover:bg-blue-700",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+      </svg>
+    ),
+  },
+  special: {
+    label: "Special Treatment",
+    badgeBg: "bg-purple-500",
+    cardBg: "bg-purple-50",
+    cardBorder: "border-purple-100",
+    buttonBg: "bg-purple-600 hover:bg-purple-700",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+      </svg>
+    ),
+  },
+};
 
 // ── Invoice preview rendered inside the drawer ────────────────────────────────
 const GOLD = "#B08D57";
@@ -570,6 +628,7 @@ export default function ReservationDrawer({
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
   const [newIssueDate, setNewIssueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newIssueCategory, setNewIssueCategory] = useState<IssueCategory>("problem");
   const [includePaymentQR, setIncludePaymentQR] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceData>({
     companyName: "",
@@ -591,6 +650,7 @@ export default function ReservationDrawer({
       setNotes(reservation.notes);
       setNewIssueText("");
       setNewIssueDate(new Date().toISOString().slice(0, 10));
+      setNewIssueCategory("problem");
       setDriveSaveResult(null);
       setDriveSaveError(null);
       if (reservation.invoiceData) {
@@ -631,6 +691,7 @@ export default function ReservationDrawer({
     if (!newIssueText.trim()) return;
     const issue: Issue = {
       id: Date.now().toString(),
+      category: newIssueCategory,
       text: newIssueText.trim(),
       actionableDate: newIssueDate,
       resolved: false,
@@ -639,6 +700,7 @@ export default function ReservationDrawer({
     onUpdate({ ...reservation!, issues: [...(reservation!.issues ?? []), issue] });
     setNewIssueText("");
     setNewIssueDate(new Date().toISOString().slice(0, 10));
+    setNewIssueCategory("problem");
   }
 
   function toggleIssueResolved(id: string) {
@@ -1127,58 +1189,91 @@ export default function ReservationDrawer({
               <div className="space-y-2 mb-4">
                 {[...(reservation.issues ?? [])]
                   .sort((a, b) => a.actionableDate.localeCompare(b.actionableDate))
-                  .map((issue) => (
-                    <div
-                      key={issue.id}
-                      className={`rounded-md border px-3 py-2.5 ${
-                        issue.resolved
-                          ? "border-gray-100 bg-gray-50"
-                          : "border-red-100 bg-red-50"
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-sm ${issue.resolved ? "line-through text-gray-400" : "text-gray-800"}`}>
-                            {issue.text}
-                          </p>
-                          <p className="text-[11px] text-gray-400 mt-0.5">
-                            Actionable: {formatDate(issue.actionableDate)}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => toggleIssueResolved(issue.id)}
-                            className={`text-[11px] px-2 py-1 rounded border font-medium transition-colors ${
-                              issue.resolved
-                                ? "border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-600"
-                                : "border-green-200 text-green-700 bg-green-50 hover:bg-green-100"
-                            }`}
-                          >
-                            {issue.resolved ? "Reopen" : "Resolve"}
-                          </button>
-                          <button
-                            onClick={() => deleteIssue(issue.id)}
-                            className="p-1 text-gray-300 hover:text-red-400 transition-colors"
-                            title="Delete issue"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
+                  .map((issue) => {
+                    const cat = issue.category ?? "problem";
+                    const cfg = CATEGORY_CONFIG[cat];
+                    return (
+                      <div
+                        key={issue.id}
+                        className={`rounded-md border px-3 py-2.5 ${
+                          issue.resolved ? "border-gray-100 bg-gray-50" : `${cfg.cardBorder} ${cfg.cardBg}`
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          {/* Category badge */}
+                          <span className={`mt-0.5 shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full text-white ${cfg.badgeBg}`}>
+                            {cfg.icon}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-xs font-semibold mb-0.5 ${issue.resolved ? "text-gray-400" : "text-gray-500"}`}>
+                              {cfg.label}
+                            </p>
+                            <p className={`text-sm ${issue.resolved ? "line-through text-gray-400" : "text-gray-800"}`}>
+                              {issue.text}
+                            </p>
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              Actionable: {formatDate(issue.actionableDate)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => toggleIssueResolved(issue.id)}
+                              className={`text-[11px] px-2 py-1 rounded border font-medium transition-colors ${
+                                issue.resolved
+                                  ? "border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-600"
+                                  : "border-green-200 text-green-700 bg-green-50 hover:bg-green-100"
+                              }`}
+                            >
+                              {issue.resolved ? "Reopen" : "Resolve"}
+                            </button>
+                            <button
+                              onClick={() => deleteIssue(issue.id)}
+                              className="p-1 text-gray-300 hover:text-red-400 transition-colors"
+                              title="Delete"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
               </div>
             )}
 
             {/* New issue form */}
             <div className="space-y-2">
+              {/* Category selector */}
+              <div className="flex gap-1.5 flex-wrap">
+                {(Object.keys(CATEGORY_CONFIG) as IssueCategory[]).map((cat) => {
+                  const cfg = CATEGORY_CONFIG[cat];
+                  const active = newIssueCategory === cat;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setNewIssueCategory(cat)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        active
+                          ? `${cfg.badgeBg} text-white border-transparent`
+                          : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                      }`}
+                    >
+                      <span className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-white/20" : cfg.badgeBg} text-white`}>
+                        {cfg.icon}
+                      </span>
+                      {cfg.label}
+                    </button>
+                  );
+                })}
+              </div>
               <textarea
                 value={newIssueText}
                 onChange={(e) => setNewIssueText(e.target.value)}
                 rows={2}
-                placeholder="Describe the issue or task (e.g. &quot;Issue invoice&quot;, &quot;Expected check-in problem&quot;)..."
+                placeholder="Describe the issue or task…"
                 className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
               />
               <div className="flex gap-2">
@@ -1195,9 +1290,9 @@ export default function ReservationDrawer({
                   <button
                     onClick={addIssue}
                     disabled={!newIssueText.trim()}
-                    className="px-4 py-1.5 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${CATEGORY_CONFIG[newIssueCategory].buttonBg}`}
                   >
-                    Add Issue
+                    Add {CATEGORY_CONFIG[newIssueCategory].label}
                   </button>
                 </div>
               </div>
@@ -1283,12 +1378,21 @@ export default function ReservationDrawer({
                     />
                   </div>
                 </div>
-                <button
-                  onClick={handleGenerateInvoice}
-                  className="w-full py-2 px-4 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors"
-                >
-                  Generate Invoice
-                </button>
+                {/* Save details without generating — lets operator store company info early */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onUpdate({ ...reservation!, invoiceData: invoiceForm })}
+                    className="flex-1 py-2 px-4 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+                  >
+                    Save details
+                  </button>
+                  <button
+                    onClick={handleGenerateInvoice}
+                    className="flex-1 py-2 px-4 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors"
+                  >
+                    Generate Invoice
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
