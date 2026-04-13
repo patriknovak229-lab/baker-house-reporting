@@ -7,20 +7,37 @@ import { getEffectiveFlags } from "@/utils/flagUtils";
 import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 
-type SortField = keyof Pick<
-  Reservation,
-  | "reservationNumber"
-  | "firstName"
-  | "channel"
-  | "room"
-  | "checkInDate"
-  | "checkOutDate"
-  | "reservationDate"
-  | "numberOfNights"
-  | "price"
-  | "cleaningStatus"
-  | "paymentStatus"
->;
+type SortField =
+  | keyof Pick<
+      Reservation,
+      | "reservationNumber"
+      | "firstName"
+      | "channel"
+      | "room"
+      | "checkInDate"
+      | "checkOutDate"
+      | "reservationDate"
+      | "numberOfNights"
+      | "price"
+      | "cleaningStatus"
+      | "paymentStatus"
+    >
+  | "stayStatus";
+
+const STAY_STATUS_PRIORITY: Record<string, number> = {
+  "checking-in": 0,
+  "in-house": 1,
+  "checking-out-today": 2,
+  "arriving-tomorrow": 3,
+  "checking-out-tomorrow": 4,
+  "arriving-in-x-days": 5,
+};
+
+function stayStatusPriority(res: Reservation, allReservations: Reservation[]): number {
+  const statuses = computeStayStatus(res, allReservations);
+  if (statuses.length === 0) return 99;
+  return Math.min(...statuses.map((s) => STAY_STATUS_PRIORITY[s] ?? 99));
+}
 
 interface ReservationTableProps {
   reservations: Reservation[];
@@ -342,12 +359,17 @@ export default function ReservationTable({
 
   const sorted = useMemo(() => {
     return [...reservations].sort((a, b) => {
-      const av = a[sortField];
-      const bv = b[sortField];
-      const cmp = String(av) < String(bv) ? -1 : String(av) > String(bv) ? 1 : 0;
+      let cmp: number;
+      if (sortField === "stayStatus") {
+        cmp = stayStatusPriority(a, allReservations) - stayStatusPriority(b, allReservations);
+      } else {
+        const av = a[sortField];
+        const bv = b[sortField];
+        cmp = String(av) < String(bv) ? -1 : String(av) > String(bv) ? 1 : 0;
+      }
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [reservations, sortField, sortDir]);
+  }, [reservations, sortField, sortDir, allReservations]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -388,6 +410,7 @@ export default function ReservationTable({
             <option value="checkInDate:desc">Check-in (latest first)</option>
             <option value="price:desc">Price (highest first)</option>
             <option value="price:asc">Price (lowest first)</option>
+            <option value="stayStatus:asc">Status (most active first)</option>
           </select>
         </div>
         {paginated.length === 0 ? (
@@ -424,8 +447,12 @@ export default function ReservationTable({
                   <SortIcon field={col.key} sortField={sortField} sortDir={sortDir} />
                 </th>
               ))}
-              <th className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide text-left">
+              <th
+                onClick={() => handleSort("stayStatus")}
+                className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide cursor-pointer select-none whitespace-nowrap hover:bg-gray-100 transition-colors text-left"
+              >
                 Status
+                <SortIcon field="stayStatus" sortField={sortField} sortDir={sortDir} />
               </th>
               <th className="px-3 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide text-left">
                 Flags
