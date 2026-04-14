@@ -18,6 +18,6 @@ export default auth((req) => {
 });
 
 export const config = {
-  // Skip Next.js internals, static files, and the auth API routes themselves
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook).*)'],
+  // Skip Next.js internals, static files, auth routes, Stripe webhook, and public pages
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|payment-success).*)'],
 };
