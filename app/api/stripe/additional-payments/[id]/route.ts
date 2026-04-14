@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
+import type { RevenueInvoice } from '@/types/revenueInvoice';
 
-const KEY = 'baker:additional-payments';
+const KEY            = 'baker:additional-payments';
+const INVOICES_KEY   = 'baker:revenue-invoices';
 
 function getRedis(): Redis {
   return new Redis({
@@ -63,6 +65,17 @@ export async function DELETE(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
-  await redis.set(KEY, filtered);
+  // Remove the corresponding auto-created revenue invoice (id: pay-{sessionId})
+  const invoiceId = `pay-${id}`;
+  const invoices = await redis.get<RevenueInvoice[]>(INVOICES_KEY) ?? [];
+  const filteredInvoices = invoices.filter((inv) => inv.id !== invoiceId);
+
+  await Promise.all([
+    redis.set(KEY, filtered),
+    filteredInvoices.length !== invoices.length
+      ? redis.set(INVOICES_KEY, filteredInvoices)
+      : Promise.resolve(),
+  ]);
+
   return NextResponse.json({ ok: true });
 }
