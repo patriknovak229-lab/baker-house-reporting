@@ -18,6 +18,8 @@ interface Props {
   defaultDescription?: string;
   /** When set (drawer context), the payment is automatically linked to this reservation */
   reservationNumber?:  string;
+  /** Guest name passed to accounting when the link is created from a reservation */
+  guestName?:          string;
   /** If provided (from TransactionsPage), the "attach to reservation" toggle is shown */
   reservations?:       ReservationSummary[];
   /** Called after a payment link is successfully generated */
@@ -33,6 +35,7 @@ export default function PaymentLinkModal({
   defaultAmount,
   defaultDescription,
   reservationNumber: fixedReservationNumber,
+  guestName: fixedGuestName,
   reservations,
   onPaymentCreated,
   onClose,
@@ -96,6 +99,7 @@ export default function PaymentLinkModal({
           guestEmail:        email.trim() || undefined,
           guestPhone:        phone.trim() || undefined,
           reservationNumber: fixedReservationNumber ?? selectedRes?.reservationNumber,
+          guestName:         fixedGuestName ?? selectedRes?.guestName,
         }),
       });
       const data = await res.json();

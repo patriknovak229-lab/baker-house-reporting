@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory } from "@/types/reservation";
+import type { AdditionalPayment } from "@/types/additionalPayment";
 import MessageThread from "./MessageThread";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
@@ -23,6 +24,120 @@ function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): Paymen
   const amountCZK = priceCZK;
   const spdString = `SPD*1.0*ACC:${PAYMENT_IBAN}*AM:${amountCZK.toFixed(2)}*CC:CZK*VS:${vs}*MSG:Baker House Apartments`;
   return { spdString, vs, amountCZK };
+}
+
+// ── Additional payment row with status override + delete ─────────────────────
+function AdditionalPaymentRow({
+  ap,
+  onRefresh,
+}: {
+  ap: AdditionalPayment;
+  onRefresh?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  async function handleToggleStatus() {
+    setBusy(true);
+    try {
+      await fetch(`/api/stripe/additional-payments/${encodeURIComponent(ap.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: ap.status === 'unpaid' ? 'paid' : 'unpaid' }),
+      });
+      onRefresh?.();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      await fetch(`/api/stripe/additional-payments/${encodeURIComponent(ap.id)}`, {
+        method: 'DELETE',
+      });
+      onRefresh?.();
+    } finally {
+      setBusy(false);
+      setConfirmDelete(false);
+    }
+  }
+
+  return (
+    <div className="px-3 py-2.5 space-y-1.5">
+      <div className="flex items-start gap-2">
+        {/* Status dot */}
+        <span
+          className={`mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full text-white shrink-0 ${
+            ap.status === "unpaid" ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
+          }`}
+        >
+          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </span>
+
+        {/* Description + dates */}
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-gray-800 truncate">{ap.description}</p>
+          <p className="text-[10px] text-gray-500">
+            Sent {ap.createdAt.slice(0, 10)}
+            {ap.paidAt ? ` · Paid ${ap.paidAt.slice(0, 10)}` : ""}
+          </p>
+        </div>
+
+        {/* Amount + status label */}
+        <div className="text-right shrink-0">
+          <p className="text-xs font-medium text-gray-900">
+            {ap.amountCzk.toLocaleString("cs-CZ")} Kč
+          </p>
+          <span className={`text-[10px] font-medium ${ap.status === "unpaid" ? "text-amber-600" : "text-emerald-600"}`}>
+            {ap.status === "unpaid" ? "Unpaid" : "Paid"}
+          </span>
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      {!confirmDelete ? (
+        <div className="flex items-center gap-2 pl-7">
+          <button
+            onClick={handleToggleStatus}
+            disabled={busy}
+            className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+          >
+            Mark as {ap.status === "unpaid" ? "paid" : "unpaid"}
+          </button>
+          <button
+            onClick={() => setConfirmDelete(true)}
+            disabled={busy}
+            className="text-[10px] font-medium px-2 py-0.5 rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors"
+          >
+            Delete
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 pl-7">
+          <span className="text-[10px] text-red-600">Delete this record?</span>
+          <button
+            onClick={handleDelete}
+            disabled={busy}
+            className="text-[10px] font-semibold px-2 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 transition-colors"
+          >
+            {busy ? "…" : "Confirm"}
+          </button>
+          <button
+            onClick={() => setConfirmDelete(false)}
+            disabled={busy}
+            className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface ReservationDrawerProps {
@@ -1092,33 +1207,11 @@ export default function ReservationDrawer({
                 </p>
                 <div className="divide-y divide-gray-100">
                   {(reservation.additionalPayments ?? []).map((ap) => (
-                    <div key={ap.id} className="flex items-center gap-2 px-3 py-2">
-                      <span
-                        className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-white shrink-0 ${
-                          ap.status === "unpaid" ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
-                        }`}
-                      >
-                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
-                            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-gray-800 truncate">{ap.description}</p>
-                        <p className="text-[10px] text-gray-500">
-                          {ap.createdAt.slice(0, 10)}
-                          {ap.paidAt ? ` · Paid ${ap.paidAt.slice(0, 10)}` : ""}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-xs font-medium text-gray-900">
-                          {ap.amountCzk.toLocaleString("cs-CZ")} Kč
-                        </p>
-                        <span className={`text-[10px] font-medium ${ap.status === "unpaid" ? "text-amber-600" : "text-emerald-600"}`}>
-                          {ap.status === "unpaid" ? "Unpaid" : "Paid"}
-                        </span>
-                      </div>
-                    </div>
+                    <AdditionalPaymentRow
+                      key={ap.id}
+                      ap={ap}
+                      onRefresh={onPaymentCreated}
+                    />
                   ))}
                 </div>
               </div>
@@ -1132,6 +1225,7 @@ export default function ReservationDrawer({
               defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
               defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
               reservationNumber={reservation.reservationNumber}
+              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
               onPaymentCreated={onPaymentCreated}
               onClose={() => setShowPaymentModal(false)}
             />

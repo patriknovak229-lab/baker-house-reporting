@@ -32,6 +32,7 @@ export interface StripePaymentRecord {
   amountCzk: number;
   guestEmail: string;
   guestPhone: string;
+  guestName?: string;
   reservationNumber?: string;
   paidAt: string; // ISO
 }
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
     amountCzk:         parseFloat(meta.amountCzk ?? '0'),
     guestEmail:        meta.guestEmail         ?? '',
     guestPhone:        meta.guestPhone         ?? '',
+    guestName:         meta.guestName          || undefined,
     reservationNumber: meta.reservationNumber  || undefined,
     paidAt:            new Date().toISOString(),
   };
@@ -104,7 +106,7 @@ export async function POST(req: NextRequest) {
           invoiceDate:       invoiceDate,
           amountCZK:         record.amountCzk,
           reservationNumber: record.reservationNumber,
-          guestName:         record.guestEmail || undefined,
+          guestName:         record.guestName || record.guestEmail || undefined,
           description:       record.description,
           createdAt:         paidAt,
         };

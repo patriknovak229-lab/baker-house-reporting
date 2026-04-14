@@ -6,6 +6,7 @@ export interface AdditionalPayment {
   description: string;
   amountCzk: number;
   guestEmail?: string;
+  guestName?: string;
   status: AdditionalPaymentStatus;
   createdAt: string;        // ISO timestamp
   paidAt?: string;          // ISO timestamp — set by webhook on payment

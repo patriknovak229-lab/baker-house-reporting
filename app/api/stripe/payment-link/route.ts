@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
   if ('error' in authResult) return authResult.error;
 
-  const { amountCzk, description, guestEmail, guestPhone, reservationNumber } = await req.json();
+  const { amountCzk, description, guestEmail, guestPhone, reservationNumber, guestName } = await req.json();
 
   if (!amountCzk || amountCzk < 1) {
     return NextResponse.json({ error: 'amountCzk must be at least 1' }, { status: 400 });
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
       guestPhone:        guestPhone        ?? '',
       amountCzk:         String(amountCzk),
       reservationNumber: reservationNumber ?? '',
+      guestName:         guestName         ?? '',
     },
   });
 
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
         description:       description.trim(),
         amountCzk:         amountCzk,
         guestEmail:        guestEmail || undefined,
+        guestName:         guestName  || undefined,
         status:            'unpaid',
         createdAt:         new Date().toISOString(),
       };
