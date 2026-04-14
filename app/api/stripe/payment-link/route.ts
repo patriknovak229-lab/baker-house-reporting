@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     success_url: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url:  `${baseUrl}/payment-success?cancelled=1`,
     customer_email: guestEmail || undefined,
-    expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60, // 30 days
+    expires_at: Math.floor(Date.now() / 1000) + 23 * 60 * 60, // 23 hours (Stripe max is 24h)
     metadata: {
       description: description.trim(),
       guestEmail:  guestEmail  ?? '',
