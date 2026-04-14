@@ -476,7 +476,7 @@ export default function TransactionsPage() {
         <PaymentLinkModal
           reservations={reservations.map((r) => ({
             reservationNumber: r.reservationNumber,
-            guestName: r.guestName,
+            guestName: [r.firstName, r.lastName].filter(Boolean).join(' '),
             email: r.email ?? r.invoiceData?.billingEmail,
             phone: r.phone,
             checkIn: r.checkIn,
