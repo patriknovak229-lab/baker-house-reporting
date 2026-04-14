@@ -31,6 +31,7 @@ interface ReservationDrawerProps {
   unreadBookingIds: Set<number>;
   onClose: () => void;
   onUpdate: (updated: Reservation) => void;
+  onPaymentCreated?: () => void;
 }
 
 function SourceLabel({ source }: { source: string }) {
@@ -625,6 +626,7 @@ export default function ReservationDrawer({
   unreadBookingIds,
   onClose,
   onUpdate,
+  onPaymentCreated,
 }: ReservationDrawerProps) {
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
@@ -1129,6 +1131,8 @@ export default function ReservationDrawer({
               defaultPhone={reservation.phone}
               defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
               defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
+              reservationNumber={reservation.reservationNumber}
+              onPaymentCreated={onPaymentCreated}
               onClose={() => setShowPaymentModal(false)}
             />
           )}

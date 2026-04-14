@@ -16,8 +16,12 @@ interface Props {
   defaultPhone?:       string;
   defaultAmount?:      number;
   defaultDescription?: string;
+  /** When set (drawer context), the payment is automatically linked to this reservation */
+  reservationNumber?:  string;
   /** If provided (from TransactionsPage), the "attach to reservation" toggle is shown */
   reservations?:       ReservationSummary[];
+  /** Called after a payment link is successfully generated */
+  onPaymentCreated?:   () => void;
   onClose: () => void;
 }
 
@@ -28,7 +32,9 @@ export default function PaymentLinkModal({
   defaultPhone,
   defaultAmount,
   defaultDescription,
+  reservationNumber: fixedReservationNumber,
   reservations,
+  onPaymentCreated,
   onClose,
 }: Props) {
   const [step, setStep]               = useState<Step>('form');
@@ -89,13 +95,14 @@ export default function PaymentLinkModal({
           description:       description.trim(),
           guestEmail:        email.trim() || undefined,
           guestPhone:        phone.trim() || undefined,
-          reservationNumber: selectedRes?.reservationNumber,
+          reservationNumber: fixedReservationNumber ?? selectedRes?.reservationNumber,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to create payment link');
       setPaymentUrl(data.url);
       setStep('link');
+      onPaymentCreated?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {

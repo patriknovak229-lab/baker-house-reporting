@@ -548,6 +548,7 @@ export default function TransactionsPage() {
         unreadBookingIds={unreadBookingIds}
         onClose={() => setSelectedReservation(null)}
         onUpdate={handleUpdate}
+        onPaymentCreated={fetchReservations}
       />
 
       {/* Create booking modal */}
@@ -572,6 +573,7 @@ export default function TransactionsPage() {
             checkIn: r.checkInDate,
             checkOut: r.checkOutDate,
           }))}
+          onPaymentCreated={fetchReservations}
           onClose={() => setShowPaymentModal(false)}
         />
       )}
