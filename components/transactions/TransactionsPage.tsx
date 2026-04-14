@@ -479,8 +479,8 @@ export default function TransactionsPage() {
             guestName: [r.firstName, r.lastName].filter(Boolean).join(' '),
             email: r.email ?? r.invoiceData?.billingEmail,
             phone: r.phone,
-            checkIn: r.checkIn,
-            checkOut: r.checkOut,
+            checkIn: r.checkInDate,
+            checkOut: r.checkOutDate,
           }))}
           onClose={() => setShowPaymentModal(false)}
         />
