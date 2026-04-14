@@ -143,6 +143,12 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     if (physicalRooms.length > 0) {
       const merged = { ...masterBooking };
       (merged as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+      // Booking.com multi-unit via manual group: sum prices (same logic as auto-merge)
+      if (merged.apiSource === 'Booking.com') {
+        merged.price      = (merged.price      ?? 0) + siblings.reduce((s, r) => s + (r.price      ?? 0), 0);
+        merged.commission = (merged.commission ?? 0) + siblings.reduce((s, r) => s + (r.commission ?? 0), 0);
+        merged.deposit    = (merged.deposit    ?? 0) + siblings.reduce((s, r) => s + (r.deposit    ?? 0), 0);
+      }
       manualResults.push(merged);
     } else {
       manualResults.push(masterBooking);
@@ -196,6 +202,14 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
       } else {
         // Attach merged room info as extra fields (read in mapToReservation)
         (b as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+        // Booking.com multi-unit: guest buys N identical rooms, each with its own price.
+        // Sum price/commission/deposit across master + all subs so totals are correct.
+        // Airbnb twin/package: master already carries the full combined price — leave as-is.
+        if (b.apiSource === 'Booking.com') {
+          b.price      = (b.price      ?? 0) + subs.reduce((s, r) => s + (r.price      ?? 0), 0);
+          b.commission = (b.commission ?? 0) + subs.reduce((s, r) => s + (r.commission ?? 0), 0);
+          b.deposit    = (b.deposit    ?? 0) + subs.reduce((s, r) => s + (r.deposit    ?? 0), 0);
+        }
         result.push(b);
       }
     } else {
@@ -227,6 +241,12 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     // Use first sub as the base; override room with combined name
     const base = { ...subs[0] };
     (base as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+    // Booking.com multi-unit: sum prices across all subs (same logic as Case 1)
+    if (base.apiSource === 'Booking.com') {
+      base.price      = subs.reduce((s, r) => s + (r.price      ?? 0), 0);
+      base.commission = subs.reduce((s, r) => s + (r.commission ?? 0), 0);
+      base.deposit    = subs.reduce((s, r) => s + (r.deposit    ?? 0), 0);
+    }
     result.push(base);
   }
 
