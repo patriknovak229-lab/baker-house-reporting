@@ -1,5 +1,14 @@
 'use client';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+
+export interface ReservationSummary {
+  reservationNumber: string;
+  guestName: string;
+  email?: string;
+  phone?: string;
+  checkIn: string;
+  checkOut: string;
+}
 
 interface Props {
   /** Pre-filled from the reservation when opened from a drawer */
@@ -7,6 +16,8 @@ interface Props {
   defaultPhone?:       string;
   defaultAmount?:      number;
   defaultDescription?: string;
+  /** If provided (from TransactionsPage), the "attach to reservation" toggle is shown */
+  reservations?:       ReservationSummary[];
   onClose: () => void;
 }
 
@@ -17,6 +28,7 @@ export default function PaymentLinkModal({
   defaultPhone,
   defaultAmount,
   defaultDescription,
+  reservations,
   onClose,
 }: Props) {
   const [step, setStep]               = useState<Step>('form');
@@ -34,6 +46,33 @@ export default function PaymentLinkModal({
   const [emailError, setEmailError]       = useState<string | null>(null);
   const [copied, setCopied]               = useState(false);
 
+  // Reservation attachment
+  const [attachToggle, setAttachToggle]       = useState(false);
+  const [resSearch, setResSearch]             = useState('');
+  const [selectedRes, setSelectedRes]         = useState<ReservationSummary | null>(null);
+
+  const filteredReservations = useMemo(() => {
+    if (!reservations || !resSearch.trim()) return reservations ?? [];
+    const q = resSearch.toLowerCase();
+    return reservations.filter(
+      (r) =>
+        r.guestName.toLowerCase().includes(q) ||
+        r.reservationNumber.toLowerCase().includes(q),
+    );
+  }, [reservations, resSearch]);
+
+  function handleSelectRes(r: ReservationSummary) {
+    setSelectedRes(r);
+    if (r.email && !email) setEmail(r.email);
+    if (r.phone && !phone) setPhone(r.phone);
+    if (!description) setDescription(`Baker House — reservation ${r.reservationNumber}`);
+    setResSearch('');
+  }
+
+  function handleDetachRes() {
+    setSelectedRes(null);
+  }
+
   async function handleGenerate() {
     const amountNum = parseFloat(amount);
     if (!description.trim()) { setError('Description is required'); return; }
@@ -46,10 +85,11 @@ export default function PaymentLinkModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amountCzk:   amountNum,
-          description: description.trim(),
-          guestEmail:  email.trim() || undefined,
-          guestPhone:  phone.trim() || undefined,
+          amountCzk:         amountNum,
+          description:       description.trim(),
+          guestEmail:        email.trim() || undefined,
+          guestPhone:        phone.trim() || undefined,
+          reservationNumber: selectedRes?.reservationNumber,
         }),
       });
       const data = await res.json();
@@ -124,6 +164,86 @@ export default function PaymentLinkModal({
 
         {step === 'form' && (
           <div className="px-6 py-5 space-y-4">
+
+            {/* Attach to reservation toggle (only when reservations are passed in) */}
+            {reservations && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => { setAttachToggle((v) => !v); setSelectedRes(null); setResSearch(''); }}
+                  className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+                >
+                  <span
+                    className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${
+                      attachToggle ? 'bg-indigo-600' : 'bg-gray-200'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3 w-3 rounded-full bg-white shadow transform transition-transform ${
+                        attachToggle ? 'translate-x-3' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
+                  Attach to existing reservation
+                </button>
+
+                {attachToggle && (
+                  selectedRes ? (
+                    /* Selected reservation chip */
+                    <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-indigo-900 truncate">{selectedRes.guestName}</p>
+                        <p className="text-[10px] text-indigo-600">
+                          #{selectedRes.reservationNumber} · {selectedRes.checkIn} – {selectedRes.checkOut}
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleDetachRes}
+                        className="text-indigo-400 hover:text-indigo-600 flex-shrink-0"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ) : (
+                    /* Search input + results */
+                    <div className="space-y-1">
+                      <input
+                        type="text"
+                        value={resSearch}
+                        onChange={(e) => setResSearch(e.target.value)}
+                        placeholder="Search guest name or booking #"
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        autoFocus
+                      />
+                      {resSearch.trim() && (
+                        <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                          {filteredReservations.length === 0 ? (
+                            <p className="px-3 py-2 text-xs text-gray-400">No matches</p>
+                          ) : (
+                            filteredReservations.slice(0, 8).map((r) => (
+                              <button
+                                key={r.reservationNumber}
+                                type="button"
+                                onClick={() => handleSelectRes(r)}
+                                className="w-full text-left px-3 py-2 hover:bg-indigo-50 transition-colors"
+                              >
+                                <p className="text-xs font-medium text-gray-900">{r.guestName}</p>
+                                <p className="text-[10px] text-gray-500">
+                                  #{r.reservationNumber} · {r.checkIn} – {r.checkOut}
+                                </p>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+
             {/* Description */}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Description *</label>
@@ -196,6 +316,11 @@ export default function PaymentLinkModal({
               <p className="text-xl font-bold text-indigo-700">
                 {parseFloat(amount).toLocaleString('cs-CZ')} Kč
               </p>
+              {selectedRes && (
+                <p className="text-xs text-gray-500">
+                  Reservation #{selectedRes.reservationNumber} · {selectedRes.guestName}
+                </p>
+              )}
             </div>
 
             {/* URL box */}

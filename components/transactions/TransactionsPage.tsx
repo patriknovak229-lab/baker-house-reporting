@@ -473,7 +473,17 @@ export default function TransactionsPage() {
 
       {/* Manual payment link modal */}
       {showPaymentModal && (
-        <PaymentLinkModal onClose={() => setShowPaymentModal(false)} />
+        <PaymentLinkModal
+          reservations={reservations.map((r) => ({
+            reservationNumber: r.reservationNumber,
+            guestName: r.guestName,
+            email: r.email ?? r.invoiceData?.billingEmail,
+            phone: r.phone,
+            checkIn: r.checkIn,
+            checkOut: r.checkOut,
+          }))}
+          onClose={() => setShowPaymentModal(false)}
+        />
       )}
     </div>
   );

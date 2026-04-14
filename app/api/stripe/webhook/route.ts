@@ -27,6 +27,7 @@ export interface StripePaymentRecord {
   amountCzk: number;
   guestEmail: string;
   guestPhone: string;
+  reservationNumber?: string;
   paidAt: string; // ISO
 }
 
@@ -58,12 +59,13 @@ export async function POST(req: NextRequest) {
   const meta    = session.metadata ?? {};
 
   const record: StripePaymentRecord = {
-    sessionId:   session.id,
-    description: meta.description ?? '',
-    amountCzk:   parseFloat(meta.amountCzk ?? '0'),
-    guestEmail:  meta.guestEmail  ?? '',
-    guestPhone:  meta.guestPhone  ?? '',
-    paidAt:      new Date().toISOString(),
+    sessionId:         session.id,
+    description:       meta.description       ?? '',
+    amountCzk:         parseFloat(meta.amountCzk ?? '0'),
+    guestEmail:        meta.guestEmail         ?? '',
+    guestPhone:        meta.guestPhone         ?? '',
+    reservationNumber: meta.reservationNumber  || undefined,
+    paidAt:            new Date().toISOString(),
   };
 
   // Persist to Redis list
@@ -76,6 +78,7 @@ export async function POST(req: NextRequest) {
     `💳 <b>Payment received</b>`,
     `📝 ${record.description || '—'}`,
     `💰 ${amount}`,
+    record.reservationNumber ? `🏨 Reservation #${record.reservationNumber}` : '',
     record.guestEmail ? `📧 ${record.guestEmail}` : '',
     record.guestPhone ? `📞 ${record.guestPhone}` : '',
   ].filter(Boolean).join('\n');

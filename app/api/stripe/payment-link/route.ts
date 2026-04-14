@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
   if ('error' in authResult) return authResult.error;
 
-  const { amountCzk, description, guestEmail, guestPhone } = await req.json();
+  const { amountCzk, description, guestEmail, guestPhone, reservationNumber } = await req.json();
 
   if (!amountCzk || amountCzk < 1) {
     return NextResponse.json({ error: 'amountCzk must be at least 1' }, { status: 400 });
@@ -37,10 +37,11 @@ export async function POST(req: NextRequest) {
     customer_email: guestEmail || undefined,
     expires_at: Math.floor(Date.now() / 1000) + 23 * 60 * 60, // 23 hours (Stripe max is 24h)
     metadata: {
-      description: description.trim(),
-      guestEmail:  guestEmail  ?? '',
-      guestPhone:  guestPhone  ?? '',
-      amountCzk:   String(amountCzk),
+      description:       description.trim(),
+      guestEmail:        guestEmail        ?? '',
+      guestPhone:        guestPhone        ?? '',
+      amountCzk:         String(amountCzk),
+      reservationNumber: reservationNumber ?? '',
     },
   });
 
