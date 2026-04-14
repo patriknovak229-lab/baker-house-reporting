@@ -145,9 +145,20 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
       (merged as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
       // Booking.com multi-unit via manual group: sum prices (same logic as auto-merge)
       if (merged.apiSource === 'Booking.com') {
-        merged.price      = (merged.price      ?? 0) + siblings.reduce((s, r) => s + (r.price      ?? 0), 0);
-        merged.commission = (merged.commission ?? 0) + siblings.reduce((s, r) => s + (r.commission ?? 0), 0);
-        merged.deposit    = (merged.deposit    ?? 0) + siblings.reduce((s, r) => s + (r.deposit    ?? 0), 0);
+        merged.price   = (merged.price   ?? 0) + siblings.reduce((s, r) => s + (r.price   ?? 0), 0);
+        merged.deposit = (merged.deposit ?? 0) + siblings.reduce((s, r) => s + (r.deposit ?? 0), 0);
+        const commBreakdown = [merged, ...siblings].reduce(
+          (acc, r) => {
+            const bd = parseCommissionBreakdown(r.rateDescription ?? '', r.commission ?? 0);
+            return {
+              commissionAmount:    acc.commissionAmount    + bd.commissionAmount,
+              paymentChargeAmount: acc.paymentChargeAmount + bd.paymentChargeAmount,
+            };
+          },
+          { commissionAmount: 0, paymentChargeAmount: 0 },
+        );
+        (merged as Beds24Booking & { _commissionBreakdown?: { commissionAmount: number; paymentChargeAmount: number } })
+          ._commissionBreakdown = commBreakdown;
       }
       manualResults.push(merged);
     } else {
@@ -206,9 +217,23 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
         // Sum price/commission/deposit across master + all subs so totals are correct.
         // Airbnb twin/package: master already carries the full combined price — leave as-is.
         if (b.apiSource === 'Booking.com') {
-          b.price      = (b.price      ?? 0) + subs.reduce((s, r) => s + (r.price      ?? 0), 0);
-          b.commission = (b.commission ?? 0) + subs.reduce((s, r) => s + (r.commission ?? 0), 0);
-          b.deposit    = (b.deposit    ?? 0) + subs.reduce((s, r) => s + (r.deposit    ?? 0), 0);
+          b.price   = (b.price   ?? 0) + subs.reduce((s, r) => s + (r.price   ?? 0), 0);
+          b.deposit = (b.deposit ?? 0) + subs.reduce((s, r) => s + (r.deposit ?? 0), 0);
+          // Parse commission breakdown from each booking's rateDescription individually,
+          // then sum the components. We cannot just sum b.commission because mapToReservation
+          // calls parseCommissionBreakdown(rateDescription) which only sees the master's text.
+          const commBreakdown = [b, ...subs].reduce(
+            (acc, r) => {
+              const bd = parseCommissionBreakdown(r.rateDescription ?? '', r.commission ?? 0);
+              return {
+                commissionAmount:     acc.commissionAmount     + bd.commissionAmount,
+                paymentChargeAmount:  acc.paymentChargeAmount  + bd.paymentChargeAmount,
+              };
+            },
+            { commissionAmount: 0, paymentChargeAmount: 0 },
+          );
+          (b as Beds24Booking & { _commissionBreakdown?: { commissionAmount: number; paymentChargeAmount: number } })
+            ._commissionBreakdown = commBreakdown;
         }
         result.push(b);
       }
@@ -243,9 +268,20 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     (base as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
     // Booking.com multi-unit: sum prices across all subs (same logic as Case 1)
     if (base.apiSource === 'Booking.com') {
-      base.price      = subs.reduce((s, r) => s + (r.price      ?? 0), 0);
-      base.commission = subs.reduce((s, r) => s + (r.commission ?? 0), 0);
-      base.deposit    = subs.reduce((s, r) => s + (r.deposit    ?? 0), 0);
+      base.price   = subs.reduce((s, r) => s + (r.price   ?? 0), 0);
+      base.deposit = subs.reduce((s, r) => s + (r.deposit ?? 0), 0);
+      const commBreakdown = subs.reduce(
+        (acc, r) => {
+          const bd = parseCommissionBreakdown(r.rateDescription ?? '', r.commission ?? 0);
+          return {
+            commissionAmount:    acc.commissionAmount    + bd.commissionAmount,
+            paymentChargeAmount: acc.paymentChargeAmount + bd.paymentChargeAmount,
+          };
+        },
+        { commissionAmount: 0, paymentChargeAmount: 0 },
+      );
+      (base as Beds24Booking & { _commissionBreakdown?: { commissionAmount: number; paymentChargeAmount: number } })
+        ._commissionBreakdown = commBreakdown;
     }
     result.push(base);
   }
@@ -263,10 +299,12 @@ function mapToReservation(b: Beds24Booking): Reservation {
       : 0;
 
   const { paymentStatus, amountPaid } = derivePayment(b);
-  const { commissionAmount, paymentChargeAmount } = parseCommissionBreakdown(
-    b.rateDescription ?? "",
-    b.commission ?? 0
-  );
+  // Use pre-summed breakdown for Booking.com multi-unit groups; parse normally otherwise
+  const precomputedBreakdown = (b as Beds24Booking & {
+    _commissionBreakdown?: { commissionAmount: number; paymentChargeAmount: number };
+  })._commissionBreakdown;
+  const { commissionAmount, paymentChargeAmount } = precomputedBreakdown
+    ?? parseCommissionBreakdown(b.rateDescription ?? "", b.commission ?? 0);
 
   const linkedRooms = (b as Beds24Booking & { _linkedRooms?: string[] })._linkedRooms;
   const room = linkedRooms && linkedRooms.length > 0
