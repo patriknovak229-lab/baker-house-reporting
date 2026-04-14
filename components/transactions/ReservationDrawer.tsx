@@ -1081,11 +1081,51 @@ export default function ReservationDrawer({
               </svg>
               Request Payment
             </button>
+
+            {/* Additional Payments sub-list */}
+            {(reservation.additionalPayments ?? []).length > 0 && (
+              <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
+                <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide px-3 py-2 bg-gray-50 border-b border-gray-100">
+                  Additional Payments
+                </p>
+                <div className="divide-y divide-gray-100">
+                  {(reservation.additionalPayments ?? []).map((ap) => (
+                    <div key={ap.id} className="flex items-center gap-2 px-3 py-2">
+                      <span
+                        className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-white shrink-0 ${
+                          ap.status === "unpaid" ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
+                        }`}
+                      >
+                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+                            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-gray-800 truncate">{ap.description}</p>
+                        <p className="text-[10px] text-gray-500">
+                          {ap.createdAt.slice(0, 10)}
+                          {ap.paidAt ? ` · Paid ${ap.paidAt.slice(0, 10)}` : ""}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xs font-medium text-gray-900">
+                          {ap.amountCzk.toLocaleString("cs-CZ")} Kč
+                        </p>
+                        <span className={`text-[10px] font-medium ${ap.status === "unpaid" ? "text-amber-600" : "text-emerald-600"}`}>
+                          {ap.status === "unpaid" ? "Unpaid" : "Paid"}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
 
           {showPaymentModal && (
             <PaymentLinkModal
-              defaultEmail={reservation.email ?? reservation.invoiceData?.billingEmail}
+              defaultEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
               defaultPhone={reservation.phone}
               defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
               defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}

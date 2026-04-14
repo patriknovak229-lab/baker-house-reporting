@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo } from "react";
 import type { Reservation, Channel, CleaningStatus, PaymentStatus, IssueCategory } from "@/types/reservation";
+import type { AdditionalPayment } from "@/types/additionalPayment";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { getEffectiveFlags } from "@/utils/flagUtils";
@@ -179,6 +180,37 @@ function IssueBadge({ category, texts }: { category: IssueCategory; texts: strin
   );
 }
 
+// Renders a dollar-sign badge with hover tooltip for additional payments.
+// Blinks amber when any are unpaid, otherwise muted green when all paid.
+function AdditionalPaymentBadge({ payments }: { payments: AdditionalPayment[] }) {
+  if (payments.length === 0) return null;
+  const hasUnpaid = payments.some((p) => p.status === "unpaid");
+  const bg = hasUnpaid ? "bg-amber-500" : "bg-emerald-500";
+  const pulse = hasUnpaid ? "animate-pulse" : "";
+
+  return (
+    <span className="relative group/apbadge inline-flex">
+      <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-white ${bg} ${pulse}`}>
+        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </span>
+      {/* Tooltip */}
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/apbadge:flex flex-col gap-0.5 z-30 min-w-[180px] max-w-[260px]">
+        <span className="bg-gray-900 text-white text-[11px] rounded px-2.5 py-1.5 shadow-lg whitespace-normal">
+          {payments.map((p) => (
+            <span key={p.id} className="block">
+              {p.status === "unpaid" ? "⏳" : "✓"} {p.description} — {p.amountCzk.toLocaleString("cs-CZ")} Kč
+            </span>
+          ))}
+        </span>
+        <span className="self-center border-4 border-transparent border-t-gray-900 w-0 h-0" />
+      </span>
+    </span>
+  );
+}
+
 // ── Mobile card ───────────────────────────────────────────────────────────────
 function ReservationCard({
   res,
@@ -223,6 +255,7 @@ function ReservationCard({
               New
             </span>
           )}
+          <AdditionalPaymentBadge payments={res.additionalPayments ?? []} />
           {([] as IssueCategory[])
             .concat(...(Object.keys(CAT_CFG) as IssueCategory[]).map((cat) =>
               (res.issues ?? []).filter((i) => !i.resolved && (i.category ?? "problem") === cat).length > 0
@@ -559,6 +592,7 @@ export default function ReservationTable({
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1 items-center">
+                        <AdditionalPaymentBadge payments={res.additionalPayments ?? []} />
                         {(Object.keys(CAT_CFG) as IssueCategory[]).map((cat) => {
                           const texts = (res.issues ?? [])
                             .filter((i) => !i.resolved && (i.category ?? "problem") === cat)

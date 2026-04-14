@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
+import type { AdditionalPayment } from '@/types/additionalPayment';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
+
+function getRedis(): Redis {
+  return new Redis({
+    url:   process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  });
+}
 
 export async function POST(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
@@ -44,6 +55,27 @@ export async function POST(req: NextRequest) {
       reservationNumber: reservationNumber ?? '',
     },
   });
+
+  // When linked to a reservation, create a pending AdditionalPayment record
+  if (reservationNumber) {
+    try {
+      const redis = getRedis();
+      const existing = await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY) ?? [];
+      const record: AdditionalPayment = {
+        id:                session.id,
+        reservationNumber: reservationNumber,
+        description:       description.trim(),
+        amountCzk:         amountCzk,
+        guestEmail:        guestEmail || undefined,
+        status:            'unpaid',
+        createdAt:         new Date().toISOString(),
+      };
+      await redis.set(ADDITIONAL_PAYMENTS_KEY, [...existing, record]);
+    } catch (err) {
+      // Non-fatal — payment link still works even if pending record fails
+      console.error('[payment-link] Failed to create AdditionalPayment record:', err);
+    }
+  }
 
   return NextResponse.json({ url: session.url, sessionId: session.id });
 }

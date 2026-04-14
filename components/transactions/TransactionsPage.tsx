@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
+import type { AdditionalPayment } from "@/types/additionalPayment";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -76,14 +77,16 @@ export default function TransactionsPage() {
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
 
   const fetchReservations = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [bookingsRes, localStateRes] = await Promise.all([
+      const [bookingsRes, localStateRes, additionalPaymentsRes] = await Promise.all([
         fetch("/api/bookings"),
         fetch("/api/local-state"),
+        fetch("/api/stripe/additional-payments"),
       ]);
       if (!bookingsRes.ok) {
         const json = await bookingsRes.json().catch(() => ({}));
@@ -93,7 +96,23 @@ export default function TransactionsPage() {
       const localState: Record<string, LocalFields> = localStateRes.ok
         ? await localStateRes.json().catch(() => ({}))
         : {};
-      setReservations(mergeLocal(data, localState));
+      const allAdditionalPayments: AdditionalPayment[] = additionalPaymentsRes.ok
+        ? await additionalPaymentsRes.json().catch(() => [])
+        : [];
+
+      // Group additional payments by reservationNumber for merge
+      const apByRes = new Map<string, AdditionalPayment[]>();
+      for (const ap of allAdditionalPayments) {
+        const group = apByRes.get(ap.reservationNumber) ?? [];
+        group.push(ap);
+        apByRes.set(ap.reservationNumber, group);
+      }
+
+      const merged = mergeLocal(data, localState).map((r) => {
+        const aps = apByRes.get(r.reservationNumber);
+        return aps ? { ...r, additionalPayments: aps } : r;
+      });
+      setReservations(merged);
       setLastSynced(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load reservations");
@@ -147,6 +166,19 @@ export default function TransactionsPage() {
       }
     }
     return items.sort((a, b) => a.issue.actionableDate.localeCompare(b.issue.actionableDate));
+  }, [reservations]);
+
+  // ── Unpaid additional payments (Stripe payment links not yet paid) ───────────
+  const unpaidAdditionalPayments = useMemo(() => {
+    const items: { reservation: Reservation; payment: AdditionalPayment }[] = [];
+    for (const r of reservations) {
+      for (const ap of r.additionalPayments ?? []) {
+        if (ap.status === "unpaid") {
+          items.push({ reservation: r, payment: ap });
+        }
+      }
+    }
+    return items.sort((a, b) => a.payment.createdAt.localeCompare(b.payment.createdAt));
   }, [reservations]);
 
   const dataIssues = useMemo<DataIssue[]>(() => {
@@ -423,6 +455,64 @@ export default function TransactionsPage() {
         </div>
       )}
 
+      {/* Unpaid additional payments pill */}
+      {unpaidAdditionalPayments.length > 0 && (
+        <div className="mb-3">
+          <button
+            onClick={() => setPaymentAlertOpen((o) => !o)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5 shrink-0 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {unpaidAdditionalPayments.length} unpaid additional {unpaidAdditionalPayments.length === 1 ? "payment" : "payments"}
+            <svg
+              className={`w-3.5 h-3.5 transition-transform ${paymentAlertOpen ? "rotate-180" : ""}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {paymentAlertOpen && (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-amber-200">
+                    {["Guest", "Reservation", "Description", "Amount", "Sent"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-100">
+                  {unpaidAdditionalPayments.map(({ reservation, payment }) => (
+                    <tr
+                      key={payment.id}
+                      className="hover:bg-amber-100 cursor-pointer"
+                      onClick={() => { setSelectedReservation(reservation); setPaymentAlertOpen(false); }}
+                    >
+                      <td className="px-4 py-2 font-medium text-amber-900 whitespace-nowrap">
+                        {reservation.firstName} {reservation.lastName}
+                      </td>
+                      <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{payment.reservationNumber}</td>
+                      <td className="px-4 py-2 text-amber-700">{payment.description}</td>
+                      <td className="px-4 py-2 text-amber-900 font-medium whitespace-nowrap">
+                        {payment.amountCzk.toLocaleString("cs-CZ")} Kč
+                      </td>
+                      <td className="px-4 py-2 text-amber-600 text-xs whitespace-nowrap">
+                        {payment.createdAt.slice(0, 10)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Search + Filters */}
       <div className="space-y-3 mb-5">
         <input
@@ -477,7 +567,7 @@ export default function TransactionsPage() {
           reservations={reservations.map((r) => ({
             reservationNumber: r.reservationNumber,
             guestName: [r.firstName, r.lastName].filter(Boolean).join(' '),
-            email: r.email ?? r.invoiceData?.billingEmail,
+            email: r.additionalEmail || r.invoiceData?.billingEmail || undefined,
             phone: r.phone,
             checkIn: r.checkInDate,
             checkOut: r.checkOutDate,

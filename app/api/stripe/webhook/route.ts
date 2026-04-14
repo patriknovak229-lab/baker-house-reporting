@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { Redis } from '@upstash/redis';
+import type { AdditionalPayment } from '@/types/additionalPayment';
+import type { RevenueInvoice } from '@/types/revenueInvoice';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -8,6 +10,9 @@ const redis = new Redis({
   url:   process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
+
+const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
+const REVENUE_INVOICES_KEY    = 'baker:revenue-invoices';
 
 async function sendTelegram(message: string): Promise<void> {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
@@ -68,9 +73,48 @@ export async function POST(req: NextRequest) {
     paidAt:            new Date().toISOString(),
   };
 
-  // Persist to Redis list
-  const existing = await redis.get<StripePaymentRecord[]>('baker:stripe-payments') ?? [];
-  await redis.set('baker:stripe-payments', [...existing, record]);
+  // Persist to legacy Redis list (backwards compat)
+  const existingRecords = await redis.get<StripePaymentRecord[]>('baker:stripe-payments') ?? [];
+  await redis.set('baker:stripe-payments', [...existingRecords, record]);
+
+  // Update AdditionalPayment to paid + auto-create revenue invoice (when linked to reservation)
+  if (record.reservationNumber) {
+    const payments = await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY) ?? [];
+    const idx = payments.findIndex((p) => p.id === session.id);
+
+    if (idx !== -1) {
+      const paidAt = record.paidAt;
+      payments[idx] = { ...payments[idx], status: 'paid', paidAt };
+
+      // Auto-create revenue invoice
+      const invoiceId = `pay-${session.id}`;
+      const invoiceNumber = `PAY-${session.id.slice(-8).toUpperCase()}`;
+      const invoiceDate = paidAt.slice(0, 10);
+
+      const invoices = await redis.get<RevenueInvoice[]>(REVENUE_INVOICES_KEY) ?? [];
+      const alreadyExists = invoices.some((i) => i.id === invoiceId);
+
+      if (!alreadyExists) {
+        const newInvoice: RevenueInvoice = {
+          id:                invoiceId,
+          sourceType:        'issued',
+          category:          'other_services',
+          status:            'pending',
+          invoiceNumber:     invoiceNumber,
+          invoiceDate:       invoiceDate,
+          amountCZK:         record.amountCzk,
+          reservationNumber: record.reservationNumber,
+          guestName:         record.guestEmail || undefined,
+          description:       record.description,
+          createdAt:         paidAt,
+        };
+        await redis.set(REVENUE_INVOICES_KEY, [...invoices, newInvoice]);
+        payments[idx] = { ...payments[idx], invoiceId };
+      }
+
+      await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+    }
+  }
 
   // Telegram notification
   const amount  = record.amountCzk ? `${record.amountCzk.toLocaleString('cs-CZ')} Kč` : '—';
