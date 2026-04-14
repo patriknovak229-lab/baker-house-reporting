@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory } from "@/types/reservation";
 import MessageThread from "./MessageThread";
 import Badge from "@/components/shared/Badge";
@@ -643,6 +644,7 @@ export default function ReservationDrawer({
   const [isSavingToDrive, setIsSavingToDrive] = useState(false);
   const [driveSaveResult, setDriveSaveResult] = useState<{ url: string; name: string } | null>(null);
   const [driveSaveError, setDriveSaveError] = useState<string | null>(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   useEffect(() => {
     if (reservation) {
@@ -1067,9 +1069,28 @@ export default function ReservationDrawer({
                     Outstanding balance: {formatCurrency(reservation.price - reservation.amountPaid)}
                   </p>
                 )}
+                <button
+                  onClick={() => setShowPaymentModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors w-fit"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                  Request Payment
+                </button>
               </div>
             )}
           </section>
+
+          {showPaymentModal && (
+            <PaymentLinkModal
+              defaultEmail={reservation.email ?? reservation.invoiceData?.billingEmail}
+              defaultPhone={reservation.phone}
+              defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
+              defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
+              onClose={() => setShowPaymentModal(false)}
+            />
+          )}
 
           <hr className="border-gray-100" />
 

@@ -7,6 +7,7 @@ import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
 import CreateBookingModal from "./CreateBookingModal";
+import PaymentLinkModal from "./PaymentLinkModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
@@ -74,6 +75,7 @@ export default function TransactionsPage() {
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   const fetchReservations = useCallback(async () => {
     setIsLoading(true);
@@ -248,6 +250,16 @@ export default function TransactionsPage() {
             </span>
           </span>
           {role && canMutate(role, "transactions") && (
+            <>
+            <button
+              onClick={() => setShowPaymentModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-indigo-200 text-indigo-700 text-sm font-medium transition-colors hover:bg-indigo-50 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              Manual Payment
+            </button>
             <button
               onClick={() => setShowCreateModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors shadow-sm"
@@ -257,6 +269,7 @@ export default function TransactionsPage() {
               </svg>
               New Booking
             </button>
+            </>
           )}
           <button
             onClick={fetchReservations}
@@ -456,6 +469,11 @@ export default function TransactionsPage() {
             fetchReservations();
           }}
         />
+      )}
+
+      {/* Manual payment link modal */}
+      {showPaymentModal && (
+        <PaymentLinkModal onClose={() => setShowPaymentModal(false)} />
       )}
     </div>
   );
