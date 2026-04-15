@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
+import type { Voucher } from "@/types/voucher";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -9,7 +10,9 @@ import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
 import CreateBookingModal from "./CreateBookingModal";
 import PaymentLinkModal from "./PaymentLinkModal";
+import CreateVoucherModal from "./CreateVoucherModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
+import { normalizeForSearch } from "@/utils/stringUtils";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
 import type { Role } from "@/utils/roles";
@@ -77,16 +80,18 @@ export default function TransactionsPage() {
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
 
   const fetchReservations = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [bookingsRes, localStateRes, additionalPaymentsRes] = await Promise.all([
+      const [bookingsRes, localStateRes, additionalPaymentsRes, vouchersRes] = await Promise.all([
         fetch("/api/bookings"),
         fetch("/api/local-state"),
         fetch("/api/stripe/additional-payments"),
+        fetch("/api/vouchers"),
       ]);
       if (!bookingsRes.ok) {
         const json = await bookingsRes.json().catch(() => ({}));
@@ -99,6 +104,9 @@ export default function TransactionsPage() {
       const allAdditionalPayments: AdditionalPayment[] = additionalPaymentsRes.ok
         ? await additionalPaymentsRes.json().catch(() => [])
         : [];
+      const allVouchers: Voucher[] = vouchersRes.ok
+        ? await vouchersRes.json().catch(() => [])
+        : [];
 
       // Group additional payments by reservationNumber for merge
       const apByRes = new Map<string, AdditionalPayment[]>();
@@ -108,9 +116,20 @@ export default function TransactionsPage() {
         apByRes.set(ap.reservationNumber, group);
       }
 
+      // Group vouchers by reservationNumber for merge
+      const vByRes = new Map<string, Voucher[]>();
+      for (const v of allVouchers) {
+        if (v.reservationNumber) {
+          const group = vByRes.get(v.reservationNumber) ?? [];
+          group.push(v);
+          vByRes.set(v.reservationNumber, group);
+        }
+      }
+
       const merged = mergeLocal(data, localState).map((r) => {
         const aps = apByRes.get(r.reservationNumber);
-        return aps ? { ...r, additionalPayments: aps } : r;
+        const vs = vByRes.get(r.reservationNumber);
+        return { ...r, ...(aps ? { additionalPayments: aps } : {}), ...(vs ? { vouchers: vs } : {}) };
       });
       setReservations(merged);
       setLastSynced(new Date());
@@ -199,14 +218,14 @@ export default function TransactionsPage() {
 
   const filtered = useMemo(() => {
     return reservations.filter((res) => {
-      // Search
+      // Search (diacritic-insensitive)
       if (search.trim()) {
-        const q = search.toLowerCase();
-        const fullName = `${res.firstName} ${res.lastName}`.toLowerCase();
+        const q = normalizeForSearch(search);
+        const fullName = normalizeForSearch(`${res.firstName} ${res.lastName}`);
         if (
           !res.reservationNumber.toLowerCase().includes(q) &&
           !fullName.includes(q) &&
-          !res.email.toLowerCase().includes(q)
+          !normalizeForSearch(res.email).includes(q)
         ) {
           return false;
         }
@@ -283,6 +302,15 @@ export default function TransactionsPage() {
           </span>
           {role && canMutate(role, "transactions") && (
             <>
+            <button
+              onClick={() => setShowVoucherModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-purple-200 text-purple-700 text-sm font-medium transition-colors hover:bg-purple-50 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              Create Voucher
+            </button>
             <button
               onClick={() => setShowPaymentModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-indigo-200 text-indigo-700 text-sm font-medium transition-colors hover:bg-indigo-50 shadow-sm"
@@ -575,6 +603,22 @@ export default function TransactionsPage() {
           }))}
           onPaymentCreated={fetchReservations}
           onClose={() => setShowPaymentModal(false)}
+        />
+      )}
+
+      {/* Create voucher modal */}
+      {showVoucherModal && (
+        <CreateVoucherModal
+          reservations={reservations.map((r) => ({
+            reservationNumber: r.reservationNumber,
+            guestName: [r.firstName, r.lastName].filter(Boolean).join(' '),
+            email: r.additionalEmail || r.invoiceData?.billingEmail || undefined,
+            phone: r.phone,
+            checkIn: r.checkInDate,
+            checkOut: r.checkOutDate,
+          }))}
+          onVoucherCreated={fetchReservations}
+          onClose={() => setShowVoucherModal(false)}
         />
       )}
     </div>

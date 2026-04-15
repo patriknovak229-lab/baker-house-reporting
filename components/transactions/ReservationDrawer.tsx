@@ -4,7 +4,9 @@ import { QRCodeSVG } from "qrcode.react";
 import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
+import type { Voucher } from "@/types/voucher";
 import MessageThread from "./MessageThread";
+import CreateVoucherModal from "./CreateVoucherModal";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
@@ -135,6 +137,116 @@ function AdditionalPaymentRow({
             Cancel
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Voucher row with status + delete ────────────────────────────────────────
+function VoucherRow({
+  voucher,
+  onRefresh,
+}: {
+  voucher: Voucher;
+  onRefresh?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      await fetch(`/api/vouchers/${encodeURIComponent(voucher.id)}`, { method: 'DELETE' });
+      onRefresh?.();
+    } finally {
+      setBusy(false);
+      setConfirmDelete(false);
+    }
+  }
+
+  const discountLabel = voucher.discountType === 'percentage'
+    ? `${voucher.value}%`
+    : `${voucher.value.toLocaleString('cs-CZ')} Kč`;
+
+  const statusColor = voucher.status === 'issued'
+    ? 'bg-purple-500'
+    : voucher.status === 'used'
+      ? 'bg-emerald-500'
+      : 'bg-gray-400';
+
+  const statusLabel = voucher.status === 'issued'
+    ? 'Active'
+    : voucher.status === 'used'
+      ? 'Used'
+      : 'Deleted';
+
+  return (
+    <div className="px-3 py-2.5 space-y-1.5">
+      <div className="flex items-start gap-2">
+        <span className={`mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full text-white shrink-0 ${statusColor}`}>
+          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+              d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
+          </svg>
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-mono font-semibold text-purple-700">{voucher.code}</p>
+          <p className="text-[10px] text-gray-500">
+            Created {voucher.createdAt.slice(0, 10)}
+            {voucher.usedAt ? ` · Used ${voucher.usedAt.slice(0, 10)}` : ''}
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-xs font-medium text-gray-900">{discountLabel}</p>
+          <span className={`text-[10px] font-medium ${
+            voucher.status === 'issued' ? 'text-purple-600' :
+            voucher.status === 'used' ? 'text-emerald-600' :
+            'text-gray-400'
+          }`}>
+            {statusLabel}
+          </span>
+        </div>
+      </div>
+
+      {/* Delete — only for 'issued' vouchers */}
+      {voucher.status === 'issued' && (
+        !confirmDelete ? (
+          <div className="flex items-center gap-2 pl-7">
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(voucher.code);
+              }}
+              className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              Copy code
+            </button>
+            <button
+              onClick={() => setConfirmDelete(true)}
+              disabled={busy}
+              className="text-[10px] font-medium px-2 py-0.5 rounded border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 pl-7">
+            <span className="text-[10px] text-red-600">Delete this voucher?</span>
+            <button
+              onClick={handleDelete}
+              disabled={busy}
+              className="text-[10px] font-semibold px-2 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 transition-colors"
+            >
+              {busy ? '…' : 'Confirm'}
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              disabled={busy}
+              className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )
       )}
     </div>
   );
@@ -762,6 +874,7 @@ export default function ReservationDrawer({
   const [driveSaveResult, setDriveSaveResult] = useState<{ url: string; name: string } | null>(null);
   const [driveSaveError, setDriveSaveError] = useState<string | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showVoucherModal, setShowVoucherModal] = useState(false);
 
   useEffect(() => {
     if (reservation) {
@@ -1228,6 +1341,55 @@ export default function ReservationDrawer({
               guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
               onPaymentCreated={onPaymentCreated}
               onClose={() => setShowPaymentModal(false)}
+            />
+          )}
+
+          <hr className="border-gray-100" />
+
+          {/* 4b. Vouchers */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <SectionTitle>Vouchers</SectionTitle>
+            </div>
+
+            <button
+              onClick={() => setShowVoucherModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors w-fit"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              Create Voucher
+            </button>
+
+            {/* Voucher list */}
+            {(reservation.vouchers ?? []).length > 0 && (
+              <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
+                <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide px-3 py-2 bg-gray-50 border-b border-gray-100">
+                  Vouchers
+                </p>
+                <div className="divide-y divide-gray-100">
+                  {(reservation.vouchers ?? []).map((v) => (
+                    <VoucherRow
+                      key={v.id}
+                      voucher={v}
+                      onRefresh={onPaymentCreated}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {showVoucherModal && (
+            <CreateVoucherModal
+              reservationNumber={reservation.reservationNumber}
+              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
+              guestEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
+              guestPhone={reservation.phone}
+              onVoucherCreated={onPaymentCreated}
+              onClose={() => setShowVoucherModal(false)}
             />
           )}
 

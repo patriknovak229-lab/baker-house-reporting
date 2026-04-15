@@ -20,6 +20,7 @@ import { textColorFor } from '@/utils/categoryColors';
 import BankPage from './BankPage';
 import RevenuePage from './RevenuePage';
 import StatementsPage from './StatementsPage';
+import VouchersPage from './VouchersPage';
 import type { BankTransaction } from '@/types/bankTransaction';
 
 const PHASES = [
@@ -27,6 +28,7 @@ const PHASES = [
   { id: 2, label: 'Bank', description: 'Reconciliation' },
   { id: 3, label: 'Revenue', description: 'Guest invoices' },
   { id: 4, label: 'Statements', description: 'P&L · Balance Sheet' },
+  { id: 5, label: 'Vouchers', description: 'Discount codes' },
 ];
 
 interface DrawerState {
@@ -539,7 +541,7 @@ export default function AccountingPage() {
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
         {PHASES.map((phase) => {
-          const enabled = phase.id <= 4;
+          const enabled = phase.id <= 5;
           const active = activePhase === phase.id;
           return (
             <div key={phase.id}
@@ -582,6 +584,11 @@ export default function AccountingPage() {
       {/* Phase 4 — Statements */}
       {activePhase === 4 && (
         <StatementsPage />
+      )}
+
+      {/* Phase 5 — Vouchers */}
+      {activePhase === 5 && (
+        <VouchersPage />
       )}
 
       {/* Phase 1 — Costs */}

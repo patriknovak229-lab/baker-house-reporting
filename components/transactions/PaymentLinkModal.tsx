@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo } from 'react';
+import { normalizeForSearch } from '@/utils/stringUtils';
 
 export interface ReservationSummary {
   reservationNumber: string;
@@ -62,10 +63,10 @@ export default function PaymentLinkModal({
 
   const filteredReservations = useMemo(() => {
     if (!reservations || !resSearch.trim()) return reservations ?? [];
-    const q = resSearch.toLowerCase();
+    const q = normalizeForSearch(resSearch);
     return reservations.filter(
       (r) =>
-        r.guestName.toLowerCase().includes(q) ||
+        normalizeForSearch(r.guestName).includes(q) ||
         r.reservationNumber.toLowerCase().includes(q),
     );
   }, [reservations, resSearch]);

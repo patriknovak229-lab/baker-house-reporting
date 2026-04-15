@@ -1,4 +1,5 @@
 import type { AdditionalPayment } from "./additionalPayment";
+import type { Voucher } from "./voucher";
 
 export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone";
 // Physical room name (e.g. "K.201") or combined for package bookings (e.g. "K.202 + K.203")
@@ -80,4 +81,5 @@ export interface Reservation {
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this
   issues?: Issue[]; // locally managed task/issue log; undefined = no issues
   additionalPayments?: AdditionalPayment[]; // Stripe payment links created for this reservation
+  vouchers?: Voucher[]; // discount vouchers linked to this reservation
 }
