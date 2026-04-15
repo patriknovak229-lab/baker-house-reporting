@@ -32,6 +32,7 @@ type LocalFields = {
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
   issues?: Issue[];
+  parkingOverride?: string;
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -45,6 +46,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.invoiceData) local.invoiceData = r.invoiceData;
   if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
   if (r.issues && r.issues.length > 0) local.issues = r.issues;
+  if (r.parkingOverride !== undefined) local.parkingOverride = r.parkingOverride;
   return local;
 }
 

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory } from "@/types/reservation";
@@ -10,6 +10,7 @@ import CreateVoucherModal from "./CreateVoucherModal";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
+import { computeParking, getFreeSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
 import {
   printInvoice,
@@ -875,10 +876,18 @@ export default function ReservationDrawer({
   const [driveSaveError, setDriveSaveError] = useState<string | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
+  const [invoiceExpanded, setInvoiceExpanded] = useState(false);
+
+  const parkingResult = useMemo(() => computeParking(allReservations), [allReservations]);
+  const myParking = reservation ? parkingResult.byReservation.get(reservation.reservationNumber) ?? null : null;
+  const freeSpaces = reservation
+    ? getFreeSpaces(parkingResult, reservation.checkInDate, reservation.checkOutDate, reservation.reservationNumber)
+    : [];
 
   useEffect(() => {
     if (reservation) {
       setIncludePaymentQR(reservation.includeQR ?? false);
+      setInvoiceExpanded(false);
       setNotes(reservation.notes);
       setNewIssueText("");
       setNewIssueDate(new Date().toISOString().slice(0, 10));
@@ -920,7 +929,8 @@ export default function ReservationDrawer({
   }
 
   function addIssue() {
-    if (!newIssueText.trim()) return;
+    const textRequired = newIssueCategory === "problem" || newIssueCategory === "special";
+    if (textRequired && !newIssueText.trim()) return;
     const issue: Issue = {
       id: Date.now().toString(),
       category: newIssueCategory,
@@ -1416,6 +1426,88 @@ export default function ReservationDrawer({
 
           <hr className="border-gray-100" />
 
+          {/* 5b. Parking */}
+          <section>
+            <SectionTitle>Parking</SectionTitle>
+            <div className="space-y-2">
+              {/* Current assignment */}
+              {myParking ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700">
+                    Space <span className="font-semibold">{myParking.space}</span>
+                  </span>
+                  <Badge variant={myParking.type === "auto" ? "blue" : "purple"}>
+                    {myParking.type}
+                  </Badge>
+                  {myParking.conflict && (
+                    <Badge variant="amber">conflict</Badge>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">No parking assigned</p>
+              )}
+
+              {/* Conflict warning */}
+              {myParking?.conflict && (
+                <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                  <svg className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <p className="text-xs text-amber-700">{myParking.conflict}</p>
+                </div>
+              )}
+
+              {/* Dropdown */}
+              <select
+                value={
+                  reservation.parkingOverride === undefined
+                    ? "__auto__"
+                    : reservation.parkingOverride === "none"
+                      ? "__none__"
+                      : reservation.parkingOverride
+                }
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const override =
+                    val === "__auto__" ? undefined :
+                    val === "__none__" ? "none" :
+                    val;
+                  // Build a clean update — remove key entirely for undefined
+                  const updated = { ...reservation! };
+                  if (override === undefined) {
+                    delete updated.parkingOverride;
+                  } else {
+                    updated.parkingOverride = override;
+                  }
+                  onUpdate(updated);
+                }}
+                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              >
+                <option value="__auto__">Auto (room rules)</option>
+                <option value="__none__">No parking</option>
+                {/* Show currently assigned space if it's manual and not in free list */}
+                {reservation.parkingOverride &&
+                  reservation.parkingOverride !== "none" &&
+                  !freeSpaces.includes(reservation.parkingOverride) && (
+                    <option value={reservation.parkingOverride}>
+                      Space {reservation.parkingOverride} (current)
+                    </option>
+                  )}
+                {freeSpaces.map((space) => {
+                  const ps = PARKING_SPACES.find((p) => p.space === space);
+                  const label = ps?.permanentRoom
+                    ? `Space ${space} (${ps.permanentRoom})`
+                    : `Space ${space} (hot)`;
+                  return (
+                    <option key={space} value={space}>{label}</option>
+                  );
+                })}
+              </select>
+            </div>
+          </section>
+
+          <hr className="border-gray-100" />
+
           {/* 6. Rating */}
           <section>
             <SectionTitle>Guest Rating</SectionTitle>
@@ -1611,7 +1703,7 @@ export default function ReservationDrawer({
                 <div className="flex items-end">
                   <button
                     onClick={addIssue}
-                    disabled={!newIssueText.trim()}
+                    disabled={(newIssueCategory === "problem" || newIssueCategory === "special") && !newIssueText.trim()}
                     className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${CATEGORY_CONFIG[newIssueCategory].buttonBg}`}
                   >
                     Add {CATEGORY_CONFIG[newIssueCategory].label}
@@ -1718,6 +1810,28 @@ export default function ReservationDrawer({
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Collapsible summary bar */}
+                <button
+                  onClick={() => setInvoiceExpanded((v) => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors"
+                >
+                  <span className="text-sm font-medium text-gray-700 truncate">
+                    {reservation.invoiceData?.companyName || "Invoice"}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <Badge variant={reservation.invoiceStatus === "Sent" ? "green" : "blue"}>
+                      {reservation.invoiceStatus}
+                    </Badge>
+                    <svg
+                      className={`w-4 h-4 text-gray-400 transition-transform ${invoiceExpanded ? "rotate-180" : ""}`}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </span>
+                </button>
+
+                {invoiceExpanded && (<>
                 {/* PDF Preview */}
                 <InvoicePreview res={reservation} invoiceData={reservation.invoiceData!} />
 
@@ -1896,6 +2010,7 @@ export default function ReservationDrawer({
                 >
                   Re-issue with new details
                 </button>
+                </>)}
               </div>
             )}
           </section>
