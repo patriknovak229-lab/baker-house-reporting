@@ -11,6 +11,7 @@ import ReservationDrawer from "./ReservationDrawer";
 import CreateBookingModal from "./CreateBookingModal";
 import PaymentLinkModal from "./PaymentLinkModal";
 import CreateVoucherModal from "./CreateVoucherModal";
+import PriceCheckModal from "./PriceCheckModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch } from "@/utils/stringUtils";
 import { useSession } from "next-auth/react";
@@ -81,6 +82,7 @@ export default function TransactionsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
+  const [showPriceCheck, setShowPriceCheck] = useState(false);
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
 
   const fetchReservations = useCallback(async () => {
@@ -302,6 +304,15 @@ export default function TransactionsPage() {
           </span>
           {role && canMutate(role, "transactions") && (
             <>
+            <button
+              onClick={() => setShowPriceCheck(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-emerald-200 text-emerald-700 text-sm font-medium transition-colors hover:bg-emerald-50 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Price Check
+            </button>
             <button
               onClick={() => setShowVoucherModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-purple-200 text-purple-700 text-sm font-medium transition-colors hover:bg-purple-50 shadow-sm"
@@ -604,6 +615,11 @@ export default function TransactionsPage() {
           onPaymentCreated={fetchReservations}
           onClose={() => setShowPaymentModal(false)}
         />
+      )}
+
+      {/* Price check modal */}
+      {showPriceCheck && (
+        <PriceCheckModal onClose={() => setShowPriceCheck(false)} />
       )}
 
       {/* Create voucher modal */}
