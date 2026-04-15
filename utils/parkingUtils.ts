@@ -106,11 +106,7 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     }
 
     const permSpaces = permanentSpacesForReservation(r);
-    if (permSpaces.length === 0) {
-      console.log("[parking] no perm spaces for", r.reservationNumber, "room:", r.room, "linked:", r.linkedRooms);
-      continue;
-    }
-    console.log("[parking] auto-assign", r.reservationNumber, "room:", r.room, "linked:", r.linkedRooms, "→ spaces:", permSpaces);
+    if (permSpaces.length === 0) continue; // no permanent space — skip (hot space needs manual)
 
     const dates = dateRange(r.checkInDate, r.checkOutDate);
     const initials = getInitials(r);

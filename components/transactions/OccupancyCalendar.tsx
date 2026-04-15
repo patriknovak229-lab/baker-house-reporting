@@ -247,17 +247,15 @@ export default function OccupancyCalendar({ reservations }: Props) {
               </tr>
             ))}
           </tbody>
-        </table>
 
-        {/* Parking calendar */}
-        {showParking && (
-          <table className="border-collapse w-full mt-2">
+          {/* Parking rows — same table so columns align */}
+          {showParking && (
             <tbody>
               {PARKING_SPACES.map((ps, psIdx) => {
                 const spaceGrid = parkingResult.grid.get(ps.space);
                 return (
                   <tr key={ps.space}>
-                    <td className={`pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap w-14 ${psIdx === 0 ? "pt-1 border-t border-gray-200" : ""}`}>
+                    <td className={`pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap ${psIdx === 0 ? "pt-2 border-t border-gray-200" : ""}`}>
                       {parkingLabel(ps.space)}
                     </td>
                     {days.map((date) => {
@@ -268,7 +266,7 @@ export default function OccupancyCalendar({ reservations }: Props) {
                       return (
                         <td
                           key={date}
-                          className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""} ${psIdx === 0 ? "border-t border-gray-200" : ""}`}
+                          className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""} ${psIdx === 0 ? "pt-2 border-t border-gray-200" : ""}`}
                         >
                           <div
                             className={`h-5 rounded-sm flex items-center justify-center ${
@@ -293,8 +291,8 @@ export default function OccupancyCalendar({ reservations }: Props) {
                 );
               })}
             </tbody>
-          </table>
-        )}
+          )}
+        </table>
       </div>
     </div>
   );
