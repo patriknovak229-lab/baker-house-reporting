@@ -207,10 +207,9 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
                 >
                   {msg.text}
                 </div>
-                {/* Translate button / result — guest & system messages only */}
-                {msg.source !== 'host' && (
-                  <>
-                    {translations[msg.id] === 'loading' ? (
+                {/* Translate button / result */}
+                <>
+                  {translations[msg.id] === 'loading' ? (
                       <span className="text-[10px] text-gray-400 mt-0.5 px-1 italic">Translating…</span>
                     ) : translations[msg.id] && typeof translations[msg.id] === 'object' ? (
                       <div className="max-w-[85%] mt-1 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-sm text-gray-700 leading-snug">
@@ -227,9 +226,8 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
                       >
                         🌐 Translate
                       </button>
-                    )}
-                  </>
-                )}
+                  )}
+                </>
                 <span className="text-[10px] text-gray-400 mt-0.5 px-1">
                   {msg.source === 'host' ? 'You' : msg.source === 'guest' ? guestName : 'System'} · {formatTime(msg.time)}
                 </span>
