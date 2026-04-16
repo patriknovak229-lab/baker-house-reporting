@@ -36,6 +36,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [translations, setTranslations] = useState<Record<number, { text: string; lang: string } | 'loading'>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -112,6 +113,29 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
     }
   }
 
+  async function handleTranslate(msgId: number, text: string) {
+    setTranslations((prev) => ({ ...prev, [msgId]: 'loading' }));
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Translation failed');
+      setTranslations((prev) => ({
+        ...prev,
+        [msgId]: { text: data.translatedText, lang: data.detectedLanguage },
+      }));
+    } catch {
+      setTranslations((prev) => {
+        const next = { ...prev };
+        delete next[msgId];
+        return next;
+      });
+    }
+  }
+
   // Header button — always visible
   const buttonBase = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors';
 
@@ -183,6 +207,29 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
                 >
                   {msg.text}
                 </div>
+                {/* Translate button / result — guest & system messages only */}
+                {msg.source !== 'host' && (
+                  <>
+                    {translations[msg.id] === 'loading' ? (
+                      <span className="text-[10px] text-gray-400 mt-0.5 px-1 italic">Translating…</span>
+                    ) : translations[msg.id] && typeof translations[msg.id] === 'object' ? (
+                      <div className="max-w-[85%] mt-1 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-sm text-gray-700 leading-snug">
+                        {(translations[msg.id] as { text: string; lang: string }).text}
+                        <span className="block text-[10px] text-gray-400 mt-0.5">
+                          Translated from {(translations[msg.id] as { text: string; lang: string }).lang?.toUpperCase()}
+                        </span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleTranslate(msg.id, msg.text)}
+                        className="text-[10px] text-indigo-500 hover:text-indigo-700 mt-0.5 px-1 flex items-center gap-0.5"
+                        title="Translate to Czech"
+                      >
+                        🌐 Translate
+                      </button>
+                    )}
+                  </>
+                )}
                 <span className="text-[10px] text-gray-400 mt-0.5 px-1">
                   {msg.source === 'host' ? 'You' : msg.source === 'guest' ? guestName : 'System'} · {formatTime(msg.time)}
                 </span>
