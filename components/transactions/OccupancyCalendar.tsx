@@ -77,11 +77,14 @@ function getOccupancyStyle(bookedCount: number, totalRooms: number) {
   return              { header: "bg-red-100 text-red-700",    filled: "bg-red-500"   };
 }
 
-// Parking space label: "153 (K.201)", "152 (hot)"
-function parkingLabel(space: string): string {
-  const ps = PARKING_SPACES.find((p) => p.space === space);
-  if (!ps) return space;
-  return ps.permanentRoom ? `${space} (${ps.permanentRoom})` : `${space} (hot)`;
+// Parking row label: "P153", "P152"
+function parkingRowLabel(space: string): string {
+  return `P${space}`;
+}
+
+// Format room string for tooltip: "K.203" → "K203", "K.202 + K.203" → "K202+K203"
+function formatRoomForTooltip(room: string): string {
+  return room.replace(/\./g, '').replace(/\s+/g, '');
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -187,6 +190,8 @@ export default function OccupancyCalendar({ reservations }: Props) {
                 const bookedCount = ROOMS.filter((r) => isRoomBooked(reservations, r, date)).length;
                 const { header } = getOccupancyStyle(bookedCount, ROOMS.length);
 
+                const dayAbbr = d.toLocaleString("en-GB", { weekday: "short" }).slice(0, 2);
+
                 return (
                   <th key={date} className="px-px pb-1 min-w-[2rem]">
                     <div
@@ -199,6 +204,9 @@ export default function OccupancyCalendar({ reservations }: Props) {
                     >
                       <div className={`text-center text-xs font-bold leading-none ${isToday ? "underline" : ""}`}>
                         {dayNum}
+                      </div>
+                      <div className="text-center text-[9px] leading-tight opacity-70">
+                        {dayAbbr}
                       </div>
                       <div className="text-center text-[9px] leading-tight opacity-70 h-3">
                         {showMonth ? d.toLocaleString("en-GB", { month: "short" }) : ""}
@@ -256,12 +264,16 @@ export default function OccupancyCalendar({ reservations }: Props) {
                 return (
                   <tr key={ps.space}>
                     <td className={`pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap ${psIdx === 0 ? "pt-2 border-t border-gray-200" : ""}`}>
-                      {parkingLabel(ps.space)}
+                      {parkingRowLabel(ps.space)}
                     </td>
                     {days.map((date) => {
                       const cell = spaceGrid?.get(date) ?? null;
                       const isToday = date === todayStr;
                       const occupied = cell != null;
+                      const occupantRes = occupied
+                        ? reservations.find((r) => r.reservationNumber === cell!.reservationNumber)
+                        : null;
+                      const roomStr = occupantRes ? formatRoomForTooltip(occupantRes.room) : '';
 
                       return (
                         <td
@@ -274,8 +286,8 @@ export default function OccupancyCalendar({ reservations }: Props) {
                             }`}
                             title={
                               occupied
-                                ? `Space ${ps.space} — ${cell!.initials}`
-                                : `Space ${ps.space} — free`
+                                ? `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}`
+                                : `P${ps.space} — free`
                             }
                           >
                             {occupied && (

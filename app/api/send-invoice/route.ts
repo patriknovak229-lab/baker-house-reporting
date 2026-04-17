@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import { requireRole } from '@/utils/authGuard';
 import QRCodeLib from 'qrcode';
-import type { Reservation } from '@/types/reservation';
+import type { Reservation, InvoiceModification } from '@/types/reservation';
 import {
   buildInvoiceHTML,
   generateInvoiceNumber,
@@ -19,7 +19,11 @@ export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
 
-  const { reservation, includeQR }: { reservation: Reservation; includeQR?: boolean } = await req.json();
+  const { reservation, includeQR, modification }: {
+    reservation: Reservation;
+    includeQR?: boolean;
+    modification?: InvoiceModification;
+  } = await req.json();
 
   if (!reservation.invoiceData) {
     return NextResponse.json({ error: 'No invoice data on reservation' }, { status: 400 });
@@ -54,7 +58,8 @@ export async function POST(req: NextRequest) {
       reservation.invoiceData,
       invoiceNum,
       payment,
-      true // forEmail — omits the window.print() script
+      true, // forEmail — omits the window.print() script
+      modification
     );
 
     const pdfBuffer = await generatePDF(html);

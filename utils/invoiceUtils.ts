@@ -1,6 +1,19 @@
 import QRCodeLib from "qrcode";
-import type { Reservation, InvoiceData } from "@/types/reservation";
+import type { Reservation, InvoiceData, InvoiceModification } from "@/types/reservation";
 import { formatDate, formatCurrency } from "./formatters";
+
+/** Count calendar nights between two ISO date strings (exclusive end, same as reservations). */
+function nightsBetween(from: string, to: string): number {
+  const a = new Date(from + "T00:00:00");
+  const b = new Date(to + "T00:00:00");
+  return Math.max(0, Math.round((b.getTime() - a.getTime()) / 86_400_000));
+}
+
+/** Short date label, e.g. "3 Apr". */
+function shortDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
 
 const GOLD = "#B08D57";
 const DARK_BROWN = "#3B2F2F";
@@ -25,25 +38,79 @@ export function buildInvoiceHTML(
   invoiceData: InvoiceData,
   invoiceNum: string,
   payment?: { qrDataUrl: string; info: PaymentQRInfo },
-  forEmail = false
+  forEmail = false,
+  modification?: InvoiceModification
 ): string {
   const today = new Date().toLocaleDateString("en-GB", {
     day: "numeric", month: "long", year: "numeric",
   });
-  const unitPrice = res.numberOfNights > 0 ? res.price / res.numberOfNights : res.price;
 
-  const detailCells = [
-    ["Pokoj / Room", res.room],
-    ["Příjezd / Check-in", formatDate(res.checkInDate)],
-    ["Odjezd / Check-out", formatDate(res.checkOutDate)],
-    ["Nocí / Nights", String(res.numberOfNights)],
-    ["Hostů / Guests", String(res.numberOfGuests)],
-    ["Rezervace / Booking", res.reservationNumber],
-  ].map(([label, value]) => `
+  // ── Details grid cells ──────────────────────────────────────────────────────
+  const cell = (label: string, value: string) => `
     <div>
       <div style="color:${GOLD};font-size:9px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">${label}</div>
       <div style="color:${DARK_BROWN};font-weight:500;font-size:13px">${value}</div>
-    </div>`).join("");
+    </div>`;
+
+  let detailCells: string;
+  if (modification) {
+    const datesHtml = modification.dateRanges
+      .map(r => `${shortDate(r.from)} – ${shortDate(r.to)}`)
+      .join("<br/>");
+    detailCells = [
+      cell("Pokoj / Room", modification.room || res.room),
+      cell("Datum / Dates", datesHtml),
+      cell("Nocí / Nights", String(modification.numberOfNights)),
+      cell("Hostů / Guests", String(modification.numberOfGuests)),
+      cell("Rezervace / Booking", res.reservationNumber),
+    ].join("");
+  } else {
+    detailCells = [
+      cell("Pokoj / Room", res.room),
+      cell("Příjezd / Check-in", formatDate(res.checkInDate)),
+      cell("Odjezd / Check-out", formatDate(res.checkOutDate)),
+      cell("Nocí / Nights", String(res.numberOfNights)),
+      cell("Hostů / Guests", String(res.numberOfGuests)),
+      cell("Rezervace / Booking", res.reservationNumber),
+    ].join("");
+  }
+
+  // ── Line items ──────────────────────────────────────────────────────────────
+  let lineItemsHtml: string;
+  if (modification && modification.dateRanges.length > 0) {
+    const totalNights = modification.numberOfNights > 0 ? modification.numberOfNights : 1;
+    const avgPPN = res.price / totalNights; // price per night (average)
+
+    // Distribute total price across ranges; last range absorbs rounding
+    const ranges = modification.dateRanges;
+    const nightsList = ranges.map(r => nightsBetween(r.from, r.to));
+    const linePrices: number[] = ranges.map((_, i) => {
+      if (i === ranges.length - 1) {
+        const sumSoFar = linePrices.reduce((s, v) => s + v, 0);
+        return res.price - sumSoFar;
+      }
+      return Math.round(nightsList[i] * avgPPN);
+    });
+
+    lineItemsHtml = ranges.map((r, i) => {
+      const isLast = i === ranges.length - 1;
+      const borderStyle = isLast ? "border-bottom:1px solid #EFEAE4" : "border-bottom:1px solid #f0ebe4";
+      return `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:6px;margin-bottom:${isLast ? "0" : "4px"};${borderStyle};font-size:13px">
+      <span>Ubytování / Accommodation<br/><span style="font-size:11px;color:${MID_BROWN}">${res.firstName} ${res.lastName} · ${shortDate(r.from)} – ${shortDate(r.to)}</span></span>
+      <span style="text-align:right;min-width:40px">${nightsList[i]}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrency(avgPPN)}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrency(linePrices[i])}</span>
+    </div>`;
+    }).join("");
+  } else {
+    const unitPrice = res.numberOfNights > 0 ? res.price / res.numberOfNights : res.price;
+    lineItemsHtml = `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:8px;border-bottom:1px solid #EFEAE4;font-size:13px">
+      <span>Ubytování / Accommodation<br/><span style="font-size:11px;color:${MID_BROWN}">${res.firstName} ${res.lastName}</span></span>
+      <span style="text-align:right;min-width:40px">${res.numberOfNights}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrency(unitPrice)}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrency(res.price)}</span>
+    </div>`;
+  }
 
   return `<!DOCTYPE html>
 <html lang="cs">
@@ -115,12 +182,7 @@ export function buildInvoiceHTML(
       <span style="text-align:right;min-width:80px">Cena / night</span>
       <span style="text-align:right;min-width:80px">Celkem</span>
     </div>
-    <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:8px;border-bottom:1px solid #EFEAE4;font-size:13px">
-      <span>Ubytování / Accommodation<br/><span style="font-size:11px;color:${MID_BROWN}">${res.firstName} ${res.lastName}</span></span>
-      <span style="text-align:right;min-width:40px">${res.numberOfNights}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(unitPrice)}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(res.price)}</span>
-    </div>
+    ${lineItemsHtml}
     <div style="display:flex;justify-content:space-between;margin-top:8px;font-weight:bold;font-size:15px">
       <span>Celkem / Total</span>
       <span style="color:${GOLD}">${formatCurrency(res.price)}</span>
@@ -161,7 +223,8 @@ export function buildInvoiceHTML(
 export async function printInvoice(
   res: Reservation,
   invoiceData: InvoiceData,
-  paymentQRInfo?: PaymentQRInfo
+  paymentQRInfo?: PaymentQRInfo,
+  modification?: InvoiceModification
 ): Promise<void> {
   const invoiceNum = generateInvoiceNumber(res.reservationNumber);
 
@@ -175,7 +238,7 @@ export async function printInvoice(
     payment = { qrDataUrl, info: paymentQRInfo };
   }
 
-  const html = buildInvoiceHTML(res, invoiceData, invoiceNum, payment);
+  const html = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, false, modification);
   const printWindow = window.open("", "_blank", "width=900,height=700");
   if (!printWindow) {
     alert("Pop-up blocked — please allow pop-ups for this page to print invoices.");

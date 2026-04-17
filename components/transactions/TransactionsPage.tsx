@@ -33,6 +33,7 @@ type LocalFields = {
   invoiceStatus?: InvoiceStatus;
   issues?: Issue[];
   parkingOverride?: string;
+  invoiceModifications?: import('@/types/reservation').InvoiceModification[];
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -47,6 +48,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
   if (r.issues && r.issues.length > 0) local.issues = r.issues;
   if (r.parkingOverride !== undefined) local.parkingOverride = r.parkingOverride;
+  if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
   return local;
 }
 
@@ -57,7 +59,8 @@ function mergeLocal(reservations: Reservation[], state: Record<string, LocalFiel
   });
 }
 
-// Fire-and-forget — UI is already updated optimistically before this resolves
+// Fire-and-forget — UI is already updated optimistically before this resolves.
+// On failure the in-memory state is still correct; the change is only lost on page reload.
 async function persistOverride(reservationNumber: string, fields: LocalFields): Promise<void> {
   try {
     await fetch('/api/local-state', {
@@ -65,8 +68,9 @@ async function persistOverride(reservationNumber: string, fields: LocalFields): 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reservationNumber, fields }),
     });
-  } catch {
-    // Non-fatal — user sees the change immediately; worst case it doesn't persist
+  } catch (err) {
+    // Non-fatal — user sees the change immediately; worst case it doesn't persist on reload.
+    console.error('[persistOverride] Failed to save changes for', reservationNumber, err);
   }
 }
 
@@ -178,8 +182,10 @@ export default function TransactionsPage() {
 
   // ── Unresolved issues actionable within the next 7 days ─────────────────────
   const upcomingUnresolved = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const in7 = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    // Use local date (sv-SE locale = YYYY-MM-DD), same as date pickers in the drawer
+    const today = new Date().toLocaleDateString("sv-SE");
+    const d7 = new Date(); d7.setDate(d7.getDate() + 7);
+    const in7 = d7.toLocaleDateString("sv-SE");
     const items: { reservation: Reservation; issue: Issue }[] = [];
     for (const r of reservations) {
       for (const issue of r.issues ?? []) {

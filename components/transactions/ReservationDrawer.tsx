@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import PaymentLinkModal from "./PaymentLinkModal";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory, InvoiceModification } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import MessageThread from "./MessageThread";
@@ -858,7 +858,7 @@ export default function ReservationDrawer({
 }: ReservationDrawerProps) {
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
-  const [newIssueDate, setNewIssueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newIssueDate, setNewIssueDate] = useState(() => new Date().toLocaleDateString("sv-SE"));
   const [newIssueCategory, setNewIssueCategory] = useState<IssueCategory>("problem");
   const [includePaymentQR, setIncludePaymentQR] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceData>({
@@ -877,6 +877,14 @@ export default function ReservationDrawer({
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
+  // Save details feedback
+  const [saveDetailsSaved, setSaveDetailsSaved] = useState(false);
+  // Invoice modification editor
+  const [showModifyEditor, setShowModifyEditor] = useState(false);
+  const [modifyDateRanges, setModifyDateRanges] = useState<{ from: string; to: string }[]>([{ from: "", to: "" }]);
+  const [modifyNights, setModifyNights] = useState(0);
+  const [modifyGuests, setModifyGuests] = useState(1);
+  const [modifyRoom, setModifyRoom] = useState("");
 
   const parkingResult = useMemo(() => computeParking(allReservations), [allReservations]);
   const myParking = reservation ? parkingResult.byReservation.get(reservation.reservationNumber) ?? null : null;
@@ -890,10 +898,16 @@ export default function ReservationDrawer({
       setInvoiceExpanded(false);
       setNotes(reservation.notes);
       setNewIssueText("");
-      setNewIssueDate(new Date().toISOString().slice(0, 10));
+      setNewIssueDate(new Date().toLocaleDateString("sv-SE"));
       setNewIssueCategory("problem");
       setDriveSaveResult(null);
       setDriveSaveError(null);
+      setSaveDetailsSaved(false);
+      setShowModifyEditor(false);
+      setModifyDateRanges([{ from: reservation.checkInDate, to: reservation.checkOutDate }]);
+      setModifyNights(reservation.numberOfNights);
+      setModifyGuests(reservation.numberOfGuests);
+      setModifyRoom(reservation.room);
       if (reservation.invoiceData) {
         setInvoiceForm({ ...reservation.invoiceData });
       } else {
@@ -909,6 +923,17 @@ export default function ReservationDrawer({
       setIsMounted(false);
     }
   }, [reservation]);
+
+  // Auto-calculate nights when modification date ranges change
+  useEffect(() => {
+    const auto = modifyDateRanges.reduce((sum, r) => {
+      if (!r.from || !r.to || r.from >= r.to) return sum;
+      const a = new Date(r.from + "T00:00:00");
+      const b = new Date(r.to + "T00:00:00");
+      return sum + Math.round((b.getTime() - a.getTime()) / 86_400_000);
+    }, 0);
+    if (auto > 0) setModifyNights(auto);
+  }, [modifyDateRanges]);
 
   if (!reservation) return null;
 
@@ -955,6 +980,61 @@ export default function ReservationDrawer({
   function deleteIssue(id: string) {
     const issues = (reservation!.issues ?? []).filter((i) => i.id !== id);
     onUpdate({ ...reservation!, issues });
+  }
+
+  function handleSaveDetails() {
+    onUpdate({ ...reservation!, invoiceData: invoiceForm });
+    setSaveDetailsSaved(true);
+    setTimeout(() => setSaveDetailsSaved(false), 2500);
+  }
+
+  function saveModification() {
+    const validRanges = modifyDateRanges.filter(r => r.from && r.to && r.from < r.to);
+    if (validRanges.length === 0) return;
+    const mod: InvoiceModification = {
+      id: Date.now().toString(),
+      dateRanges: validRanges,
+      numberOfNights: modifyNights,
+      numberOfGuests: modifyGuests,
+      room: modifyRoom,
+      createdAt: new Date().toISOString(),
+    };
+    onUpdate({
+      ...reservation!,
+      invoiceModifications: [...(reservation!.invoiceModifications ?? []), mod],
+    });
+    setShowModifyEditor(false);
+  }
+
+  function deleteModification(id: string) {
+    const invoiceModifications = (reservation!.invoiceModifications ?? []).filter(m => m.id !== id);
+    onUpdate({ ...reservation!, invoiceModifications });
+  }
+
+  async function handlePrintModified(mod: InvoiceModification) {
+    if (reservation!.invoiceData) {
+      await printInvoice(reservation!, reservation!.invoiceData, undefined, mod);
+    }
+  }
+
+  async function handleSendModified(mod: InvoiceModification) {
+    setSendInvoiceError(null);
+    setIsSendingInvoice(true);
+    try {
+      const res = await fetch('/api/send-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation: reservation!, includeQR: false, modification: mod }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error ?? `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send');
+    } finally {
+      setIsSendingInvoice(false);
+    }
   }
 
   /** Upsert a revenue invoice for a QR-enabled issued invoice */
@@ -1795,10 +1875,14 @@ export default function ReservationDrawer({
                 {/* Save details without generating — lets operator store company info early */}
                 <div className="flex gap-2">
                   <button
-                    onClick={() => onUpdate({ ...reservation!, invoiceData: invoiceForm })}
-                    className="flex-1 py-2 px-4 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+                    onClick={handleSaveDetails}
+                    className={`flex-1 py-2 px-4 border text-sm font-medium rounded-md transition-colors ${
+                      saveDetailsSaved
+                        ? "border-green-300 bg-green-50 text-green-700"
+                        : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                    }`}
                   >
-                    Save details
+                    {saveDetailsSaved ? "✓ Saved" : "Save details"}
                   </button>
                   <button
                     onClick={handleGenerateInvoice}
@@ -2002,6 +2086,178 @@ export default function ReservationDrawer({
                     </svg>
                     <span className="truncate">Saved — {driveSaveResult.name}</span>
                   </a>
+                )}
+
+                {/* ── Modify Invoice ─────────────────────────────────────── */}
+                {!showModifyEditor && (
+                  <button
+                    onClick={() => setShowModifyEditor(true)}
+                    className="w-full py-1.5 px-3 border border-amber-200 text-amber-700 text-xs font-medium rounded-md hover:bg-amber-50 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    Modify Invoice
+                  </button>
+                )}
+
+                {/* ── Modification editor ────────────────────────────────── */}
+                {showModifyEditor && (
+                  <div className="border border-amber-200 rounded-lg p-3 space-y-3 bg-amber-50/50">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Modify Invoice</span>
+                      <button onClick={() => setShowModifyEditor(false)} className="text-gray-400 hover:text-gray-600">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    {/* Date ranges */}
+                    <div className="space-y-2">
+                      <label className="text-[11px] text-gray-500 font-medium block">Date Ranges</label>
+                      {modifyDateRanges.map((r, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <input
+                            type="date"
+                            value={r.from}
+                            onChange={(e) => {
+                              const next = [...modifyDateRanges];
+                              next[i] = { ...next[i], from: e.target.value };
+                              setModifyDateRanges(next);
+                            }}
+                            className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                          />
+                          <span className="text-gray-400 text-xs shrink-0">→</span>
+                          <input
+                            type="date"
+                            value={r.to}
+                            onChange={(e) => {
+                              const next = [...modifyDateRanges];
+                              next[i] = { ...next[i], to: e.target.value };
+                              setModifyDateRanges(next);
+                            }}
+                            className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                          />
+                          {modifyDateRanges.length > 1 && (
+                            <button
+                              onClick={() => setModifyDateRanges(modifyDateRanges.filter((_, j) => j !== i))}
+                              className="shrink-0 text-red-400 hover:text-red-600"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => setModifyDateRanges([...modifyDateRanges, { from: "", to: "" }])}
+                        className="text-[11px] text-amber-700 hover:text-amber-900 flex items-center gap-0.5"
+                      >
+                        + Add date range
+                      </button>
+                    </div>
+
+                    {/* Override fields */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[11px] text-gray-500 block mb-1">Nights</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={modifyNights}
+                          onChange={(e) => setModifyNights(Number(e.target.value))}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-gray-500 block mb-1">Guests</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={modifyGuests}
+                          onChange={(e) => setModifyGuests(Number(e.target.value))}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-gray-500 block mb-1">Room</label>
+                        <input
+                          type="text"
+                          value={modifyRoom}
+                          onChange={(e) => setModifyRoom(e.target.value)}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={saveModification}
+                      disabled={modifyDateRanges.every(r => !r.from || !r.to || r.from >= r.to)}
+                      className="w-full py-1.5 px-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-md transition-colors"
+                    >
+                      Save Modification
+                    </button>
+                  </div>
+                )}
+
+                {/* ── Saved modifications list ───────────────────────────── */}
+                {(reservation.invoiceModifications ?? []).length > 0 && (
+                  <div className="border border-amber-100 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-1.5">
+                      <svg className="w-3 h-3 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      <span className="text-xs font-semibold text-amber-700">Modified Versions</span>
+                    </div>
+                    <div className="divide-y divide-amber-50">
+                      {[...(reservation.invoiceModifications ?? [])].reverse().map((mod) => {
+                        const rangeStr = mod.dateRanges
+                          .map(r => {
+                            const fmt = (s: string) => new Date(s + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+                            return `${fmt(r.from)} – ${fmt(r.to)}`;
+                          })
+                          .join(" · ");
+                        const createdLabel = new Date(mod.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+                        return (
+                          <div key={mod.id} className="px-3 py-2.5 space-y-1.5 bg-white">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] text-gray-400">{createdLabel}</span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handlePrintModified(mod)}
+                                  className="px-2 py-0.5 text-[11px] font-medium bg-gray-900 text-white rounded hover:bg-gray-700 transition-colors"
+                                >
+                                  Print
+                                </button>
+                                <button
+                                  onClick={() => handleSendModified(mod)}
+                                  disabled={isSendingInvoice || !reservation.invoiceData?.billingEmail}
+                                  title={!reservation.invoiceData?.billingEmail ? "No billing email set" : "Send this version by email"}
+                                  className="px-2 py-0.5 text-[11px] font-medium bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  Send
+                                </button>
+                                <button
+                                  onClick={() => deleteModification(mod.id)}
+                                  className="p-0.5 text-gray-300 hover:text-red-500 transition-colors"
+                                  title="Delete this modification"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-[11px] text-gray-600 leading-snug">
+                              {rangeStr} · {mod.numberOfNights}N · {mod.numberOfGuests} guests · {mod.room}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
 
                 <button

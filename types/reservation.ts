@@ -37,6 +37,21 @@ export interface InvoiceData {
   billingEmail: string;
 }
 
+export interface InvoiceDateRange {
+  from: string; // YYYY-MM-DD
+  to: string;   // YYYY-MM-DD
+}
+
+/** A display-only invoice variant — never changes stored reservation or Beds24 data. */
+export interface InvoiceModification {
+  id: string;
+  dateRanges: InvoiceDateRange[];
+  numberOfNights: number;
+  numberOfGuests: number;
+  room: string;
+  createdAt: string; // ISO timestamp
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -83,4 +98,5 @@ export interface Reservation {
   additionalPayments?: AdditionalPayment[]; // Stripe payment links created for this reservation
   vouchers?: Voucher[]; // discount vouchers linked to this reservation
   parkingOverride?: string; // undefined = auto rules, "none" = no parking, "152"/"153"/etc = manual space
+  invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
 }
