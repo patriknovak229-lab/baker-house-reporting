@@ -84,13 +84,15 @@ export function buildInvoiceHTML(
     // Distribute total price across ranges; last range absorbs rounding
     const ranges = modification.dateRanges;
     const nightsList = ranges.map(r => nightsBetween(r.from, r.to));
-    const linePrices: number[] = ranges.map((_, i) => {
+    const linePrices: number[] = [];
+    for (let i = 0; i < ranges.length; i++) {
       if (i === ranges.length - 1) {
         const sumSoFar = linePrices.reduce((s, v) => s + v, 0);
-        return res.price - sumSoFar;
+        linePrices.push(res.price - sumSoFar);
+      } else {
+        linePrices.push(Math.round(nightsList[i] * avgPPN));
       }
-      return Math.round(nightsList[i] * avgPPN);
-    });
+    }
 
     lineItemsHtml = ranges.map((r, i) => {
       const isLast = i === ranges.length - 1;
