@@ -296,15 +296,15 @@ export default function TransactionsPage() {
 {/* large banner removed — compact pill lives above the filter instead */}
 
       {/* Page header */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Reservations</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             {reservations.length} total · {filtered.length} shown
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-400">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="hidden sm:inline text-xs text-gray-400">
             Last synced:{" "}
             <span className="text-gray-600">
               {lastSynced ? lastSynced.toLocaleTimeString() : "—"}
