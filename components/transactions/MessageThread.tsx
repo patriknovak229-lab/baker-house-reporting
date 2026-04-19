@@ -48,7 +48,24 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
       const data: ThreadMessage[] = await res.json();
-      setMessages([...data].reverse()); // oldest → newest (top → bottom)
+      const sorted = [...data].reverse(); // oldest → newest (top → bottom)
+      setMessages((prev) => {
+        // Preserve optimistic host messages not yet confirmed by Beds24.
+        // Optimistic IDs are Date.now() (~1.7 trillion); real Beds24 IDs are
+        // sequential integers in the millions — reliably distinguishable.
+        const OPTIMISTIC_ID_THRESHOLD = 1_000_000_000_000;
+        const OPTIMISTIC_MAX_AGE_MS = 5 * 60 * 1000; // drop after 5 min regardless
+        const now = Date.now();
+        const pending = prev.filter(
+          (m) =>
+            m.id > OPTIMISTIC_ID_THRESHOLD &&
+            m.source === 'host' &&
+            now - new Date(m.time).getTime() < OPTIMISTIC_MAX_AGE_MS &&
+            // Not yet confirmed: no real message in fetched data with same text
+            !sorted.some((d) => d.source === 'host' && d.text === m.text)
+        );
+        return [...sorted, ...pending];
+      });
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -104,8 +121,8 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
           time: new Date().toISOString(),
         },
       ]);
-      // Re-sync after Beds24 write propagation (~1–2 s)
-      setTimeout(fetchMessages, 2000);
+      // Re-sync after Beds24 write propagation (~3–4 s)
+      setTimeout(fetchMessages, 4000);
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'Failed to send');
     } finally {
