@@ -21,9 +21,13 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
   const [departure, setDeparture] = useState(tomorrow);
   const [adults, setAdults] = useState(2);
   const [children, setChildren] = useState(0);
+  const [ignoreAvailability, setIgnoreAvailability] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offers, setOffers] = useState<RoomOffer[] | null>(null);
+  // Track which mode the displayed offers were fetched in, so the amber notice
+  // only shows when the visible prices were retrieved with availability ignored.
+  const [offersIgnoredAvailability, setOffersIgnoredAvailability] = useState(false);
 
   async function handleCheck() {
     if (!arrival || !departure) { setError('Pick dates'); return; }
@@ -38,10 +42,12 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
         adults: String(adults),
         children: String(children),
       });
+      if (ignoreAvailability) params.set('ignoreAvailability', 'true');
       const res = await fetch(`/api/price-check?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Request failed');
       setOffers(data.offers ?? []);
+      setOffersIgnoredAvailability(ignoreAvailability);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -132,6 +138,29 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
+          {/* Ignore-availability toggle */}
+          <label className="flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-gray-200 bg-gray-50 cursor-pointer select-none">
+            <div className="flex flex-col">
+              <span className="text-xs font-medium text-gray-700">Ignore availability</span>
+              <span className="text-[10px] text-gray-400">Show prices even when rooms are booked</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIgnoreAvailability((v) => !v)}
+              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                ignoreAvailability ? 'bg-amber-500' : 'bg-gray-300'
+              }`}
+              role="switch"
+              aria-checked={ignoreAvailability}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  ignoreAvailability ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </label>
+
           {nights > 0 && (
             <p className="text-xs text-gray-400 text-center">
               {nights} night{nights !== 1 ? 's' : ''} · {adults + children} guest{adults + children !== 1 ? 's' : ''}
@@ -169,6 +198,14 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
           {/* Results */}
           {offers && (
             <div className="space-y-2">
+              {offersIgnoredAvailability && (
+                <div className="flex items-start gap-2 px-3 py-2 rounded-md border border-amber-200 bg-amber-50 text-[11px] text-amber-800">
+                  <svg className="w-3.5 h-3.5 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                  <span>Prices shown regardless of availability — rooms may be booked.</span>
+                </div>
+              )}
               {offers.map((o) => (
                 <div
                   key={o.room}
@@ -190,7 +227,9 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
                   {o.price != null ? (
                     <span className="text-base font-semibold text-emerald-700">{formatCZK(o.price)}</span>
                   ) : (
-                    <span className="text-xs font-medium text-gray-400 bg-gray-200 px-2 py-1 rounded">Unavailable</span>
+                    <span className="text-xs font-medium text-gray-400 bg-gray-200 px-2 py-1 rounded">
+                      {offersIgnoredAvailability ? 'No rate' : 'Unavailable'}
+                    </span>
                   )}
                 </div>
               ))}
@@ -207,7 +246,9 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
 
               {offers.every((o) => o.price == null) && (
                 <p className="text-xs text-gray-500 text-center py-1">
-                  No rooms available for these dates.
+                  {offersIgnoredAvailability
+                    ? 'No rate data found for these dates.'
+                    : 'No rooms available for these dates.'}
                 </p>
               )}
             </div>
