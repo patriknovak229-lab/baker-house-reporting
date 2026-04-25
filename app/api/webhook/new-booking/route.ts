@@ -76,6 +76,7 @@ const ROOM_MAP: Record<string, string> = {
   "656437": "K.201",
   "648596": "K.202",
   "648772": "K.203",
+  "674672": "O.308",
 };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {

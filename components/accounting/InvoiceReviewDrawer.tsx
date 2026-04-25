@@ -8,7 +8,7 @@ import type {
 } from '@/types/supplierInvoice';
 import { useCategories } from './useCategories';
 
-const ALL_ROOMS = ['K.201', 'K.202', 'K.203'];
+const ALL_ROOMS = ['K.201', 'K.202', 'K.203', 'O.308'];
 
 interface Props {
   extracted?: ExtractedInvoiceData | null;

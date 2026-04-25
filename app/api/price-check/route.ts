@@ -8,6 +8,7 @@ const PROPERTY_ID = 311322;
 // Sellable Beds24 room IDs (what the offers endpoint returns prices for)
 const SELL_ROOM_2KK = 656437; // K.201 — 2KK Deluxe (physical = sellable, same ID)
 const SELL_ROOM_1KK = 648816; // Virtual 1KK Deluxe (qty=2, maps to K.202 + K.203)
+const SELL_ROOM_2BR = 674672; // O.308 — 2 Bedroom Apartment (physical = sellable, same ID)
 
 function extractPrice(roomOffers: unknown): number | null {
   if (!Array.isArray(roomOffers) || roomOffers.length === 0) return null;
@@ -130,13 +131,22 @@ async function fetchCalendarPrices(
   arrival: string,
   departure: string,
 ): Promise<{ priceMap: Record<number, number | null>; rawByRoom: Record<number, unknown> }> {
-  const [r2kk, r1kk] = await Promise.all([
+  const [r2kk, r1kk, r2br] = await Promise.all([
     fetchRoomCalendar(token, SELL_ROOM_2KK, arrival, departure),
     fetchRoomCalendar(token, SELL_ROOM_1KK, arrival, departure),
+    fetchRoomCalendar(token, SELL_ROOM_2BR, arrival, departure),
   ]);
   return {
-    priceMap: { [SELL_ROOM_2KK]: r2kk.price, [SELL_ROOM_1KK]: r1kk.price },
-    rawByRoom: { [SELL_ROOM_2KK]: r2kk.raw, [SELL_ROOM_1KK]: r1kk.raw },
+    priceMap: {
+      [SELL_ROOM_2KK]: r2kk.price,
+      [SELL_ROOM_1KK]: r1kk.price,
+      [SELL_ROOM_2BR]: r2br.price,
+    },
+    rawByRoom: {
+      [SELL_ROOM_2KK]: r2kk.raw,
+      [SELL_ROOM_1KK]: r1kk.raw,
+      [SELL_ROOM_2BR]: r2br.raw,
+    },
   };
 }
 
@@ -208,7 +218,7 @@ export async function GET(req: NextRequest) {
       for (const row of rows) {
         if (row === null || typeof row !== 'object') continue;
         const rid = Number((row as { roomId?: unknown }).roomId);
-        if (rid === SELL_ROOM_2KK || rid === SELL_ROOM_1KK) {
+        if (rid === SELL_ROOM_2KK || rid === SELL_ROOM_1KK || rid === SELL_ROOM_2BR) {
           priceMap[rid] = extractPrice((row as { offers?: unknown }).offers);
         }
       }
@@ -224,6 +234,11 @@ export async function GET(req: NextRequest) {
         room: 'K.202 / K.203',
         description: '1KK Deluxe Apartment',
         price: priceMap[SELL_ROOM_1KK] ?? null,
+      },
+      {
+        room: 'O.308',
+        description: '2 Bedroom Apartment',
+        price: priceMap[SELL_ROOM_2BR] ?? null,
       },
     ];
 

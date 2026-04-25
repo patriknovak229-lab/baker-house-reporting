@@ -7,7 +7,7 @@ interface Props {
   reservations: Reservation[];
 }
 
-const ROOMS: Room[] = ["K.201", "K.202", "K.203"];
+const ROOMS: Room[] = ["K.201", "K.202", "K.203", "O.308"];
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 

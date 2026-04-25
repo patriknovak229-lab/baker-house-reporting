@@ -14,6 +14,7 @@ export const BEDS24_ID_TO_ROOM: Record<string, string> = {
   '656437': 'K.201',
   '648596': 'K.202',
   '648772': 'K.203',
+  '674672': 'O.308',
 };
 
 // Reverse: reporting room display name → Beds24 roomId

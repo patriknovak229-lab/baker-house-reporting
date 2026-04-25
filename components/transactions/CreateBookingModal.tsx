@@ -5,6 +5,7 @@ const ROOM_OPTIONS = [
   { label: "K.201", roomId: 656437 },
   { label: "K.202", roomId: 648596 },
   { label: "K.203", roomId: 648772 },
+  { label: "O.308", roomId: 674672 },
 ];
 
 interface Props {
