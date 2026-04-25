@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/platform-prices",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/send-scheduled-payments",
+      "schedule": "0 9 * * *"
+    }
+  ]
+}
