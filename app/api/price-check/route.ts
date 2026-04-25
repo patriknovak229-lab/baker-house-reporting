@@ -97,10 +97,13 @@ async function fetchRoomCalendar(
   departure: string,
 ): Promise<{ price: number | null; raw: unknown }> {
   const endDateInclusive = previousDay(departure);
+  // Per Beds24 V2 spec: calendar returns nothing unless at least one includeX flag is set.
+  // includePrices=true is what we need; we don't care about availability/restrictions here.
   const params = new URLSearchParams({
     startDate: arrival,
     endDate: endDateInclusive,
     roomId: String(roomId),
+    includePrices: 'true',
   });
 
   const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params.toString()}`, {
