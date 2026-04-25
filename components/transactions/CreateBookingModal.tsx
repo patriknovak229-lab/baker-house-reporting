@@ -267,7 +267,26 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Failed to create booking");
 
-      const newBookingId = Array.isArray(json.data) ? json.data[0] : json.data?.id;
+      // Beds24 POST /bookings response shapes vary by version. Common ones:
+      //   [{ id, new, info }]                      ← bare array
+      //   { success: true, data: [{ id, ... }] }   ← wrapped
+      //   { id, ... }                              ← single object
+      // Walk through them all and return just the id (number/string), never an object.
+      function extractBookingId(d: unknown): string | number | undefined {
+        if (!d) return undefined;
+        if (Array.isArray(d)) {
+          const first = d[0];
+          if (first && typeof first === 'object') return (first as { id?: string | number }).id;
+          return typeof first === 'string' || typeof first === 'number' ? first : undefined;
+        }
+        if (typeof d === 'object') {
+          const obj = d as { id?: string | number; data?: unknown };
+          if (obj.id !== undefined) return obj.id;
+          if (obj.data !== undefined) return extractBookingId(obj.data); // unwrap { data: [...] }
+        }
+        return undefined;
+      }
+      const newBookingId = extractBookingId(json.data);
       const reservationNumber = newBookingId ? `BH-${newBookingId}` : undefined;
 
       if (!includePaymentLink || !form.price || parseFloat(form.price) <= 0) {
