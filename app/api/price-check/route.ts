@@ -38,59 +38,70 @@ function nightsBetween(arrival: string, departure: string): number {
 }
 
 /**
- * Sum daily price1 across the date range from a Beds24 calendar response.
- * Beds24 returns calendar entries that may either be per-day or span ranges
- * (when prices/availability are constant across multiple days). We handle both.
+ * Walk an arbitrary value tree and sum daily price1 entries that fall inside [arrival, departure).
+ * The Beds24 V2 calendar response shape is undocumented in the consumer SDK and varies by version,
+ * so this is intentionally permissive: any object that looks like a calendar day (has a price1
+ * field plus either { from, to } or { date }) is included.
  */
-function sumCalendarPrice(roomCalendar: unknown, arrival: string, departure: string): number | null {
-  if (!Array.isArray(roomCalendar) || roomCalendar.length === 0) return null;
+function sumCalendarPrice(value: unknown, arrival: string, departure: string): number | null {
   const startMs = new Date(arrival + 'T00:00:00Z').getTime();
   const endMs = new Date(departure + 'T00:00:00Z').getTime(); // exclusive
   let total = 0;
   let coveredNights = 0;
 
-  for (const entry of roomCalendar) {
-    if (!entry || typeof entry !== 'object') continue;
-    const e = entry as { from?: unknown; to?: unknown; date?: unknown; price1?: unknown };
-    // Support both { date } (single day) and { from, to } (range, "to" inclusive in Beds24 calendar)
-    const fromStr = typeof e.from === 'string' ? e.from : typeof e.date === 'string' ? e.date : null;
-    const toStr = typeof e.to === 'string' ? e.to : fromStr;
-    if (!fromStr || !toStr) continue;
+  function visit(node: unknown) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
 
-    const rawPrice = e.price1;
-    const price = typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(',', '.')) : Number(rawPrice);
-    if (!Number.isFinite(price) || price <= 0) continue;
+    // Heuristic: a calendar day entry has price1 + a date field
+    const hasPrice = 'price1' in obj || 'price' in obj;
+    const fromStr = typeof obj.from === 'string' ? obj.from
+      : typeof obj.date === 'string' ? obj.date : null;
+    const toStr = typeof obj.to === 'string' ? obj.to : fromStr;
 
-    // Iterate each day in the entry's range, only count days inside [arrival, departure)
-    const entryStart = new Date(fromStr + 'T00:00:00Z').getTime();
-    const entryEnd = new Date(toStr + 'T00:00:00Z').getTime();
-    for (let t = entryStart; t <= entryEnd; t += 86_400_000) {
-      if (t >= startMs && t < endMs) {
-        total += price;
-        coveredNights += 1;
+    if (hasPrice && fromStr && toStr && /^\d{4}-\d{2}-\d{2}$/.test(fromStr)) {
+      const rawPrice = obj.price1 ?? obj.price;
+      const price = typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(',', '.')) : Number(rawPrice);
+      if (Number.isFinite(price) && price > 0) {
+        const entryStart = new Date(fromStr + 'T00:00:00Z').getTime();
+        const entryEnd = new Date(toStr + 'T00:00:00Z').getTime();
+        for (let t = entryStart; t <= entryEnd; t += 86_400_000) {
+          if (t >= startMs && t < endMs) {
+            total += price;
+            coveredNights += 1;
+          }
+        }
       }
     }
+
+    // Recurse into child objects/arrays — handles nested { calendar: [...] } shapes
+    for (const key of Object.keys(obj)) visit(obj[key]);
   }
 
+  visit(value);
   return coveredNights > 0 ? Math.round(total * 100) / 100 : null;
 }
 
 /**
- * Fetch prices ignoring availability via /inventory/rooms/calendar.
- * Returns total stay price = sum of daily price1 across nights.
+ * Fetch the calendar for a single roomId.
+ * Returns { price, raw } — raw is the parsed JSON response (used by debug mode).
  */
-async function fetchCalendarPrices(token: string, arrival: string, departure: string): Promise<Record<number, number | null>> {
-  // Calendar endpoint takes endDate inclusive, so use departure - 1
+async function fetchRoomCalendar(
+  token: string,
+  roomId: number,
+  arrival: string,
+  departure: string,
+): Promise<{ price: number | null; raw: unknown }> {
   const endDateInclusive = previousDay(departure);
-
   const params = new URLSearchParams({
     startDate: arrival,
     endDate: endDateInclusive,
-    propertyId: String(PROPERTY_ID),
+    roomId: String(roomId),
   });
-  // Beds24 V2 typically supports repeated roomId params for multi-room queries
-  params.append('roomId', String(SELL_ROOM_2KK));
-  params.append('roomId', String(SELL_ROOM_1KK));
 
   const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params.toString()}`, {
     headers: { token },
@@ -99,21 +110,31 @@ async function fetchCalendarPrices(token: string, arrival: string, departure: st
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Beds24 calendar returned ${res.status}: ${text}`);
+    throw new Error(`Beds24 calendar (room ${roomId}) returned ${res.status}: ${text}`);
   }
 
-  const data = await res.json();
-  const rows: unknown[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+  const raw = await res.json();
+  const price = sumCalendarPrice(raw, arrival, departure);
+  return { price, raw };
+}
 
-  const priceMap: Record<number, number | null> = {};
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue;
-    const rid = Number((row as { roomId?: unknown }).roomId);
-    if (rid !== SELL_ROOM_2KK && rid !== SELL_ROOM_1KK) continue;
-    const calendar = (row as { calendar?: unknown }).calendar;
-    priceMap[rid] = sumCalendarPrice(calendar, arrival, departure);
-  }
-  return priceMap;
+/**
+ * Fetch prices ignoring availability via /inventory/rooms/calendar.
+ * Issues one request per sellable roomId so the response shape is unambiguous.
+ */
+async function fetchCalendarPrices(
+  token: string,
+  arrival: string,
+  departure: string,
+): Promise<{ priceMap: Record<number, number | null>; rawByRoom: Record<number, unknown> }> {
+  const [r2kk, r1kk] = await Promise.all([
+    fetchRoomCalendar(token, SELL_ROOM_2KK, arrival, departure),
+    fetchRoomCalendar(token, SELL_ROOM_1KK, arrival, departure),
+  ]);
+  return {
+    priceMap: { [SELL_ROOM_2KK]: r2kk.price, [SELL_ROOM_1KK]: r1kk.price },
+    rawByRoom: { [SELL_ROOM_2KK]: r2kk.raw, [SELL_ROOM_1KK]: r1kk.raw },
+  };
 }
 
 /**
@@ -136,6 +157,7 @@ export async function GET(req: NextRequest) {
   const adults = req.nextUrl.searchParams.get('adults') ?? '2';
   const children = req.nextUrl.searchParams.get('children') ?? '0';
   const ignoreAvailability = req.nextUrl.searchParams.get('ignoreAvailability') === 'true';
+  const debug = req.nextUrl.searchParams.get('debug') === '1';
 
   if (!arrival || !departure) {
     return NextResponse.json({ error: 'arrival and departure are required' }, { status: 400 });
@@ -148,9 +170,12 @@ export async function GET(req: NextRequest) {
     const token = await getAccessToken();
 
     let priceMap: Record<number, number | null>;
+    let rawByRoom: Record<number, unknown> | null = null;
 
     if (ignoreAvailability) {
-      priceMap = await fetchCalendarPrices(token, arrival, departure);
+      const result = await fetchCalendarPrices(token, arrival, departure);
+      priceMap = result.priceMap;
+      rawByRoom = result.rawByRoom;
     } else {
       const params = new URLSearchParams({
         propertyId: String(PROPERTY_ID),
@@ -199,6 +224,9 @@ export async function GET(req: NextRequest) {
       },
     ];
 
+    if (debug) {
+      return NextResponse.json({ offers, ignoreAvailability, debug: { rawByRoom, priceMap } });
+    }
     return NextResponse.json({ offers, ignoreAvailability });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
