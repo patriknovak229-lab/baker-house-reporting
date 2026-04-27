@@ -77,6 +77,11 @@ const ROOM_MAP: Record<string, string> = {
   "648596": "K.202",
   "648772": "K.203",
   "674672": "O.308",
+  // Virtual sellable for the 1KK pair. Direct-web bookings via the rental-site
+  // arrive on this VR with the full price; the physical sub allocated by Beds24
+  // ends up with price=0 (skipped by the rule below). Without this entry the
+  // master was being skipped as "virtual room" → zero Telegram notifications.
+  "648816": "K.202 / K.203",
 };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {

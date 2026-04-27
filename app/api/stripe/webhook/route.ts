@@ -64,14 +64,31 @@ export async function POST(req: NextRequest) {
   const session = event.data.object as Stripe.Checkout.Session;
   const meta    = session.metadata ?? {};
 
+  // Two metadata schemas hit this webhook:
+  //   1. Reporting-app payment links — set { description, amountCzk, guestEmail/Phone/Name, reservationNumber }
+  //   2. Rental-site bookings (bakerhouseapartments.cz) — set only { roomId, arrival, departure, voucherCode? }
+  // For (2) the metadata-driven Telegram came out empty. Fall back to the Stripe session itself
+  // (amount_total + customer_email + customer_details.name) so direct-web payments still produce
+  // a useful notification. Metadata wins when present.
+  const sessionAmountCzk = typeof session.amount_total === 'number'
+    ? session.amount_total / 100
+    : 0;
+  const sessionEmail = session.customer_email ?? session.customer_details?.email ?? '';
+  const sessionName = session.customer_details?.name ?? '';
+  const sessionPhone = session.customer_details?.phone ?? '';
+  // Synthesize a description for rental-site bookings from arrival/departure metadata
+  const fallbackDescription = (meta.arrival && meta.departure)
+    ? `Web booking ${meta.arrival} → ${meta.departure}`
+    : '';
+
   const record: StripePaymentRecord = {
     sessionId:         session.id,
-    description:       meta.description       ?? '',
-    amountCzk:         parseFloat(meta.amountCzk ?? '0'),
-    guestEmail:        meta.guestEmail         ?? '',
-    guestPhone:        meta.guestPhone         ?? '',
-    guestName:         meta.guestName          || undefined,
-    reservationNumber: meta.reservationNumber  || undefined,
+    description:       meta.description       || fallbackDescription || '',
+    amountCzk:         parseFloat(meta.amountCzk ?? '0') || sessionAmountCzk,
+    guestEmail:        meta.guestEmail        || sessionEmail || '',
+    guestPhone:        meta.guestPhone        || sessionPhone || '',
+    guestName:         meta.guestName         || sessionName  || undefined,
+    reservationNumber: meta.reservationNumber || undefined,
     paidAt:            new Date().toISOString(),
   };
 
