@@ -44,6 +44,7 @@ export default function CreateVoucherModal({
   const [step, setStep] = useState<Step>('form');
   const [discountType, setDiscountType] = useState<DiscountType>('fixed');
   const [value, setValue] = useState('');
+  const [voucherName, setVoucherName] = useState('');
   const [email, setEmail] = useState(defaultEmail ?? '');
   const [phone, setPhone] = useState(defaultPhone ?? '');
 
@@ -69,8 +70,11 @@ export default function CreateVoucherModal({
     ?? selectedRes?.guestName.split(' ')[0]
     ?? '';
 
-  // Auto-generated code preview
-  const codePreview = generateCode(guestFirstName, value);
+  // The reservation prefix wins; otherwise fall back to the operator-supplied voucherName.
+  // Standalone vouchers (no reservation) require voucherName so the code isn't just the amount.
+  const isLinkedToReservation = !!fixedReservationNumber || !!selectedRes;
+  const codePrefix = guestFirstName || voucherName;
+  const codePreview = generateCode(codePrefix, value);
 
   const filteredReservations = useMemo(() => {
     if (!reservations || !resSearch.trim()) return reservations ?? [];
@@ -103,8 +107,14 @@ export default function CreateVoucherModal({
       setError('Percentage cannot exceed 100');
       return;
     }
+    // When not linked to a reservation, a voucher name is mandatory so the code
+    // isn't trivially guessable (e.g. plain "1000" for a 1000 Kč voucher).
+    if (!isLinkedToReservation && !voucherName.trim()) {
+      setError('Voucher name is required when no reservation is linked');
+      return;
+    }
     if (!codePreview) {
-      setError('A guest name is needed to generate the voucher code. Link a reservation or enter a name.');
+      setError('A guest name or voucher name is needed to generate the voucher code.');
       return;
     }
 
@@ -287,6 +297,26 @@ export default function CreateVoucherModal({
                   <p className="text-xs font-medium text-purple-900 truncate">{fixedGuestName}</p>
                   <p className="text-[10px] text-purple-600">#{fixedReservationNumber}</p>
                 </div>
+              </div>
+            )}
+
+            {/* Voucher name — only when no reservation is linked.
+                Required so the resulting code isn't just the amount (e.g. "1000"). */}
+            {!isLinkedToReservation && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Voucher name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={voucherName}
+                  onChange={(e) => setVoucherName(e.target.value)}
+                  placeholder="e.g. Promo, Spring, Influencer"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Used as the prefix in the voucher code. Letters and digits only.
+                </p>
               </div>
             )}
 
