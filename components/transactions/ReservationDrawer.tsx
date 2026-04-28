@@ -5,6 +5,7 @@ import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory, InvoiceModification } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
+import type { SplitPayment } from "@/types/splitPayment";
 import MessageThread from "./MessageThread";
 import CreateVoucherModal from "./CreateVoucherModal";
 import Badge from "@/components/shared/Badge";
@@ -30,15 +31,31 @@ function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): Paymen
 }
 
 // ── Additional payment row with status override + delete ─────────────────────
+// Stripe Checkout sessions expire 24h after creation — show a clear "expired" cue
+// after 23h so the operator knows the customer needs a regenerated link.
+const PAYMENT_LINK_TTL_MS = 23 * 60 * 60 * 1000;
+
 function AdditionalPaymentRow({
   ap,
+  guestPhone,
+  guestName,
   onRefresh,
 }: {
   ap: AdditionalPayment;
+  guestPhone?: string;
+  guestName?: string;
   onRefresh?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regeneratedUrl, setRegeneratedUrl] = useState<string | null>(null);
+  const [regenError, setRegenError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const isUnpaid = ap.status === 'unpaid';
+  const ageMs = Date.now() - new Date(ap.createdAt).getTime();
+  const linkExpired = isUnpaid && ageMs > PAYMENT_LINK_TTL_MS;
 
   async function handleToggleStatus() {
     setBusy(true);
@@ -67,13 +84,50 @@ function AdditionalPaymentRow({
     }
   }
 
+  async function handleRegenerate() {
+    setRegenerating(true);
+    setRegenError(null);
+    setRegeneratedUrl(null);
+    try {
+      const res = await fetch('/api/stripe/regenerate-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId: ap.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setRegeneratedUrl(data.url);
+      onRefresh?.();
+    } catch (err) {
+      setRegenError(err instanceof Error ? err.message : 'Failed to regenerate link');
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  function handleCopyRegenerated() {
+    if (!regeneratedUrl) return;
+    navigator.clipboard.writeText(regeneratedUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  function handleWhatsAppRegenerated() {
+    if (!regeneratedUrl) return;
+    const text = encodeURIComponent(
+      `Hi ${guestName || 'there'}, here is your payment link for your Baker House stay: ${regeneratedUrl}`,
+    );
+    const num = (guestPhone ?? '').replace(/\D/g, '');
+    window.open(`https://wa.me/${num}?text=${text}`, '_blank');
+  }
+
   return (
     <div className="px-3 py-2.5 space-y-1.5">
       <div className="flex items-start gap-2">
         {/* Status dot */}
         <span
           className={`mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full text-white shrink-0 ${
-            ap.status === "unpaid" ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
+            isUnpaid ? "bg-amber-500 animate-pulse" : "bg-emerald-500"
           }`}
         >
           <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -88,6 +142,9 @@ function AdditionalPaymentRow({
           <p className="text-[10px] text-gray-500">
             Sent {ap.createdAt.slice(0, 10)}
             {ap.paidAt ? ` · Paid ${ap.paidAt.slice(0, 10)}` : ""}
+            {linkExpired && (
+              <span className="ml-1 text-rose-600 font-medium">· Link expired</span>
+            )}
           </p>
         </div>
 
@@ -96,21 +153,69 @@ function AdditionalPaymentRow({
           <p className="text-xs font-medium text-gray-900">
             {ap.amountCzk.toLocaleString("cs-CZ")} Kč
           </p>
-          <span className={`text-[10px] font-medium ${ap.status === "unpaid" ? "text-amber-600" : "text-emerald-600"}`}>
-            {ap.status === "unpaid" ? "Unpaid" : "Paid"}
+          <span className={`text-[10px] font-medium ${isUnpaid ? "text-amber-600" : "text-emerald-600"}`}>
+            {isUnpaid ? (linkExpired ? "Pending · expired" : "Pending") : "Paid"}
           </span>
         </div>
       </div>
 
+      {/* Regenerated link preview (after Regenerate succeeds) */}
+      {regeneratedUrl && (
+        <div className="ml-7 space-y-1.5 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+          <p className="text-[10px] font-medium text-emerald-700">New link ready:</p>
+          <div className="flex items-center gap-1.5">
+            <input
+              readOnly
+              value={regeneratedUrl}
+              className="flex-1 px-2 py-1 border border-emerald-200 rounded text-[10px] text-gray-600 bg-white truncate"
+            />
+            <button
+              onClick={handleCopyRegenerated}
+              className={`px-2 py-1 text-[10px] font-medium rounded transition-colors whitespace-nowrap ${
+                copied ? 'bg-green-100 text-green-700' : 'bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+              }`}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            {guestPhone && (
+              <button
+                onClick={handleWhatsAppRegenerated}
+                className="px-2 py-1 text-[10px] font-medium bg-white border border-green-200 text-green-700 rounded hover:bg-green-50 transition-colors whitespace-nowrap"
+                title="Send via WhatsApp"
+              >
+                WA
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {regenError && (
+        <p className="ml-7 text-[10px] text-red-600">{regenError}</p>
+      )}
+
       {/* Action buttons */}
       {!confirmDelete ? (
-        <div className="flex items-center gap-2 pl-7">
+        <div className="flex items-center gap-2 pl-7 flex-wrap">
+          {isUnpaid && (
+            <button
+              onClick={handleRegenerate}
+              disabled={regenerating || busy}
+              className={`text-[10px] font-medium px-2 py-0.5 rounded border transition-colors disabled:opacity-40 ${
+                linkExpired
+                  ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                  : 'border-indigo-200 text-indigo-600 hover:bg-indigo-50'
+              }`}
+              title={linkExpired ? 'Original link has expired — generate a fresh one' : 'Generate a new payment link (the old one stays valid until it expires)'}
+            >
+              {regenerating ? '…' : 'Regenerate link'}
+            </button>
+          )}
           <button
             onClick={handleToggleStatus}
             disabled={busy}
             className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
           >
-            Mark as {ap.status === "unpaid" ? "paid" : "unpaid"}
+            Mark as {isUnpaid ? "paid" : "unpaid"}
           </button>
           <button
             onClick={() => setConfirmDelete(true)}
@@ -139,6 +244,55 @@ function AdditionalPaymentRow({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Scheduled split-payment row (link will be cron-emailed on sendDate) ─────
+function ScheduledSplitPaymentRow({ sp }: { sp: SplitPayment }) {
+  const today = new Date().toLocaleDateString("sv-SE");
+  const isOverdue = sp.sendDate < today; // cron didn't fire yet — temporary lag, or failed
+  const daysAway = (() => {
+    const a = new Date(sp.sendDate + 'T00:00:00').getTime();
+    const b = new Date(today + 'T00:00:00').getTime();
+    return Math.round((a - b) / 86_400_000);
+  })();
+
+  return (
+    <div className="px-3 py-2.5 space-y-1">
+      <div className="flex items-start gap-2">
+        {/* Calendar dot */}
+        <span className="mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-600 shrink-0">
+          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+              d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        </span>
+
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-gray-800 truncate">{sp.description}</p>
+          <p className="text-[10px] text-gray-500">
+            {isOverdue ? (
+              <span className="text-rose-600 font-medium">Overdue · expected {sp.sendDate}</span>
+            ) : (
+              <>
+                Will be emailed on <span className="font-medium text-gray-700">{sp.sendDate}</span>
+                {daysAway > 0 && ` · in ${daysAway} day${daysAway === 1 ? '' : 's'}`}
+              </>
+            )}
+            {sp.failureReason && (
+              <span className="block text-rose-600">Last attempt failed: {sp.failureReason}</span>
+            )}
+          </p>
+        </div>
+
+        <div className="text-right shrink-0">
+          <p className="text-xs font-medium text-gray-900">
+            {sp.amountCzk.toLocaleString("cs-CZ")} Kč
+          </p>
+          <span className="text-[10px] font-medium text-blue-600">Upcoming</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1491,7 +1645,7 @@ export default function ReservationDrawer({
               </p>
             )}
 
-            {/* Additional Payments sub-list */}
+            {/* Additional Payments sub-list (sent links — paid + pending) */}
             {(reservation.additionalPayments ?? []).length > 0 && (
               <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
                 <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide px-3 py-2 bg-gray-50 border-b border-gray-100">
@@ -1502,9 +1656,28 @@ export default function ReservationDrawer({
                     <AdditionalPaymentRow
                       key={ap.id}
                       ap={ap}
+                      guestPhone={reservation.phone}
+                      guestName={`${reservation.firstName} ${reservation.lastName}`.trim() || undefined}
                       onRefresh={onPaymentCreated}
                     />
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Upcoming scheduled split-payments (cron will email the link on sendDate) */}
+            {(reservation.splitPayments ?? []).filter((sp) => sp.status === 'scheduled').length > 0 && (
+              <div className="mt-3 border border-blue-100 rounded-lg overflow-hidden">
+                <p className="text-[11px] font-medium text-blue-700 uppercase tracking-wide px-3 py-2 bg-blue-50 border-b border-blue-100">
+                  Upcoming
+                </p>
+                <div className="divide-y divide-blue-50">
+                  {(reservation.splitPayments ?? [])
+                    .filter((sp) => sp.status === 'scheduled')
+                    .sort((a, b) => a.paymentNumber - b.paymentNumber)
+                    .map((sp) => (
+                      <ScheduledSplitPaymentRow key={sp.id} sp={sp} />
+                    ))}
                 </div>
               </div>
             )}

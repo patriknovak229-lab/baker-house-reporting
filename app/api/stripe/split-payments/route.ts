@@ -267,22 +267,25 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * GET /api/stripe/split-payments?reservationNumber=BH-12345
- * Lists all SplitPayment records for a reservation.
+ * GET /api/stripe/split-payments
+ *   ?reservationNumber=BH-12345 → SplitPayments for that reservation only
+ *   (no query)                  → every SplitPayment (used by TransactionsPage to merge per-reservation)
  */
 export async function GET(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super', 'viewer', 'accountant']);
   if ('error' in authResult) return authResult.error;
 
   const reservationNumber = req.nextUrl.searchParams.get('reservationNumber');
-  if (!reservationNumber) {
-    return NextResponse.json({ error: 'reservationNumber is required' }, { status: 400 });
-  }
-
   const redis = getRedis();
   const all = (await redis.get<SplitPayment[]>(SCHEDULED_KEY)) ?? [];
-  const filtered = all
-    .filter((sp) => sp.reservationNumber === reservationNumber)
-    .sort((a, b) => a.paymentNumber - b.paymentNumber);
-  return NextResponse.json({ payments: filtered });
+
+  if (reservationNumber) {
+    const filtered = all
+      .filter((sp) => sp.reservationNumber === reservationNumber)
+      .sort((a, b) => a.paymentNumber - b.paymentNumber);
+    return NextResponse.json({ payments: filtered });
+  }
+
+  // No filter → return all (TransactionsPage merges by reservationNumber client-side)
+  return NextResponse.json({ payments: all });
 }

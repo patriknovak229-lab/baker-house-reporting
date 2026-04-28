@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
+import type { SplitPayment } from "@/types/splitPayment";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -95,11 +96,12 @@ export default function TransactionsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [bookingsRes, localStateRes, additionalPaymentsRes, vouchersRes] = await Promise.all([
+      const [bookingsRes, localStateRes, additionalPaymentsRes, vouchersRes, splitPaymentsRes] = await Promise.all([
         fetch("/api/bookings"),
         fetch("/api/local-state"),
         fetch("/api/stripe/additional-payments"),
         fetch("/api/vouchers"),
+        fetch("/api/stripe/split-payments"),
       ]);
       if (!bookingsRes.ok) {
         const json = await bookingsRes.json().catch(() => ({}));
@@ -114,6 +116,12 @@ export default function TransactionsPage() {
         : [];
       const allVouchers: Voucher[] = vouchersRes.ok
         ? await vouchersRes.json().catch(() => [])
+        : [];
+      const splitPaymentsBody = splitPaymentsRes.ok
+        ? await splitPaymentsRes.json().catch(() => ({}))
+        : {};
+      const allSplitPayments: SplitPayment[] = Array.isArray(splitPaymentsBody?.payments)
+        ? splitPaymentsBody.payments
         : [];
 
       // Group additional payments by reservationNumber for merge
@@ -134,12 +142,26 @@ export default function TransactionsPage() {
         }
       }
 
+      // Group split payments by reservationNumber for merge
+      const spByRes = new Map<string, SplitPayment[]>();
+      for (const sp of allSplitPayments) {
+        const group = spByRes.get(sp.reservationNumber) ?? [];
+        group.push(sp);
+        spByRes.set(sp.reservationNumber, group);
+      }
+
       // Stripe fees are aggregated server-side in /api/bookings now, so we just
-      // attach the AdditionalPayments + Vouchers and let the API's value flow through.
+      // attach the AdditionalPayments + Vouchers + SplitPayments and let the API's value flow through.
       const merged = mergeLocal(data, localState).map((r) => {
         const aps = apByRes.get(r.reservationNumber);
         const vs = vByRes.get(r.reservationNumber);
-        return { ...r, ...(aps ? { additionalPayments: aps } : {}), ...(vs ? { vouchers: vs } : {}) };
+        const sps = spByRes.get(r.reservationNumber);
+        return {
+          ...r,
+          ...(aps ? { additionalPayments: aps } : {}),
+          ...(vs ? { vouchers: vs } : {}),
+          ...(sps ? { splitPayments: sps } : {}),
+        };
       });
       setReservations(merged);
       setLastSynced(new Date());

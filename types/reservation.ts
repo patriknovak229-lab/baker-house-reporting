@@ -1,5 +1,6 @@
 import type { AdditionalPayment } from "./additionalPayment";
 import type { Voucher } from "./voucher";
+import type { SplitPayment } from "./splitPayment";
 
 export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone" | "Direct-Web";
 // Physical room name (e.g. "K.201") or combined for package bookings (e.g. "K.202 + K.203")
@@ -96,6 +97,7 @@ export interface Reservation {
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this
   issues?: Issue[]; // locally managed task/issue log; undefined = no issues
   additionalPayments?: AdditionalPayment[]; // Stripe payment links created for this reservation
+  splitPayments?: SplitPayment[]; // scheduled future payments (cron-emailed when sendDate ≤ today)
   vouchers?: Voucher[]; // discount vouchers linked to this reservation
   parkingOverride?: string; // undefined = auto rules, "none" = no parking, "152"/"153"/etc = manual space
   invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
