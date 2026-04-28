@@ -6,7 +6,7 @@ import {
   type PricingResult,
 } from '@/utils/platformScraper';
 
-export const maxDuration = 120; // Vercel Pro: up to 300s, 120 is a safe limit
+export const maxDuration = 300; // Vercel Pro maximum — Booking + Airbnb sequential needs the headroom
 
 const REDIS_KEY_LATEST = 'platform-prices:latest';
 const REDIS_KEY_STATUS = 'platform-prices:status';

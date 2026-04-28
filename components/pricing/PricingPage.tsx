@@ -408,6 +408,23 @@ export default function PricingPage() {
   const [nights, setNights] = useState<'2' | '7'>('2');
   const [error, setError] = useState<string | null>(null);
 
+  // Vercel sometimes returns plain-text/HTML on 5xx (e.g. function timeout =
+  // "An error occurred…"). A naive `.json()` then throws SyntaxError. This
+  // helper returns the error message text or a sensible fallback so the UI
+  // surfaces a useful message instead of "Unexpected token 'A'".
+  const readErrorMessage = async (res: Response, fallback: string): Promise<string> => {
+    const text = await res.text().catch(() => '');
+    if (!text) return fallback;
+    try {
+      const parsed = JSON.parse(text);
+      return typeof parsed?.error === 'string' ? parsed.error : fallback;
+    } catch {
+      // Plain text / HTML response — surface a short, readable hint
+      const stripped = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      return stripped.length > 0 ? stripped.slice(0, 240) : fallback;
+    }
+  };
+
   const loadCached = useCallback(async () => {
     setLoadingScheduled(true);
     try {
@@ -438,7 +455,7 @@ export default function PricingPage() {
     setError(null);
     try {
       const res = await fetch('/api/platform-prices', { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json()).error ?? 'Failed');
+      if (!res.ok) throw new Error(await readErrorMessage(res, `Failed (${res.status})`));
       const data = await res.json();
       setScheduled({ ...normalizeResult(data), status: 'idle' });
     } catch (e) {
@@ -459,7 +476,7 @@ export default function PricingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ checkIn, checkOut, nights: Number(nights) }),
       });
-      if (!res.ok) throw new Error((await res.json()).error ?? 'Failed');
+      if (!res.ok) throw new Error(await readErrorMessage(res, `Failed (${res.status})`));
       setCustom(normalizeResult(await res.json()));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Check failed');

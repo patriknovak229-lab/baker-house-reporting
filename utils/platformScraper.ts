@@ -965,6 +965,29 @@ async function scrapeBookingCom(
       });
       console.log(`[pricing] Booking.com ${slot.checkIn} → ${roomData.length} rooms (text pass)`);
 
+      // When text pass returns nothing, dump page state once so we can see
+      // why on Vercel (likely CAPTCHA/anti-bot/cookie wall vs locally).
+      // Skip the click pass and the rest of the slot — there's nothing to
+      // hover anyway, and that path costs ~10s per empty slot which is what
+      // pushed us over the 120s function timeout in the first run.
+      if (roomData.length === 0) {
+        const diag = await page.evaluate(() => ({
+          title: document.title,
+          url: location.href,
+          bodyLen: (document.body?.innerText ?? '').length,
+          bodyHead: (document.body?.innerText ?? '').slice(0, 600),
+          hasCaptcha: /captcha|robot|are\s*you\s*human|access\s*denied|blocked/i.test(
+            document.body?.innerText ?? '',
+          ),
+        }));
+        console.log(
+          `[pricing] Booking.com EMPTY for ${slot.checkIn}: title=${JSON.stringify(diag.title)} url=${diag.url} bodyLen=${diag.bodyLen} captchaHint=${diag.hasCaptcha}`,
+        );
+        console.log(`  body[0:600]: ${JSON.stringify(diag.bodyHead)}`);
+        results.push({ k201: NULL_OFFER, oneKK: NULL_OFFER });
+        continue;
+      }
+
       // Click-to-reveal pass: for each room heading, find the first rate row
       // (cheapest — Booking.com orders rate plans ascending) and open the
       // price-breakdown tooltip. Captures are associated with their heading
