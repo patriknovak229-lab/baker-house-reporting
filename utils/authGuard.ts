@@ -7,6 +7,15 @@ import type { Role } from '@/utils/roles';
 export async function requireRole(
   allowedRoles: Role[]
 ): Promise<{ role: Role } | { error: NextResponse }> {
+  // Local dev bypass: set DEV_ADMIN_EMAIL in .env.local to skip Google auth
+  if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
+    const devRole: Role = 'admin';
+    if (!allowedRoles.includes(devRole)) {
+      return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+    }
+    return { role: devRole };
+  }
+
   const session = await auth();
   if (!session?.user) {
     return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };

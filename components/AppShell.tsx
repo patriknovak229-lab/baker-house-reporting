@@ -7,6 +7,7 @@ import { canAccessTab, getDefaultTab } from '@/utils/roles';
 import TransactionsPage from '@/components/transactions/TransactionsPage';
 import PerformancePage from '@/components/performance/PerformancePage';
 import AccountingPage from '@/components/accounting/AccountingPage';
+import PricingPage from '@/components/pricing/PricingPage';
 
 function ComingSoon({ tab }: { tab: string }) {
   return (
@@ -22,12 +23,18 @@ function ComingSoon({ tab }: { tab: string }) {
   );
 }
 
-export default function AppShell() {
+interface AppShellProps {
+  devRole?: Role; // Passed from the server component in dev mode; skips OAuth entirely
+}
+
+export default function AppShell({ devRole }: AppShellProps) {
   const { data: session, status } = useSession();
-  const role = session?.user?.role as Role | undefined;
+
+  const role: Role | undefined = devRole ?? (session?.user?.role as Role | undefined);
+  const authReady = !!devRole || status !== 'loading';
+
   const [activeTab, setActiveTab] = useState<Tab>('transactions');
 
-  // Once role is known, jump to the user's default tab
   useEffect(() => {
     if (role) setActiveTab(getDefaultTab(role));
   }, [role]);
@@ -36,7 +43,7 @@ export default function AppShell() {
     if (!role || canAccessTab(role, tab)) setActiveTab(tab);
   }
 
-  if (status === 'loading') {
+  if (!authReady) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
@@ -51,6 +58,7 @@ export default function AppShell() {
         {activeTab === 'transactions' && <TransactionsPage />}
         {activeTab === 'performance' && <PerformancePage />}
         {activeTab === 'accounting' && <AccountingPage />}
+        {activeTab === 'pricing' && <PricingPage />}
       </main>
     </div>
   );

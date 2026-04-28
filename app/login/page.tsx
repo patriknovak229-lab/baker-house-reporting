@@ -1,6 +1,11 @@
 import { signIn } from '@/auth';
+import { redirect } from 'next/navigation';
 
 export default function LoginPage() {
+  // In local dev with the bypass configured, skip the login form entirely.
+  if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
+    redirect('/');
+  }
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 w-full max-w-sm text-center">

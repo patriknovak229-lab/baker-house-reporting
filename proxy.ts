@@ -1,8 +1,20 @@
 import { auth } from '@/auth';
 import { NextResponse } from 'next/server';
 
+// Local dev auth bypass: when DEV_ADMIN_EMAIL is set in .env.local, skip Google OAuth
+const DEV_BYPASS = process.env.NODE_ENV === 'development' && !!process.env.DEV_ADMIN_EMAIL;
+
 export default auth((req) => {
   const { nextUrl } = req;
+
+  if (DEV_BYPASS) {
+    // Redirect /login → / so the dev doesn't sit on an unreachable page
+    if (nextUrl.pathname === '/login') {
+      return NextResponse.redirect(new URL('/', nextUrl));
+    }
+    return NextResponse.next();
+  }
+
   const isLoggedIn = !!req.auth;
 
   if (nextUrl.pathname === '/login') {
