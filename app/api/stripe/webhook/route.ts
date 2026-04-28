@@ -97,6 +97,32 @@ export async function POST(req: NextRequest) {
   const existingRecords = await redis.get<StripePaymentRecord[]>('baker:stripe-payments') ?? [];
   await redis.set('baker:stripe-payments', [...existingRecords, record]);
 
+  // Pull the Stripe processing fee from the BalanceTransaction linked to this
+  // session's PaymentIntent → Charge. Captured per-payment so we can roll it up
+  // to reservation.paymentChargeAmount and surface it in the existing
+  // PaymentBreakdown alongside OTA fees.
+  // BalanceTransaction.fee is in minor units (haléř); convert to CZK.
+  let stripeFeeCzk: number | undefined;
+  try {
+    const expanded = await stripe.checkout.sessions.retrieve(session.id, {
+      expand: ['payment_intent.latest_charge.balance_transaction'],
+    });
+    const pi = expanded.payment_intent;
+    if (pi && typeof pi !== 'string') {
+      const charge = pi.latest_charge;
+      if (charge && typeof charge !== 'string') {
+        const bt = charge.balance_transaction;
+        if (bt && typeof bt !== 'string' && typeof bt.fee === 'number') {
+          stripeFeeCzk = Math.round(bt.fee) / 100;
+        }
+      }
+    }
+  } catch (err) {
+    // Non-fatal — settlement may not have happened yet; the manual "Check Stripe"
+    // button or the next webhook event will fill it in.
+    console.warn('[stripe/webhook] Could not fetch fee for session', session.id, err);
+  }
+
   // Update AdditionalPayment to paid + auto-create revenue invoice (when linked to reservation)
   if (record.reservationNumber) {
     const payments = await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY) ?? [];
@@ -104,7 +130,12 @@ export async function POST(req: NextRequest) {
 
     if (idx !== -1) {
       const paidAt = record.paidAt;
-      payments[idx] = { ...payments[idx], status: 'paid', paidAt };
+      payments[idx] = {
+        ...payments[idx],
+        status: 'paid',
+        paidAt,
+        ...(stripeFeeCzk !== undefined ? { stripeFeeCzk } : {}),
+      };
 
       // Auto-create revenue invoice
       const invoiceId = `pay-${session.id}`;

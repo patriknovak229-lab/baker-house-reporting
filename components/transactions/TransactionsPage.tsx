@@ -137,7 +137,21 @@ export default function TransactionsPage() {
       const merged = mergeLocal(data, localState).map((r) => {
         const aps = apByRes.get(r.reservationNumber);
         const vs = vByRes.get(r.reservationNumber);
-        return { ...r, ...(aps ? { additionalPayments: aps } : {}), ...(vs ? { vouchers: vs } : {}) };
+        // Aggregate per-payment Stripe fees up to the reservation so the existing
+        // PaymentBreakdown surfaces them on the same line as OTA payment-charge fees.
+        // Only adds to paymentChargeAmount — Beds24 doesn't report Stripe fees, so
+        // for direct bookings the existing value is 0 and this becomes the sole source.
+        const stripeFeeSum = (aps ?? [])
+          .filter((ap) => ap.status === 'paid' && typeof ap.stripeFeeCzk === 'number')
+          .reduce((sum, ap) => sum + (ap.stripeFeeCzk ?? 0), 0);
+        const adjusted = stripeFeeSum > 0
+          ? { ...r, paymentChargeAmount: r.paymentChargeAmount + stripeFeeSum }
+          : r;
+        return {
+          ...adjusted,
+          ...(aps ? { additionalPayments: aps } : {}),
+          ...(vs ? { vouchers: vs } : {}),
+        };
       });
       setReservations(merged);
       setLastSynced(new Date());

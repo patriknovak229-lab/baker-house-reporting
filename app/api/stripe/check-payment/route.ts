@@ -87,15 +87,20 @@ export async function POST(req: NextRequest) {
       changed: false,
     };
 
-    if (p.status === 'paid') {
-      // Already paid locally — Stripe is unlikely to disagree, skip the API call to save quota
+    if (p.status === 'paid' && p.stripeFeeCzk !== undefined) {
+      // Already paid locally and fee already captured — skip Stripe call to save quota.
+      // (If fee is missing on a paid record, fall through to fetch it as a backfill.)
       details.push(detail);
       continue;
     }
 
+    // Expand to grab the Stripe processing fee in the same call (BalanceTransaction
+    // sits at session → payment_intent → latest_charge → balance_transaction).
     let session: Stripe.Checkout.Session;
     try {
-      session = await stripe.checkout.sessions.retrieve(p.id);
+      session = await stripe.checkout.sessions.retrieve(p.id, {
+        expand: ['payment_intent.latest_charge.balance_transaction'],
+      });
     } catch (err) {
       console.error('[check-payment] Stripe retrieve failed for', p.id, err);
       detail.stripeStatus = 'error';
@@ -106,39 +111,61 @@ export async function POST(req: NextRequest) {
     detail.stripeStatus = session.payment_status ?? null;
 
     if (session.payment_status === 'paid') {
-      // Mirror exactly what the webhook does: flip to paid + auto-create RevenueInvoice
+      // Extract fee (in haléř) → CZK. May be undefined if BalanceTransaction not yet ready.
+      let stripeFeeCzk: number | undefined;
+      const pi = session.payment_intent;
+      if (pi && typeof pi !== 'string') {
+        const charge = pi.latest_charge;
+        if (charge && typeof charge !== 'string') {
+          const bt = charge.balance_transaction;
+          if (bt && typeof bt !== 'string' && typeof bt.fee === 'number') {
+            stripeFeeCzk = Math.round(bt.fee) / 100;
+          }
+        }
+      }
+
       const idx = paymentsCopy.findIndex((x) => x.id === p.id);
       if (idx !== -1) {
-        const paidAt = new Date().toISOString();
-        const invoiceId = `pay-${p.id}`;
-        paymentsCopy[idx] = {
-          ...paymentsCopy[idx],
-          status: 'paid',
-          paidAt,
-          invoiceId,
-        };
-        mutatedAdditional = true;
-        detail.after = 'paid';
-        detail.changed = true;
-        updated += 1;
+        const wasUnpaid = p.status !== 'paid';
+        if (wasUnpaid) {
+          // Mirror the webhook: flip to paid + auto-create RevenueInvoice
+          const paidAt = new Date().toISOString();
+          const invoiceId = `pay-${p.id}`;
+          paymentsCopy[idx] = {
+            ...paymentsCopy[idx],
+            status: 'paid',
+            paidAt,
+            invoiceId,
+            ...(stripeFeeCzk !== undefined ? { stripeFeeCzk } : {}),
+          };
+          detail.after = 'paid';
+          detail.changed = true;
+          updated += 1;
+          mutatedAdditional = true;
 
-        const invoiceNumber = `PAY-${p.id.slice(-8).toUpperCase()}`;
-        const alreadyExists = invoicesCopy.some((i) => i.id === invoiceId);
-        if (!alreadyExists) {
-          invoicesCopy.push({
-            id: invoiceId,
-            sourceType: 'issued',
-            category: 'other_services',
-            status: 'pending',
-            invoiceNumber,
-            invoiceDate: paidAt.slice(0, 10),
-            amountCZK: p.amountCzk,
-            reservationNumber: p.reservationNumber,
-            guestName: p.guestName || p.guestEmail || undefined,
-            description: p.description,
-            createdAt: paidAt,
-          });
-          mutatedInvoices = true;
+          const invoiceNumber = `PAY-${p.id.slice(-8).toUpperCase()}`;
+          const alreadyExists = invoicesCopy.some((i) => i.id === invoiceId);
+          if (!alreadyExists) {
+            invoicesCopy.push({
+              id: invoiceId,
+              sourceType: 'issued',
+              category: 'other_services',
+              status: 'pending',
+              invoiceNumber,
+              invoiceDate: paidAt.slice(0, 10),
+              amountCZK: p.amountCzk,
+              reservationNumber: p.reservationNumber,
+              guestName: p.guestName || p.guestEmail || undefined,
+              description: p.description,
+              createdAt: paidAt,
+            });
+            mutatedInvoices = true;
+          }
+        } else if (stripeFeeCzk !== undefined && p.stripeFeeCzk === undefined) {
+          // Backfill: payment already marked paid but fee never captured.
+          paymentsCopy[idx] = { ...paymentsCopy[idx], stripeFeeCzk };
+          detail.changed = true;
+          mutatedAdditional = true;
         }
       }
     }
