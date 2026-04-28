@@ -877,6 +877,13 @@ export default function ReservationDrawer({
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
+  // Check-Stripe button state
+  const [checkingStripe, setCheckingStripe] = useState(false);
+  const [checkStripeResult, setCheckStripeResult] = useState<
+    | { kind: 'ok'; status: string | null; updated: number; checked: number }
+    | { kind: 'error'; message: string }
+    | null
+  >(null);
   // Save details feedback
   const [saveDetailsSaved, setSaveDetailsSaved] = useState(false);
   // Invoice modification editor
@@ -903,6 +910,7 @@ export default function ReservationDrawer({
       setDriveSaveResult(null);
       setDriveSaveError(null);
       setSaveDetailsSaved(false);
+      setCheckStripeResult(null);
       setShowModifyEditor(false);
       setModifyDateRanges([{ from: reservation.checkInDate, to: reservation.checkOutDate }]);
       setModifyNights(reservation.numberOfNights);
@@ -1100,6 +1108,41 @@ export default function ReservationDrawer({
         ? buildPaymentQRInfo(reservation!.reservationNumber, reservation!.price)
         : undefined;
       await printInvoice(reservation!, reservation!.invoiceData, qrInfo);
+    }
+  }
+
+  // Manual fallback for the case where the Stripe webhook didn't fire — asks
+  // the server to query Stripe directly for every linked AdditionalPayment,
+  // flips local state if Stripe says paid, and recomputes the override.
+  async function handleCheckStripe() {
+    if (!reservation) return;
+    setCheckingStripe(true);
+    setCheckStripeResult(null);
+    try {
+      const res = await fetch('/api/stripe/check-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservationNumber: reservation.reservationNumber }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setCheckStripeResult({
+        kind: 'ok',
+        status: data.status ?? null,
+        updated: data.updated ?? 0,
+        checked: data.checked ?? 0,
+      });
+      // Trigger reservation refresh so updated AdditionalPayments + override show through
+      onPaymentCreated?.();
+    } catch (err) {
+      setCheckStripeResult({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Failed to check Stripe',
+      });
+    } finally {
+      setCheckingStripe(false);
+      // Auto-clear feedback after a few seconds
+      setTimeout(() => setCheckStripeResult(null), 4500);
     }
   }
 
@@ -1392,15 +1435,61 @@ export default function ReservationDrawer({
               </div>
             )}
 
-            <button
-              onClick={() => setShowPaymentModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors w-fit mt-2"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-              </svg>
-              Request Payment
-            </button>
+            <div className="flex items-center gap-2 flex-wrap mt-2">
+              <button
+                onClick={() => setShowPaymentModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors w-fit"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+                Request Payment
+              </button>
+
+              {/* Manual Stripe re-check — fallback when webhook didn't fire.
+                  Only relevant when at least one Stripe payment is linked. */}
+              {(reservation.additionalPayments ?? []).length > 0 && (
+                <button
+                  onClick={handleCheckStripe}
+                  disabled={checkingStripe}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors w-fit disabled:opacity-50"
+                  title="Ask Stripe directly whether linked payments cleared (use if webhook missed)"
+                >
+                  {checkingStripe ? (
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  )}
+                  {checkingStripe ? 'Checking…' : 'Check Stripe'}
+                </button>
+              )}
+            </div>
+
+            {/* Check-Stripe result feedback */}
+            {checkStripeResult && (
+              <p
+                className={`text-[11px] mt-1 px-2 py-1 rounded ${
+                  checkStripeResult.kind === 'error'
+                    ? 'text-red-700 bg-red-50 border border-red-200'
+                    : checkStripeResult.updated > 0
+                      ? 'text-green-700 bg-green-50 border border-green-200'
+                      : 'text-gray-500 bg-gray-50 border border-gray-200'
+                }`}
+              >
+                {checkStripeResult.kind === 'error'
+                  ? checkStripeResult.message
+                  : checkStripeResult.updated > 0
+                    ? `Updated ${checkStripeResult.updated} payment${checkStripeResult.updated > 1 ? 's' : ''}${checkStripeResult.status ? ` · status now ${checkStripeResult.status}` : ''}`
+                    : checkStripeResult.checked > 0
+                      ? `Checked ${checkStripeResult.checked} — already in sync${checkStripeResult.status ? ` (${checkStripeResult.status})` : ''}`
+                      : 'No linked Stripe payments to check'}
+              </p>
+            )}
 
             {/* Additional Payments sub-list */}
             {(reservation.additionalPayments ?? []).length > 0 && (

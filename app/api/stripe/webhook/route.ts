@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { Redis } from '@upstash/redis';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
+import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -132,6 +133,14 @@ export async function POST(req: NextRequest) {
       }
 
       await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+    }
+
+    // Reconcile reservation paymentStatusOverride based on the new payment state.
+    // Best-effort: if Beds24 lookup fails or the override was manually set, this is a no-op.
+    try {
+      await recomputePaymentOverride(redis, record.reservationNumber);
+    } catch (err) {
+      console.error('[stripe/webhook] recomputePaymentOverride failed:', err);
     }
   }
 
