@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
     "app/api/send-invoice/route": [
       "./node_modules/@sparticuz/chromium/bin/**/*",
     ],
+    "app/api/platform-prices/route": [
+      "./node_modules/@sparticuz/chromium/bin/**/*",
+    ],
   },
 };
 
