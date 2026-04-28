@@ -1276,10 +1276,151 @@ async function scrapeBookingCom(
   return results;
 }
 
-// TODO(vercel): For the Web column, call the Beds24 API (same pattern as
-// app/api/price-check/route.ts). The API returns the same prices the widget
-// displays, without the scraping fragility. Implement once deployed where
-// BEDS24_REFRESH_TOKEN is configured.
+// ─────────────────────────────────────────────
+// Web column — Beds24 calendar prices
+// ─────────────────────────────────────────────
+//
+// The Web column shows the price the booking widget would quote for our
+// own direct site. We fetch from Beds24 V2 `/inventory/rooms/calendar`
+// because, unlike `/inventory/rooms/offers`, it returns prices regardless
+// of availability — relevant here since we want a comparable rack rate
+// for every sampled date even when a room is fully booked. This mirrors
+// the ignoreAvailability=true path in app/api/price-check/route.ts.
+
+const BEDS24_API_BASE = 'https://beds24.com/api/v2';
+const BEDS24_PROPERTY_ID = 311322;
+const SELL_ROOM_2KK = 656437; // K.201
+const SELL_ROOM_1KK = 648816; // virtual 1KK (qty=2 → K.202 + K.203)
+
+let beds24CachedToken: string | null = null;
+let beds24TokenExpiresAt = 0;
+
+async function getBeds24Token(): Promise<string | null> {
+  const refreshToken = process.env.BEDS24_REFRESH_TOKEN;
+  if (!refreshToken) return null;
+
+  const now = Date.now();
+  if (beds24CachedToken && now < beds24TokenExpiresAt - 60_000) {
+    return beds24CachedToken;
+  }
+  const res = await fetch(`${BEDS24_API_BASE}/authentication/token`, {
+    headers: { refreshToken },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    console.log(`[pricing] Beds24 token refresh failed ${res.status}`);
+    return null;
+  }
+  const json = await res.json();
+  beds24CachedToken = json.token as string;
+  beds24TokenExpiresAt = now + (json.expiresIn as number) * 1000;
+  return beds24CachedToken;
+}
+
+function previousDay(yyyymmdd: string): string {
+  const d = new Date(yyyymmdd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Walks an arbitrary value tree and sums daily price1 entries that fall
+ * inside [arrival, departure). Permissive on shape since the Beds24 V2
+ * calendar response varies. (Same heuristic used in /api/price-check.)
+ */
+function sumCalendarPrice(value: unknown, arrival: string, departure: string): number | null {
+  const startMs = new Date(arrival + 'T00:00:00Z').getTime();
+  const endMs = new Date(departure + 'T00:00:00Z').getTime();
+  let total = 0;
+  let coveredNights = 0;
+
+  function visit(node: unknown) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    const hasPrice = 'price1' in obj || 'price' in obj;
+    const fromStr = typeof obj.from === 'string' ? obj.from
+      : typeof obj.date === 'string' ? obj.date : null;
+    const toStr = typeof obj.to === 'string' ? obj.to : fromStr;
+    if (hasPrice && fromStr && toStr && /^\d{4}-\d{2}-\d{2}$/.test(fromStr)) {
+      const rawPrice = obj.price1 ?? obj.price;
+      const price = typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(',', '.')) : Number(rawPrice);
+      if (Number.isFinite(price) && price > 0) {
+        const entryStart = new Date(fromStr + 'T00:00:00Z').getTime();
+        const entryEnd = new Date(toStr + 'T00:00:00Z').getTime();
+        for (let t = entryStart; t <= entryEnd; t += 86_400_000) {
+          if (t >= startMs && t < endMs) {
+            total += price;
+            coveredNights += 1;
+          }
+        }
+      }
+    }
+    for (const key of Object.keys(obj)) visit(obj[key]);
+  }
+  visit(value);
+  return coveredNights > 0 ? Math.round(total) : null;
+}
+
+async function fetchRoomCalendarTotal(
+  token: string,
+  roomId: number,
+  arrival: string,
+  departure: string,
+): Promise<number | null> {
+  const params = new URLSearchParams({
+    startDate: arrival,
+    endDate: previousDay(departure),
+    roomId: String(roomId),
+    includePrices: 'true',
+  });
+  const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params.toString()}`, {
+    headers: { token },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    console.log(`[pricing] Beds24 calendar room=${roomId} ${arrival}→${departure} failed ${res.status}`);
+    return null;
+  }
+  const raw = await res.json();
+  return sumCalendarPrice(raw, arrival, departure);
+}
+
+async function fetchWebPrices(
+  slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
+): Promise<RoomOffers[]> {
+  const token = await getBeds24Token();
+  // Local dev or missing creds → all-null fallback (UI shows "—" in Web column)
+  if (!token) {
+    console.log(`[pricing] Beds24 token unavailable — Web column will be empty`);
+    return slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
+  }
+  void BEDS24_PROPERTY_ID; // reserved for future offers-endpoint use
+  console.log(`[pricing] Fetching Beds24 web prices for ${slots.length} slot(s)`);
+
+  const results: RoomOffers[] = [];
+  for (const slot of slots) {
+    try {
+      const [k201Total, oneKKTotal] = await Promise.all([
+        fetchRoomCalendarTotal(token, SELL_ROOM_2KK, slot.checkIn, slot.checkOut),
+        fetchRoomCalendarTotal(token, SELL_ROOM_1KK, slot.checkIn, slot.checkOut),
+      ]);
+      const toOffer = (price: number | null): Offer =>
+        price !== null
+          ? { price, originalPrice: null, labels: [], availability: 'available' }
+          : { ...NULL_OFFER, availability: 'not_available' };
+      results.push({ k201: toOffer(k201Total), oneKK: toOffer(oneKKTotal) });
+      console.log(`[pricing] Beds24 ${slot.checkIn}→${slot.checkOut}: K.201=${k201Total} 1KK=${oneKKTotal}`);
+    } catch (err) {
+      console.log(`[pricing] Beds24 ${slot.checkIn} failed: ${err instanceof Error ? err.message : err}`);
+      results.push({ k201: NULL_OFFER, oneKK: NULL_OFFER });
+    }
+  }
+  return results;
+}
 
 // ─────────────────────────────────────────────
 // Spread + orchestrator
@@ -1303,10 +1444,16 @@ export async function runFullPricingCheck(
   console.log(`[pricing] Browser launched`);
 
   let bookingResults: RoomOffers[] = [];
-  // Web prices are populated via Beds24 API on Vercel (see TODO above).
-  const webResults: RoomOffers[] = slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
+  let webResults: RoomOffers[] = slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
   let airbnbK201: Offer[] = [];
   let airbnb1kk: Offer[] = [];
+
+  // Beds24 calls go via fetch and don't share state with puppeteer, so run
+  // them in parallel with Booking/Airbnb to keep total runtime down.
+  const webPromise = fetchWebPrices(slots).catch((err) => {
+    console.log(`[pricing] Web fetch failed: ${err instanceof Error ? err.message : err}`);
+    return slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
+  });
 
   try {
     bookingResults = await scrapeBookingCom(browser, slots);
@@ -1333,6 +1480,7 @@ export async function runFullPricingCheck(
     await browser.close().catch(() => null);
     console.log(`[pricing] Browser closed`);
   }
+  webResults = await webPromise;
   console.log(`[pricing] All scrapers done`);
 
   const runs: PricingRun[] = slots.map((slot, i) => ({
