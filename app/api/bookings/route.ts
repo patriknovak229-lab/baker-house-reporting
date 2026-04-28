@@ -1,9 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
 import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "@/types/reservation";
+import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
+const ADDITIONAL_PAYMENTS_KEY = "baker:additional-payments";
+
+function getRedis(): Redis | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
+
+/**
+ * Roll up paid Stripe fees from AdditionalPayments into reservation.paymentChargeAmount.
+ * Beds24 only reports OTA payment-charge fees (Booking.com); for Stripe-paid bookings
+ * (direct phone or direct web) the fee comes from the Stripe BalanceTransaction and is
+ * captured per AdditionalPayment by the Stripe webhook. Aggregating here means every
+ * consumer (Transactions, Performance, Statements) reads a single, consistent number.
+ */
+async function aggregateStripeFees(reservations: Reservation[]): Promise<Reservation[]> {
+  const redis = getRedis();
+  if (!redis) return reservations;
+
+  const allPayments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const feeByRes = new Map<string, number>();
+  for (const ap of allPayments) {
+    if (ap.status !== "paid" || typeof ap.stripeFeeCzk !== "number") continue;
+    feeByRes.set(ap.reservationNumber, (feeByRes.get(ap.reservationNumber) ?? 0) + ap.stripeFeeCzk);
+  }
+
+  if (feeByRes.size === 0) return reservations;
+
+  return reservations.map((r) => {
+    const fee = feeByRes.get(r.reservationNumber);
+    if (!fee) return r;
+    return { ...r, paymentChargeAmount: r.paymentChargeAmount + fee };
+  });
+}
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 // Derived from raw response inspection. Confirm in Beds24 → Properties → Rooms.
@@ -470,7 +507,8 @@ export async function GET(req: NextRequest) {
       raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled")
     ).map(mapToReservation);
 
-    return NextResponse.json(reservations);
+    const withStripeFees = await aggregateStripeFees(reservations);
+    return NextResponse.json(withStripeFees);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
