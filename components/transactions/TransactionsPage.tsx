@@ -211,22 +211,34 @@ export default function TransactionsPage() {
     problems: string[];
   }
 
-  // ── Unresolved issues actionable within the next 7 days ─────────────────────
+  // ── Unresolved issues — overdue + actionable within the next 7 days ─────────
+  // Overdue rows (actionableDate < today) are included with a flag so the table
+  // can flag them visually. Sort: overdue oldest first, then upcoming soonest first.
   const upcomingUnresolved = useMemo(() => {
     // Use local date (sv-SE locale = YYYY-MM-DD), same as date pickers in the drawer
     const today = new Date().toLocaleDateString("sv-SE");
     const d7 = new Date(); d7.setDate(d7.getDate() + 7);
     const in7 = d7.toLocaleDateString("sv-SE");
-    const items: { reservation: Reservation; issue: Issue }[] = [];
+    const items: { reservation: Reservation; issue: Issue; overdue: boolean }[] = [];
     for (const r of reservations) {
       for (const issue of r.issues ?? []) {
-        if (!issue.resolved && issue.actionableDate >= today && issue.actionableDate <= in7) {
-          items.push({ reservation: r, issue });
+        if (issue.resolved) continue;
+        // Overdue → always included regardless of how stale (so nothing slips
+        // off the radar). Upcoming → only the 7-day window.
+        if (issue.actionableDate < today) {
+          items.push({ reservation: r, issue, overdue: true });
+        } else if (issue.actionableDate <= in7) {
+          items.push({ reservation: r, issue, overdue: false });
         }
       }
     }
     return items.sort((a, b) => a.issue.actionableDate.localeCompare(b.issue.actionableDate));
   }, [reservations]);
+
+  const overdueCount = useMemo(
+    () => upcomingUnresolved.filter((x) => x.overdue).length,
+    [upcomingUnresolved],
+  );
 
   // ── Unpaid additional payments (Stripe payment links not yet paid) ───────────
   const unpaidAdditionalPayments = useMemo(() => {
@@ -473,7 +485,8 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Pending tasks/issues pill — compact, sits above the search bar */}
+      {/* Pending tasks/issues pill — compact, sits above the search bar.
+          Includes overdue (past actionableDate) + upcoming (next 7 days). */}
       {upcomingUnresolved.length > 0 && (
         <div className="mb-3">
           <button
@@ -481,7 +494,13 @@ export default function TransactionsPage() {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
           >
             <span className="flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold animate-pulse shrink-0">!</span>
-            {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"} · next 7 days
+            {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"}
+            {overdueCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wide">
+                {overdueCount} overdue
+              </span>
+            )}
+            <span className="text-red-500 font-normal">· next 7 days</span>
             <svg
               className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
               fill="none" stroke="currentColor" viewBox="0 0 24 24"
@@ -503,7 +522,7 @@ export default function TransactionsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-red-100">
-                  {upcomingUnresolved.map(({ reservation, issue }) => {
+                  {upcomingUnresolved.map(({ reservation, issue, overdue }) => {
                     const cat = (issue.category ?? "problem") as IssueCategory;
                     const catLabels: Record<IssueCategory, string> = {
                       problem: "Problem",
@@ -511,10 +530,14 @@ export default function TransactionsPage() {
                       cleaning: "Mid-stay Cleaning",
                       special: "Special Treatment",
                     };
+                    // Days overdue vs today
+                    const todayMs = new Date(new Date().toLocaleDateString("sv-SE") + "T00:00:00").getTime();
+                    const dueMs = new Date(issue.actionableDate + "T00:00:00").getTime();
+                    const daysLate = Math.round((todayMs - dueMs) / 86_400_000);
                     return (
                       <tr
                         key={issue.id}
-                        className="hover:bg-red-100 cursor-pointer"
+                        className={`cursor-pointer ${overdue ? "bg-red-100/70 hover:bg-red-200/60" : "hover:bg-red-100"}`}
                         onClick={() => { setSelectedReservation(reservation); setTaskAlertOpen(false); }}
                       >
                         <td className="px-4 py-2 font-medium text-red-900 whitespace-nowrap">
@@ -522,7 +545,19 @@ export default function TransactionsPage() {
                         </td>
                         <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">{catLabels[cat]}</td>
                         <td className="px-4 py-2 text-red-700">{issue.text}</td>
-                        <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">{issue.actionableDate}</td>
+                        <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span>{issue.actionableDate}</span>
+                            {overdue && (
+                              <span
+                                className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-bold uppercase tracking-wide"
+                                title={`Was due ${daysLate} day${daysLate === 1 ? "" : "s"} ago`}
+                              >
+                                {daysLate === 0 ? "Overdue" : `${daysLate}d overdue`}
+                              </span>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
