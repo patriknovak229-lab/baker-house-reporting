@@ -1,10 +1,11 @@
 export type Role = 'admin' | 'super' | 'viewer' | 'accountant';
-export type Tab = 'transactions' | 'performance' | 'accounting';
+export type Tab = 'transactions' | 'performance' | 'accounting' | 'pricing';
 
 const TAB_ACCESS: Record<Tab, Role[]> = {
   transactions: ['admin', 'super'],
   performance: ['admin', 'super', 'viewer'],
   accounting: ['admin', 'accountant'],
+  pricing: ['admin', 'super'],
 };
 
 export function getRoleForEmail(email: string): Role | null {

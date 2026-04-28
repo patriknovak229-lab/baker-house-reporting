@@ -12,6 +12,7 @@ const ALL_TABS: { id: Tab; label: string }[] = [
   { id: 'transactions', label: 'Transactions' },
   { id: 'performance', label: 'Performance' },
   { id: 'accounting', label: 'Accounting' },
+  { id: 'pricing', label: 'Pricing' },
 ];
 
 export default function Nav({ activeTab, onTabChange }: NavProps) {
