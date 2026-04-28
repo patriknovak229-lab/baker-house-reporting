@@ -5,11 +5,11 @@ import puppeteer, { type Browser } from 'puppeteer-core';
 // Listing identifiers
 // ─────────────────────────────────────────────
 
-export const AIRBNB_K201_ID = '1635011413648373253'; // K.201 — 2KK Deluxe
-// 1KK is two separate Airbnb listings (same room type, one qty=2 block on Booking.com).
-// We scrape both and take whichever is available / cheapest.
-export const AIRBNB_K202_ID = '1560149310755564258'; // K.202 — 1KK Deluxe unit 1
-export const AIRBNB_K203_ID = '1557243344995462947'; // K.203 — 1KK Deluxe unit 2
+export const AIRBNB_K201_ID = '1635011413648373253'; // K.201 — 2KK Deluxe (single listing)
+// 1KK has been consolidated to a single Airbnb listing fed by the Beds24
+// virtual room (qty=2). The previous K.203 standalone listing
+// (1557243344995462947) is no longer used. Same VR also drives Booking.com.
+export const AIRBNB_1KK_ID = '1560149310755564258'; // 1KK Deluxe (Beds24 VR, qty=2)
 
 const BOOKING_URL =
   'https://www.booking.com/hotel/cz/baker-house-apartments-brno-mesto.en-gb.html';
@@ -1458,24 +1458,9 @@ export async function runFullPricingCheck(
   try {
     bookingResults = await scrapeBookingCom(browser, slots);
     airbnbK201 = await scrapeAirbnbViaBrowser(browser, AIRBNB_K201_ID, slots);
-    // 1KK: both K.202 and K.203 are priced identically, so checking one is enough.
-    // Try K.202 first; only scrape K.203 for slots where K.202 returned no price.
-    const airbnbK202 = await scrapeAirbnbViaBrowser(browser, AIRBNB_K202_ID, slots);
-    const fallbackSlots: Array<{ idx: number; slot: typeof slots[0] }> = [];
-    airbnbK202.forEach((o, i) => {
-      if (o.price === null) fallbackSlots.push({ idx: i, slot: slots[i] });
-    });
-    airbnb1kk = [...airbnbK202];
-    if (fallbackSlots.length > 0) {
-      const fallbackResults = await scrapeAirbnbViaBrowser(
-        browser,
-        AIRBNB_K203_ID,
-        fallbackSlots.map((f) => f.slot),
-      );
-      fallbackSlots.forEach((f, i) => {
-        if (fallbackResults[i].price !== null) airbnb1kk[f.idx] = fallbackResults[i];
-      });
-    }
+    // 1KK is now a single Airbnb listing backed by the Beds24 VR (qty=2),
+    // so one scrape per slot is sufficient — no K.202/K.203 fallback needed.
+    airbnb1kk = await scrapeAirbnbViaBrowser(browser, AIRBNB_1KK_ID, slots);
   } finally {
     await browser.close().catch(() => null);
     console.log(`[pricing] Browser closed`);
