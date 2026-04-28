@@ -7,6 +7,7 @@ import { formatDate, formatCurrency } from "@/utils/formatters";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
+import { roomChipClasses } from "@/utils/roomVisuals";
 
 type SortField =
   | keyof Pick<
@@ -292,8 +293,7 @@ function ReservationCard({
 
       {/* Row 2: Room · channel · res# */}
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-sm font-medium text-gray-700">{res.room}</span>
-        <span className="text-gray-300">·</span>
+        <span className={roomChipClasses(res.room)}>{res.room}</span>
         <Badge variant={channelBadgeVariant(res.channel)} size="xs">{res.channel}</Badge>
         <span className="ml-auto font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
       </div>
@@ -559,7 +559,9 @@ export default function ReservationTable({
                         {res.channel}
                       </Badge>
                     </td>
-                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{res.room}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <span className={roomChipClasses(res.room)}>{res.room}</span>
+                    </td>
                     <td className="px-3 py-3 text-gray-500 whitespace-nowrap text-xs">
                       {formatDate(res.reservationDate)}
                     </td>
