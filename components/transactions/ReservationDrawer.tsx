@@ -300,9 +300,11 @@ function ScheduledSplitPaymentRow({ sp }: { sp: SplitPayment }) {
 // ── Voucher row with status + delete ────────────────────────────────────────
 function VoucherRow({
   voucher,
+  reservationNumber,
   onRefresh,
 }: {
   voucher: Voucher;
+  reservationNumber: string;
   onRefresh?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -335,6 +337,26 @@ function VoucherRow({
       ? 'Used'
       : 'Deleted';
 
+  // Decide what to label this row with relative to the current reservation:
+  // a single voucher can attach to two different bookings (created-for vs
+  // used-on). Show whichever relationship matches THIS drawer.
+  const isCreatedHere = voucher.reservationNumber === reservationNumber;
+  const isUsedHere = voucher.redeemedOnReservationNumber === reservationNumber;
+  const relationLabel = isCreatedHere && isUsedHere
+    ? 'Created & redeemed here'
+    : isCreatedHere
+      ? 'Created for this booking'
+      : isUsedHere
+        ? 'Redeemed on this booking'
+        : '';
+  // Cross-reference link: if voucher was created for one booking and used on
+  // another, show the OTHER reservation number alongside the relation label.
+  const crossRef = isCreatedHere && voucher.redeemedOnReservationNumber && !isUsedHere
+    ? voucher.redeemedOnReservationNumber
+    : isUsedHere && voucher.reservationNumber && !isCreatedHere
+      ? voucher.reservationNumber
+      : null;
+
   return (
     <div className="px-3 py-2.5 space-y-1.5">
       <div className="flex items-start gap-2">
@@ -350,6 +372,17 @@ function VoucherRow({
             Created {voucher.createdAt.slice(0, 10)}
             {voucher.usedAt ? ` · Used ${voucher.usedAt.slice(0, 10)}` : ''}
           </p>
+          {relationLabel && (
+            <p className="text-[10px] font-medium text-purple-600 mt-0.5">
+              {relationLabel}
+              {crossRef && (
+                <>
+                  {' · '}
+                  <span className="font-mono">#{crossRef}</span>
+                </>
+              )}
+            </p>
+          )}
         </div>
         <div className="text-right shrink-0">
           <p className="text-xs font-medium text-gray-900">{discountLabel}</p>
@@ -1726,6 +1759,7 @@ export default function ReservationDrawer({
                     <VoucherRow
                       key={v.id}
                       voucher={v}
+                      reservationNumber={reservation.reservationNumber}
                       onRefresh={onPaymentCreated}
                     />
                   ))}

@@ -45,11 +45,12 @@ export async function POST(req: NextRequest) {
     ...vouchers[idx],
     status: 'used',
     usedAt: new Date().toISOString(),
-    // Preserve any pre-existing reservationNumber (set at creation time for
-    // operator-linked vouchers); only fill it from the redeem payload when
-    // the field was previously empty (web vouchers redeemed via rental-site).
-    ...(!vouchers[idx].reservationNumber && reservationNumber?.trim()
-      ? { reservationNumber: reservationNumber.trim() }
+    // Track where the voucher was actually applied. We deliberately set this
+    // on a separate field from reservationNumber (which records what it was
+    // CREATED FOR) so we don't lose either piece of info when the two differ
+    // — e.g. a goodwill voucher issued for stay A, redeemed on later stay B.
+    ...(reservationNumber?.trim()
+      ? { redeemedOnReservationNumber: reservationNumber.trim() }
       : {}),
   };
 

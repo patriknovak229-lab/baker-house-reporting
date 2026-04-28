@@ -132,13 +132,20 @@ export default function TransactionsPage() {
         apByRes.set(ap.reservationNumber, group);
       }
 
-      // Group vouchers by reservationNumber for merge
+      // Group vouchers by reservationNumber for merge.
+      // A voucher attaches to a reservation if it was either CREATED FOR it
+      // or REDEEMED ON it — both keys are valid joins so the operator sees
+      // the voucher in the drawer regardless of which side they came from.
+      // Deduped via Set so a voucher with both fields equal isn't doubled.
       const vByRes = new Map<string, Voucher[]>();
       for (const v of allVouchers) {
-        if (v.reservationNumber) {
-          const group = vByRes.get(v.reservationNumber) ?? [];
+        const targets = new Set<string>();
+        if (v.reservationNumber) targets.add(v.reservationNumber);
+        if (v.redeemedOnReservationNumber) targets.add(v.redeemedOnReservationNumber);
+        for (const resNum of targets) {
+          const group = vByRes.get(resNum) ?? [];
           group.push(v);
-          vByRes.set(v.reservationNumber, group);
+          vByRes.set(resNum, group);
         }
       }
 

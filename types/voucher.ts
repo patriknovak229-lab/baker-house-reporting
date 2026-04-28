@@ -7,7 +7,14 @@ export interface Voucher {
   discountType: VoucherDiscountType;
   value: number;                 // CZK amount or percentage (1–100)
   status: VoucherStatus;
-  reservationNumber?: string;    // linked reservation (always saved when available)
+  /** The reservation the voucher was CREATED FOR — set when the operator
+   *  links the voucher to a guest's stay at issuance time. May be empty for
+   *  standalone promo vouchers. Distinct from where it ends up being USED. */
+  reservationNumber?: string;
+  /** The reservation the voucher was REDEEMED ON — set by the redeem endpoint
+   *  on first use. Often the same as reservationNumber (guest applies their own
+   *  voucher to a future booking) but can differ if the voucher was gifted. */
+  redeemedOnReservationNumber?: string;
   guestName?: string;
   guestEmail?: string;           // guest's own email (never OTA conduit)
   guestPhone?: string;
