@@ -78,7 +78,7 @@ function MultiCheckbox<T extends string>({
 export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
   const [open, setOpen] = useState(false);
 
-  const channels: Channel[] = ["Booking.com", "Airbnb", "Direct", "Direct-Phone"];
+  const channels: Channel[] = ["Booking.com", "Airbnb", "Direct", "Direct-Phone", "Direct-Web"];
   const rooms: Room[] = ["K.201", "K.202", "K.203", "O.308"];
   const cleaningStatuses: CleaningStatus[] = [
     "Pending",

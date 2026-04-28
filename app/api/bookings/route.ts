@@ -52,11 +52,17 @@ const UNIT_MAP: Record<number, Room> = {
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
-// referer "PhoneDirect." means reservation came via phone/email, not web checkout.
+// Differentiate operator-created phone bookings from rental-site web checkouts:
+//   referer contains "phone"  → "Direct-Phone" (manual via /api/bookings POST,
+//                                              or Beds24's auto "PhoneDirect.")
+//   referer contains "web"    → "Direct-Web"   (rental-site bakerhouseapartments.cz)
+//   anything else direct      → "Direct"       (legacy / manual Beds24 entries)
 function mapChannel(apiSource = "", referer = ""): Channel {
   if (apiSource === "Booking.com") return "Booking.com";
   if (apiSource === "Airbnb") return "Airbnb";
-  if (referer.toLowerCase().includes("phone")) return "Direct-Phone";
+  const ref = referer.toLowerCase();
+  if (ref.includes("phone")) return "Direct-Phone";
+  if (ref.includes("web")) return "Direct-Web";
   return "Direct";
 }
 
@@ -451,7 +457,10 @@ export async function POST(req: NextRequest) {
     lastName: lastName ?? "",
     email: email ?? "",
     phone: phone ?? "",
-    referer: "Direct",
+    // "PhoneDirect" referer is what mapChannel() detects to label the
+    // booking as "Direct-Phone" in the reporting app — distinguishes
+    // operator-created bookings from rental-site "DirectWeb" ones.
+    referer: "PhoneDirect",
     apiSource: "Direct",
     comments: notes ?? "",
     // Top-level price field — shown in Beds24 UI and read by the reporting app

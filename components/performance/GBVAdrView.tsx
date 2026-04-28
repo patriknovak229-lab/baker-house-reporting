@@ -22,6 +22,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   Airbnb: "#F43F5E",
   Direct: "#10B981",
   "Direct-Phone": "#14B8A6",
+  "Direct-Web": "#6366F1",
 };
 
 const FALLBACK_COLOR = "#94A3B8";

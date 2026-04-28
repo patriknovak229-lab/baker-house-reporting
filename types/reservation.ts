@@ -1,7 +1,7 @@
 import type { AdditionalPayment } from "./additionalPayment";
 import type { Voucher } from "./voucher";
 
-export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone";
+export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone" | "Direct-Web";
 // Physical room name (e.g. "K.201") or combined for package bookings (e.g. "K.202 + K.203")
 export type Room = string;
 export type CleaningStatus = "Pending" | "In Progress" | "Completed";
