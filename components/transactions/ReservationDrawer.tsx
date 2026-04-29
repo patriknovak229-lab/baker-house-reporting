@@ -1071,6 +1071,13 @@ export default function ReservationDrawer({
     | { kind: 'error'; message: string }
     | null
   >(null);
+  // Send-confirmation button state
+  const [sendingConfirmation, setSendingConfirmation] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState<
+    | { kind: 'ok'; sentTo: string }
+    | { kind: 'error'; message: string }
+    | null
+  >(null);
   // Save details feedback
   const [saveDetailsSaved, setSaveDetailsSaved] = useState(false);
   // Invoice modification editor
@@ -1098,6 +1105,7 @@ export default function ReservationDrawer({
       setDriveSaveError(null);
       setSaveDetailsSaved(false);
       setCheckStripeResult(null);
+      setConfirmationResult(null);
       setShowModifyEditor(false);
       setModifyDateRanges([{ from: reservation.checkInDate, to: reservation.checkOutDate }]);
       setModifyNights(reservation.numberOfNights);
@@ -1333,6 +1341,32 @@ export default function ReservationDrawer({
     }
   }
 
+  // Send a bilingual reservation confirmation email from
+  // reservations@bakerhouseapartments.cz (matches invoice styling).
+  async function handleSendConfirmation() {
+    if (!reservation) return;
+    setSendingConfirmation(true);
+    setConfirmationResult(null);
+    try {
+      const res = await fetch('/api/send-confirmation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setConfirmationResult({ kind: 'ok', sentTo: data.sentTo ?? '' });
+    } catch (err) {
+      setConfirmationResult({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Failed to send confirmation',
+      });
+    } finally {
+      setSendingConfirmation(false);
+      setTimeout(() => setConfirmationResult(null), 5000);
+    }
+  }
+
   async function handleSaveToDrive() {
     setDriveSaveError(null);
     setIsSavingToDrive(true);
@@ -1457,6 +1491,43 @@ export default function ReservationDrawer({
               <ReadOnlyField label="Check-out" value={formatDate(reservation.checkOutDate)} />
               <ReadOnlyField label="Nights" value={String(reservation.numberOfNights)} />
               <ReadOnlyField label="Reservation Date" value={formatDate(reservation.reservationDate)} />
+            </div>
+
+            {/* Send Reservation Confirmation — emails a styled summary from
+                reservations@bakerhouseapartments.cz to the best email on file. */}
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <button
+                onClick={handleSendConfirmation}
+                disabled={sendingConfirmation}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-800 border border-amber-200 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
+                title="Send a styled reservation confirmation email to the guest"
+              >
+                {sendingConfirmation ? (
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                )}
+                {sendingConfirmation ? 'Sending…' : 'Send Reservation Confirmation'}
+              </button>
+              {confirmationResult && (
+                <span
+                  className={`text-[11px] px-2 py-1 rounded ${
+                    confirmationResult.kind === 'error'
+                      ? 'text-red-700 bg-red-50 border border-red-200'
+                      : 'text-green-700 bg-green-50 border border-green-200'
+                  }`}
+                >
+                  {confirmationResult.kind === 'error'
+                    ? confirmationResult.message
+                    : `Sent to ${confirmationResult.sentTo}`}
+                </span>
+              )}
             </div>
           </section>
 
