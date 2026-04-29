@@ -355,8 +355,14 @@ async function scrapeAirbnbViaBrowser(
         let panelKcTotal: number | null = null;
         let currencyDetected: 'CZK' | 'USD' | null = null;
         const kcTotalMatch =
-          panelText.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč[ \t]+total\b/i) ??
-          panelText.match(/\b(?:total|celkem)\b\s*\n\s*(\d[\d ,.\u00a0]{2,20})\s*Kč/i);
+          // EN: "X Kč total" inline
+          panelText.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč[ \t]+(?:total|celkem)\b/i) ??
+          // EN/CZ: "Total/Celkem X Kč" — allow space, tab OR newline between
+          // (Czech rate plan rows are "...· Celkem 4 290,30 Kč" on one line;
+          // the previous newline-only pattern missed them)
+          panelText.match(/\b(?:total|celkem)\b[ \t\n]+(\d[\d ,.\u00a0]{2,20})\s*Kč/i) ??
+          // CZ: "X Kč za N nocí" (headline price → "for N nights")
+          panelText.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč\s+za\s+\d+\s+noc[ií]?/i);
         if (kcTotalMatch) {
           panelKcTotal = parsePanelAmount(kcTotalMatch[1]);
           currencyDetected = 'CZK';
