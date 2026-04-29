@@ -590,11 +590,30 @@ async function scrapeAirbnbViaBrowser(
         console.log(`  strike-tooltip: ${JSON.stringify(panelResult.strikeTooltipText.slice(0, 300))}`);
       }
 
-      // If Reserve button didn't render, listing is not available for these dates.
+      // If Reserve button didn't render, dump page state so we can see WHY
+      // (CAPTCHA / "Hold on while we verify your browser" / blank shell /
+      // geo-block) — distinguishes anti-bot blocks from genuine unavailability.
       if (!panelResult.reserveFound || (!panelResult.panelKcTotal && !panelResult.tooltipText)) {
         const availability: Offer['availability'] = reserveReady
           ? 'not_available'
           : 'not_available';
+        try {
+          const diag = await page.evaluate(() => ({
+            title: document.title,
+            url: location.href,
+            bodyLen: (document.body?.innerText ?? '').length,
+            bodyHead: (document.body?.innerText ?? '').slice(0, 600),
+            hasCaptcha: /captcha|robot|hold\s*on\s*while|verify\s*your\s*browser|are\s*you\s*human|access\s*denied|blocked/i.test(
+              document.body?.innerText ?? '',
+            ),
+          }));
+          console.log(
+            `[pricing] ${tag} EMPTY: title=${JSON.stringify(diag.title)} url=${diag.url} bodyLen=${diag.bodyLen} captchaHint=${diag.hasCaptcha}`,
+          );
+          console.log(`  body[0:600]: ${JSON.stringify(diag.bodyHead)}`);
+        } catch {
+          /* page may already be closed — best effort */
+        }
         results.push({ ...NULL_OFFER, availability });
         continue;
       }
@@ -988,6 +1007,15 @@ async function scrapeBookingCom(
         continue;
       }
 
+      // Diagnostic: log every parsed room row so we can spot when text-pass
+      // returned data but the values look off (cell-walker matched wrong
+      // element on Vercel's Booking variant, locale-specific markup, etc.)
+      roomData.forEach((r, idx) => {
+        console.log(
+          `[pricing] Booking.com ${slot.checkIn} parsed[${idx}]: name=${JSON.stringify(r.name.slice(0, 50))} price=${r.price} original=${r.originalPrice ?? 'null'}`,
+        );
+      });
+
       // Click-to-reveal pass: for each room heading, find the first rate row
       // (cheapest — Booking.com orders rate plans ascending) and open the
       // price-breakdown tooltip. Captures are associated with their heading
@@ -1300,15 +1328,19 @@ async function scrapeBookingCom(
 }
 
 // ─────────────────────────────────────────────
-// Web column — Beds24 calendar prices
+// Web column + Beds24 availability gate
 // ─────────────────────────────────────────────
 //
-// The Web column shows the price the booking widget would quote for our
-// own direct site. We fetch from Beds24 V2 `/inventory/rooms/calendar`
-// because, unlike `/inventory/rooms/offers`, it returns prices regardless
-// of availability — relevant here since we want a comparable rack rate
-// for every sampled date even when a room is fully booked. This mirrors
-// the ignoreAvailability=true path in app/api/price-check/route.ts.
+// Web prices come from Beds24 GET /inventory/rooms/offers — the SAME
+// endpoint the rental site (Cursor/rental-site/src/lib/beds24-offers.ts)
+// uses to render its booking widget. Returns the final bookable
+// `totalPrice` with all multipliers, length-of-stay rules, and channel
+// rate plans applied. Naturally returns nothing for unavailable dates,
+// so the same call that gives us the Web price ALSO tells us whether to
+// run the (expensive) puppeteer scrapers for that slot at all.
+//
+// Slots where neither room has an offer are dropped before scraping —
+// saves Vercel function time and reduces anti-bot exposure.
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const BEDS24_PROPERTY_ID = 311322;
@@ -1340,109 +1372,133 @@ async function getBeds24Token(): Promise<string | null> {
   return beds24CachedToken;
 }
 
-function previousDay(yyyymmdd: string): string {
-  const d = new Date(yyyymmdd + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
+/** Pick a numeric total from a Beds24 offer object — totalPrice preferred. */
+function parseOfferAmount(first: unknown): number | null {
+  if (first === null || typeof first !== 'object') return null;
+  const obj = first as { totalPrice?: unknown; price?: unknown };
+  const raw =
+    obj.totalPrice != null && obj.totalPrice !== ''
+      ? obj.totalPrice
+      : obj.price != null && obj.price !== ''
+        ? obj.price
+        : null;
+  const n = typeof raw === 'string' ? parseFloat(raw.replace(',', '.')) : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
 }
 
 /**
- * Walks an arbitrary value tree and sums daily price1 entries that fall
- * inside [arrival, departure). Permissive on shape since the Beds24 V2
- * calendar response varies. (Same heuristic used in /api/price-check.)
+ * One /inventory/rooms/offers call per slot — returns offers for all
+ * rooms at the property. Maps each sellable room to its first offer's
+ * totalPrice, or null if no offer (= unavailable for those dates).
  */
-function sumCalendarPrice(value: unknown, arrival: string, departure: string): number | null {
-  const startMs = new Date(arrival + 'T00:00:00Z').getTime();
-  const endMs = new Date(departure + 'T00:00:00Z').getTime();
-  let total = 0;
-  let coveredNights = 0;
-
-  function visit(node: unknown) {
-    if (node === null || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item);
-      return;
-    }
-    const obj = node as Record<string, unknown>;
-    const hasPrice = 'price1' in obj || 'price' in obj;
-    const fromStr = typeof obj.from === 'string' ? obj.from
-      : typeof obj.date === 'string' ? obj.date : null;
-    const toStr = typeof obj.to === 'string' ? obj.to : fromStr;
-    if (hasPrice && fromStr && toStr && /^\d{4}-\d{2}-\d{2}$/.test(fromStr)) {
-      const rawPrice = obj.price1 ?? obj.price;
-      const price = typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(',', '.')) : Number(rawPrice);
-      if (Number.isFinite(price) && price > 0) {
-        const entryStart = new Date(fromStr + 'T00:00:00Z').getTime();
-        const entryEnd = new Date(toStr + 'T00:00:00Z').getTime();
-        for (let t = entryStart; t <= entryEnd; t += 86_400_000) {
-          if (t >= startMs && t < endMs) {
-            total += price;
-            coveredNights += 1;
-          }
-        }
-      }
-    }
-    for (const key of Object.keys(obj)) visit(obj[key]);
-  }
-  visit(value);
-  return coveredNights > 0 ? Math.round(total) : null;
-}
-
-async function fetchRoomCalendarTotal(
+async function fetchOffersForSlot(
   token: string,
-  roomId: number,
   arrival: string,
   departure: string,
-): Promise<number | null> {
+): Promise<{ k201: number | null; oneKK: number | null }> {
   const params = new URLSearchParams({
-    startDate: arrival,
-    endDate: previousDay(departure),
-    roomId: String(roomId),
-    includePrices: 'true',
+    propertyId: String(BEDS24_PROPERTY_ID),
+    arrival,
+    departure,
+    numAdults: '2',
+    numChildren: '0',
   });
-  const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params.toString()}`, {
+  const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/offers?${params.toString()}`, {
     headers: { token },
     cache: 'no-store',
   });
   if (!res.ok) {
-    console.log(`[pricing] Beds24 calendar room=${roomId} ${arrival}→${departure} failed ${res.status}`);
-    return null;
+    console.log(`[pricing] Beds24 offers ${arrival}→${departure} failed ${res.status}`);
+    return { k201: null, oneKK: null };
   }
-  const raw = await res.json();
-  return sumCalendarPrice(raw, arrival, departure);
+  const data = await res.json().catch(() => null);
+  const rows: unknown[] = Array.isArray((data as { data?: unknown[] } | null)?.data)
+    ? ((data as { data: unknown[] }).data)
+    : Array.isArray(data)
+      ? (data as unknown[])
+      : [];
+
+  const out: { k201: number | null; oneKK: number | null } = { k201: null, oneKK: null };
+  for (const row of rows) {
+    if (row === null || typeof row !== 'object') continue;
+    const rid = Number((row as { roomId?: unknown }).roomId);
+    const offers = (row as { offers?: unknown }).offers;
+    if (!Array.isArray(offers) || offers.length === 0) continue;
+    const total = parseOfferAmount(offers[0]);
+    if (total === null) continue;
+    if (rid === SELL_ROOM_2KK) out.k201 = total;
+    else if (rid === SELL_ROOM_1KK) out.oneKK = total;
+  }
+  return out;
 }
 
-async function fetchWebPrices(
-  slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
-): Promise<RoomOffers[]> {
-  const token = await getBeds24Token();
-  // Local dev or missing creds → all-null fallback (UI shows "—" in Web column)
-  if (!token) {
-    console.log(`[pricing] Beds24 token unavailable — Web column will be empty`);
-    return slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
-  }
-  void BEDS24_PROPERTY_ID; // reserved for future offers-endpoint use
-  console.log(`[pricing] Fetching Beds24 web prices for ${slots.length} slot(s)`);
+export type AvailabilityGated = {
+  /** Slots that have at least one room available (kept for scraping). */
+  availableSlots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>;
+  /** Web column results indexed by ORIGINAL slot index. */
+  webResults: RoomOffers[];
+  /** Map availableSlot index → original slot index, for stitching scraper output back. */
+  availableToOriginalIdx: number[];
+};
 
-  const results: RoomOffers[] = [];
-  for (const slot of slots) {
+/**
+ * Single source of truth for Web prices + availability:
+ *   - One /offers call per slot.
+ *   - First offer's totalPrice → Web column (matches rental site).
+ *   - Slots where neither room has an offer → dropped from scraping.
+ */
+async function fetchWebPricesAndAvailability(
+  slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
+): Promise<AvailabilityGated> {
+  const token = await getBeds24Token();
+  if (!token) {
+    console.log(`[pricing] Beds24 token unavailable — Web column empty, skipping availability filter`);
+    return {
+      availableSlots: slots,
+      webResults: slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER })),
+      availableToOriginalIdx: slots.map((_, i) => i),
+    };
+  }
+
+  console.log(`[pricing] Beds24 offers + availability check for ${slots.length} slot(s)`);
+  const webResults: RoomOffers[] = [];
+  const availableSlots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
+  const availableToOriginalIdx: number[] = [];
+
+  // Sequential — Beds24 rate-limits hard on parallel offers calls
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    let webRow: RoomOffers = { k201: NULL_OFFER, oneKK: NULL_OFFER };
     try {
-      const [k201Total, oneKKTotal] = await Promise.all([
-        fetchRoomCalendarTotal(token, SELL_ROOM_2KK, slot.checkIn, slot.checkOut),
-        fetchRoomCalendarTotal(token, SELL_ROOM_1KK, slot.checkIn, slot.checkOut),
-      ]);
+      const res = await fetchOffersForSlot(token, slot.checkIn, slot.checkOut);
       const toOffer = (price: number | null): Offer =>
         price !== null
           ? { price, originalPrice: null, labels: [], availability: 'available' }
           : { ...NULL_OFFER, availability: 'not_available' };
-      results.push({ k201: toOffer(k201Total), oneKK: toOffer(oneKKTotal) });
-      console.log(`[pricing] Beds24 ${slot.checkIn}→${slot.checkOut}: K.201=${k201Total} 1KK=${oneKKTotal}`);
+      webRow = { k201: toOffer(res.k201), oneKK: toOffer(res.oneKK) };
+      console.log(
+        `[pricing] Beds24 ${slot.checkIn}→${slot.checkOut}: K.201=${res.k201 ?? '—'} 1KK=${res.oneKK ?? '—'}`,
+      );
+      if (res.k201 !== null || res.oneKK !== null) {
+        availableSlots.push(slot);
+        availableToOriginalIdx.push(i);
+      } else {
+        console.log(`[pricing] Beds24 ${slot.checkIn} → no rooms available, dropping slot`);
+      }
     } catch (err) {
       console.log(`[pricing] Beds24 ${slot.checkIn} failed: ${err instanceof Error ? err.message : err}`);
-      results.push({ k201: NULL_OFFER, oneKK: NULL_OFFER });
+      // On unexpected failure, keep the slot for scraping (safer than dropping)
+      availableSlots.push(slot);
+      availableToOriginalIdx.push(i);
     }
+    webResults.push(webRow);
   }
-  return results;
+
+  console.log(
+    `[pricing] Availability filter: ${availableSlots.length}/${slots.length} slots kept`,
+  );
+  return { availableSlots, webResults, availableToOriginalIdx };
 }
 
 // ─────────────────────────────────────────────
@@ -1463,33 +1519,44 @@ export async function runFullPricingCheck(
   const slots = customSlots ?? generateDateSlots();
   console.log(`[pricing] Starting run — ${slots.length} slot(s)`);
 
-  const browser = await launchBrowser();
-  console.log(`[pricing] Browser launched`);
+  // STEP 1: Beds24 availability gate. ONE /offers call per slot:
+  //   - totalPrice → Web column (matches rental site, includes multipliers)
+  //   - empty offers list → slot dropped from scraping (saves Vercel time)
+  const { availableSlots, webResults, availableToOriginalIdx } =
+    await fetchWebPricesAndAvailability(slots);
 
-  let bookingResults: RoomOffers[] = [];
-  let webResults: RoomOffers[] = slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
-  let airbnbK201: Offer[] = [];
-  let airbnb1kk: Offer[] = [];
+  // STEP 2: Scrape Airbnb + Booking ONLY for surviving slots
+  let bookingScraped: RoomOffers[] = [];
+  let airbnbK201Scraped: Offer[] = [];
+  let airbnb1kkScraped: Offer[] = [];
 
-  // Beds24 calls go via fetch and don't share state with puppeteer, so run
-  // them in parallel with Booking/Airbnb to keep total runtime down.
-  const webPromise = fetchWebPrices(slots).catch((err) => {
-    console.log(`[pricing] Web fetch failed: ${err instanceof Error ? err.message : err}`);
-    return slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
-  });
-
-  try {
-    bookingResults = await scrapeBookingCom(browser, slots);
-    airbnbK201 = await scrapeAirbnbViaBrowser(browser, AIRBNB_K201_ID, slots);
-    // 1KK is now a single Airbnb listing backed by the Beds24 VR (qty=2),
-    // so one scrape per slot is sufficient — no K.202/K.203 fallback needed.
-    airbnb1kk = await scrapeAirbnbViaBrowser(browser, AIRBNB_1KK_ID, slots);
-  } finally {
-    await browser.close().catch(() => null);
-    console.log(`[pricing] Browser closed`);
+  if (availableSlots.length > 0) {
+    const browser = await launchBrowser();
+    console.log(`[pricing] Browser launched (scraping ${availableSlots.length} slot(s))`);
+    try {
+      bookingScraped = await scrapeBookingCom(browser, availableSlots);
+      airbnbK201Scraped = await scrapeAirbnbViaBrowser(browser, AIRBNB_K201_ID, availableSlots);
+      airbnb1kkScraped = await scrapeAirbnbViaBrowser(browser, AIRBNB_1KK_ID, availableSlots);
+    } finally {
+      await browser.close().catch(() => null);
+      console.log(`[pricing] Browser closed`);
+    }
+  } else {
+    console.log(`[pricing] No available slots — skipping all scrapers`);
   }
-  webResults = await webPromise;
   console.log(`[pricing] All scrapers done`);
+
+  // STEP 3: Stitch scraper results back to original slot positions.
+  // Slots that were dropped get NULL_OFFER for Airbnb/Booking (Web stays
+  // as not_available from the gate, which is correct).
+  const bookingResults: RoomOffers[] = slots.map(() => ({ k201: NULL_OFFER, oneKK: NULL_OFFER }));
+  const airbnbK201Full: Offer[] = slots.map(() => NULL_OFFER);
+  const airbnb1kkFull: Offer[] = slots.map(() => NULL_OFFER);
+  availableToOriginalIdx.forEach((origIdx, scrapeIdx) => {
+    if (bookingScraped[scrapeIdx]) bookingResults[origIdx] = bookingScraped[scrapeIdx];
+    if (airbnbK201Scraped[scrapeIdx]) airbnbK201Full[origIdx] = airbnbK201Scraped[scrapeIdx];
+    if (airbnb1kkScraped[scrapeIdx]) airbnb1kkFull[origIdx] = airbnb1kkScraped[scrapeIdx];
+  });
 
   const runs: PricingRun[] = slots.map((slot, i) => ({
     checkIn: slot.checkIn,
@@ -1499,16 +1566,16 @@ export async function runFullPricingCheck(
       {
         roomLabel: '1KK Deluxe',
         web: webResults[i].oneKK,
-        airbnb: airbnb1kk[i],
+        airbnb: airbnb1kkFull[i],
         bookingCom: bookingResults[i].oneKK,
-        spread: calcSpread([webResults[i].oneKK.price, airbnb1kk[i].price, bookingResults[i].oneKK.price]),
+        spread: calcSpread([webResults[i].oneKK.price, airbnb1kkFull[i].price, bookingResults[i].oneKK.price]),
       },
       {
         roomLabel: '2KK Deluxe',
         web: webResults[i].k201,
-        airbnb: airbnbK201[i],
+        airbnb: airbnbK201Full[i],
         bookingCom: bookingResults[i].k201,
-        spread: calcSpread([webResults[i].k201.price, airbnbK201[i].price, bookingResults[i].k201.price]),
+        spread: calcSpread([webResults[i].k201.price, airbnbK201Full[i].price, bookingResults[i].k201.price]),
       },
     ],
   }));
