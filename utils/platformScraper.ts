@@ -66,29 +66,37 @@ export type PricingResult = {
 // Date slot generation
 // ─────────────────────────────────────────────
 
-export function generateDateSlots(): Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> {
-  // Override window via env vars (useful for local testing against known-available dates)
+/**
+ * Computes the look-ahead window: defaults to "next reasonable Friday or
+ * 3 days from now" → 65 days out. Override via env vars for testing.
+ */
+function computeWindow(): { start: Date; end: Date } {
   const envStart = process.env.PRICING_DATE_START;
   const envEnd = process.env.PRICING_DATE_END;
-
-  let start: Date;
-  let end: Date;
-
   if (envStart && envEnd) {
-    start = new Date(envStart + 'T00:00:00Z');
-    end = new Date(envEnd + 'T00:00:00Z');
-  } else {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dow = today.getDay();
-    const daysUntilFriday = ((5 - dow + 7) % 7) || 7;
-    start = new Date(today.getTime() + Math.max(daysUntilFriday, 3) * 86400_000);
-    end = new Date(today.getTime() + 65 * 86400_000);
+    return {
+      start: new Date(envStart + 'T00:00:00Z'),
+      end: new Date(envEnd + 'T00:00:00Z'),
+    };
   }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dow = today.getDay();
+  const daysUntilFriday = ((5 - dow + 7) % 7) || 7;
+  return {
+    start: new Date(today.getTime() + Math.max(daysUntilFriday, 3) * 86400_000),
+    end: new Date(today.getTime() + 65 * 86400_000),
+  };
+}
 
-  // Iteration mode (default): single check-in date producing one 2-night
-  // and one 7-night slot. Fast feedback loop while debugging the
-  // scrapers. Can be expanded back to multiple check-ins once stable.
+/**
+ * Fallback when Beds24 is unavailable — picks the first 2-night and
+ * 7-night windows from the start date without availability validation.
+ * Equivalent to the old behavior. Production should use the
+ * Beds24-driven `discoverAvailableSlots` instead.
+ */
+export function generateDateSlots(): Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> {
+  const { start, end } = computeWindow();
   const ci = start;
   const slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
   for (const nights of [2, 7] as const) {
@@ -101,7 +109,6 @@ export function generateDateSlots(): Array<{ checkIn: string; checkOut: string; 
       });
     }
   }
-
   return slots;
 }
 
@@ -1428,6 +1435,171 @@ async function fetchOffersForSlot(
   return out;
 }
 
+// ─────────────────────────────────────────────
+// Beds24-driven slot discovery
+// ─────────────────────────────────────────────
+//
+// Instead of guessing dates and hoping they're bookable, scan Beds24's
+// availability over the look-ahead window and pick the first available
+// 2-night and 7-night windows. One /calendar call per sellable room with
+// includeNumAvail=true gives us per-day availability for the entire
+// window in a single round-trip.
+
+function previousDay(yyyymmdd: string): string {
+  const d = new Date(yyyymmdd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Fetches per-day availability for one room over [start, endInclusive].
+ * Returns a Set of YYYY-MM-DD strings where numAvail >= 1.
+ */
+async function fetchAvailableDays(
+  token: string,
+  roomId: number,
+  startDate: string,
+  endDateInclusive: string,
+): Promise<Set<string>> {
+  const params = new URLSearchParams({
+    startDate,
+    endDate: endDateInclusive,
+    roomId: String(roomId),
+    includeNumAvail: 'true',
+  });
+  const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params.toString()}`, {
+    headers: { token },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    console.log(`[pricing] Beds24 calendar room=${roomId} availability fetch failed ${res.status}`);
+    return new Set();
+  }
+  const raw = await res.json().catch(() => null);
+  const available = new Set<string>();
+
+  function visit(node: unknown) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    const fromStr = typeof obj.from === 'string' ? obj.from
+      : typeof obj.date === 'string' ? obj.date : null;
+    const toStr = typeof obj.to === 'string' ? obj.to : fromStr;
+    const numAvailRaw = obj.numAvail;
+    if (fromStr && toStr && numAvailRaw !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(fromStr)) {
+      const numAvail = Number(numAvailRaw);
+      if (Number.isFinite(numAvail) && numAvail >= 1) {
+        const startMs = new Date(fromStr + 'T00:00:00Z').getTime();
+        const endMs = new Date(toStr + 'T00:00:00Z').getTime();
+        for (let t = startMs; t <= endMs; t += 86_400_000) {
+          available.add(new Date(t).toISOString().slice(0, 10));
+        }
+      }
+    }
+    for (const key of Object.keys(obj)) visit(obj[key]);
+  }
+  visit(raw);
+  return available;
+}
+
+/**
+ * Walks day-by-day looking for the first window of N consecutive nights
+ * where at least one room is available on each night. Returns the
+ * (checkIn, checkOut) pair if found.
+ */
+function findFirstAvailableWindow(
+  availableDays: Set<string>,
+  start: Date,
+  end: Date,
+  nights: number,
+): { checkIn: string; checkOut: string } | null {
+  for (let t = start.getTime(); t < end.getTime(); t += 86_400_000) {
+    let allAvailable = true;
+    for (let n = 0; n < nights; n++) {
+      const day = new Date(t + n * 86_400_000).toISOString().slice(0, 10);
+      if (!availableDays.has(day)) {
+        allAvailable = false;
+        break;
+      }
+    }
+    if (allAvailable) {
+      const checkIn = new Date(t).toISOString().slice(0, 10);
+      const checkOut = new Date(t + nights * 86_400_000).toISOString().slice(0, 10);
+      return { checkIn, checkOut };
+    }
+  }
+  return null;
+}
+
+/**
+ * Production slot picker. Scans Beds24 availability for the look-ahead
+ * window, returns the first 2-night and 7-night slots where at least
+ * one room is available. Falls back to `generateDateSlots()` if the
+ * Beds24 token is unavailable (local dev).
+ */
+export async function discoverAvailableSlots(): Promise<
+  Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>
+> {
+  const token = await getBeds24Token();
+  if (!token) {
+    console.log(`[pricing] No Beds24 token — falling back to fixed-date slot generator`);
+    return generateDateSlots();
+  }
+
+  const { start, end } = computeWindow();
+  const startStr = ymd(start);
+  const endStrInclusive = previousDay(ymd(end));
+  console.log(`[pricing] Scanning availability ${startStr} → ${endStrInclusive}`);
+
+  const [k201Days, oneKKDays] = await Promise.all([
+    fetchAvailableDays(token, SELL_ROOM_2KK, startStr, endStrInclusive),
+    fetchAvailableDays(token, SELL_ROOM_1KK, startStr, endStrInclusive),
+  ]);
+
+  // A day is "available" if EITHER room is bookable that night
+  const anyAvailable = new Set<string>([...k201Days, ...oneKKDays]);
+  console.log(
+    `[pricing] Availability: K.201=${k201Days.size}d, 1KK=${oneKKDays.size}d, union=${anyAvailable.size}d`,
+  );
+
+  const slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
+
+  const win2 = findFirstAvailableWindow(anyAvailable, start, end, 2);
+  if (win2) {
+    slots.push({ ...win2, nights: 2 });
+    console.log(`[pricing] Picked 2-night slot: ${win2.checkIn} → ${win2.checkOut}`);
+  } else {
+    console.log(`[pricing] No 2-night window found in look-ahead`);
+  }
+
+  // Search for 7-night window starting AFTER the 2-night one to avoid
+  // picking literally identical (overlapping) slots.
+  const search7Start = win2
+    ? new Date(new Date(win2.checkOut + 'T00:00:00Z').getTime())
+    : start;
+  const win7 = findFirstAvailableWindow(anyAvailable, search7Start, end, 7);
+  if (win7) {
+    slots.push({ ...win7, nights: 7 });
+    console.log(`[pricing] Picked 7-night slot: ${win7.checkIn} → ${win7.checkOut}`);
+  } else {
+    console.log(`[pricing] No 7-night window found in look-ahead`);
+  }
+
+  if (slots.length === 0) {
+    console.log(`[pricing] No availability discovered — falling back to fixed dates`);
+    return generateDateSlots();
+  }
+
+  return slots;
+}
+
 export type AvailabilityGated = {
   /** Slots that have at least one room available (kept for scraping). */
   availableSlots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>;
@@ -1511,7 +1683,10 @@ function calcSpread(prices: (number | null)[]): number | null {
 export async function runFullPricingCheck(
   customSlots?: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
 ): Promise<PricingResult> {
-  const slots = customSlots ?? generateDateSlots();
+  // Production: discover available dates from Beds24 and pick from those.
+  // Custom (operator-provided) slots bypass discovery — operator knows the
+  // dates they want to compare.
+  const slots = customSlots ?? (await discoverAvailableSlots());
   console.log(`[pricing] Starting run — ${slots.length} slot(s)`);
 
   // STEP 1: Beds24 availability gate. ONE /offers call per slot:
