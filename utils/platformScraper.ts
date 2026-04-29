@@ -86,24 +86,19 @@ export function generateDateSlots(): Array<{ checkIn: string; checkOut: string; 
     end = new Date(today.getTime() + 65 * 86400_000);
   }
 
-  // Three check-in dates evenly spaced across the window
-  const windowDays = Math.floor((end.getTime() - start.getTime()) / 86400_000);
-  const checkInOffsets = windowDays >= 28
-    ? [0, Math.floor(windowDays / 3), Math.floor((2 * windowDays) / 3)]
-    : [0, Math.floor(windowDays / 2)];
-
+  // Iteration mode (default): single check-in date producing one 2-night
+  // and one 7-night slot. Fast feedback loop while debugging the
+  // scrapers. Can be expanded back to multiple check-ins once stable.
+  const ci = start;
   const slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
-  for (const offset of checkInOffsets) {
-    const ci = new Date(start.getTime() + offset * 86400_000);
-    for (const nights of [2, 7] as const) {
-      const co = new Date(ci.getTime() + nights * 86400_000);
-      if (co <= end) {
-        slots.push({
-          checkIn: ci.toISOString().slice(0, 10),
-          checkOut: co.toISOString().slice(0, 10),
-          nights,
-        });
-      }
+  for (const nights of [2, 7] as const) {
+    const co = new Date(ci.getTime() + nights * 86400_000);
+    if (co <= end) {
+      slots.push({
+        checkIn: ci.toISOString().slice(0, 10),
+        checkOut: co.toISOString().slice(0, 10),
+        nights,
+      });
     }
   }
 
