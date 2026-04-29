@@ -222,13 +222,14 @@ async function scrapeAirbnbViaBrowser(
   await page.setUserAgent(
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   );
-  await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
-  // Force CZK currency regardless of geo
-  await page.setCookie({
-    name: 'currency',
-    value: 'CZK',
-    domain: '.airbnb.com',
-  });
+  // cs-CZ first nudges Airbnb's locale routing toward Czech rates / language
+  await page.setExtraHTTPHeaders({ 'Accept-Language': 'cs-CZ,cs;q=0.9,en;q=0.8' });
+  // Force CZK currency. Set on every plausible domain — Airbnb is fussy
+  // about which exact host the cookie is bound to. Safe to set on any
+  // page (cookies persist across goto navigations).
+  for (const domain of ['.airbnb.com', '.airbnb.cz', 'www.airbnb.com']) {
+    await page.setCookie({ name: 'currency', value: 'CZK', domain }).catch(() => null);
+  }
 
   const results: Offer[] = [];
   const shortId = listingId.slice(-6);
@@ -240,9 +241,13 @@ async function scrapeAirbnbViaBrowser(
     // anonymous scraper sessions can receive a stale rate plan that the live
     // authenticated browser sees corrected.
     const cacheBust = Date.now();
+    // currency=CZK URL param + display_currency=CZK belt-and-suspenders.
+    // Some Airbnb edge variants honor the URL param even when the cookie
+    // isn't sticking (Vercel datacenter IPs frequently get USD via cookie).
     const url =
       `https://www.airbnb.com/rooms/${listingId}` +
-      `?check_in=${slot.checkIn}&check_out=${slot.checkOut}&adults=2&_cb=${cacheBust}`;
+      `?check_in=${slot.checkIn}&check_out=${slot.checkOut}&adults=2&_cb=${cacheBust}` +
+      `&currency=CZK&display_currency=CZK&locale=cs`;
     try {
       // networkidle2 (instead of domcontentloaded) waits for XHR-driven price
       // recalcs to finish — matters on 7-night slots where the weekly
@@ -278,6 +283,7 @@ async function scrapeAirbnbViaBrowser(
         strikeTooltipText: string;
         panelKcTotal: number | null;
         panelStrikethrough: number | null;
+        currencyDetected: 'CZK' | 'USD' | null;
       } = await page.evaluate(async () => {
         const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -293,6 +299,7 @@ async function scrapeAirbnbViaBrowser(
             strikeTooltipText: '',
             panelKcTotal: null,
             panelStrikethrough: null,
+            currencyDetected: null,
           };
         }
         // Find the TIGHTEST container that is the booking card: smallest
@@ -304,11 +311,14 @@ async function scrapeAirbnbViaBrowser(
         for (let i = 0; i < 12 && panel; i++) {
           const r = panel.getBoundingClientRect();
           const txt = (panel.textContent || '').slice(0, 3000);
-          const hasNight = /\/\s*(night|noc)\b/i.test(txt);
+          const hasNight = /\b(?:nights?|noc[ií]?|\/\s*night)\b/i.test(txt);
           const hasTotal = /\b(total|celkem)\b/i.test(txt);
-          const hasKc = /\d[\d ,.\u00a0]{2,20}\s*Kč/.test(txt);
+          // Accept either Kč (preferred) OR $ as the price indicator —
+          // Vercel datacenter IPs sometimes get USD pricing despite the
+          // currency cookie/URL param.
+          const hasPrice = /\d[\d ,.\u00a0]{2,20}\s*Kč/.test(txt) || /\$\s*\d[\d ,.\u00a0]{1,15}/.test(txt);
           const looksLikeCard = r.width > 240 && r.width < 560 && r.height > 280;
-          if (looksLikeCard && hasNight && hasTotal && hasKc) break;
+          if (looksLikeCard && hasNight && hasTotal && hasPrice) break;
           panel = panel.parentElement;
         }
         if (!panel) panel = reserveBtn.parentElement as HTMLElement;
@@ -325,17 +335,48 @@ async function scrapeAirbnbViaBrowser(
         const panelText = (panel.innerText || '').slice(0, 6000);
 
         // Parse panel text for the total: try both "X Kč total" (single line)
-        // and "Total\nX Kč" (two-column flex layout) variants.
+        // and "Total\nX Kč" (two-column flex layout) variants. If neither
+        // hits, fall back to USD parsing — Airbnb sometimes serves USD
+        // from Vercel datacenter IPs even with currency=CZK cookie set.
+        const FX_USD_TO_CZK = 24.0; // approximate; updated as needed
         const parsePanelAmount = (raw: string): number => {
           const stripped = raw.replace(/[^\d]/g, '');
           const hasCents = /[.,]\d{2}(?!\d)/.test(raw);
           const n = parseInt(stripped, 10);
           return hasCents ? Math.round(n / 100) : n;
         };
-        const totalMatch =
+        const parseUsdAmount = (raw: string): number => {
+          // "$1,541.97" → 1541.97 (in dollars)
+          const stripped = raw.replace(/[^\d.]/g, '');
+          const n = parseFloat(stripped);
+          return Number.isFinite(n) ? n : 0;
+        };
+
+        let panelKcTotal: number | null = null;
+        let currencyDetected: 'CZK' | 'USD' | null = null;
+        const kcTotalMatch =
           panelText.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč[ \t]+total\b/i) ??
           panelText.match(/\b(?:total|celkem)\b\s*\n\s*(\d[\d ,.\u00a0]{2,20})\s*Kč/i);
-        const panelKcTotal = totalMatch ? parsePanelAmount(totalMatch[1]) : null;
+        if (kcTotalMatch) {
+          panelKcTotal = parsePanelAmount(kcTotalMatch[1]);
+          currencyDetected = 'CZK';
+        } else {
+          // USD fallback. Patterns we've seen on Vercel:
+          //   "$1,541.97 total"
+          //   "$1,541 for 7 nights"
+          //   "Non-refundable · $1,541.97 total"
+          const usdMatch =
+            panelText.match(/\$\s*([\d,.]+)\s+total\b/i) ??
+            panelText.match(/\$\s*([\d,.]+)\s+for\s+\d+\s+nights?\b/i) ??
+            panelText.match(/non-refundable[^$]{0,30}\$\s*([\d,.]+)/i);
+          if (usdMatch) {
+            const usd = parseUsdAmount(usdMatch[1]);
+            if (usd > 0) {
+              panelKcTotal = Math.round(usd * FX_USD_TO_CZK);
+              currencyDetected = 'USD';
+            }
+          }
+        }
 
         // Strikethrough detection: ONLY trust prices that are actually rendered
         // with line-through styling in the DOM. Earlier versions picked any
@@ -353,10 +394,12 @@ async function scrapeAirbnbViaBrowser(
         });
         for (const el of strikeEls) {
           const txt = (el.innerText || el.textContent || '').trim();
-          const m = txt.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč/);
-          if (!m) continue;
-          const n = parsePanelAmount(m[1]);
-          if (panelKcTotal && n > panelKcTotal && n < panelKcTotal * 3) {
+          const kcM = txt.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč/);
+          const usdM = !kcM ? txt.match(/\$\s*([\d,.]+)/) : null;
+          let n: number | null = null;
+          if (kcM) n = parsePanelAmount(kcM[1]);
+          else if (usdM && currencyDetected === 'USD') n = Math.round(parseUsdAmount(usdM[1]) * FX_USD_TO_CZK);
+          if (n !== null && panelKcTotal && n > panelKcTotal && n < panelKcTotal * 3) {
             panelStrikethrough = panelStrikethrough == null ? n : Math.max(panelStrikethrough, n);
           }
         }
@@ -576,11 +619,12 @@ async function scrapeAirbnbViaBrowser(
           strikeTooltipText,
           panelKcTotal,
           panelStrikethrough,
+          currencyDetected,
         };
       });
 
       console.log(
-        `[pricing] ${tag} reserveFound=${panelResult.reserveFound} panelKcTotal=${panelResult.panelKcTotal} strike=${panelResult.panelStrikethrough} tooltipLen=${panelResult.tooltipText.length} strikeTooltipLen=${panelResult.strikeTooltipText.length}`,
+        `[pricing] ${tag} reserveFound=${panelResult.reserveFound} panelKcTotal=${panelResult.panelKcTotal} strike=${panelResult.panelStrikethrough} currency=${panelResult.currencyDetected ?? 'null'} tooltipLen=${panelResult.tooltipText.length} strikeTooltipLen=${panelResult.strikeTooltipText.length}`,
       );
       if (panelResult.panelText) {
         console.log(`  panel-text[0:500]: ${JSON.stringify(panelResult.panelText.slice(0, 500))}`);
@@ -918,7 +962,23 @@ async function scrapeBookingCom(
         };
 
         const majorHeading = /^(deluxe|two[\s-]?bedroom|one[\s-]?bedroom|studio|suite|standard|superior|\b[12]kk\b)/i;
-        const priceRegex = /(\d[\d ,.\u00a0]{2,20})\s*(?:CZK|Kč)/i;
+        // Match a CZK amount NOT followed by per-night markers (slash-night,
+        // "/noc", "per night", "average price per night"). Booking renders
+        // the per-night rate right under the stay total — without this guard
+        // the text scanner picks up the smaller per-night number.
+        const priceRegex = /(\d[\d ,.\u00a0]{2,20})\s*(?:CZK|Kč)(?!\s*(?:\/|per\s|average\s|.\s*(?:is\s*the\s*average\s*)?price\s*per)?\s*(?:night|noc))/i;
+        // A line is per-night if either the line itself OR the next 1-2 lines
+        // contain night-rate markers ("X Kč/night" sometimes spans wrappers
+        // and renders to innerText as "X Kč" then "/night" on the next line).
+        const isPerNightLine = (idx: number): boolean => {
+          for (let k = 0; k < 3 && idx + k < lines.length; k++) {
+            const l = lines[idx + k];
+            if (/\b(?:per\s*night|\/\s*night|\/\s*noc|noc[ií]|average\s*price\s*per)/i.test(l)) {
+              return true;
+            }
+          }
+          return false;
+        };
         // NOTE: We deliberately do NOT regex-scan for "label" text on Booking.com anymore.
         // The property page mentions every discount name across all rate plans — any loose
         // text match produces false positives (e.g. "Last Minute Deal" showing on a Jun 20
@@ -955,6 +1015,9 @@ async function scrapeBookingCom(
           const firstTwo: Array<{ idx: number; price: number }> = [];
           for (let j = i + 1; j < blockEnd && firstTwo.length < 2; j++) {
             if (majorHeading.test(lines[j]) && j > i + 3) break;
+            // Skip lines that are per-night rates — the scanner's looking
+            // for stay totals only.
+            if (isPerNightLine(j)) continue;
             const m = lines[j].match(priceRegex);
             if (!m) continue;
             const price = parseInt(m[1].replace(/[^\d]/g, ''), 10);
@@ -1242,8 +1305,11 @@ async function scrapeBookingCom(
         return { ...parsed, heading: c.heading };
       });
 
-      // Match each room to its tooltip by heading text (exact or substring) and
-      // fall back to price match only if the heading link isn't available.
+      // Match each room to its tooltip by heading text. The tooltip's
+      // Total/Original/discount values are the AUTHORITATIVE numbers — the
+      // text-pass picks them up from card-level rendering which is fragile
+      // (per-night rates, locale-specific markup, etc.). When we have a
+      // tooltip match, override r.price / r.originalPrice from the tooltip.
       for (const r of roomData) {
         const roomHeadingLc = r.name.toLowerCase();
         let tt = tooltipBreakdowns.find((b) => {
@@ -1251,22 +1317,31 @@ async function scrapeBookingCom(
           return bh.includes(roomHeadingLc.slice(0, 20)) || roomHeadingLc.includes(bh.slice(0, 20));
         });
         if (!tt) {
-          const matchesPrice = (n: number) => Math.abs(n - r.price) <= 20;
+          // No heading match — try matching by either of the prices the
+          // text-pass found (defensive: handles tooltip showing rounded
+          // values that don't exactly match the card).
+          const matchesPrice = (n: number) => Math.abs(n - r.price) <= 200;
           const matchesOriginal = (n: number) =>
-            r.originalPrice !== null && Math.abs(n - r.originalPrice) <= 20;
+            r.originalPrice !== null && Math.abs(n - r.originalPrice) <= 200;
           tt = tooltipBreakdowns.find((b) => {
             if (b.total !== null && matchesPrice(b.total)) return true;
             if (b.originalPrice !== null && matchesOriginal(b.originalPrice)) return true;
             return false;
           });
         }
-        if (!tt || !r.originalPrice) continue;
+        if (!tt) continue;
 
-        const originalForPp = tt.originalPrice ?? r.originalPrice;
+        // Tooltip wins when present
+        if (tt.total !== null && tt.total > 0) r.price = tt.total;
+        if (tt.originalPrice !== null && tt.originalPrice > r.price) {
+          r.originalPrice = tt.originalPrice;
+        }
+
+        const originalForPp = r.originalPrice ?? tt.total ?? r.price;
         r.breakdown = tt.discounts.map((d) => ({
           name: d.name,
           amountKc: d.amountKc,
-          pp: Math.round((d.amountKc / originalForPp) * 1000) / 10,
+          pp: originalForPp > 0 ? Math.round((d.amountKc / originalForPp) * 1000) / 10 : 0,
         }));
       }
 
