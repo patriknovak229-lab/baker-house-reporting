@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
@@ -60,20 +60,21 @@ function mergeLocal(reservations: Reservation[], state: Record<string, LocalFiel
   });
 }
 
-// Fire-and-forget — UI is already updated optimistically before this resolves.
-// On failure the in-memory state is still correct; the change is only lost on page reload.
+// Persists local fields. Throws on failure so the caller can show error feedback;
+// callers that don't care can wrap in their own try/catch.
 async function persistOverride(reservationNumber: string, fields: LocalFields): Promise<void> {
-  try {
-    await fetch('/api/local-state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reservationNumber, fields }),
-    });
-  } catch (err) {
-    // Non-fatal — user sees the change immediately; worst case it doesn't persist on reload.
-    console.error('[persistOverride] Failed to save changes for', reservationNumber, err);
+  const res = await fetch('/api/local-state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reservationNumber, fields }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error ?? `HTTP ${res.status}`);
   }
 }
+
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
 
@@ -91,6 +92,10 @@ export default function TransactionsPage() {
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [showPriceCheck, setShowPriceCheck] = useState(false);
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
+  // Single source of truth for "are we saving / did we save / did it fail" so
+  // the drawer can render one consistent toast for any onUpdate-driven write.
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const saveStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchReservations = useCallback(async () => {
     setIsLoading(true);
@@ -323,12 +328,25 @@ export default function TransactionsPage() {
     });
   }, [reservations, search, filters]);
 
-  function handleUpdate(updated: Reservation) {
+  async function handleUpdate(updated: Reservation) {
+    // Optimistic UI: reflect the change locally before the server confirms.
     setReservations((prev) =>
       prev.map((r) => r.reservationNumber === updated.reservationNumber ? updated : r)
     );
     setSelectedReservation(updated);
-    persistOverride(updated.reservationNumber, extractLocalFields(updated));
+
+    // Track save lifecycle so the drawer can surface "Saving… / Saved / Failed".
+    if (saveStatusTimer.current) clearTimeout(saveStatusTimer.current);
+    setSaveStatus('saving');
+    try {
+      await persistOverride(updated.reservationNumber, extractLocalFields(updated));
+      setSaveStatus('saved');
+      saveStatusTimer.current = setTimeout(() => setSaveStatus('idle'), 2200);
+    } catch (err) {
+      console.error('[persistOverride] Failed to save changes for', updated.reservationNumber, err);
+      setSaveStatus('error');
+      saveStatusTimer.current = setTimeout(() => setSaveStatus('idle'), 5000);
+    }
   }
 
   return (
@@ -662,6 +680,7 @@ export default function TransactionsPage() {
         onClose={() => setSelectedReservation(null)}
         onUpdate={handleUpdate}
         onPaymentCreated={fetchReservations}
+        saveStatus={saveStatus}
       />
 
       {/* Create booking modal */}

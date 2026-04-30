@@ -447,6 +447,10 @@ interface ReservationDrawerProps {
   onClose: () => void;
   onUpdate: (updated: Reservation) => void;
   onPaymentCreated?: () => void;
+  /** Driven by TransactionsPage's persist lifecycle. Renders a toast at the
+   *  top of the drawer so any onUpdate write surfaces save feedback without
+   *  having to instrument every individual button. */
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 function SourceLabel({ source }: { source: string }) {
@@ -1042,6 +1046,7 @@ export default function ReservationDrawer({
   onClose,
   onUpdate,
   onPaymentCreated,
+  saveStatus = 'idle',
 }: ReservationDrawerProps) {
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
@@ -1442,6 +1447,38 @@ export default function ReservationDrawer({
           isMounted ? "translate-x-0" : "translate-x-full"
         }`}
       >
+        {/* Save-status toast — fixed pill at top centre, fades automatically.
+            Driven by TransactionsPage.persistOverride lifecycle so any onUpdate
+            write surfaces feedback, no per-button instrumentation needed. */}
+        {saveStatus !== 'idle' && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+            {saveStatus === 'saving' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-800/90 text-white text-[11px] font-medium shadow-md">
+                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+                Saving…
+              </span>
+            )}
+            {saveStatus === 'saved' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-600 text-white text-[11px] font-medium shadow-md">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={3}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                Saved
+              </span>
+            )}
+            {saveStatus === 'error' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-600 text-white text-[11px] font-medium shadow-md">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                Save failed — retry
+              </span>
+            )}
+          </div>
+        )}
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
           <div>
