@@ -1360,6 +1360,75 @@ export default function ReservationDrawer({
     }
   }
 
+  // ── Invoice request banner — accept/reject pending detected requests ──────
+  // On Accept: pre-fills invoiceData (only fields currently empty, so existing
+  // operator entries aren't overwritten) + creates an Issue (category=invoice,
+  // actionableDate=checkout). Marks request 'accepted' server-side.
+  // On Reject: marks 'rejected' server-side so the banner stops showing.
+  // Reservation merges happen client-side too — the next /api/invoice-requests
+  // sync will re-attach the persisted state.
+  async function processInvoiceRequest(
+    requestId: string,
+    action: 'accept' | 'reject',
+  ) {
+    if (!reservation) return;
+    const request = (reservation.invoiceRequests ?? []).find((r) => r.id === requestId);
+    if (!request) return;
+
+    // Build the updated reservation in one shot (single onUpdate call → single save)
+    const updates: Partial<Reservation> = {
+      invoiceRequests: (reservation.invoiceRequests ?? []).map((r) =>
+        r.id === requestId
+          ? { ...r, status: action === 'accept' ? 'accepted' : 'rejected', processedAt: new Date().toISOString() }
+          : r,
+      ),
+    };
+
+    if (action === 'accept') {
+      const existing = reservation.invoiceData ?? {
+        companyName: '',
+        companyAddress: '',
+        ico: '',
+        vatNumber: '',
+        billingEmail: '',
+      };
+      updates.invoiceData = {
+        companyName: existing.companyName || request.companyName || '',
+        companyAddress: existing.companyAddress,
+        ico: existing.ico || request.ico || '',
+        vatNumber: existing.vatNumber || request.dic || '',
+        billingEmail: existing.billingEmail || request.email || '',
+      };
+      updates.issues = [
+        ...(reservation.issues ?? []),
+        {
+          id: Date.now().toString(),
+          category: 'invoice',
+          text: request.companyName
+            ? `Send invoice — ${request.companyName}${request.dic ? ` (DIČ ${request.dic})` : ''}`
+            : 'Send invoice — guest requested via Booking.com',
+          actionableDate: reservation.checkOutDate,
+          resolved: false,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+    }
+
+    onUpdate({ ...reservation, ...updates });
+
+    // Persist server-side (best-effort — local state is already optimistic).
+    try {
+      await fetch(`/api/invoice-requests/${encodeURIComponent(requestId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+    } catch (err) {
+      console.error('[invoice-request]', err);
+    }
+    onPaymentCreated?.();
+  }
+
   // Open the preview modal first — operator confirms styling/data before
   // committing to send. Preview HTML is fetched lazily on open.
   async function handleOpenConfirmationPreview() {
@@ -1555,6 +1624,88 @@ export default function ReservationDrawer({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+
+          {/* Auto-detected invoice requests from the guest's Booking.com message.
+              Shows only `pending` rows; once accepted/rejected they vanish. */}
+          {(reservation.invoiceRequests ?? [])
+            .filter((r) => r.status === 'pending')
+            .map((req) => (
+              <div
+                key={req.id}
+                className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 space-y-2.5"
+              >
+                <div className="flex items-start gap-2">
+                  <svg className="w-4 h-4 mt-0.5 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-amber-900 uppercase tracking-wide">
+                      Invoice request detected
+                    </p>
+                    <p className="text-[10px] text-amber-700 mt-0.5">
+                      Auto-parsed from guest message · review before accepting
+                    </p>
+                  </div>
+                </div>
+
+                {/* Parsed fields */}
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  <div>
+                    <span className="text-amber-700 text-[10px] block">Company</span>
+                    <span className="text-amber-950 font-medium truncate block">
+                      {req.companyName || <span className="italic text-amber-400">not detected</span>}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-amber-700 text-[10px] block">DIČ / Tax ID</span>
+                    <span className="text-amber-950 font-mono">
+                      {req.dic || <span className="italic text-amber-400 font-sans">not detected</span>}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-amber-700 text-[10px] block">IČO</span>
+                    <span className="text-amber-950 font-mono">
+                      {req.ico || <span className="italic text-amber-400 font-sans">not detected</span>}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-amber-700 text-[10px] block">Email</span>
+                    <span className="text-amber-950 break-all">
+                      {req.email || <span className="italic text-amber-400">not detected</span>}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Original message (collapsed by default; clickable to expand) */}
+                <details className="text-[11px] text-amber-700">
+                  <summary className="cursor-pointer hover:text-amber-900">View original message</summary>
+                  <p className="mt-1.5 p-2 bg-white/60 rounded border border-amber-200 text-amber-900 whitespace-pre-wrap">
+                    {req.rawMessage}
+                  </p>
+                </details>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => processInvoiceRequest(req.id, 'accept')}
+                    className="px-3 py-1 text-[11px] font-semibold rounded bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                    title="Pre-fill invoice details and create a Send-Invoice task for checkout"
+                  >
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => processInvoiceRequest(req.id, 'reject')}
+                    className="px-3 py-1 text-[11px] font-medium rounded border border-amber-300 text-amber-800 hover:bg-amber-100 transition-colors"
+                    title="Dismiss — guest didn't actually want an invoice"
+                  >
+                    Reject
+                  </button>
+                  <span className="text-[10px] text-amber-600 ml-auto">
+                    Detected {req.detectedAt.slice(0, 10)}
+                  </span>
+                </div>
+              </div>
+            ))}
 
           {/* 1. Reservation Info */}
           <section>

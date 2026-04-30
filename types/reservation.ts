@@ -1,6 +1,7 @@
 import type { AdditionalPayment } from "./additionalPayment";
 import type { Voucher } from "./voucher";
 import type { SplitPayment } from "./splitPayment";
+import type { InvoiceRequest } from "./invoiceRequest";
 
 export type Channel = "Booking.com" | "Airbnb" | "Direct" | "Direct-Phone" | "Direct-Web";
 // Physical room name (e.g. "K.201") or combined for package bookings (e.g. "K.202 + K.203")
@@ -105,4 +106,5 @@ export interface Reservation {
   vouchers?: Voucher[]; // discount vouchers linked to this reservation
   parkingOverride?: string; // undefined = auto rules, "none" = no parking, "152"/"153"/etc = manual space
   invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
+  invoiceRequests?: InvoiceRequest[]; // auto-detected invoice requests from Booking.com guest messages
 }
