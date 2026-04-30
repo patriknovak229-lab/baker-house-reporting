@@ -9,6 +9,121 @@ interface MessageThreadProps {
   beds24Id: number;       // raw Beds24 booking ID (not "BH-" prefixed)
   hasUnread: boolean;     // driven by the table-level unread poll
   guestName: string;
+  /** Physical room (e.g. "K.201"), used by templates to inject the
+   *  correct parking-space number into the parking template. */
+  room?: string;
+  /** Guest first name — used by templates for personalised greetings. */
+  guestFirstName?: string;
+}
+
+// Parking spaces per physical room — kept in sync with utils/parkingUtils.ts.
+// Used by the parking template in the templates dropdown.
+const ROOM_PARKING_SPACE: Record<string, string> = {
+  'K.201': '153',
+  'K.202': '167',
+  'K.203': '160',
+};
+
+interface Template {
+  id: string;
+  label: string;
+  /** Two-language template — operator picks which to insert. */
+  textCs: string;
+  textEn: string;
+}
+
+function buildTemplates(args: { room?: string; guestFirstName?: string }): Template[] {
+  const greeting = (lang: 'cs' | 'en') => {
+    if (!args.guestFirstName) return lang === 'cs' ? 'Dobrý den,' : 'Hello,';
+    return lang === 'cs'
+      ? `Dobrý den ${args.guestFirstName},`
+      : `Hi ${args.guestFirstName},`;
+  };
+
+  // Look up parking — fall back to a placeholder if the room is unknown
+  // or combined ("K.202 + K.203"). For combined we just say "underground level 2".
+  const parkingSpace = args.room ? ROOM_PARKING_SPACE[args.room] : null;
+
+  const templates: Template[] = [
+    {
+      id: 'invoice-details',
+      label: 'Ask for invoice details',
+      textCs: [
+        greeting('cs'),
+        '',
+        'Děkujeme za Vaši rezervaci! Pro vystavení faktury potřebujeme od Vás následující údaje (Booking.com nám bohužel přeposílá pouze svou interní e-mailovou adresu):',
+        '',
+        '1. Váš skutečný e-mail (na který Vám fakturu zašleme)',
+        '2. Název společnosti (pokud chcete fakturu na firmu)',
+        '3. IČO a DIČ společnosti',
+        '4. Adresa společnosti',
+        '',
+        'Pokud chcete fakturu pouze na fyzickou osobu, postačí e-mail a Vaše jméno.',
+        '',
+        'Děkujeme!',
+        'Patrik & Zuzana',
+      ].join('\n'),
+      textEn: [
+        greeting('en'),
+        '',
+        'Thank you for your reservation! To issue your invoice, we need the following information (Booking.com only forwards their internal proxy email, so we can\'t reach you directly):',
+        '',
+        '1. Your real email address (where we\'ll send the invoice)',
+        '2. Company name (if invoicing to a company)',
+        '3. Company ID (IČO) and VAT number (DIČ)',
+        '4. Company address',
+        '',
+        'If you\'d like the invoice issued to you as an individual, just your email and full name will do.',
+        '',
+        'Thank you!',
+        'Patrik & Zuzana',
+      ].join('\n'),
+    },
+    {
+      id: 'parking',
+      label: 'Parking info',
+      textCs: parkingSpace
+        ? [
+            greeting('cs'),
+            '',
+            `Vaše rezervované parkovací místo je v podzemním parkovišti, 2. patro, místo č. ${parkingSpace}. Místo je označeno cedulí "Baker House Apartments".`,
+            '',
+            'Pokud budete potřebovat pomoc s navigací nebo přístupem k parkovišti, dejte nám prosím vědět.',
+            '',
+            'Hezký den!',
+            'Patrik & Zuzana',
+          ].join('\n')
+        : [
+            greeting('cs'),
+            '',
+            'Parkování je k dispozici v podzemním parkovišti, 2. patro. Pošleme Vám konkrétní místo před příjezdem.',
+            '',
+            'Hezký den!',
+            'Patrik & Zuzana',
+          ].join('\n'),
+      textEn: parkingSpace
+        ? [
+            greeting('en'),
+            '',
+            `Your reserved parking space is in the underground garage, level −2, space #${parkingSpace}. The space is labelled "Baker House Apartments".`,
+            '',
+            'Let us know if you need help with directions or accessing the garage.',
+            '',
+            'Have a nice day!',
+            'Patrik & Zuzana',
+          ].join('\n')
+        : [
+            greeting('en'),
+            '',
+            'Parking is available in the underground garage, level −2. We\'ll send you the specific space number before your arrival.',
+            '',
+            'Have a nice day!',
+            'Patrik & Zuzana',
+          ].join('\n'),
+    },
+  ];
+
+  return templates;
 }
 
 function formatTime(iso: string): string {
@@ -29,7 +144,7 @@ function isConversationActive(messages: ThreadMessage[]): boolean {
   return last.source === 'guest';
 }
 
-export default function MessageThread({ beds24Id, hasUnread, guestName }: MessageThreadProps) {
+export default function MessageThread({ beds24Id, hasUnread, guestName, room, guestFirstName }: MessageThreadProps) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -253,10 +368,44 @@ export default function MessageThread({ beds24Id, hasUnread, guestName }: Messag
           </div>
 
           {/* Send box */}
-          <div className="border-t border-gray-200 p-3 bg-white">
+          <div className="border-t border-gray-200 p-3 bg-white space-y-2">
             {sendError && (
-              <p className="text-xs text-red-500 mb-1.5">{sendError}</p>
+              <p className="text-xs text-red-500">{sendError}</p>
             )}
+
+            {/* Template inserts — operator picks language; text drops into the
+                draft (replaces empty draft, otherwise prepends with a blank line). */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-gray-400">Templates:</span>
+              {buildTemplates({ room, guestFirstName }).map((tpl) => (
+                <div key={tpl.id} className="inline-flex items-stretch border border-gray-200 rounded-md overflow-hidden">
+                  <span className="px-2 py-1 text-[10px] font-medium text-gray-600 bg-gray-50">{tpl.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraft((prev) => (prev.trim() ? `${tpl.textCs}\n\n${prev}` : tpl.textCs));
+                      textareaRef.current?.focus();
+                    }}
+                    className="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-200"
+                    title="Insert Czech version"
+                  >
+                    CZ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraft((prev) => (prev.trim() ? `${tpl.textEn}\n\n${prev}` : tpl.textEn));
+                      textareaRef.current?.focus();
+                    }}
+                    className="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-200"
+                    title="Insert English version"
+                  >
+                    EN
+                  </button>
+                </div>
+              ))}
+            </div>
+
             <div className="flex gap-2">
               <textarea
                 ref={textareaRef}

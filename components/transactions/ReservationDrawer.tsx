@@ -1706,6 +1706,8 @@ export default function ReservationDrawer({
                 beds24Id={parseInt(reservation.reservationNumber.slice(3))}
                 hasUnread={unreadBookingIds.has(parseInt(reservation.reservationNumber.slice(3)))}
                 guestName={`${reservation.firstName} ${reservation.lastName}`}
+                room={reservation.room}
+                guestFirstName={reservation.firstName}
               />
             ) : (
               <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded px-3 py-2.5">
