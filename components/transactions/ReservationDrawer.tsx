@@ -1096,6 +1096,8 @@ export default function ReservationDrawer({
   const [modifyNights, setModifyNights] = useState(0);
   const [modifyGuests, setModifyGuests] = useState(1);
   const [modifyRoom, setModifyRoom] = useState("");
+  const [modifyGuestName, setModifyGuestName] = useState("");
+  const [modifyLineDescription, setModifyLineDescription] = useState("");
 
   const parkingResult = useMemo(() => computeParking(allReservations), [allReservations]);
   const myParking = reservation ? parkingResult.byReservation.get(reservation.reservationNumber) ?? null : null;
@@ -1124,6 +1126,8 @@ export default function ReservationDrawer({
       setModifyNights(reservation.numberOfNights);
       setModifyGuests(reservation.numberOfGuests);
       setModifyRoom(reservation.room);
+      setModifyGuestName("");
+      setModifyLineDescription("");
       if (reservation.invoiceData) {
         setInvoiceForm({ ...reservation.invoiceData });
       } else {
@@ -1213,6 +1217,8 @@ export default function ReservationDrawer({
       numberOfNights: modifyNights,
       numberOfGuests: modifyGuests,
       room: modifyRoom,
+      ...(modifyGuestName.trim() ? { guestName: modifyGuestName.trim() } : {}),
+      ...(modifyLineDescription.trim() ? { lineDescription: modifyLineDescription.trim() } : {}),
       createdAt: new Date().toISOString(),
     };
     onUpdate({
@@ -2705,6 +2711,35 @@ export default function ReservationDrawer({
                           type="text"
                           value={modifyRoom}
                           onChange={(e) => setModifyRoom(e.target.value)}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Manual content overrides — name + line description.
+                        Empty value = use the Beds24-derived default. */}
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-[11px] text-gray-500 block mb-1">
+                          Guest name on invoice <span className="text-gray-400 font-normal">(optional override)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={modifyGuestName}
+                          onChange={(e) => setModifyGuestName(e.target.value)}
+                          placeholder={`${reservation.firstName} ${reservation.lastName}`.trim()}
+                          className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-gray-500 block mb-1">
+                          Line description <span className="text-gray-400 font-normal">(optional override)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={modifyLineDescription}
+                          onChange={(e) => setModifyLineDescription(e.target.value)}
+                          placeholder="Ubytování / Accommodation"
                           className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
                         />
                       </div>

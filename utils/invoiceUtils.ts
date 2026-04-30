@@ -75,6 +75,12 @@ export function buildInvoiceHTML(
     ].join("");
   }
 
+  // Resolve overridable line-item bits (defaults to Beds24-derived values).
+  const guestNameLine = modification?.guestName?.trim()
+    || `${res.firstName} ${res.lastName}`.trim();
+  const lineDescription = modification?.lineDescription?.trim()
+    || "Ubytování / Accommodation";
+
   // ── Line items ──────────────────────────────────────────────────────────────
   let lineItemsHtml: string;
   if (modification && modification.dateRanges.length > 0) {
@@ -98,7 +104,7 @@ export function buildInvoiceHTML(
       const isLast = i === ranges.length - 1;
       const borderStyle = isLast ? "border-bottom:1px solid #EFEAE4" : "border-bottom:1px solid #f0ebe4";
       return `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:6px;margin-bottom:${isLast ? "0" : "4px"};${borderStyle};font-size:13px">
-      <span>Ubytování / Accommodation<br/><span style="font-size:11px;color:${MID_BROWN}">${res.firstName} ${res.lastName} · ${shortDate(r.from)} – ${shortDate(r.to)}</span></span>
+      <span>${lineDescription}<br/><span style="font-size:11px;color:${MID_BROWN}">${guestNameLine} · ${shortDate(r.from)} – ${shortDate(r.to)}</span></span>
       <span style="text-align:right;min-width:40px">${nightsList[i]}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(avgPPN)}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(linePrices[i])}</span>
@@ -107,7 +113,7 @@ export function buildInvoiceHTML(
   } else {
     const unitPrice = res.numberOfNights > 0 ? res.price / res.numberOfNights : res.price;
     lineItemsHtml = `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:8px;border-bottom:1px solid #EFEAE4;font-size:13px">
-      <span>Ubytování / Accommodation<br/><span style="font-size:11px;color:${MID_BROWN}">${res.firstName} ${res.lastName}</span></span>
+      <span>${lineDescription}<br/><span style="font-size:11px;color:${MID_BROWN}">${guestNameLine}</span></span>
       <span style="text-align:right;min-width:40px">${res.numberOfNights}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(unitPrice)}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(res.price)}</span>

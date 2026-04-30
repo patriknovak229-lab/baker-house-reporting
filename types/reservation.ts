@@ -50,6 +50,10 @@ export interface InvoiceModification {
   numberOfNights: number;
   numberOfGuests: number;
   room: string;
+  /** Override the guest name shown on the invoice (overrides "{firstName} {lastName}" on the line items). */
+  guestName?: string;
+  /** Override the line-item description (defaults to "Ubytování / Accommodation"). */
+  lineDescription?: string;
   createdAt: string; // ISO timestamp
 }
 
