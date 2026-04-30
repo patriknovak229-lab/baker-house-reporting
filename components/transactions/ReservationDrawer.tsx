@@ -1090,6 +1090,12 @@ export default function ReservationDrawer({
   const [confirmationPreviewError, setConfirmationPreviewError] = useState<string | null>(null);
   // Save details feedback
   const [saveDetailsSaved, setSaveDetailsSaved] = useState(false);
+  // Notes save feedback
+  const [noteSaved, setNoteSaved] = useState(false);
+  // Add issue feedback
+  const [issueSaved, setIssueSaved] = useState(false);
+  // Invoice request accept/reject — tracks which request is currently being processed
+  const [processingInvoiceRequestId, setProcessingInvoiceRequestId] = useState<string | null>(null);
   // Invoice modification editor
   const [showModifyEditor, setShowModifyEditor] = useState(false);
   const [modifyDateRanges, setModifyDateRanges] = useState<{ from: string; to: string }[]>([{ from: "", to: "" }]);
@@ -1171,6 +1177,8 @@ export default function ReservationDrawer({
 
   function saveNote() {
     onUpdate({ ...reservation!, notes });
+    setNoteSaved(true);
+    setTimeout(() => setNoteSaved(false), 2500);
   }
 
   function addIssue() {
@@ -1187,6 +1195,8 @@ export default function ReservationDrawer({
     onUpdate({ ...reservation!, issues: [...(reservation!.issues ?? []), issue] });
     setNewIssueText("");
     setNewIssueDate(new Date().toISOString().slice(0, 10));
+    setIssueSaved(true);
+    setTimeout(() => setIssueSaved(false), 2500);
     setNewIssueCategory("problem");
   }
 
@@ -1374,6 +1384,7 @@ export default function ReservationDrawer({
     if (!reservation) return;
     const request = (reservation.invoiceRequests ?? []).find((r) => r.id === requestId);
     if (!request) return;
+    setProcessingInvoiceRequestId(requestId);
 
     // Build the updated reservation in one shot (single onUpdate call → single save)
     const updates: Partial<Reservation> = {
@@ -1392,12 +1403,26 @@ export default function ReservationDrawer({
         vatNumber: '',
         billingEmail: '',
       };
+
+      // Apply IČO/DIČ cross-fallback for already-stored requests (parser handles new ones,
+      // but requests detected before the fix won't have both fields populated).
+      const effectiveIco = request.ico || (request.dic ? request.dic.replace(/^(CZ|SK)/i, '') : '');
+      const effectiveDic = request.dic || (request.ico ? `CZ${request.ico}` : '');
+
+      // Email: use message email first, then fall back to drawer's additionalEmail
+      const effectiveEmail = request.email || reservation.additionalEmail || '';
+
+      // If the message contained an email and the drawer's additionalEmail is empty, populate it
+      if (request.email && !reservation.additionalEmail) {
+        updates.additionalEmail = request.email;
+      }
+
       updates.invoiceData = {
         companyName: existing.companyName || request.companyName || '',
         companyAddress: existing.companyAddress,
-        ico: existing.ico || request.ico || '',
-        vatNumber: existing.vatNumber || request.dic || '',
-        billingEmail: existing.billingEmail || request.email || '',
+        ico: existing.ico || effectiveIco,
+        vatNumber: existing.vatNumber || effectiveDic,
+        billingEmail: existing.billingEmail || effectiveEmail,
       };
       updates.issues = [
         ...(reservation.issues ?? []),
@@ -1405,7 +1430,7 @@ export default function ReservationDrawer({
           id: Date.now().toString(),
           category: 'invoice',
           text: request.companyName
-            ? `Send invoice — ${request.companyName}${request.dic ? ` (DIČ ${request.dic})` : ''}`
+            ? `Send invoice — ${request.companyName}${effectiveDic ? ` (DIČ ${effectiveDic})` : ''}`
             : 'Send invoice — guest requested via Booking.com',
           actionableDate: reservation.checkOutDate,
           resolved: false,
@@ -1425,6 +1450,8 @@ export default function ReservationDrawer({
       });
     } catch (err) {
       console.error('[invoice-request]', err);
+    } finally {
+      setProcessingInvoiceRequestId(null);
     }
     onPaymentCreated?.();
   }
@@ -1688,17 +1715,19 @@ export default function ReservationDrawer({
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     onClick={() => processInvoiceRequest(req.id, 'accept')}
-                    className="px-3 py-1 text-[11px] font-semibold rounded bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                    disabled={processingInvoiceRequestId === req.id}
+                    className="px-3 py-1 text-[11px] font-semibold rounded bg-amber-600 text-white hover:bg-amber-700 transition-colors disabled:opacity-60 disabled:cursor-wait"
                     title="Pre-fill invoice details and create a Send-Invoice task for checkout"
                   >
-                    Accept
+                    {processingInvoiceRequestId === req.id ? '…' : 'Accept'}
                   </button>
                   <button
                     onClick={() => processInvoiceRequest(req.id, 'reject')}
-                    className="px-3 py-1 text-[11px] font-medium rounded border border-amber-300 text-amber-800 hover:bg-amber-100 transition-colors"
+                    disabled={processingInvoiceRequestId === req.id}
+                    className="px-3 py-1 text-[11px] font-medium rounded border border-amber-300 text-amber-800 hover:bg-amber-100 transition-colors disabled:opacity-60 disabled:cursor-wait"
                     title="Dismiss — guest didn't actually want an invoice"
                   >
-                    Reject
+                    {processingInvoiceRequestId === req.id ? '…' : 'Reject'}
                   </button>
                   <span className="text-[10px] text-amber-600 ml-auto">
                     Detected {req.detectedAt.slice(0, 10)}
@@ -2341,9 +2370,13 @@ export default function ReservationDrawer({
             />
             <button
               onClick={saveNote}
-              className="mt-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors"
+              className={`mt-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                noteSaved
+                  ? "bg-green-600 text-white hover:bg-green-700"
+                  : "bg-indigo-600 text-white hover:bg-indigo-700"
+              }`}
             >
-              Save Note
+              {noteSaved ? "✓ Saved" : "Save Note"}
             </button>
           </section>
 
@@ -2459,9 +2492,11 @@ export default function ReservationDrawer({
                   <button
                     onClick={addIssue}
                     disabled={(newIssueCategory === "problem" || newIssueCategory === "special") && !newIssueText.trim()}
-                    className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${CATEGORY_CONFIG[newIssueCategory].buttonBg}`}
+                    className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+                      issueSaved ? "bg-green-600" : CATEGORY_CONFIG[newIssueCategory].buttonBg
+                    }`}
                   >
-                    Add {CATEGORY_CONFIG[newIssueCategory].label}
+                    {issueSaved ? "✓ Added" : `Add ${CATEGORY_CONFIG[newIssueCategory].label}`}
                   </button>
                 </div>
               </div>

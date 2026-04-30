@@ -84,10 +84,14 @@ function extractCompanyName(text: string): string | null {
   for (const p of patterns) {
     const m = text.match(p);
     if (m && m[1]) {
-      return m[1]
+      const name = m[1]
         .replace(/\s+/g, " ")
         .replace(/[\s,.;:]+$/, "")
-        .trim() || null;
+        // Booking.com sends a literal "[link removed]" in company names — strip it everywhere
+        .replace(/\[link removed\]/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      return name || null;
     }
   }
   return null;
@@ -103,10 +107,23 @@ function extractEmail(text: string): string | null {
 }
 
 export function parseInvoiceRequest(text: string): ParsedInvoiceRequest {
+  let ico = extractIco(text);
+  let dic = extractDic(text);
+
+  // Cross-fallback: if only one ID is present, derive the other.
+  // IČO is always 8 raw digits; DIČ has a CZ/SK country prefix.
+  if (!ico && dic) {
+    // Strip country prefix (CZ/SK) to get the bare 8-digit IČO
+    ico = dic.replace(/^(CZ|SK)/i, "");
+  } else if (!dic && ico) {
+    // Assume Czech company when we only have IČO
+    dic = `CZ${ico}`;
+  }
+
   return {
     companyName: extractCompanyName(text),
-    ico: extractIco(text),
-    dic: extractDic(text),
+    ico,
+    dic,
     email: extractEmail(text),
   };
 }
