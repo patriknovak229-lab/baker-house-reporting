@@ -46,6 +46,26 @@ function buildTemplates(args: { room?: string; guestFirstName?: string }): Templ
 
   const templates: Template[] = [
     {
+      id: 'ask-email',
+      label: 'Ask for email',
+      textCs: [
+        greeting('cs'),
+        '',
+        'Prosím, mohli byste nám sdělit Vaši skutečnou e-mailovou adresu? Booking.com nám bohužel přeposílá pouze svou interní adresu a my Vás tak nemůžeme kontaktovat přímo.',
+        '',
+        'Děkujeme!',
+        'Patrik & Zuzana',
+      ].join('\n'),
+      textEn: [
+        greeting('en'),
+        '',
+        'Could you please share your real email address with us? Booking.com only forwards their internal proxy address, so we\'re unable to contact you directly.',
+        '',
+        'Thank you!',
+        'Patrik & Zuzana',
+      ].join('\n'),
+    },
+    {
       id: 'invoice-details',
       label: 'Ask for invoice details',
       textCs: [
@@ -154,6 +174,16 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
   const [translations, setTranslations] = useState<Record<number, { text: string; lang: string } | 'loading'>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize the textarea as content changes — min 2 rows, max 8 rows.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    // text-sm line-height ≈ 20px; py-1.5 adds ~12px total vertical padding
+    const maxHeight = 20 * 8 + 12;
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+  }, [draft]);
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -419,6 +449,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
                 }}
                 placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
                 rows={2}
+                style={{ minHeight: '52px', maxHeight: '172px', overflowY: 'auto' }}
                 className="flex-1 text-sm border border-gray-200 rounded-md px-2.5 py-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-300"
               />
               <button
