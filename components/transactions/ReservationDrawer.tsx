@@ -1083,6 +1083,11 @@ export default function ReservationDrawer({
     | { kind: 'error'; message: string }
     | null
   >(null);
+  // Preview modal state — confirmation flow now renders the email in an iframe
+  // before committing to Send, to catch styling / data issues.
+  const [showConfirmationPreview, setShowConfirmationPreview] = useState(false);
+  const [confirmationPreviewHtml, setConfirmationPreviewHtml] = useState<string | null>(null);
+  const [confirmationPreviewError, setConfirmationPreviewError] = useState<string | null>(null);
   // Save details feedback
   const [saveDetailsSaved, setSaveDetailsSaved] = useState(false);
   // Invoice modification editor
@@ -1111,6 +1116,9 @@ export default function ReservationDrawer({
       setSaveDetailsSaved(false);
       setCheckStripeResult(null);
       setConfirmationResult(null);
+      setShowConfirmationPreview(false);
+      setConfirmationPreviewHtml(null);
+      setConfirmationPreviewError(null);
       setShowModifyEditor(false);
       setModifyDateRanges([{ from: reservation.checkInDate, to: reservation.checkOutDate }]);
       setModifyNights(reservation.numberOfNights);
@@ -1346,8 +1354,31 @@ export default function ReservationDrawer({
     }
   }
 
-  // Send a bilingual reservation confirmation email from
-  // reservations@bakerhouseapartments.cz (matches invoice styling).
+  // Open the preview modal first — operator confirms styling/data before
+  // committing to send. Preview HTML is fetched lazily on open.
+  async function handleOpenConfirmationPreview() {
+    if (!reservation) return;
+    setShowConfirmationPreview(true);
+    setConfirmationPreviewHtml(null);
+    setConfirmationPreviewError(null);
+    try {
+      const res = await fetch('/api/send-confirmation?preview=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      const html = await res.text();
+      setConfirmationPreviewHtml(html);
+    } catch (err) {
+      setConfirmationPreviewError(err instanceof Error ? err.message : 'Failed to load preview');
+    }
+  }
+
+  // Actually send the email (called from the preview modal's Send button).
   async function handleSendConfirmation() {
     if (!reservation) return;
     setSendingConfirmation(true);
@@ -1361,6 +1392,7 @@ export default function ReservationDrawer({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
       setConfirmationResult({ kind: 'ok', sentTo: data.sentTo ?? '' });
+      setShowConfirmationPreview(false);
     } catch (err) {
       setConfirmationResult({
         kind: 'error',
@@ -1534,10 +1566,10 @@ export default function ReservationDrawer({
                 reservations@bakerhouseapartments.cz to the best email on file. */}
             <div className="mt-3 flex items-center gap-2 flex-wrap">
               <button
-                onClick={handleSendConfirmation}
+                onClick={handleOpenConfirmationPreview}
                 disabled={sendingConfirmation}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-800 border border-amber-200 bg-amber-50 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
-                title="Send a styled reservation confirmation email to the guest"
+                title="Preview a styled reservation confirmation email, then send"
               >
                 {sendingConfirmation ? (
                   <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1885,6 +1917,86 @@ export default function ReservationDrawer({
               onVoucherCreated={onPaymentCreated}
               onClose={() => setShowVoucherModal(false)}
             />
+          )}
+
+          {/* Confirmation email preview modal — operator reviews rendered
+              email in an iframe, can Cancel or Send. */}
+          {showConfirmationPreview && (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+              onClick={() => !sendingConfirmation && setShowConfirmationPreview(false)}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-amber-50">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <h2 className="text-sm font-semibold text-amber-900">Preview confirmation email</h2>
+                  </div>
+                  <button
+                    onClick={() => !sendingConfirmation && setShowConfirmationPreview(false)}
+                    disabled={sendingConfirmation}
+                    className="text-amber-700 hover:text-amber-900 disabled:opacity-50"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden bg-gray-100">
+                  {confirmationPreviewError ? (
+                    <p className="p-4 text-sm text-red-600">{confirmationPreviewError}</p>
+                  ) : confirmationPreviewHtml ? (
+                    <iframe
+                      title="Confirmation preview"
+                      srcDoc={confirmationPreviewHtml}
+                      sandbox=""
+                      className="w-full h-full bg-white"
+                    />
+                  ) : (
+                    <div className="p-8 text-center text-xs text-gray-500">
+                      <svg className="w-5 h-5 mx-auto mb-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      Loading preview…
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-gray-100 bg-white">
+                  <p className="text-xs text-gray-500 truncate">
+                    Will be sent to{' '}
+                    <span className="font-medium text-gray-700">
+                      {reservation.invoiceData?.billingEmail
+                        || reservation.additionalEmail
+                        || reservation.email
+                        || '(no email on file)'}
+                    </span>
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setShowConfirmationPreview(false)}
+                      disabled={sendingConfirmation}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSendConfirmation}
+                      disabled={sendingConfirmation || !confirmationPreviewHtml || !!confirmationPreviewError}
+                      className="px-4 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                    >
+                      {sendingConfirmation ? 'Sending…' : 'Send email'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
 
           <hr className="border-gray-100" />

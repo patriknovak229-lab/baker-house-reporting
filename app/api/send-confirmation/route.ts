@@ -24,6 +24,42 @@ import {
 
 const RESERVATIONS_ALIAS = "reservations@bakerhouseapartments.cz";
 
+/**
+ * GET /api/send-confirmation?reservationNumber=BH-12345
+ * Renders the same HTML the POST handler would email, so the drawer can
+ * preview it in an iframe before the operator commits to sending. Returns
+ * raw HTML (Content-Type: text/html) so it works directly in srcDoc.
+ *
+ * This trusts the POST flow's recipient picking — preview always renders
+ * with the live reservation data the client supplies via POST anyway, so
+ * we accept the same body payload through GET via JSON in body. Most
+ * convenient: callers POST to /api/send-confirmation?preview=1 with the
+ * reservation, and we return HTML instead of sending.
+ */
+async function buildPreview(req: NextRequest): Promise<NextResponse | null> {
+  if (req.nextUrl.searchParams.get("preview") !== "1") return null;
+
+  const guard = await requireRole(["admin", "super"]);
+  if ("error" in guard) return guard.error;
+
+  let body: { reservation?: Reservation };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.reservation?.reservationNumber) {
+    return NextResponse.json({ error: "reservation is required" }, { status: 400 });
+  }
+
+  const html = buildConfirmationHTML(body.reservation);
+  return new NextResponse(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 function pickRecipient(
   reservation: Reservation,
   override?: string,
@@ -42,6 +78,10 @@ function pickRecipient(
 }
 
 export async function POST(req: NextRequest) {
+  // Preview short-circuit — returns HTML without sending. Same auth + body shape.
+  const preview = await buildPreview(req);
+  if (preview) return preview;
+
   const guard = await requireRole(["admin", "super"]);
   if ("error" in guard) return guard.error;
 
