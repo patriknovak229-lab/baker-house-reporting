@@ -1662,7 +1662,17 @@ export default function ReservationDrawer({
               Shows only `pending` rows; once accepted/rejected they vanish. */}
           {(reservation.invoiceRequests ?? [])
             .filter((r) => r.status === 'pending')
-            .map((req) => (
+            .map((req) => {
+              // Compute the same effective values the accept handler will store —
+              // so the banner always shows exactly what will land in the reservation.
+              const displayCompany = (req.companyName ?? '')
+                .replace(/\[link removed\]/gi, '')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+              const displayIco = req.ico || (req.dic ? req.dic.replace(/^(CZ|SK)/i, '') : '');
+              const displayDic = req.dic || (req.ico ? `CZ${req.ico}` : '');
+              const displayEmail = req.email || reservation.additionalEmail || '';
+              return (
               <div
                 key={req.id}
                 className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 space-y-2.5"
@@ -1682,30 +1692,30 @@ export default function ReservationDrawer({
                   </div>
                 </div>
 
-                {/* Parsed fields */}
+                {/* Parsed fields — show exactly what will be stored on Accept */}
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                   <div>
                     <span className="text-amber-700 text-[10px] block">Company</span>
                     <span className="text-amber-950 font-medium truncate block">
-                      {req.companyName || <span className="italic text-amber-400">not detected</span>}
+                      {displayCompany || <span className="italic text-amber-400">not detected</span>}
                     </span>
                   </div>
                   <div>
                     <span className="text-amber-700 text-[10px] block">DIČ / Tax ID</span>
                     <span className="text-amber-950 font-mono">
-                      {req.dic || <span className="italic text-amber-400 font-sans">not detected</span>}
+                      {displayDic || <span className="italic text-amber-400 font-sans">not detected</span>}
                     </span>
                   </div>
                   <div>
                     <span className="text-amber-700 text-[10px] block">IČO</span>
                     <span className="text-amber-950 font-mono">
-                      {req.ico || <span className="italic text-amber-400 font-sans">not detected</span>}
+                      {displayIco || <span className="italic text-amber-400 font-sans">not detected</span>}
                     </span>
                   </div>
                   <div>
                     <span className="text-amber-700 text-[10px] block">Email</span>
                     <span className="text-amber-950 break-all">
-                      {req.email || <span className="italic text-amber-400">not detected</span>}
+                      {displayEmail || <span className="italic text-amber-400">not detected</span>}
                     </span>
                   </div>
                 </div>
@@ -1740,7 +1750,8 @@ export default function ReservationDrawer({
                   </span>
                 </div>
               </div>
-            ))}
+              );
+            })}
 
           {/* 1. Reservation Info */}
           <section>
