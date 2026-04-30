@@ -1417,8 +1417,14 @@ export default function ReservationDrawer({
         updates.additionalEmail = request.email;
       }
 
+      // Strip Booking.com's "[link removed]" artifact from stored company names
+      const effectiveCompanyName = (request.companyName ?? '')
+        .replace(/\[link removed\]/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
       updates.invoiceData = {
-        companyName: existing.companyName || request.companyName || '',
+        companyName: existing.companyName || effectiveCompanyName || '',
         companyAddress: existing.companyAddress,
         ico: existing.ico || effectiveIco,
         vatNumber: existing.vatNumber || effectiveDic,
@@ -1429,8 +1435,8 @@ export default function ReservationDrawer({
         {
           id: Date.now().toString(),
           category: 'invoice',
-          text: request.companyName
-            ? `Send invoice — ${request.companyName}${effectiveDic ? ` (DIČ ${effectiveDic})` : ''}`
+          text: effectiveCompanyName
+            ? `Send invoice — ${effectiveCompanyName}${effectiveDic ? ` (DIČ ${effectiveDic})` : ''}`
             : 'Send invoice — guest requested via Booking.com',
           actionableDate: reservation.checkOutDate,
           resolved: false,
