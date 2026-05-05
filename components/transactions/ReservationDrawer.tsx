@@ -1072,10 +1072,14 @@ export default function ReservationDrawer({
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
   const [checkStripeResult, setCheckStripeResult] = useState<
-    | { kind: 'ok'; status: string | null; updated: number; checked: number; message?: string; webPayment?: { amountCzk: number; paidAt: string; guestEmail: string; stripeFeeCzk?: number; stripePaymentStatus?: string | null } }
+    | { kind: 'ok'; status: string | null; updated: number; checked: number; message?: string; webPayment?: { amountCzk: number; paidAt: string; guestEmail: string; stripeFeeCzk?: number; stripePaymentStatus?: string | null }; manualLink?: boolean }
     | { kind: 'error'; message: string }
     | null
   >(null);
+  // Manual Stripe session linking (operator pastes a cs_… session ID)
+  const [showManualLink, setShowManualLink] = useState(false);
+  const [manualSessionId, setManualSessionId] = useState('');
+  const [linkingManually, setLinkingManually] = useState(false);
   // Send-confirmation button state
   const [sendingConfirmation, setSendingConfirmation] = useState(false);
   const [confirmationResult, setConfirmationResult] = useState<
@@ -1338,9 +1342,8 @@ export default function ReservationDrawer({
   // Manual fallback for the case where the Stripe webhook didn't fire — asks
   // the server to query Stripe directly for every linked AdditionalPayment,
   // flips local state if Stripe says paid, and recomputes the override.
-  async function handleCheckStripe() {
+  async function callCheckPayment(extraBody: Record<string, unknown> = {}): Promise<void> {
     if (!reservation) return;
-    setCheckingStripe(true);
     setCheckStripeResult(null);
     try {
       const res = await fetch('/api/stripe/check-payment', {
@@ -1348,7 +1351,10 @@ export default function ReservationDrawer({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reservationNumber: reservation.reservationNumber,
-          checkInDate: reservation.checkInDate,
+          checkInDate:       reservation.checkInDate,
+          guestEmail:        reservation.additionalEmail || reservation.email || undefined,
+          expectedAmount:    typeof reservation.price === 'number' ? reservation.price : undefined,
+          ...extraBody,
         }),
       });
       const data = await res.json();
@@ -1360,6 +1366,7 @@ export default function ReservationDrawer({
         checked: data.checked ?? 0,
         message: data.message,
         webPayment: data.webPayment,
+        manualLink: data.manualLink,
       });
       // Trigger reservation refresh so updated AdditionalPayments + override show through
       onPaymentCreated?.();
@@ -1369,9 +1376,30 @@ export default function ReservationDrawer({
         message: err instanceof Error ? err.message : 'Failed to check Stripe',
       });
     } finally {
-      setCheckingStripe(false);
       // Auto-clear feedback after a few seconds (longer for web import — has more info)
       setTimeout(() => setCheckStripeResult(null), 8000);
+    }
+  }
+
+  async function handleCheckStripe() {
+    setCheckingStripe(true);
+    try {
+      await callCheckPayment();
+    } finally {
+      setCheckingStripe(false);
+    }
+  }
+
+  async function handleManualLink() {
+    const id = manualSessionId.trim();
+    if (!id) return;
+    setLinkingManually(true);
+    try {
+      await callCheckPayment({ sessionId: id });
+      setManualSessionId('');
+      setShowManualLink(false);
+    } finally {
+      setLinkingManually(false);
     }
   }
 
@@ -1991,26 +2019,72 @@ export default function ReservationDrawer({
               {((reservation.additionalPayments ?? []).length > 0 ||
                 reservation.channel === 'Direct-Web' ||
                 reservation.channel === 'Direct') && (
-                <button
-                  onClick={handleCheckStripe}
-                  disabled={checkingStripe}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors w-fit disabled:opacity-50"
-                  title="Ask Stripe directly whether linked payments cleared (use if webhook missed)"
-                >
-                  {checkingStripe ? (
-                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                    </svg>
-                  ) : (
+                <>
+                  <button
+                    onClick={handleCheckStripe}
+                    disabled={checkingStripe}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors w-fit disabled:opacity-50"
+                    title="Auto-match a Stripe payment by reservation/email/amount/check-in"
+                  >
+                    {checkingStripe ? (
+                      <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                    )}
+                    {checkingStripe ? 'Checking…' : 'Check Stripe'}
+                  </button>
+                  <button
+                    onClick={() => setShowManualLink((v) => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-lg transition-colors w-fit"
+                    title="Paste a Stripe Checkout session ID (cs_live_… / cs_test_…) to import the payment manually"
+                  >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
-                  )}
-                  {checkingStripe ? 'Checking…' : 'Check Stripe'}
-                </button>
+                    Link by ID
+                  </button>
+                </>
               )}
             </div>
+
+            {/* Manual session-ID linking — disclosure panel under the buttons */}
+            {showManualLink && (
+              <div className="mt-2 p-3 border border-gray-200 rounded-lg bg-gray-50 space-y-2">
+                <p className="text-[11px] text-gray-500">
+                  Paste the Stripe Checkout session ID (starts with <code className="text-gray-700">cs_</code>).
+                  Find it in the Stripe dashboard on the payment&apos;s detail page.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={manualSessionId}
+                    onChange={(e) => setManualSessionId(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && manualSessionId.trim()) handleManualLink(); }}
+                    placeholder="cs_live_…"
+                    className="flex-1 px-2.5 py-1.5 text-xs font-mono border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleManualLink}
+                    disabled={!manualSessionId.trim() || linkingManually}
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {linkingManually ? '…' : 'Link'}
+                  </button>
+                  <button
+                    onClick={() => { setShowManualLink(false); setManualSessionId(''); }}
+                    className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Check-Stripe result feedback */}
             {checkStripeResult && (

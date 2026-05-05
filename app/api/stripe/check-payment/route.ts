@@ -52,10 +52,14 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const reservationNumber = String(body?.reservationNumber ?? '').trim();
-  // checkInDate is passed for Direct-Web reservations so we can match against
-  // baker:stripe-payments records (those don't carry a reservationNumber —
-  // the Beds24 booking is created after the Stripe session completes).
-  const checkInDate = String(body?.checkInDate ?? '').trim();  // YYYY-MM-DD
+  // Optional context for the Direct/Direct-Web fallback. The more we have, the
+  // higher the confidence on the auto-match.
+  const checkInDate    = String(body?.checkInDate ?? '').trim();  // YYYY-MM-DD
+  const guestEmail     = String(body?.guestEmail ?? '').trim().toLowerCase();
+  const expectedAmount = typeof body?.expectedAmount === 'number' ? body.expectedAmount : undefined;
+  // Manual override: operator pasted a Stripe session ID (cs_live_… / cs_test_…)
+  // for direct linking. Bypasses the Redis lookup entirely.
+  const manualSessionId = String(body?.sessionId ?? '').trim();
 
   if (!reservationNumber) {
     return NextResponse.json({ error: 'reservationNumber is required' }, { status: 400 });
@@ -66,90 +70,155 @@ export async function POST(req: NextRequest) {
 
   const linked = allPayments.filter((p) => p.reservationNumber === reservationNumber);
 
-  // ── Direct/Direct-Web fallback: no payment links were created in the reporting
-  // app, but a payment may have landed via the rental-site Stripe checkout (or
-  // been processed before AdditionalPayment records existed). Look for a
-  // matching record in baker:stripe-payments, retrieve the Stripe fee from the
-  // BalanceTransaction, and persist as a paid AdditionalPayment so the fee
-  // rolls up into reservation.paymentChargeAmount and the "fee missing"
-  // warning clears. The resulting record is flagged isMainPayment=true so the
+  // ── Direct/Direct-Web fallback: import a Stripe payment as a paid
+  // AdditionalPayment so the fee rolls up into reservation.paymentChargeAmount.
+  // Two ways to find it:
+  //   1. Auto-match against baker:stripe-payments (scored by reservationNumber,
+  //      check-in date, guest email, and amount)
+  //   2. Manual: operator pasted a Stripe session ID — fetch it directly from
+  //      Stripe, no Redis lookup
+  // Either way, the resulting record is flagged isMainPayment=true so the
   // drawer shows it under "Booking Payment", not "Additional Payments".
-  if (linked.length === 0 && checkInDate) {
-    const rawRecords = (await redis.get<StripePaymentRecord[]>(STRIPE_PAYMENTS_KEY)) ?? [];
-    const webRecord = rawRecords.find((r) =>
-      (r.reservationNumber && r.reservationNumber === reservationNumber) ||
-      r.description?.includes(checkInDate),
-    );
+  if (linked.length === 0 && (checkInDate || manualSessionId)) {
+    let webSource:
+      | { from: 'redis'; record: StripePaymentRecord }
+      | { from: 'manual'; sessionId: string }
+      | null = null;
 
-    if (!webRecord) {
+    if (manualSessionId) {
+      // Validate format — Stripe session IDs always start with "cs_"
+      if (!manualSessionId.startsWith('cs_')) {
+        return NextResponse.json(
+          { error: 'Invalid Stripe session ID — expected format starting with "cs_"' },
+          { status: 400 },
+        );
+      }
+      webSource = { from: 'manual', sessionId: manualSessionId };
+    } else {
+      // Auto-match: score every record and pick the best above threshold.
+      // Threshold of 30 means at least one strong signal is required.
+      const rawRecords = (await redis.get<StripePaymentRecord[]>(STRIPE_PAYMENTS_KEY)) ?? [];
+      const scored = rawRecords
+        .map((r) => {
+          let score = 0;
+          // Definitive: reservationNumber baked into Stripe metadata
+          if (r.reservationNumber && r.reservationNumber === reservationNumber) score += 100;
+          // Strong: guest email match (rental site captures customer_email)
+          if (guestEmail && r.guestEmail?.toLowerCase() === guestEmail) score += 30;
+          // Moderate: check-in date in description ("Web booking YYYY-MM-DD → …")
+          if (checkInDate && r.description?.includes(checkInDate)) score += 30;
+          // Moderate: amount within 1 Kč of expected
+          if (typeof expectedAmount === 'number' && Math.abs(r.amountCzk - expectedAmount) <= 1) score += 30;
+          return { r, score };
+        })
+        .filter((m) => m.score >= 30)
+        .sort((a, b) => b.score - a.score);
+
+      const best = scored[0];
+      if (best) webSource = { from: 'redis', record: best.r };
+    }
+
+    if (!webSource) {
       return NextResponse.json({
         ok: true,
         checked: 0,
         updated: 0,
         status: null,
-        message: 'No Stripe payments found for this reservation.',
+        message: 'No Stripe payments found for this reservation. Try linking the session ID manually.',
       });
     }
 
+    const sessionId = webSource.from === 'redis' ? webSource.record.sessionId : webSource.sessionId;
+
     // Avoid double-import — if an AdditionalPayment with this sessionId already
     // exists (even on a different reservationNumber), skip creation.
-    const existingByIdAnywhere = allPayments.find((p) => p.id === webRecord.sessionId);
+    const existingByIdAnywhere = allPayments.find((p) => p.id === sessionId);
     if (existingByIdAnywhere) {
       return NextResponse.json({
         ok: true,
         checked: 1,
         updated: 0,
         status: null,
-        message: `Web payment found, already imported (linked to ${existingByIdAnywhere.reservationNumber}).`,
+        message: `Stripe session already imported (linked to ${existingByIdAnywhere.reservationNumber}).`,
       });
     }
 
-    // Fetch the Stripe session to get the fee from BalanceTransaction
+    // Fetch the Stripe session to get the fee + (for manual link) the full payment details
     let stripeFeeCzk: number | undefined;
     let stripePaymentStatus: string | null = null;
+    let sessionAmountCzk = 0;
+    let sessionEmail = '';
+    let sessionName = '';
+    let sessionDescription = '';
+    let sessionPaidAt = new Date().toISOString();
     try {
-      const session = await stripe.checkout.sessions.retrieve(webRecord.sessionId, {
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
         expand: ['payment_intent.latest_charge.balance_transaction'],
       });
       stripePaymentStatus = session.payment_status ?? null;
+      sessionAmountCzk = typeof session.amount_total === 'number' ? session.amount_total / 100 : 0;
+      sessionEmail = session.customer_email ?? session.customer_details?.email ?? '';
+      sessionName = session.customer_details?.name ?? '';
+      sessionDescription = (session.metadata?.description as string)
+        || ((session.metadata?.arrival && session.metadata?.departure)
+              ? `Web booking ${session.metadata.arrival} → ${session.metadata.departure}`
+              : `Booking payment ${reservationNumber}`);
+
       const pi = session.payment_intent;
       if (pi && typeof pi !== 'string') {
         const charge = pi.latest_charge;
         if (charge && typeof charge !== 'string') {
+          if (charge.created) sessionPaidAt = new Date(charge.created * 1000).toISOString();
           const bt = charge.balance_transaction;
           if (bt && typeof bt !== 'string' && typeof bt.fee === 'number') {
             stripeFeeCzk = Math.round(bt.fee) / 100;
           }
         }
       }
+
+      if (stripePaymentStatus !== 'paid') {
+        return NextResponse.json({
+          ok: false,
+          error: `Stripe session is not paid (status: ${stripePaymentStatus ?? 'unknown'}). Cannot import.`,
+        }, { status: 400 });
+      }
     } catch (err) {
-      console.error('[check-payment] Stripe retrieve failed for web session', webRecord.sessionId, err);
+      console.error('[check-payment] Stripe retrieve failed for session', sessionId, err);
       return NextResponse.json({
         ok: false,
-        error: 'Could not retrieve Stripe session for fee lookup.',
+        error: webSource.from === 'manual'
+          ? 'Stripe could not find that session ID. Double-check the value (cs_live_… / cs_test_…).'
+          : 'Could not retrieve Stripe session for fee lookup.',
       }, { status: 502 });
     }
 
-    // Create the AdditionalPayment record (isMainPayment so it's shown under
-    // "Booking Payment" in the drawer, not "Additional Payments")
+    // Resolve final values — prefer Redis record fields when available, fall
+    // back to live Stripe data (esp. for manual link where there's no Redis row)
+    const finalAmount = webSource.from === 'redis' ? webSource.record.amountCzk : sessionAmountCzk;
+    const finalEmail  = webSource.from === 'redis' ? webSource.record.guestEmail : sessionEmail;
+    const finalName   = webSource.from === 'redis' ? webSource.record.guestName  : sessionName;
+    const finalDesc   = webSource.from === 'redis' ? webSource.record.description : sessionDescription;
+    const finalPaidAt = webSource.from === 'redis' ? webSource.record.paidAt : sessionPaidAt;
+
+    // Create the AdditionalPayment record
     const newAp: AdditionalPayment = {
-      id:                webRecord.sessionId,
+      id:                sessionId,
       reservationNumber: reservationNumber,
-      description:       webRecord.description || `Booking payment ${reservationNumber}`,
-      amountCzk:         webRecord.amountCzk,
-      guestEmail:        webRecord.guestEmail || undefined,
-      guestName:         webRecord.guestName || undefined,
+      description:       finalDesc || `Booking payment ${reservationNumber}`,
+      amountCzk:         finalAmount,
+      guestEmail:        finalEmail || undefined,
+      guestName:         finalName  || undefined,
       status:            'paid',
-      createdAt:         webRecord.paidAt,
-      paidAt:            webRecord.paidAt,
+      createdAt:         finalPaidAt,
+      paidAt:            finalPaidAt,
       isMainPayment:     true,
       ...(stripeFeeCzk !== undefined ? { stripeFeeCzk } : {}),
     };
 
     // Auto-create the matching RevenueInvoice
-    const invoiceId = `pay-${webRecord.sessionId}`;
-    const invoiceNumber = `PAY-${webRecord.sessionId.slice(-8).toUpperCase()}`;
-    const invoiceDate = webRecord.paidAt.slice(0, 10);
+    const invoiceId = `pay-${sessionId}`;
+    const invoiceNumber = `PAY-${sessionId.slice(-8).toUpperCase()}`;
+    const invoiceDate = finalPaidAt.slice(0, 10);
     const invoices = (await redis.get<RevenueInvoice[]>(REVENUE_INVOICES_KEY)) ?? [];
     const invoiceExists = invoices.some((i) => i.id === invoiceId);
     const updatedInvoices = invoiceExists
@@ -163,11 +232,11 @@ export async function POST(req: NextRequest) {
             status:            'pending' as const,
             invoiceNumber,
             invoiceDate,
-            amountCZK:         webRecord.amountCzk,
+            amountCZK:         finalAmount,
             reservationNumber: reservationNumber,
-            guestName:         webRecord.guestName || webRecord.guestEmail || undefined,
-            description:       webRecord.description,
-            createdAt:         webRecord.paidAt,
+            guestName:         finalName || finalEmail || undefined,
+            description:       finalDesc,
+            createdAt:         finalPaidAt,
           },
         ];
 
@@ -197,17 +266,18 @@ export async function POST(req: NextRequest) {
       paidSum: reconcile.paidSum,
       bookingPrice: reconcile.bookingPrice,
       webPayment: {
-        sessionId:    webRecord.sessionId,
-        amountCzk:    webRecord.amountCzk,
-        guestEmail:   webRecord.guestEmail,
-        paidAt:       webRecord.paidAt,
-        description:  webRecord.description,
+        sessionId,
+        amountCzk:           finalAmount,
+        guestEmail:          finalEmail,
+        paidAt:              finalPaidAt,
+        description:         finalDesc,
         stripeFeeCzk,
         stripePaymentStatus,
       },
+      manualLink: webSource.from === 'manual',
       message: stripeFeeCzk !== undefined
-        ? `Imported web payment · fee ${stripeFeeCzk.toFixed(2)} Kč captured.`
-        : 'Imported web payment · Stripe fee not yet available (settlement pending). Try again in a few hours.',
+        ? `${webSource.from === 'manual' ? 'Linked' : 'Imported'} payment · fee ${stripeFeeCzk.toFixed(2)} Kč captured.`
+        : `${webSource.from === 'manual' ? 'Linked' : 'Imported'} payment · Stripe fee not yet available (settlement pending). Try again in a few hours.`,
     });
   }
 
