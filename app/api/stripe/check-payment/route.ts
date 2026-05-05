@@ -66,39 +66,148 @@ export async function POST(req: NextRequest) {
 
   const linked = allPayments.filter((p) => p.reservationNumber === reservationNumber);
 
-  // ── Direct-Web fallback: no payment links were created in the reporting app,
-  // but a payment may have landed via the rental-site Stripe checkout. In that
-  // case look for a matching record in baker:stripe-payments using the check-in
-  // date (rental-site stores "Web booking YYYY-MM-DD → YYYY-MM-DD" as description).
+  // ── Direct/Direct-Web fallback: no payment links were created in the reporting
+  // app, but a payment may have landed via the rental-site Stripe checkout (or
+  // been processed before AdditionalPayment records existed). Look for a
+  // matching record in baker:stripe-payments, retrieve the Stripe fee from the
+  // BalanceTransaction, and persist as a paid AdditionalPayment so the fee
+  // rolls up into reservation.paymentChargeAmount and the "fee missing"
+  // warning clears. The resulting record is flagged isMainPayment=true so the
+  // drawer shows it under "Booking Payment", not "Additional Payments".
   if (linked.length === 0 && checkInDate) {
     const rawRecords = (await redis.get<StripePaymentRecord[]>(STRIPE_PAYMENTS_KEY)) ?? [];
     const webRecord = rawRecords.find((r) =>
-      // Match by reservationNumber if set, otherwise by arrival date in description
       (r.reservationNumber && r.reservationNumber === reservationNumber) ||
       r.description?.includes(checkInDate),
     );
-    if (webRecord) {
+
+    if (!webRecord) {
+      return NextResponse.json({
+        ok: true,
+        checked: 0,
+        updated: 0,
+        status: null,
+        message: 'No Stripe payments found for this reservation.',
+      });
+    }
+
+    // Avoid double-import — if an AdditionalPayment with this sessionId already
+    // exists (even on a different reservationNumber), skip creation.
+    const existingByIdAnywhere = allPayments.find((p) => p.id === webRecord.sessionId);
+    if (existingByIdAnywhere) {
       return NextResponse.json({
         ok: true,
         checked: 1,
         updated: 0,
         status: null,
-        webPayment: {
-          sessionId:   webRecord.sessionId,
-          amountCzk:   webRecord.amountCzk,
-          guestEmail:  webRecord.guestEmail,
-          paidAt:      webRecord.paidAt,
-          description: webRecord.description,
-        },
-        message: 'Found a web payment matching this check-in date. This was paid via the rental site.',
+        message: `Web payment found, already imported (linked to ${existingByIdAnywhere.reservationNumber}).`,
       });
     }
+
+    // Fetch the Stripe session to get the fee from BalanceTransaction
+    let stripeFeeCzk: number | undefined;
+    let stripePaymentStatus: string | null = null;
+    try {
+      const session = await stripe.checkout.sessions.retrieve(webRecord.sessionId, {
+        expand: ['payment_intent.latest_charge.balance_transaction'],
+      });
+      stripePaymentStatus = session.payment_status ?? null;
+      const pi = session.payment_intent;
+      if (pi && typeof pi !== 'string') {
+        const charge = pi.latest_charge;
+        if (charge && typeof charge !== 'string') {
+          const bt = charge.balance_transaction;
+          if (bt && typeof bt !== 'string' && typeof bt.fee === 'number') {
+            stripeFeeCzk = Math.round(bt.fee) / 100;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[check-payment] Stripe retrieve failed for web session', webRecord.sessionId, err);
+      return NextResponse.json({
+        ok: false,
+        error: 'Could not retrieve Stripe session for fee lookup.',
+      }, { status: 502 });
+    }
+
+    // Create the AdditionalPayment record (isMainPayment so it's shown under
+    // "Booking Payment" in the drawer, not "Additional Payments")
+    const newAp: AdditionalPayment = {
+      id:                webRecord.sessionId,
+      reservationNumber: reservationNumber,
+      description:       webRecord.description || `Booking payment ${reservationNumber}`,
+      amountCzk:         webRecord.amountCzk,
+      guestEmail:        webRecord.guestEmail || undefined,
+      guestName:         webRecord.guestName || undefined,
+      status:            'paid',
+      createdAt:         webRecord.paidAt,
+      paidAt:            webRecord.paidAt,
+      isMainPayment:     true,
+      ...(stripeFeeCzk !== undefined ? { stripeFeeCzk } : {}),
+    };
+
+    // Auto-create the matching RevenueInvoice
+    const invoiceId = `pay-${webRecord.sessionId}`;
+    const invoiceNumber = `PAY-${webRecord.sessionId.slice(-8).toUpperCase()}`;
+    const invoiceDate = webRecord.paidAt.slice(0, 10);
+    const invoices = (await redis.get<RevenueInvoice[]>(REVENUE_INVOICES_KEY)) ?? [];
+    const invoiceExists = invoices.some((i) => i.id === invoiceId);
+    const updatedInvoices = invoiceExists
+      ? invoices
+      : [
+          ...invoices,
+          {
+            id:                invoiceId,
+            sourceType:        'issued' as const,
+            category:          'other_services' as const,
+            status:            'pending' as const,
+            invoiceNumber,
+            invoiceDate,
+            amountCZK:         webRecord.amountCzk,
+            reservationNumber: reservationNumber,
+            guestName:         webRecord.guestName || webRecord.guestEmail || undefined,
+            description:       webRecord.description,
+            createdAt:         webRecord.paidAt,
+          },
+        ];
+
+    if (!invoiceExists) {
+      newAp.invoiceId = invoiceId;
+    }
+
+    // Persist
+    try {
+      await Promise.all([
+        redis.set(ADDITIONAL_PAYMENTS_KEY, [...allPayments, newAp]),
+        ...(invoiceExists ? [] : [redis.set(REVENUE_INVOICES_KEY, updatedInvoices)]),
+      ]);
+    } catch (err) {
+      console.error('[check-payment] Redis write failed (web import):', err);
+      return NextResponse.json({ error: 'Persist failed' }, { status: 500 });
+    }
+
+    // Recompute payment override now that we've recorded a paid amount
+    const reconcile = await recomputePaymentOverride(redis, reservationNumber);
+
     return NextResponse.json({
       ok: true,
-      checked: 0,
-      updated: 0,
-      status: null,
-      message: 'No Stripe payments found for this reservation.',
+      checked: 1,
+      updated: 1,
+      status: reconcile.status,
+      paidSum: reconcile.paidSum,
+      bookingPrice: reconcile.bookingPrice,
+      webPayment: {
+        sessionId:    webRecord.sessionId,
+        amountCzk:    webRecord.amountCzk,
+        guestEmail:   webRecord.guestEmail,
+        paidAt:       webRecord.paidAt,
+        description:  webRecord.description,
+        stripeFeeCzk,
+        stripePaymentStatus,
+      },
+      message: stripeFeeCzk !== undefined
+        ? `Imported web payment · fee ${stripeFeeCzk.toFixed(2)} Kč captured.`
+        : 'Imported web payment · Stripe fee not yet available (settlement pending). Try again in a few hours.',
     });
   }
 

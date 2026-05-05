@@ -1072,7 +1072,7 @@ export default function ReservationDrawer({
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
   const [checkStripeResult, setCheckStripeResult] = useState<
-    | { kind: 'ok'; status: string | null; updated: number; checked: number; message?: string; webPayment?: { amountCzk: number; paidAt: string; guestEmail: string } }
+    | { kind: 'ok'; status: string | null; updated: number; checked: number; message?: string; webPayment?: { amountCzk: number; paidAt: string; guestEmail: string; stripeFeeCzk?: number; stripePaymentStatus?: string | null } }
     | { kind: 'error'; message: string }
     | null
   >(null);
@@ -1370,8 +1370,8 @@ export default function ReservationDrawer({
       });
     } finally {
       setCheckingStripe(false);
-      // Auto-clear feedback after a few seconds
-      setTimeout(() => setCheckStripeResult(null), 4500);
+      // Auto-clear feedback after a few seconds (longer for web import — has more info)
+      setTimeout(() => setCheckStripeResult(null), 8000);
     }
   }
 
@@ -2029,8 +2029,11 @@ export default function ReservationDrawer({
                   ? checkStripeResult.message
                   : checkStripeResult.webPayment
                     ? <>
-                        ✓ Web payment found · {checkStripeResult.webPayment.amountCzk.toLocaleString('cs-CZ')} Kč
+                        ✓ Web payment imported · {checkStripeResult.webPayment.amountCzk.toLocaleString('cs-CZ')} Kč
                         {' · '}paid {checkStripeResult.webPayment.paidAt.slice(0, 10)}
+                        {checkStripeResult.webPayment.stripeFeeCzk !== undefined
+                          ? ` · fee ${checkStripeResult.webPayment.stripeFeeCzk.toFixed(2)} Kč`
+                          : ' · fee pending'}
                         {checkStripeResult.webPayment.guestEmail ? ` · ${checkStripeResult.webPayment.guestEmail}` : ''}
                       </>
                     : checkStripeResult.updated > 0
