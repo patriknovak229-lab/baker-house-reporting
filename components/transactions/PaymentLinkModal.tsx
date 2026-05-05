@@ -47,6 +47,8 @@ export default function PaymentLinkModal({
   const [email, setEmail]             = useState(defaultEmail  ?? '');
   const [phone, setPhone]             = useState(defaultPhone  ?? '');
 
+  const [isMainPayment, setIsMainPayment] = useState(false);
+
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl]   = useState('');
@@ -101,6 +103,7 @@ export default function PaymentLinkModal({
           guestPhone:        phone.trim() || undefined,
           reservationNumber: fixedReservationNumber ?? selectedRes?.reservationNumber,
           guestName:         fixedGuestName ?? selectedRes?.guestName,
+          isMainPayment:     isMainPayment || undefined,
         }),
       });
       const data = await res.json();
@@ -253,6 +256,33 @@ export default function PaymentLinkModal({
                     </div>
                   )
                 )}
+              </div>
+            )}
+
+            {/* Payment type — only relevant when linked to a reservation */}
+            {(fixedReservationNumber || selectedRes) && (
+              <div className="flex items-center justify-between py-1">
+                <div>
+                  <p className="text-xs font-medium text-gray-700">Main booking payment</p>
+                  <p className="text-[11px] text-gray-400">
+                    {isMainPayment
+                      ? 'Counts toward the booking total — shown in the Payment section'
+                      : 'Extra charge — shown under Additional Payments'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMainPayment((v) => !v)}
+                  className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${
+                    isMainPayment ? 'bg-indigo-600' : 'bg-gray-200'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                      isMainPayment ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
             )}
 

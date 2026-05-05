@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
   if ('error' in authResult) return authResult.error;
 
-  const { amountCzk, description, guestEmail, guestPhone, reservationNumber, guestName } = await req.json();
+  const { amountCzk, description, guestEmail, guestPhone, reservationNumber, guestName, isMainPayment } = await req.json();
 
   if (!amountCzk || amountCzk < 1) {
     return NextResponse.json({ error: 'amountCzk must be at least 1' }, { status: 400 });
@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
         guestName:         guestName  || undefined,
         status:            'unpaid',
         createdAt:         new Date().toISOString(),
+        ...(isMainPayment ? { isMainPayment: true } : {}),
       };
       await redis.set(ADDITIONAL_PAYMENTS_KEY, [...existing, record]);
     } catch (err) {

@@ -276,12 +276,16 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         if (!d) return undefined;
         if (Array.isArray(d)) {
           const first = d[0];
-          if (first && typeof first === 'object') return (first as { id?: string | number }).id;
+          if (first && typeof first === 'object') {
+            const id = (first as Record<string, unknown>).id;
+            // Guard: only accept primitives — prevents "BH-[object Object]" if Beds24 shape changes
+            return (typeof id === 'string' || typeof id === 'number') ? id : undefined;
+          }
           return typeof first === 'string' || typeof first === 'number' ? first : undefined;
         }
         if (typeof d === 'object') {
-          const obj = d as { id?: string | number; data?: unknown };
-          if (obj.id !== undefined) return obj.id;
+          const obj = d as Record<string, unknown>;
+          if (typeof obj.id === 'string' || typeof obj.id === 'number') return obj.id;
           if (obj.data !== undefined) return extractBookingId(obj.data); // unwrap { data: [...] }
         }
         return undefined;

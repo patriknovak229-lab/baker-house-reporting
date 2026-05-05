@@ -19,4 +19,11 @@ export interface AdditionalPayment {
    * existing PaymentBreakdown like OTA payment-charge fees.
    */
   stripeFeeCzk?: number;
+  /**
+   * When true, this payment covers the main booking cost (e.g. a phone
+   * reservation paid via Stripe link). Displayed differently from additional
+   * service charges — shown inline in the Payment section rather than the
+   * "Additional Payments" sub-list.
+   */
+  isMainPayment?: boolean;
 }

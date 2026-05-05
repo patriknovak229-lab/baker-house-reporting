@@ -21,11 +21,13 @@ import { requireRole } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
+import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
-const REVENUE_INVOICES_KEY = 'baker:revenue-invoices';
+const ADDITIONAL_PAYMENTS_KEY  = 'baker:additional-payments';
+const REVENUE_INVOICES_KEY     = 'baker:revenue-invoices';
+const STRIPE_PAYMENTS_KEY      = 'baker:stripe-payments';
 
 function getRedis(): Redis {
   return new Redis({
@@ -50,6 +52,11 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const reservationNumber = String(body?.reservationNumber ?? '').trim();
+  // checkInDate is passed for Direct-Web reservations so we can match against
+  // baker:stripe-payments records (those don't carry a reservationNumber —
+  // the Beds24 booking is created after the Stripe session completes).
+  const checkInDate = String(body?.checkInDate ?? '').trim();  // YYYY-MM-DD
+
   if (!reservationNumber) {
     return NextResponse.json({ error: 'reservationNumber is required' }, { status: 400 });
   }
@@ -58,6 +65,43 @@ export async function POST(req: NextRequest) {
   const allPayments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
 
   const linked = allPayments.filter((p) => p.reservationNumber === reservationNumber);
+
+  // ── Direct-Web fallback: no payment links were created in the reporting app,
+  // but a payment may have landed via the rental-site Stripe checkout. In that
+  // case look for a matching record in baker:stripe-payments using the check-in
+  // date (rental-site stores "Web booking YYYY-MM-DD → YYYY-MM-DD" as description).
+  if (linked.length === 0 && checkInDate) {
+    const rawRecords = (await redis.get<StripePaymentRecord[]>(STRIPE_PAYMENTS_KEY)) ?? [];
+    const webRecord = rawRecords.find((r) =>
+      // Match by reservationNumber if set, otherwise by arrival date in description
+      (r.reservationNumber && r.reservationNumber === reservationNumber) ||
+      r.description?.includes(checkInDate),
+    );
+    if (webRecord) {
+      return NextResponse.json({
+        ok: true,
+        checked: 1,
+        updated: 0,
+        status: null,
+        webPayment: {
+          sessionId:   webRecord.sessionId,
+          amountCzk:   webRecord.amountCzk,
+          guestEmail:  webRecord.guestEmail,
+          paidAt:      webRecord.paidAt,
+          description: webRecord.description,
+        },
+        message: 'Found a web payment matching this check-in date. This was paid via the rental site.',
+      });
+    }
+    return NextResponse.json({
+      ok: true,
+      checked: 0,
+      updated: 0,
+      status: null,
+      message: 'No Stripe payments found for this reservation.',
+    });
+  }
+
   if (linked.length === 0) {
     return NextResponse.json({
       ok: true,

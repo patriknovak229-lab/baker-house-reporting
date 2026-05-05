@@ -1072,7 +1072,7 @@ export default function ReservationDrawer({
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
   const [checkStripeResult, setCheckStripeResult] = useState<
-    | { kind: 'ok'; status: string | null; updated: number; checked: number }
+    | { kind: 'ok'; status: string | null; updated: number; checked: number; message?: string; webPayment?: { amountCzk: number; paidAt: string; guestEmail: string } }
     | { kind: 'error'; message: string }
     | null
   >(null);
@@ -1346,7 +1346,10 @@ export default function ReservationDrawer({
       const res = await fetch('/api/stripe/check-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reservationNumber: reservation.reservationNumber }),
+        body: JSON.stringify({
+          reservationNumber: reservation.reservationNumber,
+          checkInDate: reservation.checkInDate,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
@@ -1355,6 +1358,8 @@ export default function ReservationDrawer({
         status: data.status ?? null,
         updated: data.updated ?? 0,
         checked: data.checked ?? 0,
+        message: data.message,
+        webPayment: data.webPayment,
       });
       // Trigger reservation refresh so updated AdditionalPayments + override show through
       onPaymentCreated?.();
@@ -1979,8 +1984,10 @@ export default function ReservationDrawer({
               </button>
 
               {/* Manual Stripe re-check — fallback when webhook didn't fire.
-                  Only relevant when at least one Stripe payment is linked. */}
-              {(reservation.additionalPayments ?? []).length > 0 && (
+                  Shown when there are linked payment links OR for Direct-Web
+                  reservations (paid via rental site checkout). */}
+              {((reservation.additionalPayments ?? []).length > 0 ||
+                reservation.channel === 'Direct-Web') && (
                 <button
                   onClick={handleCheckStripe}
                   disabled={checkingStripe}
@@ -2004,33 +2011,65 @@ export default function ReservationDrawer({
 
             {/* Check-Stripe result feedback */}
             {checkStripeResult && (
-              <p
-                className={`text-[11px] mt-1 px-2 py-1 rounded ${
+              <div
+                className={`text-[11px] mt-1 px-2 py-1.5 rounded ${
                   checkStripeResult.kind === 'error'
                     ? 'text-red-700 bg-red-50 border border-red-200'
-                    : checkStripeResult.updated > 0
+                    : checkStripeResult.kind === 'ok' && checkStripeResult.webPayment
                       ? 'text-green-700 bg-green-50 border border-green-200'
-                      : 'text-gray-500 bg-gray-50 border border-gray-200'
+                      : checkStripeResult.kind === 'ok' && checkStripeResult.updated > 0
+                        ? 'text-green-700 bg-green-50 border border-green-200'
+                        : 'text-gray-500 bg-gray-50 border border-gray-200'
                 }`}
               >
                 {checkStripeResult.kind === 'error'
                   ? checkStripeResult.message
-                  : checkStripeResult.updated > 0
-                    ? `Updated ${checkStripeResult.updated} payment${checkStripeResult.updated > 1 ? 's' : ''}${checkStripeResult.status ? ` · status now ${checkStripeResult.status}` : ''}`
-                    : checkStripeResult.checked > 0
-                      ? `Checked ${checkStripeResult.checked} — already in sync${checkStripeResult.status ? ` (${checkStripeResult.status})` : ''}`
-                      : 'No linked Stripe payments to check'}
-              </p>
+                  : checkStripeResult.webPayment
+                    ? <>
+                        ✓ Web payment found · {checkStripeResult.webPayment.amountCzk.toLocaleString('cs-CZ')} Kč
+                        {' · '}paid {checkStripeResult.webPayment.paidAt.slice(0, 10)}
+                        {checkStripeResult.webPayment.guestEmail ? ` · ${checkStripeResult.webPayment.guestEmail}` : ''}
+                      </>
+                    : checkStripeResult.updated > 0
+                      ? `Updated ${checkStripeResult.updated} payment${checkStripeResult.updated > 1 ? 's' : ''}${checkStripeResult.status ? ` · status now ${checkStripeResult.status}` : ''}`
+                      : checkStripeResult.message
+                        ? checkStripeResult.message
+                        : checkStripeResult.checked > 0
+                          ? `Checked ${checkStripeResult.checked} — already in sync${checkStripeResult.status ? ` (${checkStripeResult.status})` : ''}`
+                          : 'No linked Stripe payments to check'}
+              </div>
+            )}
+
+            {/* Main Payments (booking payments created via Stripe link) */}
+            {(reservation.additionalPayments ?? []).some((ap) => ap.isMainPayment) && (
+              <div className="mt-3 border border-indigo-100 rounded-lg overflow-hidden">
+                <p className="text-[11px] font-medium text-indigo-600 uppercase tracking-wide px-3 py-2 bg-indigo-50 border-b border-indigo-100">
+                  Booking Payment
+                </p>
+                <div className="divide-y divide-gray-100">
+                  {(reservation.additionalPayments ?? [])
+                    .filter((ap) => ap.isMainPayment)
+                    .map((ap) => (
+                      <AdditionalPaymentRow
+                        key={ap.id}
+                        ap={ap}
+                        guestPhone={reservation.phone}
+                        guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
+                        onRefresh={onPaymentCreated}
+                      />
+                    ))}
+                </div>
+              </div>
             )}
 
             {/* Additional Payments sub-list (sent links — paid + pending) */}
-            {(reservation.additionalPayments ?? []).length > 0 && (
+            {(reservation.additionalPayments ?? []).some((ap) => !ap.isMainPayment) && (
               <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
                 <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide px-3 py-2 bg-gray-50 border-b border-gray-100">
                   Additional Payments
                 </p>
                 <div className="divide-y divide-gray-100">
-                  {(reservation.additionalPayments ?? []).map((ap) => (
+                  {(reservation.additionalPayments ?? []).filter((ap) => !ap.isMainPayment).map((ap) => (
                     <AdditionalPaymentRow
                       key={ap.id}
                       ap={ap}
