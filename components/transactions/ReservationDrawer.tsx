@@ -1984,10 +1984,13 @@ export default function ReservationDrawer({
               </button>
 
               {/* Manual Stripe re-check — fallback when webhook didn't fire.
-                  Shown when there are linked payment links OR for Direct-Web
-                  reservations (paid via rental site checkout). */}
+                  Shown for any reservation likely paid via Stripe: linked
+                  payment links, Direct-Web (rental site), or generic "Direct"
+                  (legacy bookings — channel mapping falls back to "Direct"
+                  when Beds24 referer doesn't contain "web"/"phone"). */}
               {((reservation.additionalPayments ?? []).length > 0 ||
-                reservation.channel === 'Direct-Web') && (
+                reservation.channel === 'Direct-Web' ||
+                reservation.channel === 'Direct') && (
                 <button
                   onClick={handleCheckStripe}
                   disabled={checkingStripe}
