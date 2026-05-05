@@ -86,14 +86,40 @@ export async function POST(req: NextRequest) {
       | null = null;
 
     if (manualSessionId) {
-      // Validate format — Stripe session IDs always start with "cs_"
-      if (!manualSessionId.startsWith('cs_')) {
+      // Accept either a Checkout Session (cs_…) or a PaymentIntent (pi_…) — the
+      // Stripe dashboard shows the PaymentIntent on payment detail pages, so
+      // most operators will paste a pi_…. We resolve pi_… to its Checkout
+      // Session when one exists; otherwise we'll work with the PaymentIntent
+      // directly further down.
+      if (manualSessionId.startsWith('cs_')) {
+        webSource = { from: 'manual', sessionId: manualSessionId };
+      } else if (manualSessionId.startsWith('pi_')) {
+        try {
+          const sessions = await stripe.checkout.sessions.list({
+            payment_intent: manualSessionId,
+            limit: 1,
+          });
+          if (sessions.data.length > 0) {
+            // Found the originating Checkout Session — use the same flow as cs_…
+            webSource = { from: 'manual', sessionId: sessions.data[0].id };
+          } else {
+            // No Checkout Session — operator probably means a direct charge
+            // (Stripe dashboard manual charge, invoice payment, etc.). Handle
+            // it as a PaymentIntent below.
+            webSource = { from: 'manual', sessionId: manualSessionId };
+          }
+        } catch (err) {
+          console.error('[check-payment] Stripe sessions.list failed for', manualSessionId, err);
+          return NextResponse.json({
+            error: 'Stripe could not look up that PaymentIntent. Double-check the ID.',
+          }, { status: 502 });
+        }
+      } else {
         return NextResponse.json(
-          { error: 'Invalid Stripe session ID — expected format starting with "cs_"' },
+          { error: 'Invalid Stripe ID — expected "cs_…" (Checkout Session) or "pi_…" (PaymentIntent).' },
           { status: 400 },
         );
       }
-      webSource = { from: 'manual', sessionId: manualSessionId };
     } else {
       // Auto-match: score every record and pick the best above threshold.
       // Threshold of 30 means at least one strong signal is required.
@@ -143,7 +169,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Fetch the Stripe session to get the fee + (for manual link) the full payment details
+    // Fetch the Stripe session/PaymentIntent to get the fee + payment details
     let stripeFeeCzk: number | undefined;
     let stripePaymentStatus: string | null = null;
     let sessionAmountCzk = 0;
@@ -152,42 +178,72 @@ export async function POST(req: NextRequest) {
     let sessionDescription = '';
     let sessionPaidAt = new Date().toISOString();
     try {
-      const session = await stripe.checkout.sessions.retrieve(sessionId, {
-        expand: ['payment_intent.latest_charge.balance_transaction'],
-      });
-      stripePaymentStatus = session.payment_status ?? null;
-      sessionAmountCzk = typeof session.amount_total === 'number' ? session.amount_total / 100 : 0;
-      sessionEmail = session.customer_email ?? session.customer_details?.email ?? '';
-      sessionName = session.customer_details?.name ?? '';
-      sessionDescription = (session.metadata?.description as string)
-        || ((session.metadata?.arrival && session.metadata?.departure)
-              ? `Web booking ${session.metadata.arrival} → ${session.metadata.departure}`
-              : `Booking payment ${reservationNumber}`);
+      if (sessionId.startsWith('cs_')) {
+        // Checkout Session path — has metadata, customer_details, and payment_intent
+        const session = await stripe.checkout.sessions.retrieve(sessionId, {
+          expand: ['payment_intent.latest_charge.balance_transaction'],
+        });
+        stripePaymentStatus = session.payment_status ?? null;
+        sessionAmountCzk = typeof session.amount_total === 'number' ? session.amount_total / 100 : 0;
+        sessionEmail = session.customer_email ?? session.customer_details?.email ?? '';
+        sessionName = session.customer_details?.name ?? '';
+        sessionDescription = (session.metadata?.description as string)
+          || ((session.metadata?.arrival && session.metadata?.departure)
+                ? `Web booking ${session.metadata.arrival} → ${session.metadata.departure}`
+                : `Booking payment ${reservationNumber}`);
 
-      const pi = session.payment_intent;
-      if (pi && typeof pi !== 'string') {
+        const pi = session.payment_intent;
+        if (pi && typeof pi !== 'string') {
+          const charge = pi.latest_charge;
+          if (charge && typeof charge !== 'string') {
+            if (charge.created) sessionPaidAt = new Date(charge.created * 1000).toISOString();
+            const bt = charge.balance_transaction;
+            if (bt && typeof bt !== 'string' && typeof bt.fee === 'number') {
+              stripeFeeCzk = Math.round(bt.fee) / 100;
+            }
+          }
+        }
+      } else if (sessionId.startsWith('pi_')) {
+        // PaymentIntent path — direct charge with no Checkout Session (manual
+        // dashboard charge, invoice payment, etc.). Fetch the PaymentIntent
+        // and pull amount + fee from its latest charge.
+        const pi = await stripe.paymentIntents.retrieve(sessionId, {
+          expand: ['latest_charge.balance_transaction'],
+        });
+        stripePaymentStatus = pi.status === 'succeeded' ? 'paid' : pi.status;
+        sessionAmountCzk = typeof pi.amount === 'number' ? pi.amount / 100 : 0;
+        sessionEmail = pi.receipt_email ?? '';
+        sessionDescription = (pi.description as string)
+          || (pi.metadata?.description as string)
+          || `Booking payment ${reservationNumber}`;
+
         const charge = pi.latest_charge;
         if (charge && typeof charge !== 'string') {
           if (charge.created) sessionPaidAt = new Date(charge.created * 1000).toISOString();
+          if (!sessionEmail) sessionEmail = charge.billing_details?.email ?? '';
+          if (!sessionName) sessionName = charge.billing_details?.name ?? '';
           const bt = charge.balance_transaction;
           if (bt && typeof bt !== 'string' && typeof bt.fee === 'number') {
             stripeFeeCzk = Math.round(bt.fee) / 100;
           }
         }
+      } else {
+        // Should never hit this — guarded earlier — but keep for safety
+        return NextResponse.json({ error: 'Unknown Stripe ID format.' }, { status: 400 });
       }
 
       if (stripePaymentStatus !== 'paid') {
         return NextResponse.json({
           ok: false,
-          error: `Stripe session is not paid (status: ${stripePaymentStatus ?? 'unknown'}). Cannot import.`,
+          error: `Stripe payment is not in a paid state (status: ${stripePaymentStatus ?? 'unknown'}). Cannot import.`,
         }, { status: 400 });
       }
     } catch (err) {
-      console.error('[check-payment] Stripe retrieve failed for session', sessionId, err);
+      console.error('[check-payment] Stripe retrieve failed for', sessionId, err);
       return NextResponse.json({
         ok: false,
         error: webSource.from === 'manual'
-          ? 'Stripe could not find that session ID. Double-check the value (cs_live_… / cs_test_…).'
+          ? 'Stripe could not find that ID. Double-check the value (cs_… or pi_…).'
           : 'Could not retrieve Stripe session for fee lookup.',
       }, { status: 502 });
     }

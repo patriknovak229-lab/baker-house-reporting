@@ -2041,7 +2041,7 @@ export default function ReservationDrawer({
                   <button
                     onClick={() => setShowManualLink((v) => !v)}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-lg transition-colors w-fit"
-                    title="Paste a Stripe Checkout session ID (cs_live_… / cs_test_…) to import the payment manually"
+                    title="Paste a Stripe payment ID (pi_… or cs_…) to import the payment manually"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -2056,8 +2056,7 @@ export default function ReservationDrawer({
             {showManualLink && (
               <div className="mt-2 p-3 border border-gray-200 rounded-lg bg-gray-50 space-y-2">
                 <p className="text-[11px] text-gray-500">
-                  Paste the Stripe Checkout session ID (starts with <code className="text-gray-700">cs_</code>).
-                  Find it in the Stripe dashboard on the payment&apos;s detail page.
+                  Paste a Stripe ID — either <code className="text-gray-700">pi_…</code> (PaymentIntent, shown on the payment&apos;s detail page in the Stripe dashboard) or <code className="text-gray-700">cs_…</code> (Checkout Session).
                 </p>
                 <div className="flex gap-2">
                   <input
@@ -2065,7 +2064,7 @@ export default function ReservationDrawer({
                     value={manualSessionId}
                     onChange={(e) => setManualSessionId(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && manualSessionId.trim()) handleManualLink(); }}
-                    placeholder="cs_live_…"
+                    placeholder="pi_… or cs_…"
                     className="flex-1 px-2.5 py-1.5 text-xs font-mono border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-300"
                     autoFocus
                   />
