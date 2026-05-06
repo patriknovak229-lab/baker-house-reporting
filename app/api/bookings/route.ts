@@ -336,13 +336,18 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
 // ─── Parse blackout metadata from Beds24 comments ────────────────────────────
 // Blackouts created via /api/bookings/blackout embed the operator email as
 // "[BLACKOUT_BY:email@example.com]\n<reason>" — pull both back out for display.
+// Matches the prefix anywhere in the comment (lenient — handles legacy entries
+// where Beds24 may have moved the prefix or trimmed whitespace).
 function parseBlackoutMeta(comments: string): { createdBy?: string; reason?: string } {
   if (!comments) return {};
-  // Match the header on the first line; capture rest as reason via [\s\S] (no /s flag — TS target compat)
-  const m = comments.match(/^\[BLACKOUT_BY:([^\]]+)\]\s*([\s\S]*)$/);
-  if (!m) return { reason: comments.trim() || undefined };
+  const m = comments.match(/\[BLACKOUT_BY:([^\]]+)\]/);
+  if (!m) {
+    // No prefix found — treat the whole comment as the reason (legacy blackouts)
+    return { reason: comments.trim() || undefined };
+  }
   const createdBy = m[1].trim();
-  const reason = m[2].trim();
+  // Strip the prefix from the comment to get the reason
+  const reason = comments.replace(m[0], '').replace(/^\s+|\s+$/g, '');
   return {
     createdBy: createdBy || undefined,
     reason: reason || undefined,

@@ -15,7 +15,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 
@@ -37,14 +36,8 @@ export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
 
-  // Resolve the current operator email — falls back to dev email locally
-  let operatorEmail = '';
-  if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
-    operatorEmail = process.env.DEV_ADMIN_EMAIL;
-  } else {
-    const session = await auth();
-    operatorEmail = session?.user?.email ?? 'unknown';
-  }
+  // Operator email comes from the auth guard (single source of truth)
+  const operatorEmail = guard.email;
 
   let token: string;
   try {
