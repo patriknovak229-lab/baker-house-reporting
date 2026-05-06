@@ -17,10 +17,11 @@ function getRedis(): Redis | null {
 
 /**
  * Roll up paid Stripe fees from AdditionalPayments into reservation.paymentChargeAmount.
- * Beds24 only reports OTA payment-charge fees (Booking.com); for Stripe-paid bookings
- * (direct phone or direct web) the fee comes from the Stripe BalanceTransaction and is
- * captured per AdditionalPayment by the Stripe webhook. Aggregating here means every
- * consumer (Transactions, Performance, Statements) reads a single, consistent number.
+ * For OTA bookings (Booking.com / Airbnb) the channel commission comes from Beds24's
+ * top-level `commission` field and lands in commissionAmount — paymentChargeAmount
+ * stays 0. For direct (Stripe-paid) bookings, the per-payment Stripe processing fee
+ * is captured from the BalanceTransaction by the Stripe webhook and aggregated here
+ * so every consumer (Transactions, Performance, Statements) reads a single number.
  */
 async function aggregateStripeFees(reservations: Reservation[]): Promise<Reservation[]> {
   const redis = getRedis();
@@ -119,27 +120,19 @@ interface Beds24Booking {
   comments: string;       // contains "PRE-PAID" for prepaid reservations
 }
 
-// ─── Parse channel fee breakdown from rateDescription ────────────────────────
-// Booking.com format: "Total Commission: 404.07\nPayment Charge: 47.06\n"
-// Airbnb format:      "Host Fee -1635.93 CZK\n"
-// Fallback:           use top-level commission field as a single total
+// ─── Channel fee breakdown ───────────────────────────────────────────────────
+// Beds24's top-level `commission` field is the authoritative total of
+// everything kept by the channel — for Booking.com that includes both the
+// OTA commission and the Payment Charge; for Airbnb it's the Host Fee. We
+// previously parsed rateDescription to split the two, but that field has a
+// character limit and gets truncated on long stays — making the split
+// unreliable. Operator confirmed the granularity isn't needed: a single
+// total is sufficient. Stripe fees on direct bookings still flow through
+// paymentChargeAmount via the AdditionalPayment roll-up.
 function parseCommissionBreakdown(
-  rateDescription: string,
+  _rateDescription: string,
   totalCommission: number
 ): { commissionAmount: number; paymentChargeAmount: number } {
-  const commMatch = rateDescription?.match(/Total Commission:\s*([\d.]+)/);
-  const feeMatch  = rateDescription?.match(/Payment Charge:\s*([\d.]+)/);
-  if (commMatch && feeMatch) {
-    return {
-      commissionAmount: parseFloat(commMatch[1]),
-      paymentChargeAmount: parseFloat(feeMatch[1]),
-    };
-  }
-  const hostFeeMatch = rateDescription?.match(/Host Fee\s*-?([\d.]+)/);
-  if (hostFeeMatch) {
-    return { commissionAmount: parseFloat(hostFeeMatch[1]), paymentChargeAmount: 0 };
-  }
-  // Fallback: expose the top-level total with no payment-charge split
   return { commissionAmount: totalCommission, paymentChargeAmount: 0 };
 }
 

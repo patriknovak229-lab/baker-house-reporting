@@ -1164,7 +1164,7 @@ function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
         </button>
         {feesAreMissing && (
           <span
-            title="Fee data not available from Beds24 for this booking"
+            title="Commission data not available from Beds24 for this booking"
             className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-600 text-[10px] font-bold leading-none shrink-0"
           >
             !
@@ -1174,12 +1174,7 @@ function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
       {open && hasBreakdown && (
         <div className="mt-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2.5 space-y-1.5 text-xs">
           <BreakdownRow label="Gross Booking Value" value={price} />
-          {commissionAmount > 0 && (
-            <BreakdownRow label={`${channel} commission`} value={-commissionAmount} />
-          )}
-          {paymentChargeAmount > 0 && (
-            <BreakdownRow label="Payment processing fee" value={-paymentChargeAmount} />
-          )}
+          <BreakdownRow label={`${channel} commission`} value={-totalFees} />
           <div className="border-t border-gray-200 pt-1.5">
             <BreakdownRow label="Net Revenue" value={net} bold />
           </div>

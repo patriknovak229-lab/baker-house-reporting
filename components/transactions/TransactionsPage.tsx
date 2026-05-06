@@ -283,7 +283,6 @@ export default function TransactionsPage() {
         const problems: string[] = [];
         if (r.channel === "Booking.com") {
           if (r.commissionAmount === 0) problems.push("Commission missing");
-          if (r.paymentChargeAmount === 0) problems.push("Payment fee missing");
         }
         if (r.channel === "Airbnb") {
           if (r.commissionAmount === 0) problems.push("Host fee missing");
@@ -489,7 +488,7 @@ export default function TransactionsPage() {
               {dataIssues.length} data {dataIssues.length === 1 ? "issue" : "issues"} detected
             </span>
             <span className="text-amber-500 text-xs ml-1">
-              Missing commission or payment fee data from Beds24
+              Missing commission data from Beds24
             </span>
             <svg
               className={`w-4 h-4 ml-auto text-amber-400 transition-transform ${issuesOpen ? "rotate-180" : ""}`}
