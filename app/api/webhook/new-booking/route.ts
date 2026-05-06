@@ -103,9 +103,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const booking = payload.booking;
 
-  // Only notify on new/confirmed bookings, ignore cancellations
+  // Only notify on new/confirmed bookings, ignore cancellations and blackouts
   if (booking?.status === "cancelled" || booking?.status === "canceled") {
     return NextResponse.json({ ok: true, skipped: "cancellation" });
+  }
+  if (booking?.status === "black") {
+    // Blackouts are owner-side room blocks, not actual bookings — no
+    // Telegram, no operator-facing notification.
+    return NextResponse.json({ ok: true, skipped: "blackout" });
   }
 
   // Skip sub-bookings: virtual-room allocations always carry price = 0;

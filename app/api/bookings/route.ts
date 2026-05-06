@@ -400,8 +400,10 @@ function mapToReservation(b: Beds24Booking): Reservation {
     phone: b.phone ?? "",
     price: b.price ?? 0,
     nationality: (b.country2 ?? "").toUpperCase(),
-    // Cleaning: date-derived until cleaning app is connected
-    cleaningStatus: deriveCleaningStatus(b.departure ?? ""),
+    // Cleaning: date-derived until cleaning app is connected.
+    // Blackouts have no guest, no stay → no cleaning event needed; we still
+    // set a value to satisfy the type, but renderers skip the field for blackouts.
+    cleaningStatus: isBlackout ? "Completed" : deriveCleaningStatus(b.departure ?? ""),
     paymentStatus,
     amountPaid,
     commissionAmount,
