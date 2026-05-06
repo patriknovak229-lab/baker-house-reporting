@@ -61,6 +61,17 @@ export interface InvoiceModification {
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
+  /**
+   * True when this is a Beds24 "blackout" (status="black") — a room block
+   * created by the operator to close the room without representing a paying
+   * guest. Blackouts skip payment/invoice/cleaning/performance pipelines and
+   * are rendered with a simplified row + drawer.
+   */
+  isBlackout?: boolean;
+  /** Operator email captured at blackout-creation time (parsed from comments). */
+  blackoutCreatedBy?: string;
+  /** Free-text reason ("Renovation", "Owner stay", etc.) — also from comments. */
+  blackoutReason?: string;
   // Set when this reservation spans multiple physical rooms (package/virtual room booking).
   // Each entry is a physical room name. Used by performance views to split revenue per room.
   linkedRooms?: string[];

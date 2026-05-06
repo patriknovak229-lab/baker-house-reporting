@@ -225,6 +225,37 @@ function ReservationCard({
   unreadBookingIds: Set<number>;
   onClick: () => void;
 }) {
+  // Blackouts use a stripped-down card — no guest, no payment, no flags
+  if (res.isBlackout) {
+    return (
+      <div
+        onClick={onClick}
+        className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 cursor-pointer hover:bg-gray-100 transition-colors"
+      >
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-semibold uppercase tracking-wide">
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 105.636 5.636m12.728 12.728L5.636 5.636" />
+            </svg>
+            Blackout
+          </span>
+          <span className={roomChipClasses(res.room)}>{res.room}</span>
+          <span className="ml-auto font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
+        </div>
+        <div className="text-xs text-gray-600 mb-1">
+          {formatDate(res.checkInDate)} → {formatDate(res.checkOutDate)} ·{' '}
+          <span className="text-gray-400">{res.numberOfNights}n</span>
+        </div>
+        {res.blackoutReason && (
+          <div className="text-xs text-gray-700 italic">{res.blackoutReason}</div>
+        )}
+        {res.blackoutCreatedBy && (
+          <div className="text-[11px] text-gray-400 mt-0.5">by {res.blackoutCreatedBy}</div>
+        )}
+      </div>
+    );
+  }
+
   const effectiveFlags = getEffectiveFlags(res, allReservations);
   const stayStatuses = computeStayStatus(res, allReservations);
   const nationalityFlag = countryCodeToFlag(res.nationality);
@@ -509,6 +540,53 @@ export default function ReservationTable({
 
                 const beds24Id = parseInt(res.reservationNumber.slice(3));
                 const hasUnread = unreadBookingIds.has(beds24Id);
+
+                if (res.isBlackout) {
+                  return (
+                    <tr
+                      key={res.reservationNumber}
+                      onClick={() => onRowClick(res)}
+                      className="bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors text-gray-500 italic"
+                    >
+                      <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">
+                        <span className="text-gray-400">{res.reservationNumber}</span>
+                      </td>
+                      <td colSpan={2} className="px-3 py-3 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-semibold uppercase tracking-wide not-italic">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 105.636 5.636m12.728 12.728L5.636 5.636" />
+                            </svg>
+                            Blackout
+                          </span>
+                          {res.blackoutReason && (
+                            <span className="text-xs text-gray-600 truncate max-w-[200px]" title={res.blackoutReason}>
+                              {res.blackoutReason}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap">
+                        <span className={roomChipClasses(res.room)}>{res.room}</span>
+                      </td>
+                      <td className="px-3 py-3 text-xs text-gray-400 whitespace-nowrap">
+                        {res.blackoutCreatedBy ? `by ${res.blackoutCreatedBy}` : ''}
+                      </td>
+                      <td className="px-3 py-3 text-gray-500 whitespace-nowrap">
+                        {formatDate(res.checkInDate)}
+                      </td>
+                      <td className="px-3 py-3 text-gray-500 whitespace-nowrap">
+                        {formatDate(res.checkOutDate)}
+                      </td>
+                      <td className="px-3 py-3 text-gray-500 text-right whitespace-nowrap">
+                        {res.numberOfNights}
+                      </td>
+                      <td colSpan={5} className="px-3 py-3 text-gray-300">
+                        —
+                      </td>
+                    </tr>
+                  );
+                }
 
                 return (
                   <tr

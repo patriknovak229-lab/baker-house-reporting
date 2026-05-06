@@ -333,6 +333,22 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
   return [...manualResults, ...result];
 }
 
+// ─── Parse blackout metadata from Beds24 comments ────────────────────────────
+// Blackouts created via /api/bookings/blackout embed the operator email as
+// "[BLACKOUT_BY:email@example.com]\n<reason>" — pull both back out for display.
+function parseBlackoutMeta(comments: string): { createdBy?: string; reason?: string } {
+  if (!comments) return {};
+  // Match the header on the first line; capture rest as reason via [\s\S] (no /s flag — TS target compat)
+  const m = comments.match(/^\[BLACKOUT_BY:([^\]]+)\]\s*([\s\S]*)$/);
+  if (!m) return { reason: comments.trim() || undefined };
+  const createdBy = m[1].trim();
+  const reason = m[2].trim();
+  return {
+    createdBy: createdBy || undefined,
+    reason: reason || undefined,
+  };
+}
+
 // ─── Map Beds24 booking → our Reservation type ────────────────────────────────
 function mapToReservation(b: Beds24Booking): Reservation {
   const nights =
@@ -341,6 +357,8 @@ function mapToReservation(b: Beds24Booking): Reservation {
           (new Date(b.departure).getTime() - new Date(b.arrival).getTime()) / 86_400_000
         )
       : 0;
+
+  const isBlackout = b.status === 'black';
 
   const { paymentStatus, amountPaid } = derivePayment(b);
   // Use pre-summed breakdown for Booking.com multi-unit groups; parse normally otherwise
@@ -355,8 +373,13 @@ function mapToReservation(b: Beds24Booking): Reservation {
     ? linkedRooms.join(" + ")
     : mapRoom(b.roomId);
 
+  const blackoutMeta = isBlackout ? parseBlackoutMeta(b.comments ?? '') : {};
+
   return {
     reservationNumber: `BH-${b.id}`,
+    ...(isBlackout ? { isBlackout: true } : {}),
+    ...(blackoutMeta.createdBy ? { blackoutCreatedBy: blackoutMeta.createdBy } : {}),
+    ...(blackoutMeta.reason ? { blackoutReason: blackoutMeta.reason } : {}),
     firstName: b.firstName ?? "",
     lastName: b.lastName ?? "",
     channel: mapChannel(b.apiSource, b.referer),

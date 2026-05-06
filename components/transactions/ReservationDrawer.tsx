@@ -30,6 +30,165 @@ function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): Paymen
   return { spdString, vs, amountCZK };
 }
 
+// ── Blackout drawer view ─────────────────────────────────────────────────────
+// Stripped-down drawer for Beds24 status="black" entries: just the dates, the
+// room, the reason, who created it, and a "Delete blackout" button. No
+// payment / invoice / guest / messaging / cleaning sections — none of those
+// concepts apply.
+function BlackoutDrawerView({
+  reservation,
+  isMounted,
+  onClose,
+  onDeleted,
+}: {
+  reservation: Reservation;
+  isMounted: boolean;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(
+        `/api/bookings/blackout?id=${encodeURIComponent(reservation.reservationNumber)}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      onDeleted();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete blackout');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
+      <div
+        className={`fixed top-0 right-0 h-full w-full sm:w-[420px] bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300 ${
+          isMounted ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-semibold uppercase tracking-wide">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 105.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+                Blackout
+              </span>
+              <span className="text-xs font-mono text-gray-400">{reservation.reservationNumber}</span>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1">
+              Beds24 room block — no payment, no guest, no invoice
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+          {/* Room + dates */}
+          <div className="space-y-2">
+            <div>
+              <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Room</p>
+              <p className="text-base font-medium text-gray-800">{reservation.room}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">From</p>
+                <p className="text-sm text-gray-700">{formatDate(reservation.checkInDate)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">To</p>
+                <p className="text-sm text-gray-700">{formatDate(reservation.checkOutDate)}</p>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Nights</p>
+              <p className="text-sm text-gray-700">{reservation.numberOfNights}</p>
+            </div>
+          </div>
+
+          <hr className="border-gray-100" />
+
+          {/* Reason */}
+          <div>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-1">Reason</p>
+            {reservation.blackoutReason ? (
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{reservation.blackoutReason}</p>
+            ) : (
+              <p className="text-sm text-gray-400 italic">No reason recorded</p>
+            )}
+          </div>
+
+          {/* Creator */}
+          <div>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-1">Created by</p>
+            <p className="text-sm text-gray-700">
+              {reservation.blackoutCreatedBy ?? <span className="text-gray-400 italic">Unknown</span>}
+            </p>
+          </div>
+
+          {/* Delete */}
+          <div className="pt-4 border-t border-gray-100">
+            {!confirmDelete ? (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="w-full py-2.5 border border-rose-300 text-rose-700 text-sm font-medium rounded-lg hover:bg-rose-50 transition-colors"
+              >
+                Delete blackout
+              </button>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-[11px] text-gray-600">
+                  This will cancel the blackout in Beds24 and re-open the room for sale.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={deleting}
+                    className="flex-1 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="flex-1 py-2 bg-rose-600 text-white text-sm font-medium rounded-lg hover:bg-rose-700 disabled:opacity-40"
+                  >
+                    {deleting ? 'Deleting…' : 'Confirm delete'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {deleteError && (
+              <p className="text-xs text-red-600 mt-2 px-2 py-1 bg-red-50 border border-red-200 rounded">
+                {deleteError}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── Additional payment row with status override + delete ─────────────────────
 // Stripe Checkout sessions expire 24h after creation — show a clear "expired" cue
 // after 23h so the operator knows the customer needs a regenerated link.
@@ -1608,6 +1767,23 @@ export default function ReservationDrawer({
   const isDirectPhone = reservation.channel === "Direct-Phone";
   const nationalityFlag = countryCodeToFlag(reservation.nationality);
   const nationalityName = countryCodeToName(reservation.nationality);
+
+  // ── Blackout-specific drawer view — completely different UI: no payment,
+  //    no invoice, no guest, no messaging, no cleaning, no flags. Just the
+  //    room/dates/reason/creator + a delete button.
+  if (reservation.isBlackout) {
+    return (
+      <BlackoutDrawerView
+        reservation={reservation}
+        isMounted={isMounted}
+        onClose={onClose}
+        onDeleted={() => {
+          onPaymentCreated?.(); // re-uses the existing refresh callback
+          onClose();
+        }}
+      />
+    );
+  }
 
   return (
     <>

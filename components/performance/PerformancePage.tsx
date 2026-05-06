@@ -76,7 +76,11 @@ export default function PerformancePage() {
   const filteredReservations = useMemo(
     () =>
       expandLinkedReservations(reservations).filter(
-        (r) => isReservationInPeriod(r, dateRange) && selectedRooms.includes(r.room)
+        (r) =>
+          // Blackouts are room blocks (no revenue, no guest) — exclude from performance metrics
+          !r.isBlackout &&
+          isReservationInPeriod(r, dateRange) &&
+          selectedRooms.includes(r.room),
       ),
     [reservations, dateRange, selectedRooms]
   );

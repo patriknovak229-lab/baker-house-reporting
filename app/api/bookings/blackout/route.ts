@@ -15,14 +15,36 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 
+/**
+ * Encodes the operator email + reason into the Beds24 `comments` field with
+ * a parseable header so we can render "blacked out by X" in the drawer.
+ * Format:
+ *   [BLACKOUT_BY:email@example.com]
+ *   <free-text reason>
+ */
+function buildBlackoutComment(operatorEmail: string, reason: string): string {
+  const header = `[BLACKOUT_BY:${operatorEmail}]`;
+  return reason ? `${header}\n${reason}` : header;
+}
+
 export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
+
+  // Resolve the current operator email — falls back to dev email locally
+  let operatorEmail = '';
+  if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
+    operatorEmail = process.env.DEV_ADMIN_EMAIL;
+  } else {
+    const session = await auth();
+    operatorEmail = session?.user?.email ?? 'unknown';
+  }
 
   let token: string;
   try {
@@ -71,7 +93,7 @@ export async function POST(req: NextRequest) {
     lastName: '',
     referer: 'BlackoutDirect',
     apiSource: 'Direct',
-    comments: notes ?? '',
+    comments: buildBlackoutComment(operatorEmail, (notes ?? '').trim()),
     price: 0,
   };
 
@@ -92,4 +114,49 @@ export async function POST(req: NextRequest) {
 
   const json = await res.json();
   return NextResponse.json({ ok: true, data: json });
+}
+
+/**
+ * DELETE /api/bookings/blackout?id=12345
+ *
+ * Cancels a blackout in Beds24 (sets status to "cancelled"). Beds24 V2
+ * doesn't hard-delete bookings — cancellation is the equivalent operation.
+ */
+export async function DELETE(req: NextRequest) {
+  const guard = await requireRole(['admin', 'super']);
+  if ('error' in guard) return guard.error;
+
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Auth error' },
+      { status: 500 },
+    );
+  }
+
+  const id = req.nextUrl.searchParams.get('id');
+  const numericId = id ? Number(id.replace(/^BH-/, '')) : NaN;
+  if (!Number.isFinite(numericId)) {
+    return NextResponse.json({ error: 'id is required' }, { status: 400 });
+  }
+
+  // Beds24 V2: PATCH /bookings with status="cancelled" (no hard-delete)
+  const res = await fetch(`${BEDS24_API_BASE}/bookings`, {
+    method: 'PATCH',
+    headers: { token, 'Content-Type': 'application/json' },
+    body: JSON.stringify([{ id: numericId, status: 'cancelled' }]),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    return NextResponse.json(
+      { error: `Beds24 ${res.status}: ${text}` },
+      { status: res.status },
+    );
+  }
+
+  return NextResponse.json({ ok: true });
 }
