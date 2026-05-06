@@ -91,8 +91,11 @@ export async function POST(req: NextRequest) {
     // Beds24 wants firstName populated for any booking shape — use a clear label
     firstName: 'BLOCKED',
     lastName: '',
-    referer: 'BlackoutDirect',
-    apiSource: 'Direct',
+    // apiSource = "OwnerBlock" so Beds24 surfaces blackouts as a distinct
+    // channel in the calendar legend and channel-list. Operator can assign
+    // a custom colour to this channel in Beds24 → Settings → Channels.
+    apiSource: 'OwnerBlock',
+    referer: 'OwnerBlock',
     comments: buildBlackoutComment(operatorEmail, (notes ?? '').trim()),
     price: 0,
   };
