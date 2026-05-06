@@ -11,6 +11,7 @@ import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
 import CreateBookingModal from "./CreateBookingModal";
+import BlackoutModal from "./BlackoutModal";
 import PaymentLinkModal from "./PaymentLinkModal";
 import CreateVoucherModal from "./CreateVoucherModal";
 import PriceCheckModal from "./PriceCheckModal";
@@ -89,6 +90,7 @@ export default function TransactionsPage() {
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBlackoutModal, setShowBlackoutModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [showPriceCheck, setShowPriceCheck] = useState(false);
@@ -425,6 +427,16 @@ export default function TransactionsPage() {
               </svg>
               New Booking
             </button>
+            <button
+              onClick={() => setShowBlackoutModal(true)}
+              title="Close a room for a date range without creating a reservation"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium transition-colors shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              </svg>
+              Black Out
+            </button>
             </>
           )}
           <button
@@ -705,6 +717,17 @@ export default function TransactionsPage() {
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);
+            fetchReservations();
+          }}
+        />
+      )}
+
+      {/* Blackout modal — close a room for a date range without a reservation */}
+      {showBlackoutModal && (
+        <BlackoutModal
+          onClose={() => setShowBlackoutModal(false)}
+          onCreated={() => {
+            setShowBlackoutModal(false);
             fetchReservations();
           }}
         />
