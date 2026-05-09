@@ -53,28 +53,37 @@ const UNIT_MAP: Record<number, Room> = {
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
-// Beds24 sets `apiSource` to:
-//   - "Booking.com" / "Airbnb" — channel-manager bookings (OTAs)
-//   - "API"                    — bookings POSTed via Beds24 V2 API. Two known origins:
-//        a) our /api/bookings POST (manual phone bookings) — sets referer="PhoneDirect"
-//        b) rental site bakerhouseapartments.cz — sets referer with "web"/"DirectWeb"
-//   - "Direct" / blank         — legacy / manually created in Beds24 UI
+// Confirmed via debug dump of BH-86527838:
+//   - apiSource = "Booking.com" / "Airbnb" — OTAs
+//   - apiSource = "Direct" + referer = "API" — booking POSTed via Beds24 V2 API.
+//     Beds24 forces referer to "API" for all V2 POSTs regardless of what the
+//     client supplied — so we can't rely on referer="PhoneDirect" surviving
+//     for our app's manual phone bookings.
+//   - apiSource = "Direct" + referer = "" (blank) — manually entered in the
+//     Beds24 UI (legacy)
 //
-// We classify by referer first (most specific), then fall back on apiSource.
-// API-source bookings without a referer hint default to Direct-Web — the
-// rental site is the dominant API source we don't author ourselves.
-function mapChannel(apiSource = "", referer = ""): Channel {
+// Two API origins exist:
+//   a) our /api/bookings POST (manual phone bookings) — operator creates from
+//      the dashboard. We tag these with APP_PHONE_MARKER in `comments` so they
+//      survive Beds24's referer override.
+//   b) rental site bakerhouseapartments.cz — anything else with referer="API"
+const APP_PHONE_MARKER = "[Created via Reporting App — Phone]";
+
+function mapChannel(apiSource = "", referer = "", comments = ""): Channel {
   if (apiSource === "Booking.com") return "Booking.com";
   if (apiSource === "Airbnb") return "Airbnb";
 
-  const ref = referer.toLowerCase();
-  if (ref.includes("phone")) return "Direct-Phone";
-  if (ref.includes("web"))   return "Direct-Web";
+  // Marker in comments wins over Beds24's overridden referer
+  if (comments.includes(APP_PHONE_MARKER)) return "Direct-Phone";
 
-  // No referer hint — bookings POSTed via Beds24 API (rental site, third-party
-  // integration, etc.) default to Direct-Web. Manually-created Beds24 UI
-  // bookings (apiSource blank/"Direct") fall through to "Direct".
-  if (apiSource === "API") return "Direct-Web";
+  const ref = referer.toLowerCase();
+  if (ref.includes("phone")) return "Direct-Phone";   // legacy fallback
+  if (ref.includes("web"))   return "Direct-Web";     // explicit web tag
+
+  // Beds24 V2 API submissions land here with referer="API" (literal). The
+  // rental site is the dominant such origin once our own app's bookings
+  // have been filtered out via the comment marker above.
+  if (ref === "api") return "Direct-Web";
 
   return "Direct";
 }
@@ -392,7 +401,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     ...(blackoutMeta.reason ? { blackoutReason: blackoutMeta.reason } : {}),
     firstName: b.firstName ?? "",
     lastName: b.lastName ?? "",
-    channel: mapChannel(b.apiSource, b.referer),
+    channel: mapChannel(b.apiSource, b.referer, b.comments ?? ""),
     room,
     ...(linkedRooms && linkedRooms.length > 1 ? { linkedRooms } : {}),
     checkInDate: b.arrival ?? "",
@@ -492,12 +501,14 @@ export async function POST(req: NextRequest) {
     lastName: lastName ?? "",
     email: email ?? "",
     phone: phone ?? "",
-    // "PhoneDirect" referer is what mapChannel() detects to label the
-    // booking as "Direct-Phone" in the reporting app — distinguishes
-    // operator-created bookings from rental-site "DirectWeb" ones.
+    // Beds24 forces referer="API" for V2 API POSTs regardless of what we
+    // send, so we tag the booking via comments instead — APP_PHONE_MARKER
+    // survives the round-trip and keys mapChannel() → "Direct-Phone".
     referer: "PhoneDirect",
     apiSource: "Direct",
-    comments: notes ?? "",
+    comments: notes
+      ? `${APP_PHONE_MARKER}\n${notes}`
+      : APP_PHONE_MARKER,
     // Top-level price field — shown in Beds24 UI and read by the reporting app
     price: price ? Number(price) : 0,
     // invoiceItems creates the charge line item in Beds24 invoicing
