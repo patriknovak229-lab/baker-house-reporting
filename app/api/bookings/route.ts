@@ -53,17 +53,29 @@ const UNIT_MAP: Record<number, Room> = {
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
-// Differentiate operator-created phone bookings from rental-site web checkouts:
-//   referer contains "phone"  → "Direct-Phone" (manual via /api/bookings POST,
-//                                              or Beds24's auto "PhoneDirect.")
-//   referer contains "web"    → "Direct-Web"   (rental-site bakerhouseapartments.cz)
-//   anything else direct      → "Direct"       (legacy / manual Beds24 entries)
+// Beds24 sets `apiSource` to:
+//   - "Booking.com" / "Airbnb" — channel-manager bookings (OTAs)
+//   - "API"                    — bookings POSTed via Beds24 V2 API. Two known origins:
+//        a) our /api/bookings POST (manual phone bookings) — sets referer="PhoneDirect"
+//        b) rental site bakerhouseapartments.cz — sets referer with "web"/"DirectWeb"
+//   - "Direct" / blank         — legacy / manually created in Beds24 UI
+//
+// We classify by referer first (most specific), then fall back on apiSource.
+// API-source bookings without a referer hint default to Direct-Web — the
+// rental site is the dominant API source we don't author ourselves.
 function mapChannel(apiSource = "", referer = ""): Channel {
   if (apiSource === "Booking.com") return "Booking.com";
   if (apiSource === "Airbnb") return "Airbnb";
+
   const ref = referer.toLowerCase();
   if (ref.includes("phone")) return "Direct-Phone";
-  if (ref.includes("web")) return "Direct-Web";
+  if (ref.includes("web"))   return "Direct-Web";
+
+  // No referer hint — bookings POSTed via Beds24 API (rental site, third-party
+  // integration, etc.) default to Direct-Web. Manually-created Beds24 UI
+  // bookings (apiSource blank/"Direct") fall through to "Direct".
+  if (apiSource === "API") return "Direct-Web";
+
   return "Direct";
 }
 
@@ -113,8 +125,8 @@ interface Beds24Booking {
   email: string;
   phone: string;
   country2: string | null; // uppercase ISO 2-letter (e.g. "CZ", "UA")
-  apiSource: string;      // "Booking.com" | "Airbnb" | "Direct"
-  referer: string;        // e.g. "PhoneDirect." for phone/email bookings
+  apiSource: string;      // "Booking.com" | "Airbnb" | "API" (V2 POST) | "Direct" (Beds24 UI) | ""
+  referer: string;        // e.g. "PhoneDirect" (our app), "DirectWeb" (rental site), or empty
   bookingTime: string;    // ISO timestamp
   status: string;         // "new" | "confirmed" | "cancelled"
   comments: string;       // contains "PRE-PAID" for prepaid reservations
