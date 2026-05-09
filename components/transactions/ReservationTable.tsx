@@ -51,11 +51,11 @@ interface ReservationTableProps {
 const PAGE_SIZE = 10;
 
 function channelBadgeVariant(channel: Channel) {
-  if (channel === "Booking.com") return "blue";
-  if (channel === "Airbnb") return "coral";
-  if (channel === "Direct-Phone") return "teal";
-  if (channel === "Direct-Web") return "indigo";
-  return "green";
+  if (channel === "Booking.com")  return "booking-com";   // BCom brand blue
+  if (channel === "Airbnb")       return "airbnb";        // Airbnb Rausch red
+  if (channel === "Direct-Phone") return "green";         // green
+  if (channel === "Direct-Web")   return "green-light";   // mint/light green
+  return "gray";                                          // legacy "Direct" — neutral
 }
 
 function cleaningBadgeVariant(status: CleaningStatus) {

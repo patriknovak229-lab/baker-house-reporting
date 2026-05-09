@@ -16,8 +16,11 @@ interface BadgeProps {
   | "purple"
   | "amber-filled"
   | "green-filled"
+  | "green-light"
   | "orange"
-  | "orange-light";
+  | "orange-light"
+  | "booking-com"
+  | "airbnb";
   size?: "sm" | "xs";
 }
 
@@ -34,8 +37,13 @@ const variantClasses: Record<BadgeProps["variant"], string> = {
   purple: "bg-purple-600 text-white ring-1 ring-purple-400",
   "amber-filled": "bg-amber-500 text-white",
   "green-filled": "bg-green-600 text-white",
+  // Lighter, mintier green — used for Direct-Web to differentiate from Direct-Phone
+  "green-light": "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
   "orange": "bg-orange-500 text-white",
   "orange-light": "bg-orange-100 text-orange-800",
+  // OTA brand colours
+  "booking-com": "bg-[#003B95] text-white",
+  "airbnb": "bg-[#FF5A5F] text-white",
 };
 
 export default function Badge({

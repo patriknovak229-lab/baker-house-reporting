@@ -3,21 +3,12 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recha
 import type { Reservation } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
+import { CHANNEL_COLORS, CHANNEL_COLOR_FALLBACK as FALLBACK_COLOR } from "@/utils/channelColors";
 
 interface Props {
   reservations: Reservation[];
   dateRange: DateRange;
 }
-
-const CHANNEL_COLORS: Record<string, string> = {
-  "Booking.com": "#4F46E5",
-  Airbnb: "#F43F5E",
-  Direct: "#10B981",
-  "Direct-Phone": "#14B8A6",
-  "Direct-Web": "#6366F1",
-};
-
-const FALLBACK_COLOR = "#94A3B8";
 
 interface ChannelStat {
   channel: string;
