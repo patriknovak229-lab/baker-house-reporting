@@ -433,42 +433,111 @@ function mapToReservation(b: Beds24Booking): Reservation {
   };
 }
 
-// ─── Fetch all pages from Beds24 ──────────────────────────────────────────────
-async function fetchAllBookings(token: string): Promise<Beds24Booking[]> {
-  const all: Beds24Booking[] = [];
+// ─── Fetch all pages from Beds24 with Redis-backed delta sync ────────────────
+//
+// Old behaviour: every /api/bookings call did a full year-back + year-forward
+// fetch from Beds24. As history grows, that's an increasing amount of stable
+// data being shuffled around on every sync.
+//
+// New behaviour:
+//  1. First call (or cache miss / forced full sync): fetch the full window,
+//     persist to Redis as a map<id, booking>.
+//  2. Subsequent calls: fetch only bookings with `modifiedFrom = lastSync - 5min`
+//     (5-minute overlap to dodge clock skew). Merge into the cached set.
+//  3. After 24 h, force a full refresh as a safety net for any modifications
+//     Beds24 might have missed flagging.
+//  4. Prune bookings whose departure is more than 14 months in the past so
+//     the cache stays bounded.
+//  5. Caller can force a full refresh by calling with fullSync=true (used by
+//     `?fullSync=true` query param on the GET endpoint).
 
-  // 1 year back → 1 year forward
-  const from = new Date();
-  from.setFullYear(from.getFullYear() - 1);
-  const to = new Date();
-  to.setFullYear(to.getFullYear() + 1);
+const BOOKINGS_CACHE_KEY  = "baker:beds24-bookings-cache";
+const BOOKINGS_LAST_SYNC_KEY = "baker:beds24-last-sync";
+const DELTA_OVERLAP_MS    = 5 * 60 * 1000;        // 5 minutes
+const MAX_DELTA_AGE_MS    = 24 * 60 * 60 * 1000;  // 24 hours
+const PRUNE_DEPARTURE_MONTHS = 14;                 // keep ~1 year + 2-month buffer
 
-  const params = new URLSearchParams({
-    arrivalFrom: from.toISOString().slice(0, 10),
-    arrivalTo: to.toISOString().slice(0, 10),
-  });
+async function fetchAllBookings(
+  token: string,
+  options: { fullSync?: boolean } = {},
+): Promise<Beds24Booking[]> {
+  const redis = getRedis();
 
+  // ── Load cache ──
+  let cached: Record<string, Beds24Booking> = {};
+  let lastSync: string | null = null;
+  if (redis) {
+    const [cacheRaw, lastSyncRaw] = await Promise.all([
+      redis.get<Record<string, Beds24Booking>>(BOOKINGS_CACHE_KEY),
+      redis.get<string>(BOOKINGS_LAST_SYNC_KEY),
+    ]);
+    cached = cacheRaw ?? {};
+    lastSync = lastSyncRaw;
+  }
+
+  // ── Decide full vs delta ──
+  const cacheAgeMs = lastSync ? Date.now() - new Date(lastSync).getTime() : Infinity;
+  const cacheEmpty = Object.keys(cached).length === 0;
+  const useFullSync = options.fullSync || cacheEmpty || cacheAgeMs > MAX_DELTA_AGE_MS;
+
+  const params = new URLSearchParams();
+  if (useFullSync) {
+    // Full window: 1 year back → 1 year forward (by arrival date)
+    const from = new Date();
+    from.setFullYear(from.getFullYear() - 1);
+    const to = new Date();
+    to.setFullYear(to.getFullYear() + 1);
+    params.set("arrivalFrom", from.toISOString().slice(0, 10));
+    params.set("arrivalTo", to.toISOString().slice(0, 10));
+    cached = {}; // start fresh on full sync
+  } else {
+    // Delta: bookings modified since last sync (with safety overlap)
+    const since = new Date(new Date(lastSync!).getTime() - DELTA_OVERLAP_MS);
+    params.set("modifiedFrom", since.toISOString());
+  }
+
+  // ── Paginate Beds24 ──
+  const fetched: Beds24Booking[] = [];
   let pageToken: string | undefined;
   do {
     if (pageToken) params.set("pageToken", pageToken);
-
     const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
       headers: { token },
       cache: "no-store",
     });
-
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Beds24 ${res.status}: ${text}`);
     }
-
     const json = await res.json();
     const page: Beds24Booking[] = Array.isArray(json) ? json : (json.data ?? []);
-    all.push(...page);
+    fetched.push(...page);
     pageToken = Array.isArray(json) ? undefined : json.nextPageToken;
   } while (pageToken);
 
-  return all;
+  // ── Merge fetched into cache (by id), prune very old, persist ──
+  for (const b of fetched) {
+    cached[String(b.id)] = b;
+  }
+
+  // Prune anything whose departure is more than PRUNE_DEPARTURE_MONTHS ago
+  const pruneCutoff = new Date();
+  pruneCutoff.setMonth(pruneCutoff.getMonth() - PRUNE_DEPARTURE_MONTHS);
+  const pruneCutoffStr = pruneCutoff.toISOString().slice(0, 10);
+  for (const [id, b] of Object.entries(cached)) {
+    if (b.departure && b.departure < pruneCutoffStr) {
+      delete cached[id];
+    }
+  }
+
+  if (redis) {
+    await Promise.all([
+      redis.set(BOOKINGS_CACHE_KEY, cached),
+      redis.set(BOOKINGS_LAST_SYNC_KEY, new Date().toISOString()),
+    ]);
+  }
+
+  return Object.values(cached);
 }
 
 // ─── POST handler — create a manual direct booking ───────────────────────────
@@ -544,7 +613,12 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const raw = await fetchAllBookings(token);
+    // ?fullSync=true → bypass the Redis delta cache and re-fetch the full
+    // 2-year window from Beds24. Use this when the cache is suspected to
+    // be out of sync (rare — the 24-h max-age safety net should catch most
+    // drift automatically).
+    const fullSync = req.nextUrl.searchParams.get("fullSync") === "true";
+    const raw = await fetchAllBookings(token, { fullSync });
 
     // ?raw=true → return raw Beds24 response for debugging
     if (req.nextUrl.searchParams.get("raw") === "true") {
