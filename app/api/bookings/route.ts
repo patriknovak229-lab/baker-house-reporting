@@ -353,7 +353,66 @@ function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     result.push(base);
   }
 
-  return [...manualResults, ...result];
+  // ── Case 3: package bookings created via the multi-row "New Booking" flow ──
+  // Bookings POSTed in the same multi-row call all carry the same [GROUP:xxx]
+  // marker in comments. After Beds24 has auto-allocated each master to its
+  // physical sub(s) and our Case 1/2 logic has merged each master→subs pair,
+  // we now merge across masters: collect every booking sharing the same
+  // group marker, pick the first as the canonical reservation, and merge
+  // physical room names + total price + commission across the rest.
+  const finalBookings: Beds24Booking[] = [...manualResults, ...result];
+  const byGroup = new Map<string, Beds24Booking[]>();
+  for (const b of finalBookings) {
+    const groupId = extractGroupId(b.comments ?? '');
+    if (!groupId) continue;
+    const arr = byGroup.get(groupId) ?? [];
+    arr.push(b);
+    byGroup.set(groupId, arr);
+  }
+
+  // Drop everything that belongs to a multi-row group; we'll replace with one
+  // merged booking per group below.
+  const groupConsumedIds = new Set<number>();
+  for (const arr of byGroup.values()) {
+    if (arr.length > 1) for (const b of arr) groupConsumedIds.add(b.id);
+  }
+  const ungrouped = finalBookings.filter((b) => !groupConsumedIds.has(b.id));
+  const groupedMerged: Beds24Booking[] = [];
+
+  for (const arr of byGroup.values()) {
+    if (arr.length <= 1) continue; // single-row "group" wasn't actually grouped
+    // Stable order: by id ascending — the lowest id is the canonical "package head".
+    const sorted = [...arr].sort((a, b) => a.id - b.id);
+    const head = sorted[0];
+    const base: Beds24Booking = { ...head };
+    // Combine physical rooms across all rows (already resolved by Case 1/2)
+    const allRooms: string[] = [];
+    for (const member of sorted) {
+      const linked = (member as Beds24Booking & { _linkedRooms?: string[] })._linkedRooms;
+      if (linked && linked.length > 0) {
+        allRooms.push(...linked);
+      } else {
+        const name = UNIT_MAP[member.roomId];
+        if (name) allRooms.push(name);
+      }
+    }
+    (base as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = [...new Set(allRooms)];
+    // Sum total package price + deposit so the merged reservation shows the full amount
+    base.price   = sorted.reduce((s, r) => s + (r.price   ?? 0), 0);
+    base.deposit = sorted.reduce((s, r) => s + (r.deposit ?? 0), 0);
+    base.commission = sorted.reduce((s, r) => s + (r.commission ?? 0), 0);
+    groupedMerged.push(base);
+  }
+
+  return [...ungrouped, ...groupedMerged];
+}
+
+/** Extracts the group id from a "[GROUP:xxx]" marker anywhere in comments.
+ *  Used by the multi-row package-booking merge in mergeGroupedBookings. */
+function extractGroupId(comments: string): string | null {
+  if (!comments) return null;
+  const m = comments.match(/\[GROUP:([^\]\s]+)\]/);
+  return m ? m[1] : null;
 }
 
 // ─── Parse blackout metadata from Beds24 comments ────────────────────────────
@@ -562,14 +621,63 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { roomId, arrival, departure, numAdult, numChild, firstName, lastName, email, phone, price, notes } = body;
+  const {
+    units,                    // new shape: [{ roomId, roomQty, price }, ...]
+    roomId, roomQty, price,   // legacy single-row shape (back-compat)
+    arrival, departure, numAdult, numChild,
+    firstName, lastName, email, phone, notes,
+  } = body as {
+    units?: { roomId: number; roomQty?: number; price?: number }[];
+    roomId?: number;
+    roomQty?: number;
+    price?: number;
+    arrival?: string;
+    departure?: string;
+    numAdult?: number;
+    numChild?: number;
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string;
+    notes?: string;
+  };
 
-  if (!roomId || !arrival || !departure || !firstName) {
-    return NextResponse.json({ error: "roomId, arrival, departure and firstName are required" }, { status: 400 });
+  if (!arrival || !departure || !firstName) {
+    return NextResponse.json({ error: "arrival, departure and firstName are required" }, { status: 400 });
   }
 
-  const booking = {
-    roomId: Number(roomId),
+  // Normalise input — accept both new units[] shape and legacy single-row.
+  const unitRows = Array.isArray(units) && units.length > 0
+    ? units.map((u) => ({
+        roomId:  Number(u.roomId),
+        roomQty: Math.max(1, Number(u.roomQty ?? 1)),
+        price:   Number(u.price ?? 0),
+      }))
+    : roomId
+      ? [{ roomId: Number(roomId), roomQty: Math.max(1, Number(roomQty ?? 1)), price: Number(price ?? 0) }]
+      : [];
+
+  if (unitRows.length === 0) {
+    return NextResponse.json({ error: "At least one unit row is required" }, { status: 400 });
+  }
+
+  // Multi-row bookings get a [GROUP:xxx] marker so mergeGroupedBookings can
+  // re-assemble them into a single visual reservation on GET. Single-row
+  // bookings skip the marker (no grouping needed).
+  const groupId = unitRows.length > 1
+    ? `pkg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    : null;
+  const groupMarker = groupId ? `[GROUP:${groupId}]` : '';
+
+  function buildComments(): string {
+    const parts = [APP_PHONE_MARKER];
+    if (groupMarker) parts.push(groupMarker);
+    if (notes && notes.trim()) parts.push(notes.trim());
+    return parts.join('\n');
+  }
+
+  const bookings = unitRows.map((row) => ({
+    roomId: row.roomId,
     status: "confirmed",
     arrival,
     departure,
@@ -579,26 +687,22 @@ export async function POST(req: NextRequest) {
     lastName: lastName ?? "",
     email: email ?? "",
     phone: phone ?? "",
-    // Beds24 forces referer="API" for V2 API POSTs regardless of what we
-    // send, so we tag the booking via comments instead — APP_PHONE_MARKER
-    // survives the round-trip and keys mapChannel() → "Direct-Phone".
     referer: "PhoneDirect",
     apiSource: "Direct",
-    comments: notes
-      ? `${APP_PHONE_MARKER}\n${notes}`
-      : APP_PHONE_MARKER,
-    // Top-level price field — shown in Beds24 UI and read by the reporting app
-    price: price ? Number(price) : 0,
-    // invoiceItems creates the charge line item in Beds24 invoicing
-    invoiceItems: price
-      ? [{ type: "charge", subType: 1, description: "Accommodation", qty: 1, amount: Number(price) }]
+    comments: buildComments(),
+    price: row.price > 0 ? row.price : 0,
+    // For VR rows with roomQty > 1, Beds24 auto-allocates to multiple physical
+    // subs. The field is harmless when omitted but explicit when set.
+    ...(row.roomQty > 1 ? { roomQty: row.roomQty } : {}),
+    invoiceItems: row.price > 0
+      ? [{ type: "charge", subType: 1, description: "Accommodation", qty: 1, amount: row.price }]
       : [],
-  };
+  }));
 
   const res = await fetch(`${BEDS24_API_BASE}/bookings`, {
     method: "POST",
     headers: { token, "Content-Type": "application/json" },
-    body: JSON.stringify([booking]),
+    body: JSON.stringify(bookings),
     cache: "no-store",
   });
 
@@ -608,7 +712,37 @@ export async function POST(req: NextRequest) {
   }
 
   const json = await res.json();
-  return NextResponse.json({ ok: true, data: json });
+
+  // Extract created booking IDs from Beds24's response. Shape varies:
+  //   [{ id, new, info }]                      ← bare array
+  //   { success: true, data: [{ id, ... }] }   ← wrapped
+  function extractAllIds(d: unknown): (string | number)[] {
+    const ids: (string | number)[] = [];
+    const walk = (v: unknown) => {
+      if (!v) return;
+      if (Array.isArray(v)) { for (const item of v) walk(item); return; }
+      if (typeof v === 'object') {
+        const obj = v as Record<string, unknown>;
+        if (typeof obj.id === 'string' || typeof obj.id === 'number') ids.push(obj.id);
+        if (obj.data !== undefined) walk(obj.data);
+        // Beds24 sometimes nests created records under "new"
+        if (obj.new !== undefined) walk(obj.new);
+      }
+    };
+    walk(d);
+    return ids;
+  }
+  const allIds = extractAllIds(json);
+  const firstId = allIds[0];
+  const reservationNumber = firstId !== undefined ? `BH-${firstId}` : undefined;
+
+  return NextResponse.json({
+    ok: true,
+    data: json,
+    reservationNumber,           // canonical (first booking's number)
+    reservationNumbers: allIds.map((id) => `BH-${id}`),
+    groupId,
+  });
 }
 
 // ─── GET handler — fetch all bookings ────────────────────────────────────────

@@ -1,11 +1,39 @@
 'use client';
 import { useEffect, useState } from "react";
 
-const ROOM_OPTIONS = [
-  { label: "K.201", roomId: 656437 },
-  { label: "K.202", roomId: 648596 },
-  { label: "K.203", roomId: 648772 },
-  { label: "O.308", roomId: 674672 },
+// Operator-facing manual bookings target SELLING UNITS only — Beds24 handles
+// physical-unit allocation underneath. Physical room IDs (K.102, K.201, …)
+// are intentionally NOT in this dropdown; they're inferred from Beds24's
+// sub-bookings after the master is created.
+//
+// Selling units:
+//   • 1KK Urban Studios — VR 679714, qty 1..3 (allocates K.102/103/106)
+//   • K.201             — physical, qty fixed at 1 (only one unit exists)
+//   • 1KK Deluxe        — VR 648816, qty 1..2 (allocates K.202/203). The
+//                         operator-facing name is "1KK Deluxe"; "Twin
+//                         Apartments" is an Airbnb-only listing concept.
+//   • O.308 (2 Bedroom) — physical, qty fixed at 1 (only one unit exists)
+interface SellingUnit {
+  roomId: number;
+  label: string;
+  category: 'Urban' | 'Deluxe';
+  maxQty: number;
+}
+
+const SELLING_UNITS: SellingUnit[] = [
+  { roomId: 679714, label: '1KK Urban Studios',         category: 'Urban',  maxQty: 3 },
+  { roomId: 656437, label: 'K.201 (2KK Deluxe)',        category: 'Deluxe', maxQty: 1 },
+  { roomId: 648816, label: '1KK Deluxe',                category: 'Deluxe', maxQty: 2 },
+  { roomId: 674672, label: 'O.308 (2 Bedroom)',         category: 'Deluxe', maxQty: 1 },
+];
+
+const SELLING_UNIT_BY_ROOM_ID: Record<number, SellingUnit> = Object.fromEntries(
+  SELLING_UNITS.map((s) => [s.roomId, s]),
+);
+
+const SELLING_UNIT_GROUPS = [
+  { category: 'Urban'  as const, options: SELLING_UNITS.filter((s) => s.category === 'Urban') },
+  { category: 'Deluxe' as const, options: SELLING_UNITS.filter((s) => s.category === 'Deluxe') },
 ];
 
 interface Props {
@@ -13,8 +41,21 @@ interface Props {
   onCreated: () => void;
 }
 
-interface FormState {
+/** One row in the multi-unit booking form. Multiple rows let the operator
+ *  build combination bookings (e.g. 1 × 1KK Urban + 1 × 1KK Deluxe for a
+ *  4-guest party). Each row turns into one Beds24 booking; all rows share
+ *  the same guest details and dates and are linked via a [GROUP:xxx]
+ *  marker in comments. */
+interface UnitRow {
   roomId: number;
+  /** 1..maxQty for the selected selling unit. */
+  roomQty: number;
+  /** Per-row price in CZK (raw input — converted on submit). */
+  price: string;
+}
+
+interface FormState {
+  units: UnitRow[];
   arrival: string;
   departure: string;
   numAdult: number;
@@ -23,12 +64,11 @@ interface FormState {
   lastName: string;
   email: string;
   phone: string;
-  price: string;
   notes: string;
 }
 
 const DEFAULT_FORM: FormState = {
-  roomId: 648596,
+  units: [{ roomId: 679714, roomQty: 1, price: "" }],
   arrival: "",
   departure: "",
   numAdult: 1,
@@ -37,7 +77,6 @@ const DEFAULT_FORM: FormState = {
   lastName: "",
   email: "",
   phone: "",
-  price: "",
   notes: "",
 };
 
@@ -109,6 +148,39 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  // ── Unit-row helpers ──────────────────────────────────────────────────────
+  function updateUnit(idx: number, patch: Partial<UnitRow>) {
+    setForm((prev) => ({
+      ...prev,
+      units: prev.units.map((u, i) => (i === idx ? { ...u, ...patch } : u)),
+    }));
+  }
+
+  function addUnit() {
+    setForm((prev) => ({
+      ...prev,
+      units: [...prev.units, { roomId: 679714, roomQty: 1, price: "" }],
+    }));
+  }
+
+  function removeUnit(idx: number) {
+    setForm((prev) => {
+      if (prev.units.length <= 1) return prev;
+      return { ...prev, units: prev.units.filter((_, i) => i !== idx) };
+    });
+  }
+
+  // Per-row price as a number (0 when blank/invalid)
+  function unitPriceCzk(u: UnitRow): number {
+    const n = parseFloat(u.price);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  // Sum of all row prices — replaces the old top-level form.price
+  function totalPrice(): number {
+    return form.units.reduce((s, u) => s + unitPriceCzk(u), 0);
+  }
+
   // Initialize default send dates whenever payments are reset or arrival changes.
   // Row 1 = today; row 2 = arrival (check-in); row 3 = no default (user fills).
   // Only fills empty rows so we don't trample manual edits.
@@ -163,8 +235,8 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
 
   function switchMode(newMode: PaymentMode) {
     if (newMode === paymentMode) return;
-    const priceNum = parseFloat(form.price);
-    const hasPrice = Number.isFinite(priceNum) && priceNum > 0;
+    const priceNum = totalPrice();
+    const hasPrice = priceNum > 0;
     setPayments((prev) =>
       prev.map((p) => {
         const v = parseFloat(p.amount);
@@ -197,8 +269,8 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     return Math.round(v);
   }
 
-  // Live sum for display
-  const priceNum = parseFloat(form.price) || 0;
+  // Live sum for display — derived from all unit rows
+  const priceNum = totalPrice();
   const sumActual = payments.reduce((s, p) => s + rowAmountCzk(p, priceNum), 0);
   const sumPct = paymentMode === 'pct'
     ? payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
@@ -255,45 +327,57 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
       }
     }
 
+    // Per-row validation
+    for (let i = 0; i < form.units.length; i++) {
+      const u = form.units[i];
+      const su = SELLING_UNIT_BY_ROOM_ID[u.roomId];
+      if (!su) {
+        setError(`Row ${i + 1}: invalid selling unit`);
+        return;
+      }
+      if (u.roomQty < 1 || u.roomQty > su.maxQty) {
+        setError(`Row ${i + 1}: qty must be 1–${su.maxQty} for ${su.label}`);
+        return;
+      }
+    }
+
     setError(null);
     setSubmitting(true);
     try {
-      // 1. Create the Beds24 booking
+      // 1. Create the Beds24 booking(s).
+      // Server-side handles single vs multi-row: when units.length > 1 it
+      // generates a [GROUP:xxx] marker and POSTs an array of bookings to
+      // Beds24 in one call, returning all created IDs.
+      const payload = {
+        units: form.units.map((u) => ({
+          roomId: u.roomId,
+          roomQty: u.roomQty,
+          price: unitPriceCzk(u),
+        })),
+        arrival: form.arrival,
+        departure: form.departure,
+        numAdult: form.numAdult,
+        numChild: form.numChild,
+        firstName: form.firstName,
+        lastName: form.lastName,
+        email: form.email,
+        phone: form.phone,
+        notes: form.notes,
+      };
       const res = await fetch("/api/bookings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, price: form.price ? parseFloat(form.price) : 0 }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Failed to create booking");
 
-      // Beds24 POST /bookings response shapes vary by version. Common ones:
-      //   [{ id, new, info }]                      ← bare array
-      //   { success: true, data: [{ id, ... }] }   ← wrapped
-      //   { id, ... }                              ← single object
-      // Walk through them all and return just the id (number/string), never an object.
-      function extractBookingId(d: unknown): string | number | undefined {
-        if (!d) return undefined;
-        if (Array.isArray(d)) {
-          const first = d[0];
-          if (first && typeof first === 'object') {
-            const id = (first as Record<string, unknown>).id;
-            // Guard: only accept primitives — prevents "BH-[object Object]" if Beds24 shape changes
-            return (typeof id === 'string' || typeof id === 'number') ? id : undefined;
-          }
-          return typeof first === 'string' || typeof first === 'number' ? first : undefined;
-        }
-        if (typeof d === 'object') {
-          const obj = d as Record<string, unknown>;
-          if (typeof obj.id === 'string' || typeof obj.id === 'number') return obj.id;
-          if (obj.data !== undefined) return extractBookingId(obj.data); // unwrap { data: [...] }
-        }
-        return undefined;
-      }
-      const newBookingId = extractBookingId(json.data);
-      const reservationNumber = newBookingId ? `BH-${newBookingId}` : undefined;
+      // Server returns the canonical reservation number (first booking ID)
+      // along with the full list of created IDs. The payment link attaches
+      // to the canonical reservation so the merged "package" view shows it.
+      const reservationNumber: string | undefined = json.reservationNumber;
 
-      if (!includePaymentLink || !form.price || parseFloat(form.price) <= 0) {
+      if (!includePaymentLink || priceNum <= 0) {
         onCreated();
         return;
       }
@@ -338,7 +422,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amountCzk: parseFloat(form.price),
+          amountCzk: priceNum,
           description,
           guestEmail: form.email || undefined,
           guestPhone: form.phone || undefined,
@@ -360,12 +444,13 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
   // ── Link step ──────────────────────────────────────────────────────────────
   if (step === 'link') {
     const guestName = [form.firstName, form.lastName].filter(Boolean).join(' ');
+    const submittedTotal = totalPrice();
 
     // Build display rows: split path uses resultPayments; single path synthesizes one row
     const displayRows: ResultPaymentRow[] = resultPayments ?? [{
       paymentNumber: 1,
       totalPayments: 1,
-      amountCzk: parseFloat(form.price) || 0,
+      amountCzk: submittedTotal,
       sendDate: todayLocal(),
       status: 'sent',
       url: paymentUrl,
@@ -400,7 +485,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 Baker House — {form.arrival} to {form.departure}
               </p>
               <p className="text-xl font-bold text-indigo-700">
-                {(parseFloat(form.price) || 0).toLocaleString('cs-CZ')} Kč
+                {submittedTotal.toLocaleString('cs-CZ')} Kč
               </p>
             </div>
 
@@ -512,19 +597,8 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         {/* Form */}
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
 
-          {/* Room + Dates */}
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Room">
-              <select
-                value={form.roomId}
-                onChange={(e) => set("roomId", parseInt(e.target.value))}
-                className={inputCls}
-              >
-                {ROOM_OPTIONS.map((r) => (
-                  <option key={r.roomId} value={r.roomId}>{r.label}</option>
-                ))}
-              </select>
-            </Field>
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Check-in">
               <input
                 type="date"
@@ -544,6 +618,96 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 className={inputCls}
               />
             </Field>
+          </div>
+
+          {/* Units — one or more rows. Each row becomes a separate Beds24
+              booking; multi-row bookings are linked into a single visual
+              reservation via a group marker in comments. */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-gray-600">Units</p>
+            {form.units.map((unit, idx) => {
+              const su = SELLING_UNIT_BY_ROOM_ID[unit.roomId];
+              const showQty = su?.maxQty && su.maxQty > 1;
+              return (
+                <div
+                  key={idx}
+                  className={`grid ${showQty ? 'grid-cols-[1fr_70px_120px_28px]' : 'grid-cols-[1fr_120px_28px]'} gap-2 items-end`}
+                >
+                  <Field label={idx === 0 ? "Selling unit" : ""}>
+                    <select
+                      value={unit.roomId}
+                      onChange={(e) => {
+                        const newId = parseInt(e.target.value);
+                        // Reset qty to 1 when switching unit (qty bounds change)
+                        updateUnit(idx, { roomId: newId, roomQty: 1 });
+                      }}
+                      className={inputCls}
+                    >
+                      {SELLING_UNIT_GROUPS.map((group) => (
+                        <optgroup key={group.category} label={group.category}>
+                          {group.options.map((o) => (
+                            <option key={o.roomId} value={o.roomId}>{o.label}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                  {showQty && (
+                    <Field label={idx === 0 ? "Qty" : ""}>
+                      <select
+                        value={unit.roomQty}
+                        onChange={(e) => updateUnit(idx, { roomQty: parseInt(e.target.value) })}
+                        className={inputCls}
+                      >
+                        {Array.from({ length: su!.maxQty }, (_, i) => i + 1).map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
+                  <Field label={idx === 0 ? "Price (Kč)" : ""}>
+                    <input
+                      type="number"
+                      min={0}
+                      value={unit.price}
+                      onChange={(e) => updateUnit(idx, { price: e.target.value })}
+                      placeholder="0"
+                      className={inputCls}
+                    />
+                  </Field>
+                  {form.units.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeUnit(idx)}
+                      className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+                      title="Remove this unit"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  ) : <span />}
+                </div>
+              );
+            })}
+
+            <div className="flex items-center justify-between pt-1">
+              <button
+                type="button"
+                onClick={addUnit}
+                className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add another unit
+              </button>
+              {form.units.length > 1 && (
+                <div className="text-xs text-gray-600">
+                  Total: <strong>{priceNum.toLocaleString('cs-CZ')} Kč</strong>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Guest name */}
@@ -588,7 +752,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
           </div>
 
           {/* Guests + Price */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Adults">
               <input
                 type="number"
@@ -606,17 +770,6 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 max={10}
                 value={form.numChild}
                 onChange={(e) => set("numChild", parseInt(e.target.value) || 0)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Price (Kč)">
-              <input
-                type="number"
-                min={0}
-                required
-                value={form.price}
-                onChange={(e) => set("price", e.target.value)}
-                placeholder="0"
                 className={inputCls}
               />
             </Field>
