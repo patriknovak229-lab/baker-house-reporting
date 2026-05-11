@@ -114,7 +114,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const fromAddress = process.env.SMTP_FROM_RESERVATIONS ?? RESERVATIONS_ALIAS;
+  // Trim + falsy-coerce so an empty env value falls back to the hardcoded alias
+  const fromAddress = process.env.SMTP_FROM_RESERVATIONS?.trim() || RESERVATIONS_ALIAS;
   const from = `"Baker House Apartments" <${fromAddress}>`;
 
   try {
