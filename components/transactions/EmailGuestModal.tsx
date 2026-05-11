@@ -74,6 +74,10 @@ export default function EmailGuestModal({
   const [bodyText, setBodyText] = useState(DEFAULT_THANK_YOU_BODY.join('\n\n'));
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Send state (Phase 6)
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+
   // Pre-fill subject when we land on preview step
   useEffect(() => {
     if (step === 'preview' && !subject) {
@@ -204,6 +208,39 @@ export default function EmailGuestModal({
       setVoucherError((e as Error).message);
     } finally {
       setVoucherLoading(false);
+    }
+  }
+
+  async function handleSend() {
+    if (!resolvedVoucher) return;
+    if (!subject.trim()) {
+      setSendError('Subject is required');
+      return;
+    }
+    if (!renderedHtml) {
+      setSendError('Email body could not be rendered');
+      return;
+    }
+    setSending(true);
+    setSendError(null);
+    try {
+      const res = await fetch('/api/send-guest-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: defaultEmail,
+          subject: subject.trim(),
+          html: renderedHtml,
+          reservationNumber: reservation.reservationNumber,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      onSent?.();
+    } catch (e) {
+      setSendError((e as Error).message);
+    } finally {
+      setSending(false);
     }
   }
 
@@ -439,6 +476,11 @@ export default function EmailGuestModal({
               {voucherError}
             </p>
           )}
+          {sendError && step === 'preview' && (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {sendError}
+            </p>
+          )}
         </div>
 
         {/* Footer */}
@@ -489,11 +531,11 @@ export default function EmailGuestModal({
             )}
             {step === 'preview' && (
               <button
-                disabled
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md opacity-40 cursor-not-allowed"
-                title="Send wired up in the next phase"
+                onClick={handleSend}
+                disabled={sending}
+                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                Send email
+                {sending ? 'Sending…' : 'Send email'}
               </button>
             )}
           </div>
