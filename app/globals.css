@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Mobile-overflow safety net: anchors the page at viewport width so no
+   stray-wide element (legend rows, dropdown menus, scaffold remnants) can
+   make the whole document scroll horizontally — which lets the operator
+   "slide" the layout to one side and lose their place. Individual wide
+   pieces (tables, calendar grid) still scroll inside their own containers
+   that have their own overflow-x-auto. */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
 /* Explicit keyframe definitions — Tailwind v4's production scanner can miss
    keyframes that are only referenced via animate-* utilities, causing animations
    to silently break on Vercel while working locally in dev mode. */

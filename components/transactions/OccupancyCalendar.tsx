@@ -132,14 +132,15 @@ export default function OccupancyCalendar({ reservations }: Props) {
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
+      {/* Header — wraps to a second row on narrow viewports so the legend +
+          nav + parking pill never push past the calendar's right edge. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 mb-4">
+        <div className="flex items-center gap-2 min-w-0">
           <p className="text-sm font-semibold text-gray-700">Availability</p>
-          <span className="text-xs text-gray-400">{formatDateRange(days)}</span>
+          <span className="text-xs text-gray-400 truncate">{formatDateRange(days)}</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
           {/* Navigation */}
           <div className="flex items-center gap-1">
             <button
@@ -190,17 +191,19 @@ export default function OccupancyCalendar({ reservations }: Props) {
             </span>
           </button>
 
-          {/* Legend */}
-          <div className="flex items-center gap-4 text-xs text-gray-500">
+          {/* Legend — labels collapse to swatches-only on mobile to keep the
+              header from outgrowing the viewport. Tooltip still shows the
+              label on long-press / hover. */}
+          <div className="flex items-center gap-2 sm:gap-4 text-xs text-gray-500">
             {[
               { label: "Free",    color: "bg-emerald-400" },
               { label: "Low",     color: "bg-amber-400"   },
               { label: "High",    color: "bg-orange-500"  },
               { label: "Full",    color: "bg-red-500"     },
             ].map(({ label, color }) => (
-              <span key={label} className="flex items-center gap-1.5">
+              <span key={label} className="flex items-center gap-1.5" title={label}>
                 <span className={`inline-block w-3 h-3 rounded-sm ${color}`} />
-                {label}
+                <span className="hidden sm:inline">{label}</span>
               </span>
             ))}
           </div>
