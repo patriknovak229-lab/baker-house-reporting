@@ -182,10 +182,12 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
   }
 
   // ── Fetch-prices flow ──────────────────────────────────────────────────────
-  // Pulls Beds24's daily rates for the selected dates and auto-fills the
-  // per-row Price field for every row (multiplied by its qty). Uses
-  // ignoreAvailability=true so we get rates even when the unit shows as
-  // booked — operator may be entering a manual booking that overrides.
+  // Pulls Beds24's per-unit rate for the selected dates (offers endpoint —
+  // applies the Direct rate-plan multipliers so it matches what the unit
+  // sells for on bakerhouseapartments.cz) and auto-fills each row's price
+  // multiplied by qty. If a unit is fully booked for those dates the offers
+  // endpoint returns null — that row's price is left untouched and the
+  // status note tells the operator which rooms had no rate.
   const [fetchingPrices, setFetchingPrices] = useState(false);
   const [priceFetchNote, setPriceFetchNote] = useState<string | null>(null);
 
@@ -194,7 +196,11 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     setFetchingPrices(true);
     setPriceFetchNote(null);
     try {
-      const url = `/api/price-check?arrival=${encodeURIComponent(form.arrival)}&departure=${encodeURIComponent(form.departure)}&ignoreAvailability=true`;
+      // Default mode (no ignoreAvailability) → offers endpoint → rates with
+      // Direct-channel multipliers applied. ignoreAvailability=true returns
+      // raw daily price1 which is the unadjusted base rate, not what guests
+      // would actually pay.
+      const url = `/api/price-check?arrival=${encodeURIComponent(form.arrival)}&departure=${encodeURIComponent(form.departure)}`;
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'Price check failed');
@@ -225,11 +231,11 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
       }));
 
       if (filled === 0) {
-        setPriceFetchNote('No rates published in Beds24 for these dates.');
+        setPriceFetchNote('None of the selected units are available for these dates — enter prices manually.');
       } else if (missing > 0) {
-        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'}; ${missing} had no rate in Beds24.`);
+        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'}; ${missing} unavailable for these dates — enter those manually.`);
       } else {
-        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'} with Beds24 rates.`);
+        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'} with the rates these units sell at.`);
       }
       setTimeout(() => setPriceFetchNote(null), 4000);
     } catch (e) {
@@ -693,7 +699,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 title={
                   !form.arrival || !form.departure
                     ? 'Set check-in and check-out first'
-                    : 'Pull Beds24 daily rates for these dates and fill the price fields (qty-multiplied)'
+                    : 'Pull the rates these units sell at on the website and fill the price fields (qty-multiplied)'
                 }
               >
                 {fetchingPrices ? (
