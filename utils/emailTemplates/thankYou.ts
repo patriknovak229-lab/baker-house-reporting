@@ -18,7 +18,17 @@ export interface ThankYouVars {
   voucherAmount?: string;
   /** Optional — ISO date YYYY-MM-DD. Defaults to "1 year from today" in the rendered text. */
   voucherExpiresAt?: string;
+  /** Optional override — array of paragraph strings replacing the default body copy.
+   *  Empty strings are filtered out. Use when operator wants to customise the message. */
+  bodyParagraphs?: string[];
 }
+
+/** Default body copy used when `bodyParagraphs` is not supplied. Exposed so the
+ *  modal can pre-fill its editor with the same text we'd otherwise render. */
+export const DEFAULT_THANK_YOU_BODY = [
+  'Thank you for staying with us at Baker House Apartments — and especially for the wonderful rating you left us. It genuinely means a lot to our small family-run team.',
+  'As a small token of our appreciation, please accept the voucher below. Use it on your next stay with us, or pass it on to a friend or family member.',
+];
 
 export const THANK_YOU_SUBJECT = (firstName: string) =>
   `Thank you for staying with Baker House Apartments`
@@ -32,6 +42,12 @@ export function renderThankYouEmail(vars: ThankYouVars): string {
   const voucherCode = (vars.voucherCode || '').trim();
   const voucherAmount = (vars.voucherAmount || '').trim() || 'Special discount';
   const expiresAt = formatExpiry(vars.voucherExpiresAt);
+  const paragraphs = (vars.bodyParagraphs ?? DEFAULT_THANK_YOU_BODY)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  const bodyHtml = paragraphs
+    .map((p) => `<p style="margin:0 0 14px">${escapeHtml(p)}</p>`)
+    .join('\n          ');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -60,14 +76,7 @@ export function renderThankYouEmail(vars: ThankYouVars): string {
         <!-- Greeting + body copy -->
         <tr><td style="padding:28px 32px 16px;font-size:15px;color:${DARK_BROWN}">
           <p style="margin:0 0 14px">Dear ${escapeHtml(firstName)},</p>
-          <p style="margin:0 0 14px">
-            Thank you for staying with us at Baker House Apartments — and especially for the
-            wonderful rating you left us. It genuinely means a lot to our small family-run team.
-          </p>
-          <p style="margin:0 0 14px">
-            As a small token of our appreciation, please accept the voucher below.
-            Use it on your next stay with us, or pass it on to a friend or family member.
-          </p>
+          ${bodyHtml}
         </td></tr>
 
         ${hasVoucher ? renderVoucherBlock(voucherCode, voucherAmount, expiresAt) : ''}
