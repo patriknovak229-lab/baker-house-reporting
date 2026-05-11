@@ -20,7 +20,10 @@ function extractPrice(roomOffers: unknown): number | null {
 }
 
 export type PriceCheckOffer = {
-  room: string;      // "K.201" | "K.202 / K.203"
+  /** Beds24 sellable room ID — used by the manual booking form to match
+   *  fetched prices to the corresponding unit row. */
+  roomId: number;
+  room: string;      // "K.201" | "K.202 / K.203" | "1KK Urban Studios"
   description: string;
   price: number | null;
 };
@@ -241,21 +244,25 @@ export async function GET(req: NextRequest) {
     // Order matches the calendar/filter layout: Urban first, then Deluxe units
     const offers: PriceCheckOffer[] = [
       {
+        roomId: SELL_ROOM_URBAN,
         room: '1KK Urban Studios',
         description: '1KK Urban (K.102 / K.103 / K.106)',
         price: priceMap[SELL_ROOM_URBAN] ?? null,
       },
       {
+        roomId: SELL_ROOM_2KK,
         room: 'K.201',
         description: '2KK Deluxe Apartment',
         price: priceMap[SELL_ROOM_2KK] ?? null,
       },
       {
+        roomId: SELL_ROOM_1KK,
         room: 'K.202 / K.203',
         description: '1KK Deluxe Apartment',
         price: priceMap[SELL_ROOM_1KK] ?? null,
       },
       {
+        roomId: SELL_ROOM_2BR,
         room: 'O.308',
         description: '2 Bedroom Apartment',
         price: priceMap[SELL_ROOM_2BR] ?? null,

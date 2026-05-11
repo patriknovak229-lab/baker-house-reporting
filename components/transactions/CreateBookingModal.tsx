@@ -181,6 +181,65 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     return form.units.reduce((s, u) => s + unitPriceCzk(u), 0);
   }
 
+  // ── Fetch-prices flow ──────────────────────────────────────────────────────
+  // Pulls Beds24's daily rates for the selected dates and auto-fills the
+  // per-row Price field for every row (multiplied by its qty). Uses
+  // ignoreAvailability=true so we get rates even when the unit shows as
+  // booked — operator may be entering a manual booking that overrides.
+  const [fetchingPrices, setFetchingPrices] = useState(false);
+  const [priceFetchNote, setPriceFetchNote] = useState<string | null>(null);
+
+  async function fetchPricesForAllRows() {
+    if (!form.arrival || !form.departure) return;
+    setFetchingPrices(true);
+    setPriceFetchNote(null);
+    try {
+      const url = `/api/price-check?arrival=${encodeURIComponent(form.arrival)}&departure=${encodeURIComponent(form.departure)}&ignoreAvailability=true`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'Price check failed');
+
+      // Build a per-unit price map keyed by selling roomId
+      const perUnitByRoomId = new Map<number, number>();
+      for (const offer of (data.offers ?? []) as { roomId?: number; price?: number | null }[]) {
+        if (offer.roomId && offer.price != null && offer.price > 0) {
+          perUnitByRoomId.set(offer.roomId, offer.price);
+        }
+      }
+
+      // Fill each row — multiply per-unit price by the row's qty
+      let filled = 0;
+      let missing = 0;
+      setForm((prev) => ({
+        ...prev,
+        units: prev.units.map((u) => {
+          const perUnit = perUnitByRoomId.get(u.roomId);
+          if (perUnit == null) {
+            missing += 1;
+            return u; // leave the price as-is for rows where Beds24 has no rate
+          }
+          filled += 1;
+          const total = Math.round(perUnit * u.roomQty);
+          return { ...u, price: String(total) };
+        }),
+      }));
+
+      if (filled === 0) {
+        setPriceFetchNote('No rates published in Beds24 for these dates.');
+      } else if (missing > 0) {
+        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'}; ${missing} had no rate in Beds24.`);
+      } else {
+        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'} with Beds24 rates.`);
+      }
+      setTimeout(() => setPriceFetchNote(null), 4000);
+    } catch (e) {
+      setPriceFetchNote((e as Error).message);
+      setTimeout(() => setPriceFetchNote(null), 4000);
+    } finally {
+      setFetchingPrices(false);
+    }
+  }
+
   // Initialize default send dates whenever payments are reset or arrival changes.
   // Row 1 = today; row 2 = arrival (check-in); row 3 = no default (user fills).
   // Only fills empty rows so we don't trample manual edits.
@@ -624,7 +683,32 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
               booking; multi-row bookings are linked into a single visual
               reservation via a group marker in comments. */}
           <div className="space-y-2">
-            <p className="text-xs font-medium text-gray-600">Units</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-gray-600">Units</p>
+              <button
+                type="button"
+                onClick={fetchPricesForAllRows}
+                disabled={!form.arrival || !form.departure || fetchingPrices}
+                className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={
+                  !form.arrival || !form.departure
+                    ? 'Set check-in and check-out first'
+                    : 'Pull Beds24 daily rates for these dates and fill the price fields (qty-multiplied)'
+                }
+              >
+                {fetchingPrices ? (
+                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+                {fetchingPrices ? 'Fetching…' : 'Fetch prices from Beds24'}
+              </button>
+            </div>
             {form.units.map((unit, idx) => {
               const su = SELLING_UNIT_BY_ROOM_ID[unit.roomId];
               const showQty = su?.maxQty && su.maxQty > 1;
@@ -708,6 +792,10 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 </div>
               )}
             </div>
+
+            {priceFetchNote && (
+              <p className="text-[11px] text-gray-500 italic">{priceFetchNote}</p>
+            )}
           </div>
 
           {/* Guest name */}
