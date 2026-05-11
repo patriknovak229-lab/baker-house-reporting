@@ -3,9 +3,10 @@ import { getAccessToken } from '@/utils/beds24Auth';
 import { requireRole } from '@/utils/authGuard';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
-const PROPERTY_ID = 311322;
 
-// Sellable Beds24 room IDs (what the offers endpoint returns prices for)
+// Sellable Beds24 room IDs (what the offers endpoint returns prices for).
+// We filter on these explicitly so price-check works regardless of which
+// Beds24 property each room is registered under.
 const SELL_ROOM_2KK   = 656437; // K.201 — 2KK Deluxe (physical = sellable, same ID)
 const SELL_ROOM_1KK   = 648816; // Virtual 1KK Deluxe (qty=2, maps to K.202 + K.203)
 const SELL_ROOM_2BR   = 674672; // O.308 — 2 Bedroom Apartment (physical = sellable, same ID)
@@ -196,8 +197,17 @@ export async function GET(req: NextRequest) {
       priceMap = result.priceMap;
       rawByRoom = result.rawByRoom;
     } else {
+      // Previously this filtered by propertyId=311322 which assumed all
+      // sellable rooms sit on one Beds24 property. If Urban is set up on a
+      // different property (or rates aren't published yet for the VR on
+      // 311322) the Urban row never came back and showed as "Unavailable".
+      //
+      // Switch to an explicit roomId list so Beds24 returns exactly the
+      // four sellable units regardless of property. Filter param is
+      // comma-separated per the V2 offers endpoint spec.
+      const wantedIds = [SELL_ROOM_2KK, SELL_ROOM_1KK, SELL_ROOM_2BR, SELL_ROOM_URBAN];
       const params = new URLSearchParams({
-        propertyId: String(PROPERTY_ID),
+        roomId: wantedIds.join(','),
         arrival,
         departure,
         numAdults: adults,
@@ -224,14 +234,14 @@ export async function GET(req: NextRequest) {
       for (const row of rows) {
         if (row === null || typeof row !== 'object') continue;
         const rid = Number((row as { roomId?: unknown }).roomId);
-        if (
-          rid === SELL_ROOM_2KK
-          || rid === SELL_ROOM_1KK
-          || rid === SELL_ROOM_2BR
-          || rid === SELL_ROOM_URBAN
-        ) {
+        if (wantedIds.includes(rid)) {
           priceMap[rid] = extractPrice((row as { offers?: unknown }).offers);
         }
+      }
+
+      // Capture raw response for debug=1 so we can diagnose missing rooms
+      if (debug) {
+        rawByRoom = { _rawOffers: data } as Record<number, unknown>;
       }
     }
 
