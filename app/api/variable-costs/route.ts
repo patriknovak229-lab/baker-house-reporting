@@ -11,10 +11,15 @@ const KEY_CONSUMABLE_ENTRIES = 'baker:consumable-entries';
 // ── Room mapping: Beds24 roomId → reporting display name ─────────────────────
 // Matches cleaning app src/lib/room-mapping.ts + reporting types/reservation.ts
 export const BEDS24_ID_TO_ROOM: Record<string, string> = {
+  // Deluxe
   '656437': 'K.201',
   '648596': 'K.202',
   '648772': 'K.203',
   '674672': 'O.308',
+  // Urban (new — opening soon)
+  '679703': 'K.102',
+  '679704': 'K.103',
+  '679705': 'K.106',
 };
 
 // Reverse: reporting room display name → Beds24 roomId

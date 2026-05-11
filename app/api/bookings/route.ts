@@ -46,10 +46,19 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
 // ─── Room mapping ──────────────────────────────────────────────────────────────
 // Derived from raw response inspection. Confirm in Beds24 → Properties → Rooms.
 const UNIT_MAP: Record<number, Room> = {
+  // Deluxe — existing
   656437: "K.201",
   648596: "K.202",
   648772: "K.203",
   674672: "O.308",
+  // Urban — new (1KK Urban Studios, opening in ~1 week)
+  679703: "K.102",
+  679704: "K.103",
+  679705: "K.106",
+  // Note: 679714 is the "1KK Urban Studios" virtual/selling room — not a
+  // physical unit. Beds24 auto-allocates VR bookings to one of the three
+  // physical sub-rooms (same pattern as 648816 → K.202/K.203), so the VR
+  // itself is intentionally NOT in UNIT_MAP — sub-bookings are.
 };
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────

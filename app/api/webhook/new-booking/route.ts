@@ -73,15 +73,21 @@ const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 const NOTIFIED_TTL_SECONDS = 2 * 60 * 60; // 2 hours
 
 const ROOM_MAP: Record<string, string> = {
+  // Deluxe physical rooms
   "656437": "K.201",
   "648596": "K.202",
   "648772": "K.203",
   "674672": "O.308",
-  // Virtual sellable for the 1KK pair. Direct-web bookings via the rental-site
-  // arrive on this VR with the full price; the physical sub allocated by Beds24
-  // ends up with price=0 (skipped by the rule below). Without this entry the
-  // master was being skipped as "virtual room" → zero Telegram notifications.
+  // Deluxe virtual sellable for the 1KK Deluxe pair (Twin Apartments).
+  // Direct-web bookings arrive on this VR with the full price; the physical
+  // sub allocated by Beds24 ends up with price=0 (skipped by the rule below).
   "648816": "K.202 / K.203",
+  // Urban physical rooms (1KK Urban Studios, opening soon)
+  "679703": "K.102",
+  "679704": "K.103",
+  "679705": "K.106",
+  // Urban virtual sellable for the 1KK Urban triple
+  "679714": "K.102 / K.103 / K.106",
 };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
