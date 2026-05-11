@@ -6,7 +6,10 @@ import type { Room } from "@/types/reservation";
 export const EUR_TO_CZK = 25;
 
 // ── Rooms config ─────────────────────────────────────────────────────────────
-export const ALL_ROOMS: Room[] = ["K.201", "K.202", "K.203", "O.308"];
+// Urban first to match calendar ordering, then Deluxe. Kept in sync with
+// utils/roomCategory.ts — adding a future room means editing roomCategory
+// and refreshing this list to match.
+export const ALL_ROOMS: Room[] = ["K.102", "K.103", "K.106", "K.201", "K.202", "K.203", "O.308"];
 
 // ── Channel cost config ───────────────────────────────────────────────────────
 // commissionRate: % of GBV taken by the platform as their fee

@@ -7,6 +7,7 @@ import type {
   PaymentStatus,
   CustomerFlag,
 } from "@/types/reservation";
+import { groupRoomsByCategory } from "@/utils/roomCategory";
 
 export interface Filters {
   channels: Channel[];
@@ -75,11 +76,61 @@ function MultiCheckbox<T extends string>({
   );
 }
 
+/** Room filter rendered as two clearly-separated category groups (Urban / Deluxe).
+ *  Mirrors the calendar's grouping so the filter visually reflects the same taxonomy. */
+function RoomFilterGrouped({
+  selected,
+  onChange,
+}: {
+  selected: Room[];
+  onChange: (v: Room[]) => void;
+}) {
+  const groups = groupRoomsByCategory();
+  return (
+    <div>
+      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+        Room
+      </p>
+      <div className="space-y-2">
+        {groups.map((group) => (
+          <div key={group.category}>
+            <p
+              className={`text-[10px] font-semibold uppercase tracking-wider mb-1 ${
+                group.category === 'Urban' ? 'text-cyan-700' : 'text-amber-700'
+              }`}
+            >
+              {group.category}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {group.rooms.map((opt) => {
+                const room = opt as Room;
+                const active = selected.includes(room);
+                return (
+                  <button
+                    key={room}
+                    onClick={() => onChange(toggle(selected, room))}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                      active
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                    }`}
+                  >
+                    {room}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
   const [open, setOpen] = useState(false);
 
   const channels: Channel[] = ["Booking.com", "Airbnb", "Direct", "Direct-Phone", "Direct-Web"];
-  const rooms: Room[] = ["K.201", "K.202", "K.203", "O.308"];
   const cleaningStatuses: CleaningStatus[] = [
     "Pending",
     "In Progress",
@@ -158,9 +209,7 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
               selected={filters.channels}
               onChange={(v) => onChange({ ...filters, channels: v })}
             />
-            <MultiCheckbox
-              label="Room"
-              options={rooms}
+            <RoomFilterGrouped
               selected={filters.rooms}
               onChange={(v) => onChange({ ...filters, rooms: v })}
             />
