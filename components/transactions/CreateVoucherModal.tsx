@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { normalizeForSearch } from '@/utils/stringUtils';
+import { generateCode, generateSuffix } from '@/utils/voucherCode';
 import type { ReservationSummary } from './PaymentLinkModal';
 
 interface Props {
@@ -18,36 +19,6 @@ interface Props {
 
 type Step = 'form' | 'created';
 type DiscountType = 'fixed' | 'percentage';
-
-/** Strip all non-alphanumeric characters for the voucher code */
-function sanitizeCode(s: string): string {
-  return s.replace(/[^a-zA-Z0-9]/g, '');
-}
-
-/** 4 random hex chars — used as a suffix to guarantee voucher-code uniqueness
- *  even when multiple vouchers share the same name and amount (or have no name
- *  at all). 65,536 combinations per prefix+amount — collision risk is negligible
- *  for our volume, and on the rare miss the server returns 409 and the modal
- *  regenerates the suffix and retries. */
-function generateSuffix(): string {
-  // crypto.randomUUID is available in modern browsers + Node 19+
-  return crypto.randomUUID().replace(/-/g, '').slice(0, 4).toUpperCase();
-}
-
-/** Build a voucher code with guaranteed uniqueness.
- *  - With name (linked or named standalone):  "Tamara-1000-A3F9"
- *  - Without name (unlinked):                 "BAKER-1000-A3F9"
- *  Suffix is supplied by caller so the modal can show a stable preview
- *  and retry on server-side collision (409). */
-function generateCode(firstName: string, value: string, suffix: string): string {
-  const name = sanitizeCode(firstName).replace(/\s+/g, '');
-  const val = sanitizeCode(value);
-  if (!val) return '';
-  const prefix = name
-    ? name.charAt(0).toUpperCase() + name.slice(1).toLowerCase()
-    : 'BAKER';
-  return `${prefix}-${val}-${suffix}`;
-}
 
 export default function CreateVoucherModal({
   reservationNumber: fixedReservationNumber,
