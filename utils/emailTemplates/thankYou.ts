@@ -106,20 +106,47 @@ export function renderThankYouEmail(vars: ThankYouVars): string {
 
 function renderVoucherBlock(code: string, amountLabel: string, expiresAt: string): string {
   return `
-        <tr><td style="padding:8px 32px 24px">
+        <tr><td style="padding:8px 32px 16px">
           <div style="background:${LIGHT_BG};border:1.5px dashed ${GOLD};border-radius:8px;padding:24px;text-align:center">
             <div style="font-size:11px;letter-spacing:2px;color:${MID_BROWN};text-transform:uppercase;margin-bottom:8px">
               Your voucher
             </div>
-            <div style="font-family:${CURSIVE_FONT_STACK};font-size:36px;color:${GOLD};line-height:1.1;margin-bottom:10px">
+            <div style="font-family:${CURSIVE_FONT_STACK};font-size:36px;color:${GOLD};line-height:1.1;margin-bottom:14px">
               ${escapeHtml(amountLabel)}
             </div>
-            <div style="display:inline-block;padding:8px 18px;background:#fff;border:1px solid ${GOLD};border-radius:4px;font-family:'Courier New', monospace;font-size:18px;font-weight:bold;color:${DARK_BROWN};letter-spacing:2px">
+            <!-- Code box: large, monospaced, generous padding, user-select:all
+                 for one-tap selection in clients that honour CSS. The label
+                 below makes copy intent unambiguous. -->
+            <div style="display:inline-block;padding:14px 22px;background:#fff;border:1px solid ${GOLD};border-radius:6px;font-family:'Courier New', monospace;font-size:22px;font-weight:bold;color:${DARK_BROWN};letter-spacing:3px;-webkit-user-select:all;user-select:all">
               ${escapeHtml(code)}
+            </div>
+            <div style="font-size:10px;color:${MID_BROWN};margin-top:6px;letter-spacing:0.5px;text-transform:uppercase">
+              Tap or select to copy
             </div>
             <div style="font-size:11px;color:${MID_BROWN};margin-top:14px">
               Valid until ${escapeHtml(expiresAt)}
             </div>
+          </div>
+        </td></tr>
+
+        <!-- Redemption CTA — explains where to use the code and provides a
+             prominent button to the rental site. -->
+        <tr><td style="padding:0 32px 24px;text-align:center">
+          <div style="font-size:13px;color:${DARK_BROWN};margin-bottom:14px;line-height:1.5">
+            Redeem your voucher on our website at checkout:
+          </div>
+          <a href="https://www.bakerhouseapartments.cz/"
+             style="display:inline-block;padding:14px 32px;background:${GOLD};color:#fff;text-decoration:none;font-size:14px;font-weight:600;letter-spacing:1px;border-radius:6px;text-transform:uppercase">
+            Book your next stay
+          </a>
+          <div style="font-size:11px;color:${MID_BROWN};margin-top:10px">
+            <a href="https://www.bakerhouseapartments.cz/" style="color:${MID_BROWN};text-decoration:underline">
+              www.bakerhouseapartments.cz
+            </a>
+          </div>
+          <div style="font-size:10px;color:#a9968a;margin-top:8px;line-height:1.4">
+            The voucher is only redeemable through our official website above —
+            it cannot be used on Booking.com, Airbnb, or other channels.
           </div>
         </td></tr>`;
 }
