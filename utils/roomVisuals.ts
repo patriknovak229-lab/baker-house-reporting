@@ -2,35 +2,39 @@
  * Room visual styling — assigns each room a small tinted chip so the operator
  * can scan the ROOM column at a glance.
  *
- * Three goals:
- *  - Subtle (light pastel bg + slightly darker text), not loud like a status badge.
- *  - Stable across pages (same room → same color, persistent visual identity).
- *  - Scales to new rooms — falls back to a deterministic palette index based on
- *    a hash of the room name, so adding "K.204" or "M.101" later just works
- *    without touching this file.
+ * Colours are now category-coordinated:
+ *   Deluxe (premium, gold-adjacent) → warm tones: amber, yellow, orange, rose
+ *   Urban  (modern, urban feel)     → cool tones: teal, cyan, sky
  *
- * The KNOWN_ROOMS map below pins curated combos for the rooms that exist today;
- * the fallback palette covers any future additions.
+ * A glance at any room chip immediately signals its category by hue family,
+ * and individual rooms within a category stay distinguishable by shade.
+ *
+ * The fallback palette covers any future additions outside these two groups.
  */
 
 const KNOWN_ROOMS: Record<string, { bg: string; text: string; ring: string }> = {
-  'K.201': { bg: 'bg-blue-50',    text: 'text-blue-700',    ring: 'ring-blue-100' },
-  'K.202': { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-100' },
-  'K.203': { bg: 'bg-amber-50',   text: 'text-amber-700',   ring: 'ring-amber-100' },
-  'O.308': { bg: 'bg-violet-50',  text: 'text-violet-700',  ring: 'ring-violet-100' },
+  // ── Deluxe — warm (gold-adjacent) ──────────────────────────────────────
+  'K.201': { bg: 'bg-amber-50',   text: 'text-amber-800',   ring: 'ring-amber-200' },
+  'K.202': { bg: 'bg-yellow-50',  text: 'text-yellow-800',  ring: 'ring-yellow-200' },
+  'K.203': { bg: 'bg-orange-50',  text: 'text-orange-800',  ring: 'ring-orange-200' },
+  'O.308': { bg: 'bg-rose-50',    text: 'text-rose-800',    ring: 'ring-rose-200' },
+  // ── Urban — cool (modern) ──────────────────────────────────────────────
+  'K.102': { bg: 'bg-teal-50',    text: 'text-teal-800',    ring: 'ring-teal-200' },
+  'K.103': { bg: 'bg-cyan-50',    text: 'text-cyan-800',    ring: 'ring-cyan-200' },
+  'K.106': { bg: 'bg-sky-50',     text: 'text-sky-800',     ring: 'ring-sky-200' },
 };
 
-// Cycled deterministically by hash of room name when a room isn't in KNOWN_ROOMS.
-// Chosen to look harmonious with the curated colors above without overlapping.
+// Cycled deterministically by hash of room name when a room isn't in
+// KNOWN_ROOMS. Steers away from the warm-Deluxe and cool-Urban hues used
+// above so new rooms outside either category don't visually pretend to
+// belong to one.
 const FALLBACK_PALETTE: ReadonlyArray<{ bg: string; text: string; ring: string }> = [
-  { bg: 'bg-rose-50',    text: 'text-rose-700',    ring: 'ring-rose-100' },
-  { bg: 'bg-orange-50',  text: 'text-orange-700',  ring: 'ring-orange-100' },
-  { bg: 'bg-cyan-50',    text: 'text-cyan-700',    ring: 'ring-cyan-100' },
-  { bg: 'bg-indigo-50',  text: 'text-indigo-700',  ring: 'ring-indigo-100' },
-  { bg: 'bg-pink-50',    text: 'text-pink-700',    ring: 'ring-pink-100' },
-  { bg: 'bg-teal-50',    text: 'text-teal-700',    ring: 'ring-teal-100' },
-  { bg: 'bg-lime-50',    text: 'text-lime-700',    ring: 'ring-lime-100' },
+  { bg: 'bg-violet-50',  text: 'text-violet-700',  ring: 'ring-violet-100' },
   { bg: 'bg-fuchsia-50', text: 'text-fuchsia-700', ring: 'ring-fuchsia-100' },
+  { bg: 'bg-pink-50',    text: 'text-pink-700',    ring: 'ring-pink-100' },
+  { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-100' },
+  { bg: 'bg-lime-50',    text: 'text-lime-700',    ring: 'ring-lime-100' },
+  { bg: 'bg-indigo-50',  text: 'text-indigo-700',  ring: 'ring-indigo-100' },
 ];
 
 // Combined-room display ("K.202 + K.203" etc.) — neutral so it doesn't pretend
