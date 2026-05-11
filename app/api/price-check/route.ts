@@ -6,9 +6,10 @@ const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const PROPERTY_ID = 311322;
 
 // Sellable Beds24 room IDs (what the offers endpoint returns prices for)
-const SELL_ROOM_2KK = 656437; // K.201 — 2KK Deluxe (physical = sellable, same ID)
-const SELL_ROOM_1KK = 648816; // Virtual 1KK Deluxe (qty=2, maps to K.202 + K.203)
-const SELL_ROOM_2BR = 674672; // O.308 — 2 Bedroom Apartment (physical = sellable, same ID)
+const SELL_ROOM_2KK   = 656437; // K.201 — 2KK Deluxe (physical = sellable, same ID)
+const SELL_ROOM_1KK   = 648816; // Virtual 1KK Deluxe (qty=2, maps to K.202 + K.203)
+const SELL_ROOM_2BR   = 674672; // O.308 — 2 Bedroom Apartment (physical = sellable, same ID)
+const SELL_ROOM_URBAN = 679714; // Virtual 1KK Urban Studios (qty=3, maps to K.102 + K.103 + K.106)
 
 function extractPrice(roomOffers: unknown): number | null {
   if (!Array.isArray(roomOffers) || roomOffers.length === 0) return null;
@@ -131,21 +132,24 @@ async function fetchCalendarPrices(
   arrival: string,
   departure: string,
 ): Promise<{ priceMap: Record<number, number | null>; rawByRoom: Record<number, unknown> }> {
-  const [r2kk, r1kk, r2br] = await Promise.all([
-    fetchRoomCalendar(token, SELL_ROOM_2KK, arrival, departure),
-    fetchRoomCalendar(token, SELL_ROOM_1KK, arrival, departure),
-    fetchRoomCalendar(token, SELL_ROOM_2BR, arrival, departure),
+  const [r2kk, r1kk, r2br, rUrban] = await Promise.all([
+    fetchRoomCalendar(token, SELL_ROOM_2KK,   arrival, departure),
+    fetchRoomCalendar(token, SELL_ROOM_1KK,   arrival, departure),
+    fetchRoomCalendar(token, SELL_ROOM_2BR,   arrival, departure),
+    fetchRoomCalendar(token, SELL_ROOM_URBAN, arrival, departure),
   ]);
   return {
     priceMap: {
-      [SELL_ROOM_2KK]: r2kk.price,
-      [SELL_ROOM_1KK]: r1kk.price,
-      [SELL_ROOM_2BR]: r2br.price,
+      [SELL_ROOM_2KK]:   r2kk.price,
+      [SELL_ROOM_1KK]:   r1kk.price,
+      [SELL_ROOM_2BR]:   r2br.price,
+      [SELL_ROOM_URBAN]: rUrban.price,
     },
     rawByRoom: {
-      [SELL_ROOM_2KK]: r2kk.raw,
-      [SELL_ROOM_1KK]: r1kk.raw,
-      [SELL_ROOM_2BR]: r2br.raw,
+      [SELL_ROOM_2KK]:   r2kk.raw,
+      [SELL_ROOM_1KK]:   r1kk.raw,
+      [SELL_ROOM_2BR]:   r2br.raw,
+      [SELL_ROOM_URBAN]: rUrban.raw,
     },
   };
 }
@@ -158,8 +162,10 @@ async function fetchCalendarPrices(
  * - ignoreAvailability=true: uses /inventory/rooms/calendar — sums daily price1 across nights regardless of availability
  *
  * Room mapping:
- *   K.201 = Beds24 roomId 656437 (2KK Deluxe, 1 unit)
- *   K.202 / K.203 = Beds24 roomId 648816 (1KK Deluxe, virtual room qty=2)
+ *   K.201            = Beds24 roomId 656437 (2KK Deluxe, 1 unit)
+ *   K.202 / K.203    = Beds24 roomId 648816 (1KK Deluxe, virtual room qty=2)
+ *   O.308            = Beds24 roomId 674672 (2 Bedroom, 1 unit)
+ *   1KK Urban Studios = Beds24 roomId 679714 (virtual room qty=3, maps to K.102 + K.103 + K.106)
  */
 export async function GET(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
@@ -218,13 +224,24 @@ export async function GET(req: NextRequest) {
       for (const row of rows) {
         if (row === null || typeof row !== 'object') continue;
         const rid = Number((row as { roomId?: unknown }).roomId);
-        if (rid === SELL_ROOM_2KK || rid === SELL_ROOM_1KK || rid === SELL_ROOM_2BR) {
+        if (
+          rid === SELL_ROOM_2KK
+          || rid === SELL_ROOM_1KK
+          || rid === SELL_ROOM_2BR
+          || rid === SELL_ROOM_URBAN
+        ) {
           priceMap[rid] = extractPrice((row as { offers?: unknown }).offers);
         }
       }
     }
 
+    // Order matches the calendar/filter layout: Urban first, then Deluxe units
     const offers: PriceCheckOffer[] = [
+      {
+        room: '1KK Urban Studios',
+        description: '1KK Urban (K.102 / K.103 / K.106)',
+        price: priceMap[SELL_ROOM_URBAN] ?? null,
+      },
       {
         room: 'K.201',
         description: '2KK Deluxe Apartment',
