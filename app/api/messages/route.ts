@@ -106,10 +106,15 @@ export async function GET(req: NextRequest) {
     console.error('[messages] invoice-request detection failed', err),
   );
 
-  // Drop internal notes; return last 10 messages oldest-first
-  const messages: ThreadMessage[] = raw
+  // Sort by time ascending so order is deterministic regardless of how
+  // Beds24 returns the page. Drop internal notes. Cap at the most recent
+  // 30 messages — enough context without dragging months of history onto
+  // every poll. Returned oldest-first so the client can render top→bottom.
+  const MAX_THREAD_MESSAGES = 30;
+  const messages: ThreadMessage[] = [...raw]
     .filter((m) => m.source !== 'internalNote')
-    .slice(-10)
+    .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+    .slice(-MAX_THREAD_MESSAGES)
     .map((m) => ({
       id: m.id,
       source: m.source === 'host' ? 'host' : m.source === 'guest' ? 'guest' : 'system',

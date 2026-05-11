@@ -198,7 +198,9 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
       const data: ThreadMessage[] = await res.json();
-      const sorted = [...data].reverse(); // oldest → newest (top → bottom)
+      // API now returns oldest-first (server sorts by time asc), so no
+      // local reverse needed — render top→bottom as oldest→newest.
+      const sorted = data;
       setMessages((prev) => {
         // Preserve optimistic host messages not yet confirmed by Beds24.
         // Optimistic IDs are Date.now() (~1.7 trillion); real Beds24 IDs are
