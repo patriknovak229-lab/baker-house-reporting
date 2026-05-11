@@ -2,12 +2,37 @@
 import { useState, useMemo } from 'react';
 import type { Reservation, Room } from "@/types/reservation";
 import { computeParking, PARKING_SPACES } from "@/utils/parkingUtils";
+import {
+  groupRoomsByCategory,
+  ALL_ROOMS_BY_CATEGORY,
+  type RoomCategory,
+} from "@/utils/roomCategory";
 
 interface Props {
   reservations: Reservation[];
 }
 
-const ROOMS: Room[] = ["K.201", "K.202", "K.203", "O.308"];
+// All rooms across both categories — used for the overall occupancy counters
+// in the day header (which always represent total inventory regardless of
+// whether a category is collapsed).
+const ROOMS: Room[] = ALL_ROOMS_BY_CATEGORY as unknown as Room[];
+
+// Visual treatment per category — matches the warm/cool palette used by
+// roomVisuals.ts so the calendar grouping looks consistent with room chips.
+const CATEGORY_STYLES: Record<RoomCategory, { headerBg: string; headerText: string; headerBorder: string; chevron: string }> = {
+  Urban:  {
+    headerBg:     'bg-cyan-50',
+    headerText:   'text-cyan-900',
+    headerBorder: 'border-cyan-200',
+    chevron:      'text-cyan-700',
+  },
+  Deluxe: {
+    headerBg:     'bg-amber-50',
+    headerText:   'text-amber-900',
+    headerBorder: 'border-amber-200',
+    chevron:      'text-amber-700',
+  },
+};
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -93,9 +118,17 @@ export default function OccupancyCalendar({ reservations }: Props) {
   const todayStr = getTodayStr();
   const [startOffset, setStartOffset] = useState(0);
   const [showParking, setShowParking] = useState(false);
+  // Per-category collapse state — both expanded on first load. Operator can
+  // hide a whole category to free vertical space; the overall day-header
+  // occupancy counters keep summing across all categories regardless.
+  const [collapsed, setCollapsed] = useState<Record<RoomCategory, boolean>>({
+    Urban:  false,
+    Deluxe: false,
+  });
 
   const days = useMemo(() => get30DaysFrom(todayStr, startOffset), [todayStr, startOffset]);
   const parkingResult = useMemo(() => computeParking(reservations), [reservations]);
+  const categoryGroups = useMemo(() => groupRoomsByCategory(), []);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
@@ -218,43 +251,80 @@ export default function OccupancyCalendar({ reservations }: Props) {
             </tr>
           </thead>
 
-          <tbody>
-            {ROOMS.map((room, roomIdx) => (
-              <tr key={room}>
-                {/* Room label */}
-                <td className={`pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap ${roomIdx === 0 ? "pt-1" : ""}`}>
-                  {room}
-                </td>
-
-                {/* Day cells */}
-                {days.map((date) => {
-                  const booked = isRoomBooked(reservations, room, date);
-                  const isToday = date === todayStr;
-                  const bookedCount = ROOMS.filter((r) => isRoomBooked(reservations, r, date)).length;
-                  const { filled } = getOccupancyStyle(bookedCount, ROOMS.length);
-                  const guest = booked ? getGuest(reservations, room, date) : null;
-
-                  return (
-                    <td
-                      key={date}
-                      className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}
+          {/* One <tbody> per category — Urban first (more turnover) then Deluxe.
+              Each group leads with a clickable header row that toggles collapse.
+              When collapsed only the header is rendered; the day-cell rows are
+              hidden but their occupancy still feeds the overall counters at top. */}
+          {categoryGroups.map((group) => {
+            const style = CATEGORY_STYLES[group.category];
+            const isCollapsed = collapsed[group.category];
+            const groupRooms = group.rooms;
+            return (
+              <tbody key={group.category}>
+                {/* Category header row — spans all columns */}
+                <tr>
+                  <td
+                    colSpan={days.length + 1}
+                    className={`p-0 ${style.headerBorder} border-t border-b`}
+                  >
+                    <button
+                      onClick={() => setCollapsed((c) => ({ ...c, [group.category]: !c[group.category] }))}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 ${style.headerBg} ${style.headerText} hover:brightness-95 transition`}
+                      title={isCollapsed ? `Show ${group.category} rooms` : `Hide ${group.category} rooms`}
                     >
-                      <div
-                        className={`h-5 rounded-sm flex items-center justify-center ${booked ? filled : "bg-gray-100"}`}
-                        title={booked ? `${room} — ${guest?.name ?? "booked"}` : `${room} — free`}
+                      <svg
+                        className={`w-3.5 h-3.5 ${style.chevron} transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                        fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}
                       >
-                        {guest?.initials && (
-                          <span className="text-[9px] font-bold text-white leading-none select-none">
-                            {guest.initials}
-                          </span>
-                        )}
-                      </div>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                      <span className="text-xs font-semibold uppercase tracking-wide">{group.category}</span>
+                      <span className="text-[11px] opacity-70 font-medium">
+                        · {groupRooms.length} room{groupRooms.length === 1 ? '' : 's'}
+                      </span>
+                    </button>
+                  </td>
+                </tr>
+
+                {/* Day-cell rows — hidden when category collapsed */}
+                {!isCollapsed && groupRooms.map((room) => (
+                  <tr key={room}>
+                    {/* Room label */}
+                    <td className="pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap">
+                      {room}
                     </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
+
+                    {/* Day cells */}
+                    {days.map((date) => {
+                      const booked = isRoomBooked(reservations, room, date);
+                      const isToday = date === todayStr;
+                      const bookedCount = ROOMS.filter((r) => isRoomBooked(reservations, r, date)).length;
+                      const { filled } = getOccupancyStyle(bookedCount, ROOMS.length);
+                      const guest = booked ? getGuest(reservations, room, date) : null;
+
+                      return (
+                        <td
+                          key={date}
+                          className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}
+                        >
+                          <div
+                            className={`h-5 rounded-sm flex items-center justify-center ${booked ? filled : "bg-gray-100"}`}
+                            title={booked ? `${room} — ${guest?.name ?? "booked"}` : `${room} — free`}
+                          >
+                            {guest?.initials && (
+                              <span className="text-[9px] font-bold text-white leading-none select-none">
+                                {guest.initials}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            );
+          })}
 
           {/* Parking rows — same table so columns align */}
           {showParking && (
