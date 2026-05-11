@@ -24,12 +24,29 @@ function sanitizeCode(s: string): string {
   return s.replace(/[^a-zA-Z0-9]/g, '');
 }
 
-function generateCode(firstName: string, value: string): string {
+/** 4 random hex chars — used as a suffix to guarantee voucher-code uniqueness
+ *  even when multiple vouchers share the same name and amount (or have no name
+ *  at all). 65,536 combinations per prefix+amount — collision risk is negligible
+ *  for our volume, and on the rare miss the server returns 409 and the modal
+ *  regenerates the suffix and retries. */
+function generateSuffix(): string {
+  // crypto.randomUUID is available in modern browsers + Node 19+
+  return crypto.randomUUID().replace(/-/g, '').slice(0, 4).toUpperCase();
+}
+
+/** Build a voucher code with guaranteed uniqueness.
+ *  - With name (linked or named standalone):  "Tamara-1000-A3F9"
+ *  - Without name (unlinked):                 "BAKER-1000-A3F9"
+ *  Suffix is supplied by caller so the modal can show a stable preview
+ *  and retry on server-side collision (409). */
+function generateCode(firstName: string, value: string, suffix: string): string {
   const name = sanitizeCode(firstName).replace(/\s+/g, '');
   const val = sanitizeCode(value);
-  if (!name) return val;
-  // Capitalize first letter
-  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase() + val;
+  if (!val) return '';
+  const prefix = name
+    ? name.charAt(0).toUpperCase() + name.slice(1).toLowerCase()
+    : 'BAKER';
+  return `${prefix}-${val}-${suffix}`;
 }
 
 export default function CreateVoucherModal({
@@ -47,6 +64,9 @@ export default function CreateVoucherModal({
   const [voucherName, setVoucherName] = useState('');
   const [email, setEmail] = useState(defaultEmail ?? '');
   const [phone, setPhone] = useState(defaultPhone ?? '');
+  // Random 4-char suffix locked in for the lifetime of this modal so the
+  // preview is stable. Regenerated on 409 (collision) inside handleCreate.
+  const [codeSuffix, setCodeSuffix] = useState<string>(() => generateSuffix());
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +90,12 @@ export default function CreateVoucherModal({
     ?? selectedRes?.guestName.split(' ')[0]
     ?? '';
 
-  // The reservation prefix wins; otherwise fall back to the operator-supplied voucherName.
-  // Standalone vouchers (no reservation) require voucherName so the code isn't just the amount.
+  // Guest first name wins as the prefix; operator can also supply a custom name
+  // for standalone vouchers (Promo, Spring, etc.). If neither is provided, the
+  // code falls back to "BAKER-{amount}-{suffix}" — always unique, always usable.
   const isLinkedToReservation = !!fixedReservationNumber || !!selectedRes;
   const codePrefix = guestFirstName || voucherName;
-  const codePreview = generateCode(codePrefix, value);
+  const codePreview = generateCode(codePrefix, value, codeSuffix);
 
   const filteredReservations = useMemo(() => {
     if (!reservations || !resSearch.trim()) return reservations ?? [];
@@ -107,38 +128,50 @@ export default function CreateVoucherModal({
       setError('Percentage cannot exceed 100');
       return;
     }
-    // When not linked to a reservation, a voucher name is mandatory so the code
-    // isn't trivially guessable (e.g. plain "1000" for a 1000 Kč voucher).
-    if (!isLinkedToReservation && !voucherName.trim()) {
-      setError('Voucher name is required when no reservation is linked');
-      return;
-    }
     if (!codePreview) {
-      setError('A guest name or voucher name is needed to generate the voucher code.');
+      setError('Enter a valid amount to generate the voucher code.');
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/vouchers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code: codePreview,
-          discountType,
-          value: numValue,
-          reservationNumber: fixedReservationNumber ?? selectedRes?.reservationNumber,
-          guestName: fixedGuestName ?? selectedRes?.guestName,
-          guestEmail: email.trim() || undefined,
-          guestPhone: phone.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Failed to create voucher');
-      setCreatedCode(data.code);
-      setStep('created');
-      onVoucherCreated?.();
+      // Up to 3 attempts with fresh suffixes on collision (409). With ~65k
+      // suffixes per prefix+amount, this only triggers if the same name+amount
+      // hash truly collides — vanishingly rare.
+      let attemptedCode = codePreview;
+      let attemptSuffix = codeSuffix;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const res = await fetch('/api/vouchers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: attemptedCode,
+            discountType,
+            value: numValue,
+            reservationNumber: fixedReservationNumber ?? selectedRes?.reservationNumber,
+            guestName: fixedGuestName ?? selectedRes?.guestName,
+            guestEmail: email.trim() || undefined,
+            guestPhone: phone.trim() || undefined,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setCreatedCode(data.code);
+          setCodeSuffix(attemptSuffix); // keep state in sync with what was saved
+          setStep('created');
+          onVoucherCreated?.();
+          return;
+        }
+        // Collision → regenerate suffix and retry
+        if (res.status === 409 && attempt < 2) {
+          attemptSuffix = generateSuffix();
+          attemptedCode = generateCode(codePrefix, value, attemptSuffix);
+          continue;
+        }
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? 'Failed to create voucher');
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -301,11 +334,11 @@ export default function CreateVoucherModal({
             )}
 
             {/* Voucher name — only when no reservation is linked.
-                Required so the resulting code isn't just the amount (e.g. "1000"). */}
+                Optional: leave blank to use "BAKER" as the default prefix. */}
             {!isLinkedToReservation && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Voucher name <span className="text-red-500">*</span>
+                  Voucher name <span className="text-gray-400">(optional)</span>
                 </label>
                 <input
                   type="text"
@@ -315,7 +348,7 @@ export default function CreateVoucherModal({
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-purple-300"
                 />
                 <p className="text-[10px] text-gray-400 mt-1">
-                  Used as the prefix in the voucher code. Letters and digits only.
+                  Used as the prefix in the voucher code. Leave blank to default to <code className="text-gray-600">BAKER</code>.
                 </p>
               </div>
             )}
