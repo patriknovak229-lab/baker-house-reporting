@@ -172,6 +172,10 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [translations, setTranslations] = useState<Record<number, { text: string; lang: string } | 'loading'>>({});
+  // Manual refresh state — set while a forced refresh is in flight, and
+  // briefly afterwards to show a confirmation tick.
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshFeedback, setRefreshFeedback] = useState<'idle' | 'done'>('idle');
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -187,7 +191,8 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
 
   const fetchMessages = useCallback(async () => {
     try {
-      const res = await fetch(`/api/messages?bookingId=${beds24Id}`);
+      // cache:"no-store" defeats any HTTP cache layer between us and Beds24
+      const res = await fetch(`/api/messages?bookingId=${beds24Id}`, { cache: 'no-store' });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -216,6 +221,22 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
       setLoadError(err instanceof Error ? err.message : 'Failed to load messages');
     }
   }, [beds24Id]);
+
+  // Manual refresh — operator-triggered re-fetch. Same call as the polling
+  // tick, but with visible loading state and a brief "done" confirmation so
+  // the operator knows the request actually fired.
+  const handleManualRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshFeedback('idle');
+    try {
+      await fetchMessages();
+      setRefreshFeedback('done');
+      setTimeout(() => setRefreshFeedback('idle'), 1500);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchMessages, refreshing]);
 
   // Derived visibility — must be declared before effects that reference it
   const active = isConversationActive(messages);
@@ -335,14 +356,42 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               Messages · {guestName}
             </span>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleManualRefresh}
+                disabled={refreshing}
+                title="Refresh conversation — pull latest messages from Beds24"
+                className={`flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors ${
+                  refreshFeedback === 'done'
+                    ? 'text-emerald-700 bg-emerald-50'
+                    : 'text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 disabled:opacity-50'
+                }`}
+              >
+                {refreshing ? (
+                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                ) : refreshFeedback === 'done' ? (
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+                {refreshing ? '' : refreshFeedback === 'done' ? 'Updated' : 'Refresh'}
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
