@@ -326,13 +326,15 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
 
   return (
     <div>
-      {/* Toggle button */}
+      {/* Toggle button — coloured solid pill so it sits visibly alongside
+          the indigo Email Guest and green WhatsApp pills (no more "white on
+          white" disappearing act in the no-unread state). */}
       <button
         onClick={() => { setOpen((v) => !v); }}
         className={`${buttonBase} ${
           hasUnread
             ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-            : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+            : 'bg-sky-500 text-white hover:bg-sky-600'
         }`}
       >
         {/* Envelope icon */}

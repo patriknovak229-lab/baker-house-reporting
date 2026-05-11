@@ -254,6 +254,7 @@ export default function EmailGuestModal({
       });
 
       // ── Step 3: send the email
+      const selectedTemplate = TEMPLATES.find((t) => t.id === selectedTemplateId);
       const res = await fetch('/api/send-guest-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -262,6 +263,8 @@ export default function EmailGuestModal({
           subject: subject.trim(),
           html,
           reservationNumber: reservation.reservationNumber,
+          templateId: selectedTemplate?.id,
+          templateLabel: selectedTemplate?.label,
         }),
       });
       const data = await res.json();

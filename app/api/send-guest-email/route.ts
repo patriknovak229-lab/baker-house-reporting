@@ -14,9 +14,19 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
+import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
+import type { EmailSendLogEntry } from '@/types/emailSendLog';
 
 const RESERVATIONS_ALIAS = 'reservations@bakerhouseapartments.cz';
+const LOG_KEY = 'baker:email-send-log';
+
+function getRedis(): Redis | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
 
 /** Quick-and-dirty HTML → plain text for the multipart text/plain fallback.
  *  Mail clients that strip HTML still see something readable. */
@@ -41,7 +51,14 @@ export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
 
-  let body: { to?: string; subject?: string; html?: string; reservationNumber?: string };
+  let body: {
+    to?: string;
+    subject?: string;
+    html?: string;
+    reservationNumber?: string;
+    templateId?: string;
+    templateLabel?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -51,6 +68,9 @@ export async function POST(req: NextRequest) {
   const to = body.to?.trim();
   const subject = body.subject?.trim();
   const html = body.html?.trim();
+  const reservationNumber = body.reservationNumber?.trim();
+  const templateId = body.templateId?.trim();
+  const templateLabel = body.templateLabel?.trim();
 
   if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
     return NextResponse.json({ error: 'Valid `to` email is required' }, { status: 400 });
@@ -94,10 +114,35 @@ export async function POST(req: NextRequest) {
       html,
     });
 
+    // Append to the email-send audit log. Best-effort — a failed Redis write
+    // doesn't roll back the send (the email already left). Only logged when
+    // we have enough context to make the entry useful (reservation + template).
+    if (reservationNumber && templateId) {
+      const redis = getRedis();
+      if (redis) {
+        try {
+          const existing = (await redis.get<EmailSendLogEntry[]>(LOG_KEY)) ?? [];
+          const entry: EmailSendLogEntry = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            reservationNumber,
+            templateId,
+            templateLabel: templateLabel || templateId,
+            to,
+            subject,
+            sentAt: new Date().toISOString(),
+            sentBy: guard.email,
+          };
+          await redis.set(LOG_KEY, [...existing, entry]);
+        } catch (logErr) {
+          console.error('[send-guest-email] Failed to append send log:', logErr);
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       sentTo: to,
-      reservationNumber: body.reservationNumber,
+      reservationNumber,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

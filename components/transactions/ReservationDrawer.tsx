@@ -2093,7 +2093,9 @@ export default function ReservationDrawer({
             <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
               <SectionTitle source="Beds24">Messaging</SectionTitle>
               <div className="flex items-center gap-2 flex-wrap">
-                {/* Email Guest pill — only when a usable email is on file */}
+                {/* Email Guest pill — only when a usable email is on file.
+                    The send log appears as a small line under the pill (see the
+                    section below the messaging section). */}
                 {(reservation.additionalEmail
                   || reservation.invoiceData?.billingEmail
                   || reservation.email) && (
@@ -2127,6 +2129,37 @@ export default function ReservationDrawer({
                 })()}
               </div>
             </div>
+
+            {/* Email send log — appears as a discreet line under the pill row.
+                Shows every Email Guest send for this reservation with template
+                + timestamp + recipient + sender. Newest first. */}
+            {(reservation.emailSendLog ?? []).length > 0 && (
+              <div className="mb-3 -mt-1 space-y-0.5">
+                {(reservation.emailSendLog ?? []).map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="text-[10.5px] text-gray-500 flex items-center gap-1.5"
+                    title={`Sent by ${entry.sentBy} to ${entry.to} · Subject: "${entry.subject}"`}
+                  >
+                    <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span className="font-medium text-gray-700">{entry.templateLabel}</span>
+                    <span className="text-gray-400">sent</span>
+                    <span>
+                      {new Date(entry.sentAt).toLocaleDateString('en-GB', {
+                        day: '2-digit', month: 'short', year: 'numeric',
+                      })}
+                      {', '}
+                      {new Date(entry.sentAt).toLocaleTimeString('en-GB', {
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {isOTAChannel ? (
               <MessageThread
                 beds24Id={parseInt(reservation.reservationNumber.slice(3))}
