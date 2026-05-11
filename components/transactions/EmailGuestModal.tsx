@@ -48,6 +48,11 @@ interface ResolvedVoucher {
   code: string;
   amount: number;
   discountType: DiscountType;
+  /** True when the voucher exists server-side. Manual codes are always
+   *  persisted (we validated against the existing list); Generate-path
+   *  vouchers stay false until the operator hits Send — that way Cancel
+   *  never leaves orphan records. */
+  persisted: boolean;
 }
 
 export default function EmailGuestModal({
@@ -127,7 +132,10 @@ export default function EmailGuestModal({
     setStep('voucher-config');
   }
 
-  async function handleGenerateVoucher() {
+  function handleGenerateVoucher() {
+    // No API call here — just stage a planned voucher with a locally-generated
+    // code. The actual POST /api/vouchers happens in handleSend so that
+    // cancelling the flow never leaves an orphan voucher in the database.
     const num = parseFloat(voucherAmount);
     if (!num || num <= 0) {
       setVoucherError('Enter a valid amount');
@@ -137,50 +145,15 @@ export default function EmailGuestModal({
       setVoucherError('Percentage cannot exceed 100');
       return;
     }
-
-    setVoucherLoading(true);
     setVoucherError(null);
-    try {
-      // Up to 3 retries with fresh suffixes on 409 (collision) — same pattern as CreateVoucherModal.
-      let suffix = generateSuffix();
-      let code = generateCode(reservation.firstName, num, suffix);
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const res = await fetch('/api/vouchers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code,
-            discountType: voucherType,
-            value: num,
-            reservationNumber: reservation.reservationNumber,
-            guestName: `${reservation.firstName} ${reservation.lastName}`.trim(),
-            guestEmail: defaultEmail || undefined,
-            guestPhone: reservation.phone || undefined,
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setResolvedVoucher({
-            code: data.code,
-            amount: num,
-            discountType: voucherType,
-          });
-          setStep('preview');
-          return;
-        }
-        if (res.status === 409 && attempt < 2) {
-          suffix = generateSuffix();
-          code = generateCode(reservation.firstName, num, suffix);
-          continue;
-        }
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? 'Failed to create voucher');
-      }
-    } catch (e) {
-      setVoucherError((e as Error).message);
-    } finally {
-      setVoucherLoading(false);
-    }
+    const code = generateCode(reservation.firstName, num, generateSuffix());
+    setResolvedVoucher({
+      code,
+      amount: num,
+      discountType: voucherType,
+      persisted: false,
+    });
+    setStep('preview');
   }
 
   async function handleValidateManualCode() {
@@ -202,6 +175,7 @@ export default function EmailGuestModal({
         code: data.code,
         amount: data.value,
         discountType: data.discountType,
+        persisted: true, // manual code already exists in DB by definition
       });
       setStep('preview');
     } catch (e) {
@@ -217,20 +191,76 @@ export default function EmailGuestModal({
       setSendError('Subject is required');
       return;
     }
-    if (!renderedHtml) {
-      setSendError('Email body could not be rendered');
-      return;
-    }
     setSending(true);
     setSendError(null);
     try {
+      // ── Step 1: persist the voucher if it hasn't been saved yet
+      //    (Generate path stages the code locally; this is the moment we
+      //    actually commit it to the DB. Manual path is already persisted.)
+      let finalCode = resolvedVoucher.code;
+      if (!resolvedVoucher.persisted) {
+        let attemptedCode = resolvedVoucher.code;
+        let saved = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const res = await fetch('/api/vouchers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: attemptedCode,
+              discountType: resolvedVoucher.discountType,
+              value: resolvedVoucher.amount,
+              reservationNumber: reservation.reservationNumber,
+              guestName: `${reservation.firstName} ${reservation.lastName}`.trim(),
+              guestEmail: defaultEmail || undefined,
+              guestPhone: reservation.phone || undefined,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            finalCode = data.code;
+            setResolvedVoucher({ ...resolvedVoucher, code: data.code, persisted: true });
+            saved = true;
+            break;
+          }
+          if (res.status === 409 && attempt < 2) {
+            // Collision on planned code — regenerate suffix and retry
+            attemptedCode = generateCode(
+              reservation.firstName,
+              resolvedVoucher.amount,
+              generateSuffix(),
+            );
+            continue;
+          }
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.error ?? 'Failed to create voucher');
+        }
+        if (!saved) {
+          throw new Error('Could not save voucher — please try again');
+        }
+      }
+
+      // ── Step 2: render the email HTML using the final (server-confirmed) code.
+      //    Computing it fresh here avoids any stale-closure issue from the
+      //    useMemo'd renderedHtml when the code changed on a 409 retry.
+      const paragraphs = bodyText.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+      const html = renderThankYouEmail({
+        firstName: reservation.firstName,
+        voucherCode: finalCode,
+        voucherAmount:
+          resolvedVoucher.discountType === 'percentage'
+            ? `${resolvedVoucher.amount}%`
+            : `${resolvedVoucher.amount.toLocaleString('cs-CZ')} Kč`,
+        bodyParagraphs: paragraphs,
+      });
+
+      // ── Step 3: send the email
       const res = await fetch('/api/send-guest-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: defaultEmail,
           subject: subject.trim(),
-          html: renderedHtml,
+          html,
           reservationNumber: reservation.reservationNumber,
         }),
       });
@@ -517,7 +547,7 @@ export default function EmailGuestModal({
                 disabled={voucherLoading || !voucherAmount}
                 className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {voucherLoading ? 'Creating…' : 'Create voucher'}
+                {voucherLoading ? 'Preparing…' : 'Continue'}
               </button>
             )}
             {step === 'voucher-config' && voucherMode === 'manual' && (
