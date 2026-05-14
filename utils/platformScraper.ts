@@ -53,7 +53,7 @@ export type PricingRoomResult = {
 export type PricingRun = {
   checkIn: string;
   checkOut: string;
-  nights: 2 | 7;
+  nights: 1 | 2 | 7 | 28;
   rooms: PricingRoomResult[];
 };
 
@@ -95,10 +95,10 @@ function computeWindow(): { start: Date; end: Date } {
  * Equivalent to the old behavior. Production should use the
  * Beds24-driven `discoverAvailableSlots` instead.
  */
-export function generateDateSlots(): Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> {
+export function generateDateSlots(): Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }> {
   const { start, end } = computeWindow();
   const ci = start;
-  const slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
+  const slots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }> = [];
   for (const nights of [2, 7] as const) {
     const co = new Date(ci.getTime() + nights * 86400_000);
     if (co <= end) {
@@ -216,7 +216,7 @@ function parseTooltipBreakdown(
 async function scrapeAirbnbViaBrowser(
   browser: Browser,
   listingId: string,
-  slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
+  slots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }>,
 ): Promise<Offer[]> {
   const page = await browser.newPage();
   await page.setUserAgent(
@@ -283,6 +283,7 @@ async function scrapeAirbnbViaBrowser(
         strikeTooltipText: string;
         panelKcTotal: number | null;
         panelStrikethrough: number | null;
+        panelKcStrikeFromText: number | null;
         currencyDetected: 'CZK' | 'USD' | null;
       } = await page.evaluate(async () => {
         const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -299,6 +300,7 @@ async function scrapeAirbnbViaBrowser(
             strikeTooltipText: '',
             panelKcTotal: null,
             panelStrikethrough: null,
+            panelKcStrikeFromText: null,
             currencyDetected: null,
           };
         }
@@ -353,20 +355,43 @@ async function scrapeAirbnbViaBrowser(
         };
 
         let panelKcTotal: number | null = null;
+        let panelKcStrikeFromText: number | null = null;
         let currencyDetected: 'CZK' | 'USD' | null = null;
+
+        // Two-amount pattern FIRST: when Airbnb's Czech panel renders a
+        // discount, it stacks BOTH prices below "Celkem", typically with a
+        // "Zobrazit rozpis ceny" link between them, e.g.
+        //   "Celkem\nZobrazit rozpis ceny\n16 949 Kč\n15 255 Kč"
+        // Capture both — smaller is the bookable total, larger is the
+        // strikethrough original. Window 200 chars to tolerate inline labels.
+        const twoKcMatch = panelText.match(
+          /\b(?:total|celkem)\b[\s\S]{0,200}?(\d[\d ,.\u00a0]{2,20})\s*Kč[\s\S]{0,80}?(\d[\d ,.\u00a0]{2,20})\s*Kč/i,
+        );
         const kcTotalMatch =
           // EN: "X Kč total" inline
           panelText.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč[ \t]+(?:total|celkem)\b/i) ??
-          // EN/CZ: "Total/Celkem X Kč" — allow space, tab OR newline between
-          // (Czech rate plan rows are "...· Celkem 4 290,30 Kč" on one line;
-          // the previous newline-only pattern missed them)
-          panelText.match(/\b(?:total|celkem)\b[ \t\n]+(\d[\d ,.\u00a0]{2,20})\s*Kč/i) ??
+          // EN/CZ: "Total/Celkem X Kč" — single price after the label.
+          // \s allows newlines so we also catch panels where the price
+          // renders on the line(s) below "Celkem" (no-discount layouts).
+          panelText.match(/\b(?:total|celkem)\b\s{1,200}(\d[\d ,.\u00a0]{2,20})\s*Kč/i) ??
           // CZ: "X Kč za N nocí" (headline price → "for N nights")
           panelText.match(/(\d[\d ,.\u00a0]{2,20})\s*Kč\s+za\s+\d+\s+noc[ií]?/i);
-        if (kcTotalMatch) {
+        if (twoKcMatch) {
+          const a = parsePanelAmount(twoKcMatch[1]);
+          const b = parsePanelAmount(twoKcMatch[2]);
+          if (a > 0 && b > 0) {
+            panelKcTotal = Math.min(a, b);
+            if (Math.max(a, b) > Math.min(a, b)) {
+              panelKcStrikeFromText = Math.max(a, b);
+            }
+            currencyDetected = 'CZK';
+          }
+        }
+        if (panelKcTotal === null && kcTotalMatch) {
           panelKcTotal = parsePanelAmount(kcTotalMatch[1]);
           currencyDetected = 'CZK';
-        } else {
+        }
+        if (panelKcTotal === null) {
           // USD fallback. Patterns we've seen on Vercel:
           //   "$1,541.97 total"
           //   "$1,541 for 7 nights"
@@ -472,7 +497,7 @@ async function scrapeAirbnbViaBrowser(
         //    Airbnb's stable, purpose-built opener for the breakdown modal.
         const showBreakdownBtn = Array.from(panel.querySelectorAll<HTMLElement>('*'))
           .filter((el) => el.children.length === 0 && !isUpsell(el))
-          .find((el) => /^\s*(show\s*price\s*breakdown|zobrazit\s*rozpis)\s*$/i.test((el.textContent || '').trim()));
+          .find((el) => /^\s*(show\s*price\s*breakdown|zobrazit\s*rozpis(?:\s*ceny)?)\s*$/i.test((el.textContent || '').trim()));
         const primaryTrigger: HTMLElement | null = (() => {
           if (!showBreakdownBtn) return null;
           // Walk up to the actual clickable ancestor (button/[role="button"]/a)
@@ -625,6 +650,7 @@ async function scrapeAirbnbViaBrowser(
           strikeTooltipText,
           panelKcTotal,
           panelStrikethrough,
+          panelKcStrikeFromText,
           currencyDetected,
         };
       });
@@ -691,10 +717,14 @@ async function scrapeAirbnbViaBrowser(
         }
       }
 
-      // Tooltip unavailable — fall back to the panel's own "X Kč total" text
+      // Tooltip unavailable — fall back to the panel's own "X Kč total" text.
+      // Prefer DOM-detected strikethrough; fall back to the second Kč figure
+      // captured by the two-amount panel regex (the Czech panel layout
+      // doesn't always tag the original price with a <s>/<del> wrapper).
       if (price === null && panelResult.panelKcTotal) {
         price = panelResult.panelKcTotal;
-        originalPrice = panelResult.panelStrikethrough;
+        originalPrice =
+          panelResult.panelStrikethrough ?? panelResult.panelKcStrikeFromText;
         selectionPath = 'panel-kc-total';
       }
 
@@ -707,12 +737,17 @@ async function scrapeAirbnbViaBrowser(
         const out: string[] = [];
         const patterns: Array<RegExp> = [
           /Early[\s-]?booking\s*discount/i,
+          /Sleva\s*za\s*brzkou\s*rezervaci/i, // CZ: early booking
           /Last[- ]?minute\s*(?:discount|deal)/i,
+          /Sleva\s*na\s*posledn[ií]\s*chv[ií]li/i, // CZ: last-minute
           /Weekly\s*stay\s*discount/i,
           /Weekly\s*(?:discount|rate)/i,
+          /T[ýy]denn[ií]\s*sleva/i, // CZ: weekly
           /Monthly\s*stay\s*discount/i,
           /Monthly\s*(?:discount|rate)/i,
+          /M[ěe]s[ií]?[čc]n[ií]\s*sleva/i, // CZ: monthly
           /New[- ]?listing\s*promotion/i,
+          /Nov[áa]\s*nab[ií]dka/i, // CZ: new listing
           /(?:The\s*)?owner\s*decreased\s*(?:their|the)?\s*price(?:s)?/i,
           /(?:Host|Owner)\s*discount/i,
           // Deliberately NOT matching bare "Special offer" — Airbnb renders
@@ -857,6 +892,7 @@ async function scrapeBookingCom(
           /Smart\s*Deal/gi,
           /Mobile[- ]?only\s*(?:Deal|Discount|Rate)?/gi,
           /Bonus\s*Savings/gi,
+          /Genius/gi, // Booking.com loyalty programme — login-dependent
         ];
         // Find room heading positions in HTML so we can split deals by room
         const roomHeadingHtmlRegex = /(Deluxe|Two[-\s]?Bedroom|One[-\s]?Bedroom|Studio)[^<]{0,80}(?:Apartment|Suite|Room)/gi;
@@ -869,6 +905,7 @@ async function scrapeBookingCom(
           { name: 'Early Booker Deal', regex: /Early\s*Booker?\s*Deal/i },
           { name: 'Last Minute Deal', regex: /Last[- ]?Minute\s*(?:Deal|Discount)?/i },
           { name: 'Mobile-only Deal', regex: /Mobile[- ]?(?:only)?\s*(?:Deal|Price|Rate)/i },
+          { name: 'Genius', regex: /Genius/i },
         ];
 
         const getRoomChunk = (roomName: string): { chunk: string; found: boolean } => {
@@ -1017,25 +1054,58 @@ async function scrapeBookingCom(
           if (line.length < 10 || line.length > 100) continue;
           if (!majorHeading.test(line)) continue;
 
-          const blockEnd = Math.min(i + 60, lines.length);
-          const firstTwo: Array<{ idx: number; price: number }> = [];
-          for (let j = i + 1; j < blockEnd && firstTwo.length < 2; j++) {
+          // Walk the WHOLE block between this heading and the next major
+          // heading — collect every stay-total price, then group adjacent
+          // pairs into rate units. Booking.com renders rate plans roughly
+          // top-down by price but we don't rely on that anymore: we
+          // explicitly pick the cheapest actual across every rate plan
+          // surfaced in the property page. Per-night rate lines are
+          // skipped — only stay totals count.
+          const blockEnd = Math.min(i + 80, lines.length);
+          const allPrices: Array<{ idx: number; price: number }> = [];
+          for (let j = i + 1; j < blockEnd; j++) {
             if (majorHeading.test(lines[j]) && j > i + 3) break;
-            // Skip lines that are per-night rates — the scanner's looking
-            // for stay totals only.
             if (isPerNightLine(j)) continue;
             const m = lines[j].match(priceRegex);
             if (!m) continue;
             const price = parseInt(m[1].replace(/[^\d]/g, ''), 10);
             if (Number.isNaN(price)) continue;
-            firstTwo.push({ idx: j, price });
+            allPrices.push({ idx: j, price });
           }
-          if (firstTwo.length === 0) continue;
+          if (allPrices.length === 0) continue;
 
-          const [a, b] = firstTwo;
-          const hasStrikethrough = b && b.idx - a.idx <= 3 && a.price > b.price;
-          const price = hasStrikethrough ? b.price : a.price;
-          const originalPrice = hasStrikethrough ? a.price : null;
+          // Group adjacent prices into rate units. A pair within ≤3 idx
+          // where the first is LARGER is treated as (original, actual).
+          // Otherwise the price is a standalone rate (no strikethrough).
+          type Unit = { actual: number; original: number | null };
+          const units: Unit[] = [];
+          let k = 0;
+          while (k < allPrices.length) {
+            const cur = allPrices[k];
+            const nxt = allPrices[k + 1];
+            if (nxt && nxt.idx - cur.idx <= 3 && cur.price > nxt.price) {
+              units.push({ actual: nxt.price, original: cur.price });
+              k += 2;
+            } else {
+              units.push({ actual: cur.price, original: null });
+              k += 1;
+            }
+          }
+          if (units.length === 0) continue;
+
+          // Cheapest bookable actual wins. Ties broken by preferring the
+          // unit that carries an `original` (strike-through) — otherwise
+          // we'd silently drop the discount info when a card renders the
+          // discounted price twice (badge + total).
+          units.sort((a, b) => {
+            if (a.actual !== b.actual) return a.actual - b.actual;
+            if (a.original && !b.original) return -1;
+            if (!a.original && b.original) return 1;
+            return 0;
+          });
+          const winner = units[0];
+          const price = winner.actual;
+          const originalPrice = winner.original;
 
           const breakdown = breakdownByRoom(line, originalPrice);
           const hiddenDeals = dealsByRoomIdx(line);
@@ -1045,7 +1115,7 @@ async function scrapeBookingCom(
             price,
             originalPrice,
             labels: [],
-            allPairs: [{ price, original: originalPrice }],
+            allPairs: units.map((u) => ({ price: u.actual, original: u.original })),
             rawContext: [],
             hiddenDeals,
             breakdown,
@@ -1082,8 +1152,11 @@ async function scrapeBookingCom(
       // returned data but the values look off (cell-walker matched wrong
       // element on Vercel's Booking variant, locale-specific markup, etc.)
       roomData.forEach((r, idx) => {
+        const allPairsStr = r.allPairs
+          .map((p) => (p.original ? `${p.price}(was ${p.original})` : `${p.price}`))
+          .join(', ');
         console.log(
-          `[pricing] Booking.com ${slot.checkIn} parsed[${idx}]: name=${JSON.stringify(r.name.slice(0, 50))} price=${r.price} original=${r.originalPrice ?? 'null'}`,
+          `[pricing] Booking.com ${slot.checkIn} parsed[${idx}]: name=${JSON.stringify(r.name.slice(0, 50))} cheapest=${r.price} original=${r.originalPrice ?? 'null'} allRates=[${allPairsStr}]`,
         );
       });
 
@@ -1311,11 +1384,15 @@ async function scrapeBookingCom(
         return { ...parsed, heading: c.heading };
       });
 
-      // Match each room to its tooltip by heading text. The tooltip's
-      // Total/Original/discount values are the AUTHORITATIVE numbers — the
-      // text-pass picks them up from card-level rendering which is fragile
-      // (per-night rates, locale-specific markup, etc.). When we have a
-      // tooltip match, override r.price / r.originalPrice from the tooltip.
+      // Match each room to its tooltip by heading text. The tooltip is
+      // opened on the FIRST rate row Booking renders for the heading. We
+      // use the tooltip ONLY when its total matches our cheapest-pick
+      // within ~3% — that way the precise CZK figures (incl. fractional
+      // cents from "X × N nights" arithmetic) get rounded once, and the
+      // discount-line names align with the rate we actually picked. If
+      // the tooltip is for a different (more expensive) rate plan, we
+      // keep our text-pass numbers and don't graft mismatched breakdown
+      // lines onto our chosen price.
       for (const r of roomData) {
         const roomHeadingLc = r.name.toLowerCase();
         let tt = tooltipBreakdowns.find((b) => {
@@ -1337,8 +1414,23 @@ async function scrapeBookingCom(
         }
         if (!tt) continue;
 
-        // Tooltip wins when present
-        if (tt.total !== null && tt.total > 0) r.price = tt.total;
+        // Sanity: is this tooltip for OUR chosen rate? Allow 3% tolerance
+        // for "X × N nights" rounding (e.g. tooltip total 15848.81 vs
+        // text-pass 15849).
+        const ttTotal = tt.total ?? 0;
+        const priceMatches =
+          ttTotal > 0 && Math.abs(ttTotal - r.price) / r.price <= 0.03;
+
+        if (!priceMatches) {
+          console.log(
+            `[pricing] Booking.com ${r.name.slice(0, 35)}: tooltip total=${ttTotal} differs from cheapest pick=${r.price} (>3%) — keeping text-pass numbers, skipping tooltip breakdown`,
+          );
+          continue;
+        }
+
+        // Tooltip matches — refine to the precise CZK total and merge in
+        // its breakdown lines (which are anchored to our chosen rate).
+        if (ttTotal > 0) r.price = ttTotal;
         if (tt.originalPrice !== null && tt.originalPrice > r.price) {
           r.originalPrice = tt.originalPrice;
         }
@@ -1548,11 +1640,11 @@ async function findFirstOfferableWindow(
   token: string,
   windowStart: Date,
   windowEnd: Date,
-  nights: 2 | 7,
+  nights: 1 | 2 | 7 | 28,
   stepDays: number,
   cache: Map<string, OfferProbe>,
   excludeDateStr?: string, // exclude an exact checkIn (for 2nd slot dedup)
-): Promise<{ checkIn: string; checkOut: string; nights: 2 | 7; probe: OfferProbe } | null> {
+): Promise<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28; probe: OfferProbe } | null> {
   const lastValidStart = windowEnd.getTime() - nights * 86_400_000;
   let bothRoomsHit: { checkIn: string; checkOut: string; probe: OfferProbe } | null = null;
   let anyRoomHit: { checkIn: string; checkOut: string; probe: OfferProbe } | null = null;
@@ -1585,7 +1677,7 @@ async function findFirstOfferableWindow(
 }
 
 export type DiscoveryResult = {
-  slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>;
+  slots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }>;
   /** Pre-fetched offers keyed by `${checkIn}|${checkOut}` so the gate doesn't re-call /offers. */
   offersCache: Map<string, OfferProbe>;
 };
@@ -1608,7 +1700,7 @@ export async function discoverAvailableSlots(): Promise<DiscoveryResult> {
   const { start, end } = computeWindow();
   console.log(`[pricing] Probing offers ${ymd(start)} → ${ymd(end)} for available slots`);
 
-  const slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
+  const slots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }> = [];
 
   // 2-night first. Step 2 days so we don't hammer the API but still
   // sample finely enough to find narrow availability gaps.
@@ -1656,7 +1748,7 @@ export async function discoverAvailableSlots(): Promise<DiscoveryResult> {
 
 export type AvailabilityGated = {
   /** Slots that have at least one room available (kept for scraping). */
-  availableSlots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>;
+  availableSlots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }>;
   /** Web column results indexed by ORIGINAL slot index. */
   webResults: RoomOffers[];
   /** Map availableSlot index → original slot index, for stitching scraper output back. */
@@ -1670,7 +1762,7 @@ export type AvailabilityGated = {
  *   - Slots where neither room has an offer → dropped from scraping.
  */
 async function fetchWebPricesAndAvailability(
-  slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
+  slots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }>,
   offersCache?: Map<string, OfferProbe>,
 ): Promise<AvailabilityGated> {
   const token = await getBeds24Token();
@@ -1685,7 +1777,7 @@ async function fetchWebPricesAndAvailability(
 
   console.log(`[pricing] Beds24 offers + availability check for ${slots.length} slot(s)`);
   const webResults: RoomOffers[] = [];
-  const availableSlots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> = [];
+  const availableSlots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }> = [];
   const availableToOriginalIdx: number[] = [];
 
   for (let i = 0; i < slots.length; i++) {
@@ -1740,12 +1832,12 @@ function calcSpread(prices: (number | null)[]): number | null {
 }
 
 export async function runFullPricingCheck(
-  customSlots?: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>,
+  customSlots?: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }>,
 ): Promise<PricingResult> {
   // Production: discover available dates from Beds24 and pick from those.
   // Custom (operator-provided) slots bypass discovery — operator knows the
   // dates they want to compare.
-  let slots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }>;
+  let slots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }>;
   let offersCache: Map<string, OfferProbe> | undefined;
   if (customSlots) {
     slots = customSlots;

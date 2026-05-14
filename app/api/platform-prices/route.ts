@@ -37,12 +37,12 @@ export async function POST(req: NextRequest) {
   const redis = getRedis();
 
   // Parse optional custom slot from body
-  let customSlots: Array<{ checkIn: string; checkOut: string; nights: 2 | 7 }> | undefined;
+  let customSlots: Array<{ checkIn: string; checkOut: string; nights: 1 | 2 | 7 | 28 }> | undefined;
   try {
     const body = await req.json().catch(() => null);
     if (body?.checkIn && body?.checkOut && body?.nights) {
       customSlots = [
-        { checkIn: body.checkIn, checkOut: body.checkOut, nights: Number(body.nights) as 2 | 7 },
+        { checkIn: body.checkIn, checkOut: body.checkOut, nights: Number(body.nights) as 1 | 2 | 7 | 28 },
       ];
     } else if (body?.slots && Array.isArray(body.slots)) {
       customSlots = body.slots;

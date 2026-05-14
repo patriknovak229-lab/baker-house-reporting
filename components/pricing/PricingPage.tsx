@@ -93,32 +93,41 @@ function nightsRowClass(nights: number): string {
 // same real-world discount shows with the same badge no matter which
 // platform named it. Booking.com calls the 7-night discount "Weekly rate";
 // Airbnb calls it "Weekly stay discount". Both should render the same way.
+// `deviceLogin: true` flags discounts that are only available to specific
+// users (mobile-app users, logged-in Genius members). The operator can SEE
+// these but shouldn't treat them as the rate an anonymous desktop visitor
+// would book at.
 const DISCOUNT_CATEGORY = {
-  weekly:   { label: 'Weekly discount',       class: 'bg-blue-100 text-blue-800 ring-1 ring-blue-200' },
-  monthly:  { label: 'Monthly discount',      class: 'bg-cyan-100 text-cyan-800 ring-1 ring-cyan-200' },
-  early:    { label: 'Early booking',         class: 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200' },
-  lastMin:  { label: 'Last-minute',           class: 'bg-orange-100 text-orange-800 ring-1 ring-orange-200' },
-  mobile:   { label: 'Mobile-only',           class: 'bg-purple-100 text-purple-800 ring-1 ring-purple-200' },
-  longStay: { label: 'Long-stay discount',    class: 'bg-sky-100 text-sky-800 ring-1 ring-sky-200' },
-  newList:  { label: 'New-listing promo',     class: 'bg-pink-100 text-pink-800 ring-1 ring-pink-200' },
-  host:     { label: 'Host discount',         class: 'bg-teal-100 text-teal-800 ring-1 ring-teal-200' },
-  genius:   { label: 'Genius',                class: 'bg-indigo-100 text-indigo-800 ring-1 ring-indigo-200' },
-  generic:  { label: 'Discount',              class: 'bg-gray-100 text-gray-700 ring-1 ring-gray-200' },
+  weekly:   { label: 'Weekly discount',       class: 'bg-blue-100 text-blue-800 ring-1 ring-blue-200',         deviceLogin: false },
+  monthly:  { label: 'Monthly discount',      class: 'bg-cyan-100 text-cyan-800 ring-1 ring-cyan-200',         deviceLogin: false },
+  early:    { label: 'Early booking',         class: 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200', deviceLogin: false },
+  lastMin:  { label: 'Last-minute',           class: 'bg-orange-100 text-orange-800 ring-1 ring-orange-200',   deviceLogin: false },
+  mobile:   { label: 'Mobile-only',           class: 'bg-purple-100 text-purple-800 ring-1 ring-purple-200',   deviceLogin: true  },
+  longStay: { label: 'Long-stay discount',    class: 'bg-sky-100 text-sky-800 ring-1 ring-sky-200',             deviceLogin: false },
+  newList:  { label: 'New-listing promo',     class: 'bg-pink-100 text-pink-800 ring-1 ring-pink-200',         deviceLogin: false },
+  host:     { label: 'Host discount',         class: 'bg-teal-100 text-teal-800 ring-1 ring-teal-200',         deviceLogin: false },
+  genius:   { label: 'Genius',                class: 'bg-indigo-100 text-indigo-800 ring-1 ring-indigo-200',   deviceLogin: true  },
+  generic:  { label: 'Discount',              class: 'bg-gray-100 text-gray-700 ring-1 ring-gray-200',         deviceLogin: false },
 } as const;
 
 type DiscountCategoryKey = keyof typeof DISCOUNT_CATEGORY;
 
 function categorizeDiscount(name: string): DiscountCategoryKey {
   const lc = name.toLowerCase();
-  if (/\bweekly\b/.test(lc))                       return 'weekly';
-  if (/\bmonthly\b/.test(lc))                      return 'monthly';
-  if (/early\s*(booker?|booking)/.test(lc))        return 'early';
-  if (/last[- ]?minute/.test(lc))                  return 'lastMin';
-  if (/mobile[- ]?only/.test(lc))                  return 'mobile';
-  if (/long[- ]?stay/.test(lc))                    return 'longStay';
-  if (/new[- ]?listing/.test(lc))                  return 'newList';
-  if (/host\s*discount|owner\s*(?:discount|decreased)/.test(lc)) return 'host';
-  if (/genius/.test(lc))                           return 'generic'; // (Genius has its own treatment elsewhere)
+  // Czech equivalents Airbnb returns in its tooltip:
+  //   "Sleva za brzkou rezervaci"  → early booking
+  //   "Týdenní sleva" / "Týden..."  → weekly stay discount
+  //   "Měsíční sleva"               → monthly stay discount
+  //   "Sleva na poslední chvíli"    → last-minute
+  if (/\bweekly\b|t[ýy]denn[ií]|t[ýy]dn/.test(lc))           return 'weekly';
+  if (/\bmonthly\b|m[ěe]s[ií]?[čc]n[ií]/.test(lc))           return 'monthly';
+  if (/early\s*(booker?|booking)|brzk[ou][ou]?\s*rezervaci/.test(lc)) return 'early';
+  if (/last[- ]?minute|posledn[ií]\s*chv[ií]li/.test(lc))    return 'lastMin';
+  if (/mobile[- ]?only|mobiln[ií]/.test(lc))                 return 'mobile';
+  if (/long[- ]?stay/.test(lc))                              return 'longStay';
+  if (/new[- ]?listing|nov[áa]\s*nab[ií]dka/.test(lc))       return 'newList';
+  if (/host\s*discount|owner\s*(?:discount|decreased)|hostitel/.test(lc)) return 'host';
+  if (/genius/.test(lc))                                     return 'genius';
   return 'generic';
 }
 
@@ -128,6 +137,10 @@ function discountBadgeClass(name: string): string {
 
 function discountDisplayName(name: string): string {
   return DISCOUNT_CATEGORY[categorizeDiscount(name)].label;
+}
+
+function isDeviceLoginDiscount(name: string): boolean {
+  return DISCOUNT_CATEGORY[categorizeDiscount(name)].deviceLogin;
 }
 
 // ─────────────────────────────────────────────
@@ -184,14 +197,19 @@ function OfferCell({ offer, nights }: { offer: Offer; nights: number }) {
       )}
       {offer.discountBreakdown && offer.discountBreakdown.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1 justify-end max-w-[260px] ml-auto">
-          {offer.discountBreakdown.map((d, i) => (
-            <span
-              key={i}
-              className={`inline-block text-[11px] leading-tight px-1.5 py-0.5 rounded font-medium ${discountBadgeClass(d.name)}`}
-            >
-              {discountDisplayName(d.name)} <span className="font-bold">−{d.pp}pp</span>
-            </span>
-          ))}
+          {offer.discountBreakdown.map((d, i) => {
+            const deviceLogin = isDeviceLoginDiscount(d.name);
+            return (
+              <span
+                key={i}
+                className={`inline-block text-[11px] leading-tight px-1.5 py-0.5 rounded font-medium ${discountBadgeClass(d.name)}`}
+                title={deviceLogin ? 'Login/device-locked discount — not what an anonymous desktop user sees' : undefined}
+              >
+                {deviceLogin && <span aria-hidden className="mr-0.5">🔒</span>}
+                {discountDisplayName(d.name)} <span className="font-bold">−{d.pp}pp</span>
+              </span>
+            );
+          })}
         </div>
       )}
       {offer.labels.length > 0 && (() => {
@@ -212,14 +230,19 @@ function OfferCell({ offer, nights }: { offer: Offer; nights: number }) {
         if (deduped.length === 0) return null;
         return (
         <div className="mt-1 flex flex-wrap gap-1 justify-end max-w-[240px] ml-auto">
-          {deduped.slice(0, 3).map((l, i) => (
-            <span
-              key={i}
-              className={`inline-block text-[10px] leading-tight px-1.5 py-0.5 rounded font-medium ${discountBadgeClass(l)}`}
-            >
-              {discountDisplayName(l)}
-            </span>
-          ))}
+          {deduped.slice(0, 3).map((l, i) => {
+            const deviceLogin = isDeviceLoginDiscount(l);
+            return (
+              <span
+                key={i}
+                className={`inline-block text-[10px] leading-tight px-1.5 py-0.5 rounded font-medium ${discountBadgeClass(l)}`}
+                title={deviceLogin ? 'Login/device-locked discount' : undefined}
+              >
+                {deviceLogin && <span aria-hidden className="mr-0.5">🔒</span>}
+                {discountDisplayName(l)}
+              </span>
+            );
+          })}
         </div>
         );
       })()}
@@ -405,7 +428,7 @@ export default function PricingPage() {
 
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
-  const [nights, setNights] = useState<'2' | '7'>('2');
+  const [nights, setNights] = useState<'1' | '2' | '7' | '28'>('2');
   const [error, setError] = useState<string | null>(null);
 
   // Vercel sometimes returns plain-text/HTML on 5xx (e.g. function timeout =
@@ -557,11 +580,13 @@ export default function PricingPage() {
             <label className="block text-xs font-medium text-gray-600 mb-1">Stay length</label>
             <select
               value={nights}
-              onChange={(e) => setNights(e.target.value as '2' | '7')}
+              onChange={(e) => setNights(e.target.value as '1' | '2' | '7' | '28')}
               className="block border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
+              <option value="1">1 night (≤7 days out)</option>
               <option value="2">2 nights</option>
               <option value="7">7 nights (weekly)</option>
+              <option value="28">28 nights (monthly)</option>
             </select>
           </div>
           <div>
