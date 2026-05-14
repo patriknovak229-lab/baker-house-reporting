@@ -396,9 +396,23 @@ export default function TransactionsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Reservations</h1>
-          <p className="text-sm text-gray-400 mt-0.5">
-            {reservations.length} total · {filtered.length} shown
-          </p>
+          {(() => {
+            // "Real" reservations = everything currently in view minus blackouts
+            // (Beds24 cancellations are already excluded by the /api/bookings
+            // sync — status="cancelled" rows are filtered out server-side.)
+            const realCount = reservations.filter((r) => !r.isBlackout).length;
+            const blackoutCount = reservations.length - realCount;
+            return (
+              <p
+                className="text-sm text-gray-400 mt-0.5"
+                title="Cancellations are already excluded from the sync. Blackouts (status=black) are counted separately."
+              >
+                {realCount} reservation{realCount === 1 ? '' : 's'}
+                {blackoutCount > 0 && <> · {blackoutCount} blackout{blackoutCount === 1 ? '' : 's'}</>}
+                {' · '}{filtered.length} shown
+              </p>
+            );
+          })()}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="hidden sm:inline text-xs text-gray-400">
