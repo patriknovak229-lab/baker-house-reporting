@@ -107,9 +107,28 @@ export function renderWhatsAppMessage(vars: WhatsAppMessageVars): string {
 }
 
 /**
- * Build a wa.me deeplink that opens WhatsApp (Web or app) with the given
- * recipient + text pre-filled. The operator still has to tap Send inside
- * WhatsApp — wa.me is intentionally not a silent-send mechanism.
+ * Build a WhatsApp deeplink that opens with the given recipient + text
+ * pre-filled. The operator still has to tap Send inside WhatsApp — this
+ * is intentionally not a silent-send mechanism.
+ *
+ * Defaults to `https://web.whatsapp.com/send?...` rather than `wa.me/...`
+ * because the operator runs WhatsApp Business inside Chrome (a separate
+ * profile from the personal Desktop app). `wa.me` is the universal short
+ * link, but macOS/Windows hand it off to the registered native handler —
+ * which on this machine is the personal WhatsApp Desktop. `web.whatsapp.com`
+ * is a plain HTTPS URL with no native handler, so the browser keeps it in
+ * the current tab/profile — i.e. whichever Chrome profile is currently
+ * signed in to WhatsApp Business.
+ *
+ * To pick the Business profile reliably, the operator should run the
+ * reporting dashboard inside that same Chrome profile — link clicks open
+ * in the profile they originated from.
+ *
+ * Override via `NEXT_PUBLIC_WHATSAPP_URL_BASE` if you ever want to switch
+ * back to wa.me or use a different host (e.g. for testing). Valid values:
+ *   - "web.whatsapp.com" (default, browser-only)
+ *   - "wa.me"            (universal, may hand off to native app)
+ *   - "api.whatsapp.com" (legacy API host, behaves like wa.me)
  *
  * Phone must be normalised to international digits without the leading `+`.
  * Throws when the phone looks unusable so the UI surfaces an error instead
@@ -122,7 +141,13 @@ export function buildWhatsAppDeeplink(rawPhone: string, text: string): string {
       `Phone "${rawPhone}" doesn't look like a valid international number`,
     );
   }
-  return `https://wa.me/${cleaned}?text=${encodeURIComponent(text)}`;
+  const host = (process.env.NEXT_PUBLIC_WHATSAPP_URL_BASE || 'web.whatsapp.com').trim();
+  const encodedText = encodeURIComponent(text);
+  if (host === 'wa.me') {
+    return `https://wa.me/${cleaned}?text=${encodedText}`;
+  }
+  // web.whatsapp.com and api.whatsapp.com both use ?phone=&text=
+  return `https://${host}/send?phone=${cleaned}&text=${encodedText}`;
 }
 
 function formatExpiry(iso?: string, lang: WhatsAppLang = 'en'): string {
