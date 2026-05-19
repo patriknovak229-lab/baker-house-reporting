@@ -5,15 +5,17 @@ import { generateCode, generateSuffix } from '@/utils/voucherCode';
 import {
   renderThankYouEmail,
   THANK_YOU_SUBJECT,
-  DEFAULT_THANK_YOU_BODY,
+  defaultBodyForLang,
+  type ThankYouLang,
 } from '@/utils/emailTemplates/thankYou';
 import {
   renderWhatsAppMessage,
   buildWhatsAppDeeplink,
-  DEFAULT_WHATSAPP_BODY,
+  defaultWhatsAppBodyForLang,
 } from '@/utils/whatsAppMessage';
 
 type Channel = 'email' | 'whatsapp';
+type Lang = ThankYouLang; // 'en' | 'cs'
 
 interface Props {
   reservation: Reservation;
@@ -90,13 +92,20 @@ export default function EmailGuestModal({
   const [voucherError, setVoucherError] = useState<string | null>(null);
   const [resolvedVoucher, setResolvedVoucher] = useState<ResolvedVoucher | null>(null);
 
+  // Language for static template copy (greeting, voucher labels, sign-off,
+  // redemption CTA). Body paragraphs follow the same language by default
+  // but the operator can edit them freely once on the preview step.
+  const [lang, setLang] = useState<Lang>('en');
+
   // Preview / edit state. `bodyText` is shared across channels — same
   // paragraphs feed the HTML email template and the WhatsApp text template.
   // `whatsAppText` only exists when the operator opts to tweak the final
   // WhatsApp output directly (overrides the template-rendered version).
   const [subject, setSubject] = useState('');
-  const defaultBody = (channel === 'whatsapp' ? DEFAULT_WHATSAPP_BODY : DEFAULT_THANK_YOU_BODY).join('\n\n');
-  const [bodyText, setBodyText] = useState(defaultBody);
+  const initialBody = (channel === 'whatsapp'
+    ? defaultWhatsAppBodyForLang('en')
+    : defaultBodyForLang('en')).join('\n\n');
+  const [bodyText, setBodyText] = useState(initialBody);
   const [whatsAppTextOverride, setWhatsAppTextOverride] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -110,9 +119,27 @@ export default function EmailGuestModal({
   useEffect(() => {
     if (channel !== 'email') return;
     if (step === 'preview' && !subject) {
-      setSubject(THANK_YOU_SUBJECT(reservation.firstName));
+      setSubject(THANK_YOU_SUBJECT(reservation.firstName, lang));
     }
-  }, [step, subject, reservation.firstName, channel]);
+  }, [step, subject, reservation.firstName, channel, lang]);
+
+  /** Switch the static-copy language. Resets the body paragraphs AND the
+   *  subject to the new language's defaults. Also clears the WhatsApp
+   *  override so the operator sees the new translation immediately. Any
+   *  edits to body text are lost on switch — that's the trade-off to keep
+   *  the body in sync with the surrounding language. */
+  function handleLangChange(next: Lang) {
+    if (next === lang) return;
+    setLang(next);
+    const nextBody = (channel === 'whatsapp'
+      ? defaultWhatsAppBodyForLang(next)
+      : defaultBodyForLang(next)).join('\n\n');
+    setBodyText(nextBody);
+    setWhatsAppTextOverride(null);
+    if (channel === 'email') {
+      setSubject(THANK_YOU_SUBJECT(reservation.firstName, next));
+    }
+  }
 
   /** Shared formatter for the voucher amount label — keeps email + WhatsApp
    *  in sync (CZK with cs-CZ separators for fixed, plain "%" for percentage). */
@@ -132,8 +159,9 @@ export default function EmailGuestModal({
       voucherCode: resolvedVoucher.code,
       voucherAmount: formatAmount(resolvedVoucher),
       bodyParagraphs: paragraphs,
+      lang,
     });
-  }, [channel, resolvedVoucher, bodyText, reservation.firstName]);
+  }, [channel, resolvedVoucher, bodyText, reservation.firstName, lang]);
 
   // Live WhatsApp text render — reflects the same `bodyText` paragraphs as
   // the email path. The operator can also override this output directly via
@@ -147,8 +175,9 @@ export default function EmailGuestModal({
       voucherCode: resolvedVoucher.code,
       voucherAmount: formatAmount(resolvedVoucher),
       bodyParagraphs: paragraphs,
+      lang,
     });
-  }, [channel, resolvedVoucher, bodyText, reservation.firstName, whatsAppTextOverride]);
+  }, [channel, resolvedVoucher, bodyText, reservation.firstName, whatsAppTextOverride, lang]);
 
   // Push the rendered HTML into the iframe whenever it changes (email only)
   useEffect(() => {
@@ -296,6 +325,7 @@ export default function EmailGuestModal({
         voucherCode: finalCode,
         voucherAmount: formatAmount(resolvedVoucher),
         bodyParagraphs: paragraphs,
+        lang,
       });
 
       // ── Step 3: send the email
@@ -349,6 +379,7 @@ export default function EmailGuestModal({
         voucherCode: finalCode,
         voucherAmount: formatAmount(resolvedVoucher),
         bodyParagraphs: paragraphs,
+        lang,
       });
       const textToSend = whatsAppTextOverride
         ? whatsAppTextOverride.replace(
@@ -601,6 +632,41 @@ export default function EmailGuestModal({
                 We&apos;ll check the code is active and not expired before including it.
               </p>
             </>
+          )}
+
+          {/* Step 4: language toggle — visible on the preview step for both
+              channels. Switching resets body + (for email) subject to the
+              new language's defaults so the operator never accidentally
+              sends a mixed-language message. */}
+          {step === 'preview' && resolvedVoucher && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-500 font-medium">Language:</span>
+              <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => handleLangChange('en')}
+                  className={`px-3 py-1 text-xs font-medium transition-colors ${
+                    lang === 'en'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  English
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLangChange('cs')}
+                  className={`px-3 py-1 text-xs font-medium transition-colors ${
+                    lang === 'cs'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Čeština
+                </button>
+              </div>
+              <span className="text-gray-400">(switching resets edited body)</span>
+            </div>
           )}
 
           {/* Step 4a: EMAIL preview + manual edit */}

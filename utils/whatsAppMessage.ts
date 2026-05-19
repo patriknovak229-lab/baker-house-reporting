@@ -10,6 +10,8 @@
  * Used by EmailGuestModal when `channel === 'whatsapp'`.
  */
 
+export type WhatsAppLang = 'en' | 'cs';
+
 export interface WhatsAppMessageVars {
   firstName: string;
   voucherCode: string;
@@ -20,6 +22,9 @@ export interface WhatsAppMessageVars {
   /** Operator-edited body paragraphs (same array as the email modal feeds the
    *  HTML template). When omitted the default Thank You copy is used. */
   bodyParagraphs?: string[];
+  /** Language for static copy (greeting, voucher labels, sign-off, redemption
+   *  CTA). Defaults to 'en'. `bodyParagraphs` are emitted verbatim. */
+  lang?: WhatsAppLang;
 }
 
 export const DEFAULT_WHATSAPP_BODY = [
@@ -27,13 +32,54 @@ export const DEFAULT_WHATSAPP_BODY = [
   'As a small token of our appreciation, please accept the voucher below. Use it on your next stay with us, or pass it on to a friend or family member.',
 ];
 
+/** Czech-language equivalent of DEFAULT_WHATSAPP_BODY. Mirrors the same two
+ *  paragraphs in the email template — keep them in sync if either changes. */
+export const DEFAULT_WHATSAPP_BODY_CS = [
+  'Děkujeme, že jste si pobyt vybrali u nás v Baker House Apartments — a obzvlášť za skvělé hodnocení, které jste nám zanechali. Pro náš malý rodinný tým to opravdu hodně znamená.',
+  'Jako malé poděkování přijměte prosím poukaz níže. Můžete ho využít při svém příštím pobytu u nás, nebo ho předat příteli či rodinnému příslušníkovi.',
+];
+
+/** Pick the right default body for the chosen language. */
+export function defaultWhatsAppBodyForLang(lang: WhatsAppLang): string[] {
+  return lang === 'cs' ? DEFAULT_WHATSAPP_BODY_CS : DEFAULT_WHATSAPP_BODY;
+}
+
 const REDEMPTION_URL = 'https://www.bakerhouseapartments.cz/';
+
+/** Per-language string table for WhatsApp. Same shape as the email i18n
+ *  object so changes stay obviously parallel. */
+const I18N_WA = {
+  en: {
+    greeting: (name: string) => `Dear ${name},`,
+    voucherHeading: '🎁 *Your voucher*',
+    voucherLine: (code: string, amount: string) => `\`\`\`${code}\`\`\`  (${amount} off)`,
+    validUntil: (date: string) => `Valid until ${date}`,
+    redemptionLine: `Redeem at ${REDEMPTION_URL}`,
+    disclaimer:
+      '_The voucher is only redeemable through our official website above — it cannot be used on Booking.com, Airbnb, or other channels._',
+    signOffLine: 'Warm regards,',
+    signOff: 'Patrik & Zuzana',
+  },
+  cs: {
+    greeting: (name: string) => `Milý ${name},`,
+    voucherHeading: '🎁 *Váš poukaz*',
+    voucherLine: (code: string, amount: string) => `\`\`\`${code}\`\`\`  (sleva ${amount})`,
+    validUntil: (date: string) => `Platnost do ${date}`,
+    redemptionLine: `Uplatněte na ${REDEMPTION_URL}`,
+    disclaimer:
+      '_Poukaz lze uplatnit pouze na našem oficiálním webu výše — nelze ho použít na Booking.com, Airbnb ani jiných kanálech._',
+    signOffLine: 'S přátelským pozdravem,',
+    signOff: 'Patrik & Zuzana',
+  },
+} as const;
 
 /** Render the WhatsApp message body. Pure function — no side effects. */
 export function renderWhatsAppMessage(vars: WhatsAppMessageVars): string {
+  const lang: WhatsAppLang = vars.lang === 'cs' ? 'cs' : 'en';
+  const t = I18N_WA[lang];
   const firstName = (vars.firstName || 'there').trim();
-  const expiry = formatExpiry(vars.voucherExpiresAt);
-  const paragraphs = (vars.bodyParagraphs ?? DEFAULT_WHATSAPP_BODY)
+  const expiry = formatExpiry(vars.voucherExpiresAt, lang);
+  const paragraphs = (vars.bodyParagraphs ?? defaultWhatsAppBodyForLang(lang))
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
 
@@ -42,20 +88,20 @@ export function renderWhatsAppMessage(vars: WhatsAppMessageVars): string {
   // WhatsApp markup: *text* = bold, _text_ = italic, ```text``` = monospace.
   // The voucher code uses monospace so it stands out as something to copy.
   return [
-    `Dear ${firstName},`,
+    t.greeting(firstName),
     '',
     body,
     '',
-    '🎁 *Your voucher*',
-    `\`\`\`${vars.voucherCode}\`\`\`  (${vars.voucherAmount} off)`,
-    `Valid until ${expiry}`,
+    t.voucherHeading,
+    t.voucherLine(vars.voucherCode, vars.voucherAmount),
+    t.validUntil(expiry),
     '',
-    `Redeem at ${REDEMPTION_URL}`,
+    t.redemptionLine,
     '',
-    '_The voucher is only redeemable through our official website above — it cannot be used on Booking.com, Airbnb, or other channels._',
+    t.disclaimer,
     '',
-    'Warm regards,',
-    'Patrik & Zuzana',
+    t.signOffLine,
+    t.signOff,
     'Baker House Apartments',
   ].join('\n');
 }
@@ -79,7 +125,7 @@ export function buildWhatsAppDeeplink(rawPhone: string, text: string): string {
   return `https://wa.me/${cleaned}?text=${encodeURIComponent(text)}`;
 }
 
-function formatExpiry(iso?: string): string {
+function formatExpiry(iso?: string, lang: WhatsAppLang = 'en'): string {
   const date = iso
     ? new Date(iso)
     : (() => {
@@ -87,8 +133,10 @@ function formatExpiry(iso?: string): string {
         d.setFullYear(d.getFullYear() + 1);
         return d;
       })();
-  if (Number.isNaN(date.getTime())) return 'one year from issue date';
-  return date.toLocaleDateString('en-GB', {
+  const fallback = lang === 'cs' ? 'jeden rok od data vystavení' : 'one year from issue date';
+  if (Number.isNaN(date.getTime())) return fallback;
+  const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+  return date.toLocaleDateString(locale, {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
