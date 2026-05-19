@@ -1224,6 +1224,7 @@ export default function ReservationDrawer({
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [showEmailGuestModal, setShowEmailGuestModal] = useState(false);
+  const [showWhatsAppGuestModal, setShowWhatsAppGuestModal] = useState(false);
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
@@ -2110,53 +2111,57 @@ export default function ReservationDrawer({
                     Email Guest
                   </button>
                 )}
-                {reservation.phone && (() => {
-                  const cleaned = reservation.phone.replace(/[^\d+]/g, "").replace(/^\+/, "");
-                  return (
-                    <a
-                      href={`https://web.whatsapp.com/send?phone=${cleaned}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-semibold transition-colors"
-                      title={`Open WhatsApp chat with ${reservation.firstName}`}
-                    >
-                      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-                      </svg>
-                      WhatsApp
-                    </a>
-                  );
-                })()}
+                {/* WhatsApp Guest pill — opens the same template/voucher
+                    modal as Email Guest, but emits a wa.me deeplink with the
+                    rendered message pre-filled. The operator confirms send
+                    inside WhatsApp itself. */}
+                {reservation.phone && (
+                  <button
+                    onClick={() => setShowWhatsAppGuestModal(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-semibold transition-colors"
+                    title={`Send a templated WhatsApp message to ${reservation.firstName}`}
+                  >
+                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                    </svg>
+                    WhatsApp Guest
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* Email send log — appears as a discreet line under the pill row.
-                Shows every Email Guest send for this reservation with template
-                + timestamp + recipient + sender. Newest first. */}
+            {/* Guest-message send log — appears as a discreet line under
+                the pill row. Shows every Email Guest / WhatsApp Guest
+                dispatch for this reservation with template + timestamp +
+                channel + recipient + sender. Newest first. */}
             {(reservation.emailSendLog ?? []).length > 0 && (
               <div className="mb-3 -mt-1 space-y-0.5">
-                {(reservation.emailSendLog ?? []).map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="text-[10.5px] text-gray-500 flex items-center gap-1.5"
-                    title={`Sent by ${entry.sentBy} to ${entry.to} · Subject: "${entry.subject}"`}
-                  >
-                    <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                    <span className="font-medium text-gray-700">{entry.templateLabel}</span>
-                    <span className="text-gray-400">sent</span>
-                    <span>
-                      {new Date(entry.sentAt).toLocaleDateString('en-GB', {
-                        day: '2-digit', month: 'short', year: 'numeric',
-                      })}
-                      {', '}
-                      {new Date(entry.sentAt).toLocaleTimeString('en-GB', {
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-                ))}
+                {(reservation.emailSendLog ?? []).map((entry) => {
+                  // Old log entries pre-date the channel field — treat as email.
+                  const isWhatsApp = entry.channel === 'whatsapp';
+                  const channelIcon = isWhatsApp ? '💬' : '✉️';
+                  const channelLabel = isWhatsApp ? 'WhatsApp' : 'Email';
+                  return (
+                    <div
+                      key={entry.id}
+                      className="text-[10.5px] text-gray-500 flex items-center gap-1.5"
+                      title={`${channelLabel} sent by ${entry.sentBy} to ${entry.to}${entry.subject ? ` · Subject: "${entry.subject}"` : ''}`}
+                    >
+                      <span aria-hidden className="text-[11px] leading-none">{channelIcon}</span>
+                      <span className="font-medium text-gray-700">{entry.templateLabel}</span>
+                      <span className="text-gray-400">sent via {channelLabel.toLowerCase()}</span>
+                      <span>
+                        {new Date(entry.sentAt).toLocaleDateString('en-GB', {
+                          day: '2-digit', month: 'short', year: 'numeric',
+                        })}
+                        {', '}
+                        {new Date(entry.sentAt).toLocaleTimeString('en-GB', {
+                          hour: '2-digit', minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -2468,6 +2473,7 @@ export default function ReservationDrawer({
           {showEmailGuestModal && (
             <EmailGuestModal
               reservation={reservation}
+              channel="email"
               defaultEmail={
                 reservation.additionalEmail
                   || reservation.invoiceData?.billingEmail
@@ -2477,6 +2483,19 @@ export default function ReservationDrawer({
               onClose={() => setShowEmailGuestModal(false)}
               onSent={() => {
                 setShowEmailGuestModal(false);
+                onPaymentCreated?.();
+              }}
+            />
+          )}
+
+          {showWhatsAppGuestModal && reservation.phone && (
+            <EmailGuestModal
+              reservation={reservation}
+              channel="whatsapp"
+              phone={reservation.phone}
+              onClose={() => setShowWhatsAppGuestModal(false)}
+              onSent={() => {
+                setShowWhatsAppGuestModal(false);
                 onPaymentCreated?.();
               }}
             />
