@@ -507,6 +507,58 @@ export default function TransactionsPage() {
         </div>
       )}
 
+      {/* Overlap alert — surfaces same-room double-bookings. Driven by the
+          server-tagged `overlapWith` field. Each conflict appears once
+          (pairs are de-duplicated by sorting endpoints). One room can only
+          host one booking at a time, so any hit here means either a cache
+          staleness bug or a real Beds24 double-book the operator needs to
+          resolve. */}
+      {(() => {
+        const conflictPairs = new Set<string>();
+        const pairList: Array<{ a: string; b: string; room: string }> = [];
+        for (const r of reservations) {
+          for (const other of r.overlapWith ?? []) {
+            const key = [r.reservationNumber, other].sort().join('|');
+            if (conflictPairs.has(key)) continue;
+            conflictPairs.add(key);
+            pairList.push({ a: r.reservationNumber, b: other, room: r.room });
+          }
+        }
+        if (pairList.length === 0) return null;
+        return (
+          <div className="mb-5 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 shrink-0 text-red-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-red-900">
+                  Same-room conflict detected ({pairList.length} {pairList.length === 1 ? 'pair' : 'pairs'})
+                </p>
+                <p className="text-[12px] text-red-700 mt-0.5">
+                  Two or more reservations occupy the same room on overlapping dates — one of them is almost
+                  certainly a cancellation that didn&apos;t reach the cache. Verify on Beds24 and click Refresh
+                  if needed.
+                </p>
+                <ul className="mt-2 space-y-0.5 text-[12px] font-mono">
+                  {pairList.map((p) => (
+                    <li key={`${p.a}|${p.b}`}>
+                      {p.room}: <span className="font-semibold">{p.a}</span> ↔ <span className="font-semibold">{p.b}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                onClick={fetchReservations}
+                className="font-medium underline underline-offset-2 hover:text-red-900"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Data issues panel */}
       {dataIssues.length > 0 && (
         <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">

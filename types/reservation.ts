@@ -120,4 +120,12 @@ export interface Reservation {
   invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
   invoiceRequests?: InvoiceRequest[]; // auto-detected invoice requests from Booking.com guest messages
   emailSendLog?: EmailSendLogEntry[]; // template emails sent via "Email Guest" — append-only audit trail
+  /**
+   * Reservation numbers of OTHER reservations that occupy the same room on
+   * overlapping dates. Populated server-side after the bookings sync. Means
+   * the room appears double-booked in the dashboard — usually a stale cache
+   * issue from a cancel-then-rebook that didn't propagate, but the operator
+   * should always verify on Beds24. Empty/undefined = no conflict.
+   */
+  overlapWith?: string[];
 }

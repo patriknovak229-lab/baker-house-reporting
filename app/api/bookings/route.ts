@@ -519,11 +519,122 @@ function mapToReservation(b: Beds24Booking): Reservation {
 //  5. Caller can force a full refresh by calling with fullSync=true (used by
 //     `?fullSync=true` query param on the GET endpoint).
 
+/**
+ * Detect reservations that occupy the same physical room with overlapping
+ * date ranges and tag each side with the other's reservation numbers.
+ *
+ * Why this exists: when a guest cancels and re-books, the cancellation is
+ * supposed to land in the cache (Pass 2 in fetchAllBookings explicitly
+ * includes status=cancelled). If for any reason a cancellation slips past
+ * — Beds24 outage, network glitch mid-sync, cache key in a weird state —
+ * we'd end up with two "confirmed" reservations on the same room+dates.
+ * The operator should never have to spot that visually; this surfaces it.
+ *
+ * Blackouts are skipped — they're intentionally placed to block dates
+ * around a real reservation and routinely "overlap" with the booking
+ * they're protecting.
+ *
+ * Date logic: ranges [aIn, aOut) and [bIn, bOut) overlap iff
+ *   aIn < bOut && bIn < aOut
+ * (checkout-day departures don't count as occupation — a Saturday
+ * departure and a Saturday arrival on the same room is normal turnover).
+ *
+ * Room comparison considers BOTH the primary `room` and `linkedRooms`
+ * (multi-unit package bookings) — a Twin Apartments booking covers
+ * K.202 AND K.203, so an overlap with either physical room counts.
+ */
+function tagOverlappingReservations(reservations: Reservation[]): Reservation[] {
+  // Build (reservation, rooms) tuples once
+  type Item = { res: Reservation; rooms: Set<string>; inMs: number; outMs: number };
+  const items: Item[] = reservations
+    .filter((r) => !r.isBlackout && r.checkInDate && r.checkOutDate)
+    .map((r) => {
+      const rooms = new Set<string>();
+      if (r.room) rooms.add(r.room);
+      for (const lr of r.linkedRooms ?? []) rooms.add(lr);
+      return {
+        res: r,
+        rooms,
+        inMs: new Date(r.checkInDate + "T00:00:00Z").getTime(),
+        outMs: new Date(r.checkOutDate + "T00:00:00Z").getTime(),
+      };
+    })
+    .filter((i) => Number.isFinite(i.inMs) && Number.isFinite(i.outMs) && i.outMs > i.inMs);
+
+  // Accumulate overlap relationships
+  const overlaps = new Map<string, Set<string>>();
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const a = items[i];
+      const b = items[j];
+      // Quick date filter
+      if (!(a.inMs < b.outMs && b.inMs < a.outMs)) continue;
+      // Room overlap
+      let shared = false;
+      for (const r of a.rooms) {
+        if (b.rooms.has(r)) { shared = true; break; }
+      }
+      if (!shared) continue;
+      const aNum = a.res.reservationNumber;
+      const bNum = b.res.reservationNumber;
+      if (!aNum || !bNum) continue;
+      if (!overlaps.has(aNum)) overlaps.set(aNum, new Set());
+      if (!overlaps.has(bNum)) overlaps.set(bNum, new Set());
+      overlaps.get(aNum)!.add(bNum);
+      overlaps.get(bNum)!.add(aNum);
+    }
+  }
+
+  if (overlaps.size === 0) return reservations;
+  return reservations.map((r) => {
+    const others = overlaps.get(r.reservationNumber);
+    if (!others || others.size === 0) return r;
+    return { ...r, overlapWith: [...others].sort() };
+  });
+}
+
 const BOOKINGS_CACHE_KEY  = "baker:beds24-bookings-cache";
 const BOOKINGS_LAST_SYNC_KEY = "baker:beds24-last-sync";
 const DELTA_OVERLAP_MS    = 5 * 60 * 1000;        // 5 minutes
 const MAX_DELTA_AGE_MS    = 24 * 60 * 60 * 1000;  // 24 hours
 const PRUNE_DEPARTURE_MONTHS = 14;                 // keep ~1 year + 2-month buffer
+const LIVE_REFRESH_LOOKBACK_DAYS = 60;             // covers monthly stays currently checked-in
+
+// Statuses we want Beds24 to return in the live-window refresh. Crucially
+// includes 'cancelled' — otherwise a guest cancellation never lands in our
+// cache (Beds24's default response excludes cancelled bookings), the old
+// confirmed copy lingers, and the dashboard shows a stale duplicate
+// alongside the replacement booking.
+const ALL_BOOKING_STATUSES = ['confirmed', 'new', 'request', 'cancelled', 'black'] as const;
+
+/**
+ * One paginated `/bookings` call with the given params. Extracted so the
+ * delta sync and the live-window refresh can share pagination + error
+ * handling without duplicating code.
+ */
+async function paginateBookings(
+  token: string,
+  params: URLSearchParams,
+): Promise<Beds24Booking[]> {
+  const fetched: Beds24Booking[] = [];
+  let pageToken: string | undefined;
+  do {
+    if (pageToken) params.set("pageToken", pageToken);
+    const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
+      headers: { token },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Beds24 ${res.status}: ${text}`);
+    }
+    const json = await res.json();
+    const page: Beds24Booking[] = Array.isArray(json) ? json : (json.data ?? []);
+    fetched.push(...page);
+    pageToken = Array.isArray(json) ? undefined : json.nextPageToken;
+  } while (pageToken);
+  return fetched;
+}
 
 async function fetchAllBookings(
   token: string,
@@ -548,47 +659,64 @@ async function fetchAllBookings(
   const cacheEmpty = Object.keys(cached).length === 0;
   const useFullSync = options.fullSync || cacheEmpty || cacheAgeMs > MAX_DELTA_AGE_MS;
 
-  const params = new URLSearchParams();
+  // ── Pass 1: full-window OR delta ──
+  // (Same logic as before. Both passes write into `cached` by id.)
+  const primaryParams = new URLSearchParams();
   if (useFullSync) {
-    // Full window: 1 year back → 1 year forward (by arrival date)
+    // Full window: 1 year back → 1 year forward (by arrival date). Wipes
+    // cache first so a forced full sync drops anything Beds24 has actually
+    // deleted.
     const from = new Date();
     from.setFullYear(from.getFullYear() - 1);
     const to = new Date();
     to.setFullYear(to.getFullYear() + 1);
-    params.set("arrivalFrom", from.toISOString().slice(0, 10));
-    params.set("arrivalTo", to.toISOString().slice(0, 10));
-    cached = {}; // start fresh on full sync
+    primaryParams.set("arrivalFrom", from.toISOString().slice(0, 10));
+    primaryParams.set("arrivalTo", to.toISOString().slice(0, 10));
+    // Include cancelled in the full sweep too so the cache carries the
+    // correct status for any historically-cancelled booking we re-fetch.
+    for (const s of ALL_BOOKING_STATUSES) primaryParams.append("status", s);
+    cached = {};
   } else {
-    // Delta: bookings modified since last sync (with safety overlap)
+    // Delta: bookings modified since last sync (with safety overlap). Same
+    // explicit status list — without this Beds24 omits cancelled bookings
+    // from its response, so a guest cancellation never propagates here.
     const since = new Date(new Date(lastSync!).getTime() - DELTA_OVERLAP_MS);
-    params.set("modifiedFrom", since.toISOString());
+    primaryParams.set("modifiedFrom", since.toISOString());
+    for (const s of ALL_BOOKING_STATUSES) primaryParams.append("status", s);
   }
-
-  // ── Paginate Beds24 ──
-  const fetched: Beds24Booking[] = [];
-  let pageToken: string | undefined;
-  do {
-    if (pageToken) params.set("pageToken", pageToken);
-    const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
-      headers: { token },
-      cache: "no-store",
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Beds24 ${res.status}: ${text}`);
-    }
-    const json = await res.json();
-    const page: Beds24Booking[] = Array.isArray(json) ? json : (json.data ?? []);
-    fetched.push(...page);
-    pageToken = Array.isArray(json) ? undefined : json.nextPageToken;
-  } while (pageToken);
-
-  // ── Merge fetched into cache (by id), prune very old, persist ──
-  for (const b of fetched) {
+  const primaryFetched = await paginateBookings(token, primaryParams);
+  for (const b of primaryFetched) {
     cached[String(b.id)] = b;
   }
 
-  // Prune anything whose departure is more than PRUNE_DEPARTURE_MONTHS ago
+  // ── Pass 2: live-window refresh (always runs) ──
+  // Re-pulls every booking with arrival within the last LIVE_REFRESH_LOOKBACK_DAYS
+  // days or in the future, including cancelled. The point is to guarantee
+  // that any change affecting an upcoming or currently-checked-in
+  // reservation is reflected — even if Beds24's modifiedFrom delta missed
+  // flagging it. Bounded scope: only future-impact bookings, not the whole
+  // 2-year window.
+  //
+  // We do this on EVERY sync (not just delta) because the failure mode the
+  // operator hit — cancel-then-rebook ghosts — is specifically a cache
+  // staleness problem, not a "first load" problem.
+  if (!useFullSync) {
+    const liveFrom = new Date();
+    liveFrom.setDate(liveFrom.getDate() - LIVE_REFRESH_LOOKBACK_DAYS);
+    const liveTo = new Date();
+    liveTo.setFullYear(liveTo.getFullYear() + 1);
+    const liveParams = new URLSearchParams();
+    liveParams.set("arrivalFrom", liveFrom.toISOString().slice(0, 10));
+    liveParams.set("arrivalTo", liveTo.toISOString().slice(0, 10));
+    for (const s of ALL_BOOKING_STATUSES) liveParams.append("status", s);
+    const liveFetched = await paginateBookings(token, liveParams);
+    for (const b of liveFetched) {
+      cached[String(b.id)] = b;
+    }
+  }
+
+  // ── Prune very old + persist ──
+  // Anything whose departure is more than PRUNE_DEPARTURE_MONTHS ago.
   const pruneCutoff = new Date();
   pruneCutoff.setMonth(pruneCutoff.getMonth() - PRUNE_DEPARTURE_MONTHS);
   const pruneCutoffStr = pruneCutoff.toISOString().slice(0, 10);
@@ -780,7 +908,8 @@ export async function GET(req: NextRequest) {
     ).map(mapToReservation);
 
     const withStripeFees = await aggregateStripeFees(reservations);
-    return NextResponse.json(withStripeFees);
+    const withOverlapFlags = tagOverlappingReservations(withStripeFees);
+    return NextResponse.json(withOverlapFlags);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
