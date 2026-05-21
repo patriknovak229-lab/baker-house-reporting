@@ -498,7 +498,10 @@ export default function ReservationTable({
       </div>
 
       {/* ── Desktop: table ────────────────────────────────────────────────── */}
-      <div className="hidden md:block rounded-lg border border-gray-200 overflow-hidden">
+      {/* overflow-x-auto so the rightmost columns (Status / Flags) can be
+          reached on narrower laptops instead of being clipped by the
+          rounded border. Previously `overflow-hidden` chopped them mid-word. */}
+      <div className="hidden md:block rounded-lg border border-gray-200 overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -733,7 +736,7 @@ export default function ReservationTable({
                               : flag === "Repeat Customer"
                                 ? "↩ Repeat"
                                 : flag === "High Value Customer"
-                                  ? "★ High Value"
+                                  ? "★ HV"
                                   : "⚠ Problem"}
                           </Badge>
                         ))}
