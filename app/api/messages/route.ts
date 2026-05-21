@@ -3,6 +3,7 @@ import { Redis } from '@upstash/redis';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { requireRole } from '@/utils/authGuard';
 import { isInvoiceRequest, parseInvoiceRequest } from '@/utils/invoiceRequestParser';
+import { sendBeds24Message } from '@/utils/beds24Messages';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
@@ -68,6 +69,16 @@ export interface ThreadMessage {
   source: 'host' | 'guest' | 'system';
   text: string;
   time: string;
+  /** True when this host message was sent by the auto-reply pipeline.
+   *  Surfaced in MessageThread as a small ⚡ Auto chip so operators can tell
+   *  which replies came from the bot. */
+  isAutoReply?: boolean;
+}
+
+/** Auto-reply log entry shape (mirrors webhook/beds24-message/route.ts). */
+interface AutoReplyLogEntry {
+  beds24SentMessageId: number | null;
+  bookingId: number;
 }
 
 // ── GET /api/messages?bookingId=123 — fetch thread for one booking ─────────────
@@ -106,6 +117,25 @@ export async function GET(req: NextRequest) {
     console.error('[messages] invoice-request detection failed', err),
   );
 
+  // Load auto-reply audit log so we can tag host messages that came from
+  // the bot. Best-effort — if Redis is unreachable, messages render
+  // without the ⚡ Auto chip rather than the whole thread failing.
+  const autoReplyMessageIds = new Set<number>();
+  const redis = getRedis();
+  if (redis) {
+    try {
+      const log = (await redis.get<AutoReplyLogEntry[]>('baker:auto-reply:log')) ?? [];
+      for (const entry of log) {
+        if (entry.bookingId !== Number(bookingId)) continue;
+        if (entry.beds24SentMessageId != null) {
+          autoReplyMessageIds.add(entry.beds24SentMessageId);
+        }
+      }
+    } catch (err) {
+      console.warn('[messages] auto-reply log read failed:', err);
+    }
+  }
+
   // Sort by time ascending so order is deterministic regardless of how
   // Beds24 returns the page. Drop internal notes. Cap at the most recent
   // 30 messages — enough context without dragging months of history onto
@@ -120,6 +150,7 @@ export async function GET(req: NextRequest) {
       source: m.source === 'host' ? 'host' : m.source === 'guest' ? 'guest' : 'system',
       text: m.message,
       time: m.time,
+      isAutoReply: autoReplyMessageIds.has(m.id) || undefined,
     }));
 
   return NextResponse.json(messages);
@@ -130,29 +161,16 @@ export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
 
-  let token: string;
-  try {
-    token = await getAccessToken();
-  } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Auth error' }, { status: 500 });
-  }
-
   const { bookingId, message } = await req.json();
   if (!bookingId || !message?.trim()) {
     return NextResponse.json({ error: 'bookingId and message required' }, { status: 400 });
   }
 
-  const res = await fetch(`${BEDS24_API_BASE}/bookings/messages`, {
-    method: 'POST',
-    headers: { token, 'Content-Type': 'application/json' },
-    body: JSON.stringify([{ bookingId, message: message.trim() }]),
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    return NextResponse.json({ error: `Beds24 ${res.status}: ${text}` }, { status: res.status });
+  try {
+    const result = await sendBeds24Message(bookingId, message);
+    return NextResponse.json({ ok: true, messageId: result.messageId });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: msg }, { status: 502 });
   }
-
-  return NextResponse.json({ ok: true });
 }

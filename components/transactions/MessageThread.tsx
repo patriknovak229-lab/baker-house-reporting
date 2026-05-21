@@ -22,6 +22,10 @@ const ROOM_PARKING_SPACE: Record<string, string> = {
   'K.201': '153',
   'K.202': '167',
   'K.203': '160',
+  'O.308': '152',
+  'K.102': '15',
+  'K.103': '16',
+  'K.106': '17',
 };
 
 interface Template {
@@ -443,8 +447,18 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
                       </button>
                   )}
                 </>
-                <span className="text-[10px] text-gray-400 mt-0.5 px-1">
-                  {msg.source === 'host' ? 'You' : msg.source === 'guest' ? guestName : 'System'} · {formatTime(msg.time)}
+                <span className="text-[10px] text-gray-400 mt-0.5 px-1 flex items-center gap-1">
+                  <span>
+                    {msg.source === 'host' ? 'You' : msg.source === 'guest' ? guestName : 'System'} · {formatTime(msg.time)}
+                  </span>
+                  {msg.isAutoReply && (
+                    <span
+                      className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[9px] font-semibold bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200"
+                      title="Sent automatically by the auto-reply pipeline"
+                    >
+                      ⚡ Auto
+                    </span>
+                  )}
                 </span>
               </div>
             ))}

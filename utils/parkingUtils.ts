@@ -2,11 +2,30 @@ import type { Reservation } from "@/types/reservation";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
+/**
+ * Physical parking spaces in the underground garage at Bratislavská 82.
+ *
+ * `permanentRoom` — the room that auto-gets this space (one-to-one mapping).
+ *   `null` means the space has no permanent room (hot space, manual-only).
+ * `subLevel` — the floor of the garage (currently all on sub-level −1).
+ *   Surfaced in the parking auto-reply so guests know which level to drive to.
+ *
+ * Change history:
+ *   2026-05-21 — Urban apartments (K.102/K.103/K.106) gained dedicated spaces
+ *                15/16/17 (previously had no parking). Space 152 converted
+ *                from hot-space to permanent O.308.
+ */
 export const PARKING_SPACES = [
-  { space: "153", permanentRoom: "K.201" as string | null },
-  { space: "167", permanentRoom: "K.202" as string | null },
-  { space: "160", permanentRoom: "K.203" as string | null },
-  { space: "152", permanentRoom: null },  // hot space — no permanent room
+  // Deluxe apartments
+  { space: "153", permanentRoom: "K.201" as string | null, subLevel: -1 },
+  { space: "167", permanentRoom: "K.202" as string | null, subLevel: -1 },
+  { space: "160", permanentRoom: "K.203" as string | null, subLevel: -1 },
+  // 2-Bedroom apartment
+  { space: "152", permanentRoom: "O.308" as string | null, subLevel: -1 },
+  // Urban apartments (added 2026-05-21 — used to be no-parking units)
+  { space: "15",  permanentRoom: "K.102" as string | null, subLevel: -1 },
+  { space: "16",  permanentRoom: "K.103" as string | null, subLevel: -1 },
+  { space: "17",  permanentRoom: "K.106" as string | null, subLevel: -1 },
 ] as const;
 
 export type ParkingSpace = (typeof PARKING_SPACES)[number];
