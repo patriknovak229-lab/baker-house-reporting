@@ -1,30 +1,32 @@
 /**
  * POST /api/webhook/beds24-message
  *
- * Receives Beds24 webhook events and runs the guest-message auto-reply
- * pipeline. Register this URL in the Beds24 control panel under
- *   Settings → API → Webhooks → "New message" notification type
- * (or any event type — the handler filters internally to message events
- * with source=guest and ignores everything else).
+ * Single entry point for ALL Beds24 inventory webhook events. Beds24's
+ * Inventory Webhooks UI allows only one URL per property; this endpoint
+ * dispatches between the two behaviours we care about:
+ *
+ *   1. New booking notifications → Telegram message to the operator chat
+ *      (formerly /api/webhook/new-booking, now merged here so a single
+ *      registered URL covers everything).
+ *   2. New guest messages → auto-reply pipeline (categorise → render →
+ *      delay → send), with a red task created for early-checkin /
+ *      late-checkout intents.
+ *
+ * Register the URL in the Beds24 control panel under
+ *   Settings → Marketplace → Webhooks → Inventory Webhooks
+ * and enable every PHYSICAL room (not the virtual selling-room rows).
  *
  * Flow:
- *   1. Validate payload shape, return 200 immediately to Beds24 even on
- *      errors (failed retries cause more harm than missed auto-replies).
- *   2. Dedupe by Beds24 message id via Redis (`baker:auto-reply:processed`).
- *   3. Categorise the message via Claude Haiku.
- *   4. If confidence ≥ 0.8 AND category != other:
- *      - parking / wifi / minibar: render reply, wait 10s for natural feel,
- *        POST to Beds24, audit-log, count toward daily limit.
- *      - early-checkin / late-checkout: same auto-reply ("we'll check") AND
- *        append a red `problem` task to reservation.issues via local-state.
- *   5. Audit log appended for every action (sent / skipped / errored).
+ *   1. Parse payload, return 200 immediately to Beds24 even on errors
+ *      (failed retries cause more harm than missed auto-replies).
+ *   2. Inline: run new-booking Telegram check (fast, no delay).
+ *   3. In `after()`: dedupe message id → categorise → 10s delay → send.
+ *      For early-checkin / late-checkout: also append a red `problem`
+ *      task to reservation.issues via local-state.
  *
- * Returns 200 immediately; the work above runs in `after()` so Beds24
- * never waits on our processing. `maxDuration = 60` gives the after-block
- * time to complete the 10-second human-feel delay + send round trip.
- *
- * Bypasses NextAuth — `api/webhook/*` is already in proxy.ts's matcher
- * exclusion list, same as the existing new-booking webhook.
+ * Bypasses NextAuth — `api/webhook/*` is in proxy.ts's matcher exclusion
+ * list. The old `/api/webhook/new-booking` route still exists as a no-op
+ * fallback for any historical Beds24 registration that wasn't updated.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -65,6 +67,24 @@ const UNIT_MAP: Record<number, Room> = {
   679705: 'K.106',
 };
 
+// New-booking notification — extended map including virtual rooms so the
+// Telegram label is human-friendly for direct-web bookings that land on
+// the VR before Beds24 allocates the physical sub-room.
+const ROOM_LABEL_MAP: Record<string, string> = {
+  '656437': 'K.201',
+  '648596': 'K.202',
+  '648772': 'K.203',
+  '674672': 'O.308',
+  '648816': 'K.202 / K.203', // 1KK Deluxe Twin VR
+  '679703': 'K.102',
+  '679704': 'K.103',
+  '679705': 'K.106',
+  '679714': 'K.102 / K.103 / K.106', // 1KK Urban Studios VR
+};
+
+const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000;       // 30 min — anything older is a modification
+const NOTIFIED_TTL_SECONDS = 2 * 60 * 60;            // 2 h — Redis dedupe TTL for new-booking Telegram
+
 interface Beds24MessagePayload {
   timeStamp?: string;
   booking?: {
@@ -77,6 +97,14 @@ interface Beds24MessagePayload {
     departure?: string;
     masterId?: number | string;
     comments?: string;
+    // Fields used by the new-booking Telegram notification path
+    numAdult?: number | string;
+    numChild?: number | string;
+    price?: number | string;
+    apiSource?: string;
+    status?: string;
+    bookingTime?: string;
+    modifiedTime?: string;
   };
   message?: {
     id?: number | string;
@@ -109,6 +137,15 @@ function getRedis(): Redis | null {
 }
 
 export async function POST(req: NextRequest) {
+  // Optional secret check — set WEBHOOK_SECRET in env to lock this down
+  const secret = process.env.WEBHOOK_SECRET;
+  if (secret) {
+    const provided = req.nextUrl.searchParams.get('secret');
+    if (provided !== secret) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  }
+
   let payload: Beds24MessagePayload;
   try {
     payload = await req.json();
@@ -119,13 +156,28 @@ export async function POST(req: NextRequest) {
   const msg = payload.message;
   const booking = payload.booking;
 
-  // Only process guest messages — ignore host replies, system events,
-  // and booking-only payloads (those go to /api/webhook/new-booking).
+  // ── Branch 1: new-booking Telegram notification ──
+  // Same payload may carry both a booking AND a message (rare), so this
+  // path is independent — both branches run for the same event.
+  // Awaited inline (no delay needed, Telegram is fast and the operator
+  // benefits from immediate notification).
+  if (booking) {
+    try {
+      await maybeNotifyNewBooking(booking);
+    } catch (err) {
+      console.error('[beds24 webhook] new-booking notify failed:', err);
+    }
+  }
+
+  // ── Branch 2: guest-message auto-reply ──
+  // Skip silently when the payload isn't a new guest message — Beds24
+  // fires the same webhook for every booking change, so the vast
+  // majority of incoming events are non-message and we just no-op.
   if (!msg || msg.source !== 'guest' || !msg.message?.trim()) {
-    return NextResponse.json({ ok: true, reason: 'not-guest-message' });
+    return NextResponse.json({ ok: true, branch: 'booking-only' });
   }
   if (!booking?.id) {
-    return NextResponse.json({ ok: true, reason: 'no-booking' });
+    return NextResponse.json({ ok: true, reason: 'no-booking-on-message' });
   }
 
   // Snapshot the fields the after-block needs — `req` is unsafe to use post-response.
@@ -573,4 +625,104 @@ function makeLogId(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+// ─── New-booking Telegram notification (ported from /api/webhook/new-booking) ─
+
+/**
+ * Send a Telegram notification when this payload represents a brand-new
+ * confirmed booking (not a modification, cancellation, sub-allocation,
+ * or owner blackout). Dedupes by booking id via Redis so Beds24 retries
+ * never spam the operator chat.
+ */
+async function maybeNotifyNewBooking(
+  booking: NonNullable<Beds24MessagePayload['booking']>,
+): Promise<void> {
+  // Cancellations + blackouts: not notified
+  if (booking.status === 'cancelled' || booking.status === 'canceled') return;
+  if (booking.status === 'black') return;
+
+  // Sub-bookings of a virtual master always carry price=0; the master
+  // holds the real price and is notified separately. Prevents duplicate
+  // notifications for Twin Apartments / Urban Studios package bookings.
+  if (Number(booking.price ?? 0) === 0) return;
+
+  // Modifications: bookingTime older than 30 min = pre-existing booking
+  // got changed (status flip, message, etc.). Not a new arrival.
+  if (booking.bookingTime) {
+    const age = Date.now() - new Date(booking.bookingTime).getTime();
+    if (age > NEW_BOOKING_WINDOW_MS) return;
+  }
+
+  const roomKey = String(booking.roomId ?? '');
+  const room = ROOM_LABEL_MAP[roomKey];
+  if (!room) return; // virtual or unmapped room
+
+  // Redis dedupe: one Telegram per booking id, regardless of how many
+  // webhook retries fire.
+  const bookingId = String(booking.id ?? '');
+  const redis = getRedis();
+  if (bookingId && redis) {
+    const redisKey = `notified:booking:${bookingId}`;
+    const already = await redis.get(redisKey);
+    if (already) return;
+    // Mark BEFORE sending so parallel webhook fires don't race
+    await redis.set(redisKey, '1', { ex: NOTIFIED_TTL_SECONDS });
+  }
+
+  const firstName = booking.firstName ?? '';
+  const lastName = booking.lastName ?? '';
+  const guests =
+    (Number(booking.numAdult ?? 0) + Number(booking.numChild ?? 0)) || '—';
+  const nights =
+    booking.arrival && booking.departure
+      ? Math.round(
+          (new Date(booking.departure).getTime() -
+            new Date(booking.arrival).getTime()) /
+            86_400_000,
+        )
+      : '—';
+  const channel = booking.apiSource || 'Direct';
+  const price = booking.price
+    ? `${Number(booking.price).toLocaleString('cs-CZ')} Kč`
+    : '—';
+
+  const text = [
+    `🏠 <b>New Booking — ${room}</b>`,
+    `👤 ${firstName} ${lastName}`.trim() || '👤 —',
+    `📅 ${formatDate(booking.arrival ?? '')} → ${formatDate(booking.departure ?? '')} (${nights} nights)`,
+    `👥 ${guests} guests`,
+    `📣 ${channel}`,
+    `💰 ${price}`,
+  ].join('\n');
+
+  await sendTelegram(text);
+}
+
+async function sendTelegram(message: string): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) {
+    console.error('[beds24 webhook] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set');
+    return;
+  }
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: message,
+      parse_mode: 'HTML',
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[beds24 webhook] Telegram error:', text);
+  }
+}
+
+function formatDate(iso: string): string {
+  if (!iso) return '—';
+  const [y, m, d] = iso.slice(0, 10).split('-');
+  return `${d}/${m}/${y}`;
 }
