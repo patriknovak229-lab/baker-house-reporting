@@ -34,7 +34,7 @@ export interface BuiltTemplate {
 }
 
 export function buildTemplate(
-  category: Exclude<AutoReplyCategory, 'other'>,
+  category: Exclude<AutoReplyCategory, 'other' | 'invoice-request'>,
   reservation: Reservation,
   parking: ParkingResult,
 ): BuiltTemplate | null {

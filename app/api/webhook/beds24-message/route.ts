@@ -34,19 +34,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { Redis } from '@upstash/redis';
-import type { Reservation, Issue, Room } from '@/types/reservation';
+import type { Reservation, Issue, Room, InvoiceData } from '@/types/reservation';
+import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { sendBeds24Message } from '@/utils/beds24Messages';
-import { detectAutoReplyCategory } from '@/utils/messageAutoReplyDetector';
+import {
+  detectAutoReplyCategory,
+  type AutoReplyCategory,
+} from '@/utils/messageAutoReplyDetector';
 import {
   buildTemplate,
   renderAutoReply,
 } from '@/utils/messageAutoReplyTemplates';
+import { isInvoiceRequest } from '@/utils/invoiceRequestParser';
+import {
+  extractInvoiceFields,
+  mergeInvoiceFields,
+  missingMandatoryFields,
+  type ExtractedInvoiceFields,
+} from '@/utils/invoiceFieldExtractor';
+import {
+  renderMissingFieldsReply,
+  renderInvoiceConfirmation,
+  type InvoiceMandatory,
+} from '@/utils/invoiceReplyTemplates';
 import { computeParking } from '@/utils/parkingUtils';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const POLL_DEBOUNCE_MS = 15_000; // 15s — collapses bursts of SYNC_ROOM events
 const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
+const INVOICE_REQUESTS_KEY = 'baker:invoice-requests';
+
+// Invoice flow: how long to wait between the initial ask and the
+// (single) reminder. Per operator policy: remind once after 24 hours
+// then stop — it's the guest's request, not ours.
+const INVOICE_REMINDER_AFTER_MS = 24 * 60 * 60 * 1000;
+const INVOICE_MAX_ASKS = 2; // initial ask + one 24h reminder
 
 export const maxDuration = 60;
 
@@ -219,24 +242,50 @@ export async function POST(req: NextRequest) {
  * handled exactly once even when SYNC_ROOM fires repeatedly.
  */
 async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> {
+  // Pass 1 — chase any 24-hour invoice reminders. Independent of any
+  // incoming message; runs on every webhook fire so reminders are sent
+  // promptly without needing a separate cron slot.
+  if (redis) {
+    try {
+      await sendDueInvoiceReminders(redis);
+    } catch (err) {
+      console.error('[auto-reply] invoice reminder pass failed:', err);
+    }
+  }
+
   const messages = await fetchUnreadGuestMessages();
   if (messages.length === 0) return;
 
-  // Process serially — the 10-second human-feel delay per message means
-  // we don't want to fire ten replies into the same conversation at once.
+  // Pass 2 — process new messages. Serially so the 10-second human-feel
+  // delay doesn't compound into ten simultaneous replies on a chatty
+  // conversation.
   for (const m of messages) {
+    // Dedupe — shared between invoice + regular auto-reply paths so a
+    // message that triggers the invoice flow doesn't ALSO trigger the
+    // regular auto-reply later in the same poll.
     if (redis) {
-      const already = await redis.sismember('baker:auto-reply:processed', String(m.id));
+      const already = await redis.sismember(PROCESSED_KEY, String(m.id));
       if (already) continue;
+      await redis.sadd(PROCESSED_KEY, String(m.id));
     }
+
     try {
-      await processGuestMessage({
+      const handled = await tryInvoiceFlow({
+        redis,
         bookingId: m.bookingId,
         messageId: m.id,
         messageText: m.message,
       });
+      if (handled) continue;
+
+      await processGuestMessage({
+        bookingId: m.bookingId,
+        messageId: m.id,
+        messageText: m.message,
+        skipDedupe: true, // already deduped above
+      });
     } catch (err) {
-      console.error(`[auto-reply] processGuestMessage failed for msg ${m.id}:`, err);
+      console.error(`[auto-reply] processing failed for msg ${m.id}:`, err);
     }
   }
 }
@@ -334,15 +383,20 @@ interface ProcessArgs {
   /** Optional: payload-provided booking. Pull-style flow leaves this undefined
    *  and the reservation context is loaded from Redis cache instead. */
   booking?: CachedBooking;
+  /** When true, skip the dedupe step inside this function — the caller has
+   *  already added the message id to `baker:auto-reply:processed`. Used by
+   *  the polling loop where dedupe happens at the top so it's shared with
+   *  the invoice flow. */
+  skipDedupe?: boolean;
 }
 
 async function processGuestMessage(args: ProcessArgs): Promise<void> {
-  const { bookingId, messageId, messageText, booking } = args;
+  const { bookingId, messageId, messageText, booking, skipDedupe } = args;
   const redis = getRedis();
   const reservationNumber = `BH-${bookingId}`;
 
-  // ── Step 1: dedupe ─────────────────────────────────────────────────────────
-  if (redis) {
+  // ── Step 1: dedupe (skipped when the caller already deduped) ───────────────
+  if (redis && !skipDedupe) {
     const already = await redis.sismember(PROCESSED_KEY, String(messageId));
     if (already) {
       console.log(`[auto-reply] msg ${messageId} already processed — skipping`);
@@ -358,7 +412,15 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
     `[auto-reply] msg ${messageId} (booking ${bookingId}) → category=${detection.category} conf=${detection.confidence.toFixed(2)} lang=${detection.language}`,
   );
 
-  if (detection.category === 'other' || detection.confidence < CONFIDENCE_THRESHOLD) {
+  // invoice-request shouldn't reach this function — tryInvoiceFlow above
+  // handles it — but if it does (e.g. confidence below threshold for
+  // the invoice path), treat it as "other" and skip rather than passing
+  // an unsupported category to buildTemplate.
+  if (
+    detection.category === 'other' ||
+    detection.category === 'invoice-request' ||
+    detection.confidence < CONFIDENCE_THRESHOLD
+  ) {
     await appendLog(redis, {
       id: makeLogId(),
       beds24MessageId: messageId,
@@ -733,6 +795,480 @@ function makeLogId(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+// ─── Multi-turn invoice request flow ─────────────────────────────────────────
+
+interface InvoiceFlowArgs {
+  redis: Redis | null;
+  bookingId: number;
+  messageId: number;
+  messageText: string;
+}
+
+/**
+ * Dispatch the message to the invoice flow IF it belongs there. Returns
+ * true when the invoice flow handled the message (the regular auto-reply
+ * pipeline should then be skipped). Returns false to let the regular
+ * pipeline take over.
+ *
+ * Decision tree:
+ *   1. If this booking has a `pending` invoice request (legacy operator-
+ *      driven flow), don't touch it — operator is handling.
+ *   2. If `awaiting-info` exists → treat this message as a follow-up,
+ *      extract fields, merge, decide auto-complete or wait.
+ *   3. Else: check keyword path (existing Booking.com template detector)
+ *      and LLM categorisation. If either fires → it's a NEW invoice
+ *      request.
+ *   4. Otherwise return false — regular pipeline handles it.
+ */
+async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
+  const { redis, bookingId, messageId, messageText } = args;
+  if (!redis) return false;
+
+  const all = (await redis.get<InvoiceRequest[]>(INVOICE_REQUESTS_KEY)) ?? [];
+  const forThisBooking = all.filter(
+    (r) => r.reservationNumber === `BH-${bookingId}`,
+  );
+
+  // Existing pending request (legacy keyword path created it before this
+  // webhook ran) → operator is in control. Don't fire auto-flow.
+  const pending = forThisBooking.find((r) => r.status === 'pending');
+  if (pending) return false;
+
+  // Existing accepted/auto-completed → already done, nothing more to do here.
+  // BUT we still classify this message as invoice-related so the regular
+  // pipeline doesn't kick in with the wrong template (e.g. categoriser
+  // returning 'other' on a "thanks!" follow-up).
+  const completed = forThisBooking.find(
+    (r) => r.status === 'accepted' || r.status === 'auto-completed',
+  );
+
+  const awaiting = forThisBooking.find((r) => r.status === 'awaiting-info');
+
+  // Follow-up path — already in awaiting-info
+  if (awaiting) {
+    await handleInvoiceFollowUp({
+      redis,
+      messageId,
+      messageText,
+      request: awaiting,
+      allRequests: all,
+    });
+    return true;
+  }
+
+  if (completed) {
+    // The conversation has moved on; no further auto-action.
+    return false;
+  }
+
+  // No existing record — is THIS message a new invoice request?
+  // Two parallel detection paths run in any order.
+  const keywordHit = isInvoiceRequest(messageText);
+  let detected = keywordHit;
+  let language = '';
+  if (!detected) {
+    const detection = await detectAutoReplyCategory(messageText);
+    if (detection.category === 'invoice-request' && detection.confidence >= 0.8) {
+      detected = true;
+      language = detection.language;
+    }
+  }
+  if (!detected) return false;
+
+  await handleNewInvoiceRequest({
+    redis,
+    bookingId,
+    messageId,
+    messageText,
+    language,
+    allRequests: all,
+  });
+  return true;
+}
+
+interface NewRequestArgs {
+  redis: Redis;
+  bookingId: number;
+  messageId: number;
+  messageText: string;
+  language: string;
+  allRequests: InvoiceRequest[];
+}
+
+async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<void> {
+  const { redis, bookingId, messageId, messageText, language, allRequests } = args;
+  const reservationNumber = `BH-${bookingId}`;
+
+  // Extract whatever the guest provided in the initial message.
+  const extracted = await extractInvoiceFields(messageText);
+  // Detect language if extractor didn't surface one — small extra Haiku
+  // call kept consistent with the regular pipeline's behaviour. Only
+  // run when keyword path detected (language not yet known).
+  let lang = language;
+  if (!lang) {
+    const d = await detectAutoReplyCategory(messageText);
+    lang = d.language;
+  }
+
+  const request: InvoiceRequest = {
+    id: `ir_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    reservationNumber,
+    beds24MessageId: messageId,
+    rawMessage: messageText.slice(0, 4000),
+    companyName: extracted.companyName,
+    companyAddress: extracted.companyAddress,
+    ico: extracted.ico,
+    dic: extracted.dic,
+    email: extracted.email,
+    detectedAt: new Date().toISOString(),
+    status: 'awaiting-info',
+    asksCount: 0,
+    lastExtractedFromAt: new Date().toISOString(),
+  };
+
+  const missing = missingMandatoryFields(extracted);
+  if (missing.length === 0) {
+    // Lucky path — initial message had everything we need. Skip ask, go
+    // straight to auto-complete.
+    await autoCompleteInvoiceRequest({
+      redis,
+      request: { ...request, status: 'auto-completed' },
+      language: lang,
+      allRequests,
+    });
+    return;
+  }
+
+  // Missing mandatory fields — send the ask, persist as awaiting-info.
+  const reservation = await buildReservationContext(redis, bookingId);
+  const firstName = reservation?.firstName ?? '';
+  const replyText = await renderMissingFieldsReply(firstName, missing, lang);
+
+  await sleep(10_000); // natural-feel delay
+  let sentMessageId: number | null = null;
+  try {
+    const result = await sendBeds24Message(bookingId, replyText);
+    sentMessageId = result.messageId;
+  } catch (err) {
+    console.error(`[invoice flow] missing-fields send failed for booking ${bookingId}:`, err);
+  }
+
+  const finalRequest: InvoiceRequest = {
+    ...request,
+    asksCount: 1,
+    lastAskedAt: new Date().toISOString(),
+  };
+  await persistInvoiceRequests(redis, [...allRequests, finalRequest]);
+  await appendLog(redis, {
+    id: makeLogId(),
+    beds24MessageId: messageId,
+    beds24SentMessageId: sentMessageId,
+    bookingId,
+    reservationNumber,
+    category: 'invoice-request',
+    confidence: 1,
+    language: lang,
+    action: 'sent',
+    sentText: replyText,
+    detail: `awaiting-info; missing: ${missing.join(', ')}`,
+    decidedAt: new Date().toISOString(),
+  });
+  console.log(`[invoice flow] booking ${bookingId}: asked for ${missing.join(', ')}`);
+}
+
+interface FollowUpArgs {
+  redis: Redis;
+  messageId: number;
+  messageText: string;
+  request: InvoiceRequest;
+  allRequests: InvoiceRequest[];
+}
+
+async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<void> {
+  const { redis, messageId, messageText, request, allRequests } = args;
+  const bookingId = Number(request.reservationNumber.replace(/^BH-/, ''));
+
+  // Re-extract from this new message
+  const extracted = await extractInvoiceFields(messageText);
+  const prior: ExtractedInvoiceFields = {
+    companyName: request.companyName,
+    companyAddress: request.companyAddress ?? null,
+    ico: request.ico,
+    dic: request.dic,
+    email: request.email,
+  };
+  const merged = mergeInvoiceFields(prior, extracted);
+  const missing = missingMandatoryFields(merged);
+
+  const updatedRequest: InvoiceRequest = {
+    ...request,
+    companyName: merged.companyName,
+    companyAddress: merged.companyAddress,
+    ico: merged.ico,
+    dic: merged.dic,
+    email: merged.email,
+    lastExtractedFromAt: new Date().toISOString(),
+  };
+
+  if (missing.length === 0) {
+    // We have everything — auto-complete.
+    await autoCompleteInvoiceRequest({
+      redis,
+      request: { ...updatedRequest, status: 'auto-completed' },
+      language: '', // detector will infer for confirmation message
+      allRequests,
+    });
+    return;
+  }
+
+  // Still missing — DO NOT send another ask here (the 24h reminder pass
+  // handles the single follow-up). Just persist the merged fields and
+  // log so we have a paper trail.
+  await persistInvoiceRequests(redis, replaceInvoiceRequest(allRequests, updatedRequest));
+  await appendLog(redis, {
+    id: makeLogId(),
+    beds24MessageId: messageId,
+    beds24SentMessageId: null,
+    bookingId,
+    reservationNumber: request.reservationNumber,
+    category: 'invoice-request',
+    confidence: 1,
+    language: '',
+    action: 'skipped-rate-limit', // closest existing action label
+    sentText: null,
+    detail: `partial info received, still missing: ${missing.join(', ')}`,
+    decidedAt: new Date().toISOString(),
+  });
+}
+
+interface AutoCompleteArgs {
+  redis: Redis;
+  request: InvoiceRequest;
+  language: string;
+  allRequests: InvoiceRequest[];
+}
+
+async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void> {
+  const { redis, request, language, allRequests } = args;
+  const bookingId = Number(request.reservationNumber.replace(/^BH-/, ''));
+
+  // Look up reservation for checkout date + first name
+  const reservation = await buildReservationContext(redis, bookingId);
+  const checkoutDate = reservation?.checkOutDate ?? '';
+  const firstName = reservation?.firstName ?? '';
+
+  // Detect language from the most recent message if caller didn't pass it
+  let lang = language;
+  if (!lang) {
+    const d = await detectAutoReplyCategory(request.rawMessage);
+    lang = d.language;
+  }
+
+  // Persist invoiceData + create the red Send-invoice Issue via local-state.
+  // Both end up in the same Redis blob so we do one read-modify-write.
+  const overrides =
+    (await redis.get<Record<string, { invoiceData?: InvoiceData; issues?: Issue[] }>>(LOCAL_STATE_KEY)) ?? {};
+  const current = overrides[request.reservationNumber] ?? {};
+
+  // Don't clobber any pre-existing invoiceData the operator may have set
+  const existing = current.invoiceData ?? {
+    companyName: '',
+    companyAddress: '',
+    ico: '',
+    vatNumber: '',
+    billingEmail: '',
+  };
+  const newInvoiceData: InvoiceData = {
+    companyName: existing.companyName || request.companyName || '',
+    companyAddress: existing.companyAddress || request.companyAddress || '',
+    ico: existing.ico || request.ico || '',
+    vatNumber: existing.vatNumber || request.dic || '',
+    billingEmail: existing.billingEmail || request.email || '',
+  };
+
+  // Issue (red task per operator) actionable on checkout day
+  const issues: Issue[] = Array.isArray(current.issues) ? current.issues : [];
+  const newIssue: Issue = {
+    id: `auto-invoice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    category: 'invoice',
+    text: newInvoiceData.companyName
+      ? `Send invoice — ${newInvoiceData.companyName}${newInvoiceData.vatNumber ? ` (DIČ ${newInvoiceData.vatNumber})` : ''}`
+      : 'Send invoice — guest requested',
+    actionableDate: checkoutDate || new Date().toISOString().slice(0, 10),
+    resolved: false,
+    createdAt: new Date().toISOString(),
+  };
+
+  overrides[request.reservationNumber] = {
+    ...current,
+    invoiceData: newInvoiceData,
+    issues: [...issues, newIssue],
+  };
+  await redis.set(LOCAL_STATE_KEY, overrides);
+
+  // Mark the request auto-completed + persist
+  const completedRequest: InvoiceRequest = {
+    ...request,
+    status: 'auto-completed',
+    processedAt: new Date().toISOString(),
+  };
+  await persistInvoiceRequests(
+    redis,
+    replaceOrAppendInvoiceRequest(allRequests, completedRequest),
+  );
+
+  // Send confirmation reply
+  const replyText = await renderInvoiceConfirmation(
+    firstName,
+    newInvoiceData.billingEmail,
+    checkoutDate,
+    lang,
+  );
+  await sleep(10_000);
+  let sentMessageId: number | null = null;
+  try {
+    const result = await sendBeds24Message(bookingId, replyText);
+    sentMessageId = result.messageId;
+  } catch (err) {
+    console.error(`[invoice flow] confirmation send failed for booking ${bookingId}:`, err);
+  }
+
+  await appendLog(redis, {
+    id: makeLogId(),
+    beds24MessageId: request.beds24MessageId,
+    beds24SentMessageId: sentMessageId,
+    bookingId,
+    reservationNumber: request.reservationNumber,
+    category: 'invoice-request',
+    confidence: 1,
+    language: lang,
+    action: 'sent-with-task',
+    sentText: replyText,
+    detail: `auto-completed; invoiceData + issue created for checkout ${checkoutDate}`,
+    decidedAt: new Date().toISOString(),
+  });
+  console.log(`[invoice flow] booking ${bookingId}: auto-completed, invoice task created`);
+}
+
+/**
+ * Scan all awaiting-info invoice requests for any whose initial ask was
+ * sent more than 24 hours ago and have only had one ask. Send the
+ * single reminder, bump asksCount. After this, the request stays at
+ * status='awaiting-info' indefinitely — operator handles in the drawer
+ * if the guest never replies. Per operator policy: no further nudges.
+ */
+async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
+  const all = (await redis.get<InvoiceRequest[]>(INVOICE_REQUESTS_KEY)) ?? [];
+  const now = Date.now();
+  const due = all.filter(
+    (r) =>
+      r.status === 'awaiting-info' &&
+      (r.asksCount ?? 0) < INVOICE_MAX_ASKS &&
+      r.lastAskedAt &&
+      now - new Date(r.lastAskedAt).getTime() >= INVOICE_REMINDER_AFTER_MS,
+  );
+  if (due.length === 0) return;
+
+  const updated = [...all];
+  for (const r of due) {
+    const bookingId = Number(r.reservationNumber.replace(/^BH-/, ''));
+    const reservation = await buildReservationContext(redis, bookingId);
+    const firstName = reservation?.firstName ?? '';
+    // Re-derive missing fields from current request state
+    const fields: ExtractedInvoiceFields = {
+      companyName: r.companyName,
+      companyAddress: r.companyAddress ?? null,
+      ico: r.ico,
+      dic: r.dic,
+      email: r.email,
+    };
+    const missing = missingMandatoryFields(fields);
+    if (missing.length === 0) {
+      // Edge case: status drifted out of sync — request says
+      // awaiting-info but actually has all fields. Auto-complete now.
+      await autoCompleteInvoiceRequest({
+        redis,
+        request: { ...r, status: 'auto-completed' },
+        language: '',
+        allRequests: updated,
+      });
+      continue;
+    }
+
+    // Detect language from the most recent raw message
+    const detection = await detectAutoReplyCategory(r.rawMessage);
+    const replyText = await renderMissingFieldsReply(firstName, missing, detection.language);
+
+    await sleep(10_000);
+    let sentMessageId: number | null = null;
+    try {
+      const result = await sendBeds24Message(bookingId, replyText);
+      sentMessageId = result.messageId;
+    } catch (err) {
+      console.error(`[invoice flow] reminder send failed for booking ${bookingId}:`, err);
+    }
+
+    // Update the request in place
+    const idx = updated.findIndex((x) => x.id === r.id);
+    if (idx >= 0) {
+      updated[idx] = {
+        ...updated[idx],
+        asksCount: (updated[idx].asksCount ?? 0) + 1,
+        lastAskedAt: new Date().toISOString(),
+      };
+    }
+
+    await appendLog(redis, {
+      id: makeLogId(),
+      beds24MessageId: r.beds24MessageId,
+      beds24SentMessageId: sentMessageId,
+      bookingId,
+      reservationNumber: r.reservationNumber,
+      category: 'invoice-request',
+      confidence: 1,
+      language: detection.language,
+      action: 'sent',
+      sentText: replyText,
+      detail: `24h reminder #${(r.asksCount ?? 0) + 1}; still missing: ${missing.join(', ')}`,
+      decidedAt: new Date().toISOString(),
+    });
+  }
+  await persistInvoiceRequests(redis, updated);
+}
+
+// ─── Invoice-request Redis helpers ───────────────────────────────────────────
+
+async function persistInvoiceRequests(
+  redis: Redis,
+  requests: InvoiceRequest[],
+): Promise<void> {
+  await redis.set(INVOICE_REQUESTS_KEY, requests);
+}
+
+/** Update an existing request in-place by id. Adds it if not present. */
+function replaceOrAppendInvoiceRequest(
+  list: InvoiceRequest[],
+  updated: InvoiceRequest,
+): InvoiceRequest[] {
+  const idx = list.findIndex((r) => r.id === updated.id);
+  if (idx < 0) return [...list, updated];
+  const out = [...list];
+  out[idx] = updated;
+  return out;
+}
+
+/** Update an existing request in-place by id. Returns unchanged list if not found. */
+function replaceInvoiceRequest(
+  list: InvoiceRequest[],
+  updated: InvoiceRequest,
+): InvoiceRequest[] {
+  const idx = list.findIndex((r) => r.id === updated.id);
+  if (idx < 0) return list;
+  const out = [...list];
+  out[idx] = updated;
+  return out;
 }
 
 // ─── New-booking Telegram notification (ported from /api/webhook/new-booking) ─

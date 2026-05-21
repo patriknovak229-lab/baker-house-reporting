@@ -24,6 +24,7 @@ export type AutoReplyCategory =
   | 'minibar'
   | 'early-checkin'
   | 'late-checkout'
+  | 'invoice-request'
   | 'other';
 
 export interface DetectionResult {
@@ -43,6 +44,7 @@ Pick ONE category that best matches the guest's INTENT:
 - minibar — asking about the minibar (what's inside, prices, can they take items, restock).
 - early-checkin — asking to check in EARLIER than the standard 15:00. Includes "we'll arrive at noon, can we go up?".
 - late-checkout — asking to check out LATER than the standard 11:00. Includes "can we keep the room until X".
+- invoice-request — asking for an invoice / fakturu / fakturovat / VAT receipt. Includes Booking.com's "I need an invoice" auto-template AND ad-hoc requests like "could you send me an invoice for company X, IČO Y". Also: messages that ONLY contain billing details ("our IČO is 12345678" or "Company name: ABC s.r.o.") — those are follow-ups to a prior invoice request and should be routed here too.
 - other — anything else (greetings, complaints, restaurant tips, lost items, etc.). When the message asks about TWO categories at once (e.g. parking AND wifi), return "other" — the operator handles compound queries.
 
 Output ONLY a single JSON object on one line, no preamble:
@@ -138,6 +140,7 @@ function normaliseCategory(v: unknown): AutoReplyCategory | null {
     case 'minibar':
     case 'early-checkin':
     case 'late-checkout':
+    case 'invoice-request':
     case 'other':
       return s;
     default:

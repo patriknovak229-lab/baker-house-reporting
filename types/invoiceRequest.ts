@@ -14,7 +14,24 @@
  * sent, even if our parser missed something.
  */
 
-export type InvoiceRequestStatus = "pending" | "accepted" | "rejected";
+/**
+ * State machine for an invoice request:
+ *   pending        — detected via keyword path, awaiting operator click
+ *                    (legacy flow: every request used to start here)
+ *   awaiting-info  — multi-turn flow asked the guest for missing mandatory
+ *                    fields; we're waiting for their reply
+ *   accepted       — operator manually accepted
+ *   rejected       — operator manually rejected
+ *   auto-completed — multi-turn flow received all mandatory fields and
+ *                    populated invoiceData + created the Send-invoice task
+ *                    without operator intervention
+ */
+export type InvoiceRequestStatus =
+  | "pending"
+  | "awaiting-info"
+  | "accepted"
+  | "rejected"
+  | "auto-completed";
 
 export interface InvoiceRequest {
   id: string;                  // generated UUID
@@ -23,13 +40,33 @@ export interface InvoiceRequest {
   rawMessage: string;          // full message text as-received
 
   // Extracted fields — null when the parser couldn't pull them out.
-  // Operator can fill missing pieces during the Accept flow.
+  // Operator can fill missing pieces during the Accept flow. Auto-flow
+  // merges new extractions from subsequent guest messages into these
+  // same fields (existing non-null values are never overwritten).
   companyName: string | null;
-  ico: string | null;          // Czech/Slovak company ID — 8 digits
-  dic: string | null;          // Tax ID — "CZ12345678" / "SK12345678" or just digits
-  email: string | null;        // Real (non-OTA-conduit) guest email if mentioned
+  /** Optional per operator policy — never asked for, but stored if provided.
+   *  Optional in the type so legacy entries that pre-date the multi-turn
+   *  flow (created via /api/messages without this field) still parse. */
+  companyAddress?: string | null;
+  /** Czech/Slovak company ID — 8 digits — MANDATORY for auto-complete. */
+  ico: string | null;
+  /** Tax ID — "CZ12345678" / "SK12345678" — optional; cross-fallback to ICO. */
+  dic: string | null;
+  /** Real (non-OTA-conduit) guest email — MANDATORY for auto-complete. */
+  email: string | null;
 
   detectedAt: string;          // ISO timestamp the parser ran
   status: InvoiceRequestStatus;
-  processedAt?: string;        // ISO when accepted/rejected
+  processedAt?: string;        // ISO when accepted/rejected/auto-completed
+
+  // ── Multi-turn auto-flow tracking ──
+  // Only set on requests managed by the multi-turn pipeline. Manually-
+  // created legacy requests leave these undefined.
+  /** ISO when we last asked the guest for missing fields. */
+  lastAskedAt?: string;
+  /** How many times we've asked. Capped at 2 (initial ask + one 24h reminder). */
+  asksCount?: number;
+  /** ISO of the most recent guest message we extracted fields from — so a
+   *  re-poll on the same message doesn't re-extract. */
+  lastExtractedFromAt?: string;
 }
