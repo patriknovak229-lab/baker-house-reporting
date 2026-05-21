@@ -1,38 +1,41 @@
 /**
  * POST /api/webhook/beds24-message
  *
- * Single entry point for ALL Beds24 inventory webhook events. Beds24's
- * Inventory Webhooks UI allows only one URL per property; this endpoint
- * dispatches between the two behaviours we care about:
+ * Single entry point for the Beds24 Inventory Webhook. Beds24's
+ * Marketplace → Webhooks UI fires a MINIMAL payload on any room change:
  *
- *   1. New booking notifications → Telegram message to the operator chat
- *      (formerly /api/webhook/new-booking, now merged here so a single
- *      registered URL covers everything).
- *   2. New guest messages → auto-reply pipeline (categorise → render →
- *      delay → send), with a red task created for early-checkin /
- *      late-checkout intents.
+ *   { "roomId": "123456", "propId": "12345", "ownerId": "1234", "action": "SYNC_ROOM" }
  *
- * Register the URL in the Beds24 control panel under
- *   Settings → Marketplace → Webhooks → Inventory Webhooks
- * and enable every PHYSICAL room (not the virtual selling-room rows).
+ * No booking object, no message object — just a "something changed for
+ * this room" signal. We therefore run PULL-STYLE: receive the ping →
+ * fetch fresh data from Beds24 → process new items.
  *
- * Flow:
- *   1. Parse payload, return 200 immediately to Beds24 even on errors
- *      (failed retries cause more harm than missed auto-replies).
- *   2. Inline: run new-booking Telegram check (fast, no delay).
- *   3. In `after()`: dedupe message id → categorise → 10s delay → send.
- *      For early-checkin / late-checkout: also append a red `problem`
- *      task to reservation.issues via local-state.
+ * On every fire we:
+ *   1. Fetch unread guest messages for the property (Beds24
+ *      /bookings/messages?filter=unread&source=guest&maxAge=1).
+ *   2. For each message not yet in `baker:auto-reply:processed`, run
+ *      the categorise → 10s delay → send pipeline.
+ *   3. Fetch the latest bookings from our Redis cache, find any with
+ *      bookingTime within the last 30 min that aren't already in
+ *      `notified:booking:*`, and fire the Telegram new-booking
+ *      notification (subsumes the old /api/webhook/new-booking route).
  *
- * Bypasses NextAuth — `api/webhook/*` is in proxy.ts's matcher exclusion
- * list. The old `/api/webhook/new-booking` route still exists as a no-op
- * fallback for any historical Beds24 registration that wasn't updated.
+ * To avoid hammering Beds24 when Beds24 itself fires the webhook in
+ * bursts (price + inventory changes can fan out to many SYNC_ROOM
+ * events in a second), we debounce on `baker:auto-reply:last-poll`
+ * with a 15-second window.
+ *
+ * Setup: Beds24 control panel → Settings → Marketplace → Webhooks →
+ * Inventory Webhooks. Enter this URL once and enable every PHYSICAL
+ * room (not the virtual selling rooms 648816 / 679714). Bypasses
+ * NextAuth via `api/webhook` being in proxy.ts's matcher exclusion.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { Redis } from '@upstash/redis';
 import type { Reservation, Issue, Room } from '@/types/reservation';
+import { getAccessToken } from '@/utils/beds24Auth';
 import { sendBeds24Message } from '@/utils/beds24Messages';
 import { detectAutoReplyCategory } from '@/utils/messageAutoReplyDetector';
 import {
@@ -40,6 +43,10 @@ import {
   renderAutoReply,
 } from '@/utils/messageAutoReplyTemplates';
 import { computeParking } from '@/utils/parkingUtils';
+
+const BEDS24_API_BASE = 'https://beds24.com/api/v2';
+const POLL_DEBOUNCE_MS = 15_000; // 15s — collapses bursts of SYNC_ROOM events
+const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 
 export const maxDuration = 60;
 
@@ -85,33 +92,41 @@ const ROOM_LABEL_MAP: Record<string, string> = {
 const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000;       // 30 min — anything older is a modification
 const NOTIFIED_TTL_SECONDS = 2 * 60 * 60;            // 2 h — Redis dedupe TTL for new-booking Telegram
 
-interface Beds24MessagePayload {
-  timeStamp?: string;
-  booking?: {
-    id?: number | string;
-    bookId?: number | string;
-    roomId?: number | string;
-    firstName?: string;
-    lastName?: string;
-    arrival?: string;
-    departure?: string;
-    masterId?: number | string;
-    comments?: string;
-    // Fields used by the new-booking Telegram notification path
-    numAdult?: number | string;
-    numChild?: number | string;
-    price?: number | string;
-    apiSource?: string;
-    status?: string;
-    bookingTime?: string;
-    modifiedTime?: string;
-  };
-  message?: {
-    id?: number | string;
-    source?: 'guest' | 'host' | 'system' | 'internalNote';
-    message?: string;
-    time?: string;
-  };
+/** Minimal Beds24 Inventory Webhook payload. Documented under
+ *  Settings → Marketplace → Webhooks: `{"roomId":"X","propId":"X","ownerId":"X","action":"SYNC_ROOM"}`.
+ *  No booking or message data — those are pulled from Beds24 on demand. */
+interface Beds24InventoryWebhookPayload {
+  roomId?: string | number;
+  propId?: string | number;
+  ownerId?: string | number;
+  action?: string;
+}
+
+/** Shape we use internally for a fetched unread guest message. */
+interface UnreadGuestMessage {
+  id: number;
+  bookingId: number;
+  message: string;
+  time: string;
+}
+
+/** Shape of a cached Beds24 booking entry (subset we need here). */
+interface CachedBooking {
+  id?: number;
+  bookId?: number;
+  roomId?: number;
+  masterId?: number | null;
+  firstName?: string;
+  lastName?: string;
+  arrival?: string;
+  departure?: string;
+  comments?: string;
+  numAdult?: number | string;
+  numChild?: number | string;
+  price?: number | string;
+  apiSource?: string;
+  status?: string;
+  bookingTime?: string;
 }
 
 interface AutoReplyLogEntry {
@@ -146,71 +161,179 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let payload: Beds24MessagePayload;
+  let payload: Beds24InventoryWebhookPayload;
   try {
     payload = await req.json();
   } catch {
     return NextResponse.json({ ok: false, reason: 'invalid-json' }, { status: 200 });
   }
 
-  const msg = payload.message;
-  const booking = payload.booking;
+  // Beds24 only sends `action: "SYNC_ROOM"` events here. Anything else
+  // gets a friendly 200 so Beds24 doesn't retry indefinitely.
+  if (payload.action !== 'SYNC_ROOM') {
+    return NextResponse.json({ ok: true, reason: 'unknown-action', action: payload.action });
+  }
 
-  // ── Branch 1: new-booking Telegram notification ──
-  // Same payload may carry both a booking AND a message (rare), so this
-  // path is independent — both branches run for the same event.
-  // Awaited inline (no delay needed, Telegram is fast and the operator
-  // benefits from immediate notification).
-  if (booking) {
-    try {
-      await maybeNotifyNewBooking(booking);
-    } catch (err) {
-      console.error('[beds24 webhook] new-booking notify failed:', err);
+  const redis = getRedis();
+
+  // ── Debounce ──
+  // Beds24 fires SYNC_ROOM in bursts (e.g. a guest message triggers
+  // multiple inventory recomputations). Collapse them so we don't
+  // hammer the Beds24 API every few hundred ms.
+  if (redis) {
+    const last = await redis.get<number>(LAST_POLL_KEY);
+    const now = Date.now();
+    if (last && now - last < POLL_DEBOUNCE_MS) {
+      return NextResponse.json({ ok: true, reason: 'debounced', sinceLast: now - last });
     }
-  }
-
-  // ── Branch 2: guest-message auto-reply ──
-  // Skip silently when the payload isn't a new guest message — Beds24
-  // fires the same webhook for every booking change, so the vast
-  // majority of incoming events are non-message and we just no-op.
-  if (!msg || msg.source !== 'guest' || !msg.message?.trim()) {
-    return NextResponse.json({ ok: true, branch: 'booking-only' });
-  }
-  if (!booking?.id) {
-    return NextResponse.json({ ok: true, reason: 'no-booking-on-message' });
-  }
-
-  // Snapshot the fields the after-block needs — `req` is unsafe to use post-response.
-  const messageId = Number(msg.id);
-  const messageText = String(msg.message);
-  const bookingId = Number(booking.id ?? booking.bookId);
-
-  if (!Number.isFinite(messageId) || !Number.isFinite(bookingId)) {
-    return NextResponse.json({ ok: true, reason: 'malformed-ids' });
+    // Mark "we're polling now" before we return; the after() callback
+    // will do the actual work. Set with a 60s expiry so a crash doesn't
+    // permanently lock out future polls.
+    await redis.set(LAST_POLL_KEY, now, { ex: 60 });
   }
 
   // Heavy work runs after we return 200 to Beds24
   after(async () => {
     try {
-      await processGuestMessage({
-        bookingId,
-        messageId,
-        messageText,
-        booking,
-      });
+      // Run both flows in parallel — message auto-reply is the
+      // headline feature; Telegram new-booking notification piggybacks
+      // on the same trigger.
+      await Promise.all([
+        pollAndProcessUnreadMessages(redis),
+        pollAndNotifyNewBookings(redis),
+      ]);
     } catch (err) {
       console.error('[auto-reply webhook] after() handler failed:', err);
     }
   });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, branch: 'sync-room-poll' });
+}
+
+// ─── Pull-style: unread guest messages ───────────────────────────────────────
+
+/**
+ * Fetch every currently-unread guest message from Beds24 and run the
+ * auto-reply pipeline on any we haven't already processed. Dedupe via
+ * the `baker:auto-reply:processed` Redis Set ensures each message gets
+ * handled exactly once even when SYNC_ROOM fires repeatedly.
+ */
+async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> {
+  const messages = await fetchUnreadGuestMessages();
+  if (messages.length === 0) return;
+
+  // Process serially — the 10-second human-feel delay per message means
+  // we don't want to fire ten replies into the same conversation at once.
+  for (const m of messages) {
+    if (redis) {
+      const already = await redis.sismember('baker:auto-reply:processed', String(m.id));
+      if (already) continue;
+    }
+    try {
+      await processGuestMessage({
+        bookingId: m.bookingId,
+        messageId: m.id,
+        messageText: m.message,
+      });
+    } catch (err) {
+      console.error(`[auto-reply] processGuestMessage failed for msg ${m.id}:`, err);
+    }
+  }
+}
+
+async function fetchUnreadGuestMessages(): Promise<UnreadGuestMessage[]> {
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    console.error('[auto-reply] Beds24 token fetch failed:', err);
+    return [];
+  }
+
+  // maxAge=1 → past 24h; source=guest → only guest messages.
+  // We then narrow further in-process: keep only messages from the last
+  // 15 min so a long-stale unread isn't auto-replied days later.
+  const params = new URLSearchParams({
+    filter: 'unread',
+    maxAge: '1',
+    source: 'guest',
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(`${BEDS24_API_BASE}/bookings/messages?${params}`, {
+      headers: { token },
+      cache: 'no-store',
+    });
+  } catch (err) {
+    console.error('[auto-reply] Beds24 messages fetch failed:', err);
+    return [];
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    console.error(`[auto-reply] Beds24 messages ${res.status}: ${text.slice(0, 200)}`);
+    return [];
+  }
+
+  const json = await res.json().catch(() => null);
+  const raw: Array<Record<string, unknown>> =
+    Array.isArray(json) ? json : (Array.isArray((json as { data?: unknown[] })?.data) ? (json as { data: Record<string, unknown>[] }).data : []);
+
+  const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
+  const out: UnreadGuestMessage[] = [];
+  for (const m of raw) {
+    const id = Number(m.id);
+    const bookingId = Number(m.bookingId);
+    const message = typeof m.message === 'string' ? m.message : '';
+    const time = typeof m.time === 'string' ? m.time : '';
+    if (!Number.isFinite(id) || !Number.isFinite(bookingId)) continue;
+    if (!message.trim()) continue;
+    // Drop messages older than 15 min so a re-fire on a long-stale
+    // unread doesn't mass-reply hours after the fact.
+    if (time) {
+      const t = new Date(time).getTime();
+      if (Number.isFinite(t) && t < fifteenMinAgo) continue;
+    }
+    out.push({ id, bookingId, message, time });
+  }
+  return out;
+}
+
+// ─── Pull-style: new bookings Telegram notification ──────────────────────────
+
+/**
+ * Scan the bookings cache for any reservation whose `bookingTime` is
+ * within the last 30 min AND that hasn't already been notified. Sends
+ * Telegram for each. This replaces the old direct-payload mechanism in
+ * /api/webhook/new-booking — same dedupe (Redis `notified:booking:*`),
+ * same filtering rules, just driven by a poll instead of the payload.
+ */
+async function pollAndNotifyNewBookings(redis: Redis | null): Promise<void> {
+  if (!redis) return;
+  const cached =
+    (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
+  const now = Date.now();
+
+  for (const b of Object.values(cached)) {
+    if (!b.bookingTime) continue;
+    const age = now - new Date(b.bookingTime).getTime();
+    if (age > NEW_BOOKING_WINDOW_MS || age < 0) continue;
+    try {
+      await maybeNotifyNewBooking(b);
+    } catch (err) {
+      console.error(`[beds24 webhook] notify failed for booking ${b.id}:`, err);
+    }
+  }
 }
 
 interface ProcessArgs {
   bookingId: number;
   messageId: number;
   messageText: string;
-  booking: NonNullable<Beds24MessagePayload['booking']>;
+  /** Optional: payload-provided booking. Pull-style flow leaves this undefined
+   *  and the reservation context is loaded from Redis cache instead. */
+  booking?: CachedBooking;
 }
 
 async function processGuestMessage(args: ProcessArgs): Promise<void> {
@@ -404,19 +527,10 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 async function buildReservationContext(
   redis: Redis | null,
   bookingId: number,
-  webhookBooking: NonNullable<Beds24MessagePayload['booking']>,
+  /** Optional payload-provided booking — pull-style doesn't carry one, in
+   *  which case all context is read from the bookings cache. */
+  webhookBooking?: CachedBooking,
 ): Promise<Reservation | null> {
-  type CachedBooking = {
-    id?: number;
-    roomId?: number;
-    masterId?: number | null;
-    firstName?: string;
-    lastName?: string;
-    arrival?: string;
-    departure?: string;
-    comments?: string;
-  };
-
   let cached: Record<string, CachedBooking> = {};
   if (redis) {
     cached = (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
@@ -425,7 +539,11 @@ async function buildReservationContext(
   // Prefer cached booking (it has fields the webhook payload might omit) —
   // fall back to webhook payload data if the cache hasn't ingested this booking yet.
   const cachedThis = cached[String(bookingId)];
-  const b = cachedThis ?? (webhookBooking as CachedBooking);
+  const b: CachedBooking | undefined = cachedThis ?? webhookBooking;
+  if (!b) {
+    // Pull-style trigger AND cache miss → can't render templates safely
+    return null;
+  }
 
   const primaryRoomId = Number(b.roomId);
   const primaryRoom = UNIT_MAP[primaryRoomId];
@@ -462,13 +580,13 @@ async function buildReservationContext(
   return {
     reservationNumber: `BH-${bookingId}`,
     isBlackout: false,
-    firstName: b.firstName ?? webhookBooking.firstName ?? '',
-    lastName: b.lastName ?? webhookBooking.lastName ?? '',
+    firstName: b.firstName ?? webhookBooking?.firstName ?? '',
+    lastName: b.lastName ?? webhookBooking?.lastName ?? '',
     channel: 'Direct',
     room: primaryRoom,
     linkedRooms: linkedRooms.length > 0 ? linkedRooms : undefined,
-    checkInDate: b.arrival ?? webhookBooking.arrival ?? '',
-    checkOutDate: b.departure ?? webhookBooking.departure ?? '',
+    checkInDate: b.arrival ?? webhookBooking?.arrival ?? '',
+    checkOutDate: b.departure ?? webhookBooking?.departure ?? '',
     reservationDate: '',
     bookingTimestamp: '',
     numberOfNights: 0,
@@ -500,16 +618,6 @@ async function buildReservationContext(
  */
 async function loadAllReservations(redis: Redis | null): Promise<Reservation[]> {
   if (!redis) return [];
-  type CachedBooking = {
-    id?: number;
-    roomId?: number;
-    masterId?: number | null;
-    firstName?: string;
-    lastName?: string;
-    arrival?: string;
-    departure?: string;
-    status?: string;
-  };
   const cached = (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
   const overrides = (await redis.get<Record<string, { parkingOverride?: string }>>(LOCAL_STATE_KEY)) ?? {};
 
@@ -636,7 +744,7 @@ function sleep(ms: number): Promise<void> {
  * never spam the operator chat.
  */
 async function maybeNotifyNewBooking(
-  booking: NonNullable<Beds24MessagePayload['booking']>,
+  booking: CachedBooking,
 ): Promise<void> {
   // Cancellations + blackouts: not notified
   if (booking.status === 'cancelled' || booking.status === 'canceled') return;
