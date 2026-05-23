@@ -6,6 +6,7 @@ import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
+import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -90,6 +91,10 @@ export default function TransactionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
+  // Enriched per-booking metadata fetched alongside the unread badge poll.
+  // Drives the "X unread messages" pill panel near the top of the page.
+  const [unreadBookings, setUnreadBookings] = useState<UnreadBookingSummary[]>([]);
+  const [unreadPanelOpen, setUnreadPanelOpen] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlackoutModal, setShowBlackoutModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -225,14 +230,17 @@ export default function TransactionsPage() {
     fetchReservations();
   }, [fetchReservations]);
 
-  // Poll for unread guest messages every 30s
+  // Poll for unread guest messages every 30s — drives both the table-level
+  // blinking badge AND the new "unread messages" pill panel.
   useEffect(() => {
     async function pollUnread() {
       try {
         const res = await fetch('/api/messages/unread');
         if (!res.ok) return;
-        const { bookingIds }: { bookingIds: number[] } = await res.json();
-        setUnreadBookingIds(new Set(bookingIds));
+        const body: { bookingIds: number[]; bookings?: UnreadBookingSummary[] } =
+          await res.json();
+        setUnreadBookingIds(new Set(body.bookingIds));
+        setUnreadBookings(body.bookings ?? []);
       } catch {
         // fail silently — badge just won't update until next poll
       }
@@ -615,32 +623,58 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Pending tasks/issues pill — compact, sits above the search bar.
-          Includes overdue (past actionableDate) + upcoming (next 7 days). */}
-      {upcomingUnresolved.length > 0 && (
-        <div className="mb-3">
-          <button
-            onClick={() => setTaskAlertOpen((o) => !o)}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
-          >
-            <span className="flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold animate-pulse shrink-0">!</span>
-            {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"}
-            {overdueCount > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wide">
-                {overdueCount} overdue
-              </span>
+      {/* Pending tasks + Unread messages pills — same row above the
+          search bar so the operator's actionable surface is one glance.
+          Panels expand BELOW the pill row (full width), not next to
+          their pill, so the wide tables get the space they need. */}
+      {(upcomingUnresolved.length > 0 || unreadBookings.length > 0) && (
+        <div className="mb-3 space-y-2">
+          {/* Pills row */}
+          <div className="flex flex-wrap items-start gap-2">
+            {upcomingUnresolved.length > 0 && (
+              <button
+                onClick={() => setTaskAlertOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
+              >
+                <span className="flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold animate-pulse shrink-0">!</span>
+                {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"}
+                {overdueCount > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wide">
+                    {overdueCount} overdue
+                  </span>
+                )}
+                <span className="text-red-500 font-normal">· next 7 days</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
             )}
-            <span className="text-red-500 font-normal">· next 7 days</span>
-            <svg
-              className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
-              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
+            {unreadBookings.length > 0 && (
+              <button
+                onClick={() => setUnreadPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm font-medium hover:bg-indigo-100 transition-colors"
+              >
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-600" />
+                </span>
+                {unreadBookings.length} unread {unreadBookings.length === 1 ? "message" : "messages"}
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${unreadPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+          </div>
 
-          {taskAlertOpen && (
-            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 overflow-hidden">
+          {/* Pending-tasks panel — expanded below the pill row, full width */}
+          {upcomingUnresolved.length > 0 && taskAlertOpen && (
+            <div className="rounded-lg border border-red-200 bg-red-50 overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-red-200">
@@ -660,7 +694,6 @@ export default function TransactionsPage() {
                       cleaning: "Mid-stay Cleaning",
                       special: "Special Treatment",
                     };
-                    // Days overdue vs today
                     const todayMs = new Date(new Date().toLocaleDateString("sv-SE") + "T00:00:00").getTime();
                     const dueMs = new Date(issue.actionableDate + "T00:00:00").getTime();
                     const daysLate = Math.round((todayMs - dueMs) / 86_400_000);
@@ -687,6 +720,87 @@ export default function TransactionsPage() {
                               </span>
                             )}
                           </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Unread-messages panel — expanded below the pill row, full width */}
+          {unreadBookings.length > 0 && unreadPanelOpen && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-indigo-200">
+                    {["Guest", "Room", "Last message", "Activity", "Auto-replies"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-indigo-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-indigo-100">
+                  {unreadBookings.map((u) => {
+                    const matchingReservation = reservations.find(
+                      (r) => r.reservationNumber === `BH-${u.bookingId}`,
+                    );
+                    const guestName = matchingReservation
+                      ? `${matchingReservation.firstName} ${matchingReservation.lastName}`.trim()
+                      : `BH-${u.bookingId}`;
+                    const room = matchingReservation?.room ?? "—";
+                    const arrivedMs = new Date(u.latestMessageTime).getTime();
+                    const ageMin = Math.max(0, Math.round((Date.now() - arrivedMs) / 60_000));
+                    const ageLabel =
+                      ageMin < 1 ? "just now"
+                      : ageMin < 60 ? `${ageMin} min ago`
+                      : ageMin < 24 * 60 ? `${Math.round(ageMin / 60)}h ago`
+                      : `${Math.round(ageMin / 60 / 24)}d ago`;
+                    const replyCounts = u.autoReplies.reduce<Record<string, number>>((acc, ar) => {
+                      acc[ar.category] = (acc[ar.category] ?? 0) + 1;
+                      return acc;
+                    }, {});
+                    return (
+                      <tr
+                        key={u.bookingId}
+                        className="cursor-pointer hover:bg-indigo-100/60"
+                        onClick={() => {
+                          if (matchingReservation) {
+                            setSelectedReservation(matchingReservation);
+                            setUnreadPanelOpen(false);
+                          }
+                        }}
+                      >
+                        <td className="px-4 py-2 font-medium text-indigo-900 whitespace-nowrap">{guestName}</td>
+                        <td className="px-4 py-2 text-indigo-700 text-xs whitespace-nowrap">{room}</td>
+                        <td className="px-4 py-2 text-indigo-800 max-w-md">
+                          <div className="line-clamp-2">{u.latestMessage}</div>
+                          {u.unreadCount > 1 && (
+                            <div className="text-[11px] text-indigo-500 mt-0.5">
+                              +{u.unreadCount - 1} more unread
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-indigo-600 text-xs whitespace-nowrap">{ageLabel}</td>
+                        <td className="px-4 py-2 text-xs">
+                          {Object.keys(replyCounts).length === 0 ? (
+                            <span className="text-gray-400 italic">none</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(replyCounts).map(([category, count]) => (
+                                <span
+                                  key={category}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-indigo-700 ring-1 ring-indigo-200"
+                                  title={`${count} auto-${count === 1 ? "reply" : "replies"} in past 24h`}
+                                >
+                                  ⚡ {category}
+                                  {count > 1 && <span className="ml-0.5 text-indigo-500">×{count}</span>}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
