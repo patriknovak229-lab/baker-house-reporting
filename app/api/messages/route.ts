@@ -82,8 +82,14 @@ interface AutoReplyLogEntry {
 }
 
 // ── GET /api/messages?bookingId=123 — fetch thread for one booking ─────────────
+//
+// Supports `&raw=true` debug mode that returns the unmodified Beds24
+// response BEFORE any filtering/sorting/source-mapping happens. Useful
+// when a message is missing from the thread and we need to confirm
+// whether Beds24 returned it at all.
 export async function GET(req: NextRequest) {
   const bookingId = req.nextUrl.searchParams.get('bookingId');
+  const debugRaw = req.nextUrl.searchParams.get('raw') === 'true';
   if (!bookingId) {
     return NextResponse.json({ error: 'bookingId required' }, { status: 400 });
   }
@@ -109,6 +115,17 @@ export async function GET(req: NextRequest) {
   }
 
   const json = await res.json();
+
+  // Debug short-circuit: return everything Beds24 sent us, completely
+  // unfiltered. Operator-only diagnostic path.
+  if (debugRaw) {
+    return NextResponse.json({
+      bookingId,
+      fetchedAt: new Date().toISOString(),
+      beds24Response: json,
+    });
+  }
+
   const raw: Beds24Message[] = Array.isArray(json) ? json : (json.data ?? []);
 
   // Side effect: detect invoice-request templates from Booking.com.
