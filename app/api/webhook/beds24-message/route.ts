@@ -62,6 +62,17 @@ import { computeParking } from '@/utils/parkingUtils';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const POLL_DEBOUNCE_MS = 15_000; // 15s — collapses bursts of SYNC_ROOM events
+/**
+ * Short-TTL "we're polling now" lock used purely for debouncing bursts.
+ * Expires fast so a crashed handler doesn't permanently block future polls.
+ */
+const DEBOUNCE_KEY = 'baker:auto-reply:debounce-until';
+/**
+ * Persistent diagnostic key — last time a webhook successfully kicked off
+ * the after() block. Surfaced on /auto-reply-log as "Last webhook poll"
+ * so the operator can tell whether Beds24 is firing the trigger at all.
+ * No TTL — we want to keep the most recent value indefinitely.
+ */
 const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 const INVOICE_REQUESTS_KEY = 'baker:invoice-requests';
 
@@ -200,19 +211,14 @@ export async function POST(req: NextRequest) {
   const redis = getRedis();
 
   // ── Debounce ──
-  // Beds24 fires SYNC_ROOM in bursts (e.g. a guest message triggers
-  // multiple inventory recomputations). Collapse them so we don't
-  // hammer the Beds24 API every few hundred ms.
   if (redis) {
-    const last = await redis.get<number>(LAST_POLL_KEY);
     const now = Date.now();
-    if (last && now - last < POLL_DEBOUNCE_MS) {
-      return NextResponse.json({ ok: true, reason: 'debounced', sinceLast: now - last });
+    const debounceUntil = await redis.get<number>(DEBOUNCE_KEY);
+    if (debounceUntil && now < debounceUntil) {
+      return NextResponse.json({ ok: true, reason: 'debounced' });
     }
-    // Mark "we're polling now" before we return; the after() callback
-    // will do the actual work. Set with a 60s expiry so a crash doesn't
-    // permanently lock out future polls.
-    await redis.set(LAST_POLL_KEY, now, { ex: 60 });
+    await redis.set(DEBOUNCE_KEY, now + POLL_DEBOUNCE_MS, { ex: 60 });
+    await redis.set(LAST_POLL_KEY, now); // persistent — no TTL
   }
 
   // Heavy work runs after we return 200 to Beds24

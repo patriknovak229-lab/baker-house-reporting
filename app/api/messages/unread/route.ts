@@ -46,5 +46,38 @@ export async function GET() {
   });
 
   const bookingIds = [...new Set(recentUnread.map((m) => m.bookingId))];
+
+  // Lazy auto-reply nudge — only when we actually saw recent unread
+  // guest messages. Beds24's Inventory Webhook doesn't fire on incoming
+  // messages, so without this nudge the auto-reply pipeline only
+  // triggers on bookings/inventory changes. The unread badge poll runs
+  // every 30s while the dashboard is open, which gives operator-driven
+  // coverage even when no drawer is open. The webhook's 15s debounce
+  // prevents over-firing.
+  if (recentUnread.length > 0) {
+    triggerAutoReplyPoll().catch((err) =>
+      console.warn('[messages/unread] auto-reply nudge failed:', err),
+    );
+  }
+
   return NextResponse.json({ bookingIds });
+}
+
+/** Fire-and-forget POST to our own webhook URL — see /api/messages/route.ts
+ *  for the full rationale. */
+async function triggerAutoReplyPoll(): Promise<void> {
+  const baseUrl =
+    process.env.NEXT_PUBLIC_BASE_URL?.trim() ||
+    'https://reporting.bakerhouseapartments.cz';
+  await fetch(`${baseUrl}/api/webhook/beds24-message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      roomId: '0',
+      propId: '311322',
+      ownerId: '0',
+      action: 'SYNC_ROOM',
+    }),
+    cache: 'no-store',
+  });
 }
