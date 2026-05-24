@@ -743,15 +743,13 @@ async function appendIssueToReservation(
   const current = overrides[reservationNumber] ?? {};
   const issues: Issue[] = Array.isArray(current.issues) ? current.issues : [];
 
-  // Actionable date: day before arrival (for early check-in) or day
-  // before departure (for late checkout). Falls back to today if the
-  // reservation has no dates (shouldn't happen but defensive).
-  const refDate = category === 'early-checkin'
-    ? reservation.checkInDate
-    : reservation.checkOutDate;
-  const actionableDate = refDate
-    ? dayBefore(refDate)
-    : new Date().toISOString().slice(0, 10);
+  // Actionable date: the actual day of the event — arrival day for
+  // early check-in, departure day for late checkout. That's when the
+  // operator needs to decide and act, so that's when the task surfaces
+  // in the dashboard's "next 7 days" banner.
+  const actionableDate =
+    (category === 'early-checkin' ? reservation.checkInDate : reservation.checkOutDate) ||
+    new Date().toISOString().slice(0, 10);
 
   // Phrased explicitly as a REQUEST so it's clear nothing has been
   // auto-approved — the operator decides whether to accommodate. The
@@ -780,12 +778,6 @@ async function appendIssueToReservation(
     issues: [...issues, newIssue],
   };
   await redis.set(LOCAL_STATE_KEY, overrides);
-}
-
-function dayBefore(yyyymmdd: string): string {
-  const d = new Date(yyyymmdd + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
 }
 
 function trimQuote(s: string): string {

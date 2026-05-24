@@ -255,6 +255,8 @@ export default function TransactionsPage() {
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [taskAlertOpen, setTaskAlertOpen] = useState(false);
+  const [earlyCheckinPanelOpen, setEarlyCheckinPanelOpen] = useState(false);
+  const [lateCheckoutPanelOpen, setLateCheckoutPanelOpen] = useState(false);
 
   interface DataIssue {
     reservation: Reservation;
@@ -264,7 +266,14 @@ export default function TransactionsPage() {
   // ── Unresolved issues — overdue + actionable within the next 7 days ─────────
   // Overdue rows (actionableDate < today) are included with a flag so the table
   // can flag them visually. Sort: overdue oldest first, then upcoming soonest first.
-  const upcomingUnresolved = useMemo(() => {
+  //
+  // The full list is then split into three independent banner pills so the
+  // operator sees a clean count per category instead of one big "X tasks":
+  //   - earlyCheckin tasks → teal "X early check-ins" pill
+  //   - lateCheckout tasks → orange "Y late checkout requests" pill
+  //   - everything else (problem / invoice / cleaning / special) → red
+  //                                                                 "Z pending tasks" pill
+  const allUpcomingUnresolved = useMemo(() => {
     // Use local date (sv-SE locale = YYYY-MM-DD), same as date pickers in the drawer
     const today = new Date().toLocaleDateString("sv-SE");
     const d7 = new Date(); d7.setDate(d7.getDate() + 7);
@@ -273,8 +282,6 @@ export default function TransactionsPage() {
     for (const r of reservations) {
       for (const issue of r.issues ?? []) {
         if (issue.resolved) continue;
-        // Overdue → always included regardless of how stale (so nothing slips
-        // off the radar). Upcoming → only the 7-day window.
         if (issue.actionableDate < today) {
           items.push({ reservation: r, issue, overdue: true });
         } else if (issue.actionableDate <= in7) {
@@ -284,6 +291,29 @@ export default function TransactionsPage() {
     }
     return items.sort((a, b) => a.issue.actionableDate.localeCompare(b.issue.actionableDate));
   }, [reservations]);
+
+  /** "Generic" pending tasks = everything that isn't the dedicated
+   *  early-checkin / late-checkout request lanes. Keeps the original red
+   *  pill focused on operator-actionable items: problems, invoices to
+   *  send, mid-stay cleanings, special-treatment notes. */
+  const upcomingUnresolved = useMemo(
+    () =>
+      allUpcomingUnresolved.filter((x) => {
+        const cat = x.issue.category ?? "problem";
+        return cat !== "earlyCheckin" && cat !== "lateCheckout";
+      }),
+    [allUpcomingUnresolved],
+  );
+
+  const upcomingEarlyCheckins = useMemo(
+    () => allUpcomingUnresolved.filter((x) => x.issue.category === "earlyCheckin"),
+    [allUpcomingUnresolved],
+  );
+
+  const upcomingLateCheckouts = useMemo(
+    () => allUpcomingUnresolved.filter((x) => x.issue.category === "lateCheckout"),
+    [allUpcomingUnresolved],
+  );
 
   const overdueCount = useMemo(
     () => upcomingUnresolved.filter((x) => x.overdue).length,
@@ -627,7 +657,10 @@ export default function TransactionsPage() {
           search bar so the operator's actionable surface is one glance.
           Panels expand BELOW the pill row (full width), not next to
           their pill, so the wide tables get the space they need. */}
-      {(upcomingUnresolved.length > 0 || unreadBookings.length > 0) && (
+      {(upcomingUnresolved.length > 0
+        || unreadBookings.length > 0
+        || upcomingEarlyCheckins.length > 0
+        || upcomingLateCheckouts.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row */}
           <div className="flex flex-wrap items-start gap-2">
@@ -646,6 +679,44 @@ export default function TransactionsPage() {
                 <span className="text-red-500 font-normal">· next 7 days</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {upcomingEarlyCheckins.length > 0 && (
+              <button
+                onClick={() => setEarlyCheckinPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-50 border border-teal-200 text-teal-700 text-sm font-medium hover:bg-teal-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 7v5l3 2" />
+                </svg>
+                {upcomingEarlyCheckins.length} early check-{upcomingEarlyCheckins.length === 1 ? "in" : "ins"}
+                <span className="text-teal-500 font-normal">· next 7 days</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${earlyCheckinPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {upcomingLateCheckouts.length > 0 && (
+              <button
+                onClick={() => setLateCheckoutPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium hover:bg-orange-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M6 3h12M6 21h12M8 3v3a4 4 0 008 0V3M8 21v-3a4 4 0 018-0v3" />
+                </svg>
+                {upcomingLateCheckouts.length} late checkout {upcomingLateCheckouts.length === 1 ? "request" : "requests"}
+                <span className="text-orange-500 font-normal">· next 7 days</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${lateCheckoutPanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -671,6 +742,84 @@ export default function TransactionsPage() {
               </button>
             )}
           </div>
+
+          {/* Early check-ins panel — expanded below pill row, full width */}
+          {upcomingEarlyCheckins.length > 0 && earlyCheckinPanelOpen && (
+            <div className="rounded-lg border border-teal-200 bg-teal-50 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-teal-200">
+                    {["Reservation", "Guest", "Arrival date", "Request"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-teal-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-teal-100">
+                  {upcomingEarlyCheckins.map(({ reservation, issue, overdue }) => (
+                    <tr
+                      key={issue.id}
+                      className={`cursor-pointer ${overdue ? "bg-teal-100/70 hover:bg-teal-200/60" : "hover:bg-teal-100"}`}
+                      onClick={() => { setSelectedReservation(reservation); setEarlyCheckinPanelOpen(false); }}
+                    >
+                      <td className="px-4 py-2 font-mono text-xs text-teal-800 whitespace-nowrap">
+                        {reservation.reservationNumber}
+                      </td>
+                      <td className="px-4 py-2 font-medium text-teal-900 whitespace-nowrap">
+                        {reservation.firstName} {reservation.lastName}
+                      </td>
+                      <td className="px-4 py-2 text-teal-700 text-xs whitespace-nowrap">
+                        {reservation.checkInDate || issue.actionableDate}
+                      </td>
+                      <td className="px-4 py-2 text-teal-700 max-w-md">
+                        <div className="line-clamp-2">{issue.text}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Late checkouts panel — expanded below pill row, full width */}
+          {upcomingLateCheckouts.length > 0 && lateCheckoutPanelOpen && (
+            <div className="rounded-lg border border-orange-200 bg-orange-50 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-orange-200">
+                    {["Reservation", "Guest", "Departure date", "Request"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-orange-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-orange-100">
+                  {upcomingLateCheckouts.map(({ reservation, issue, overdue }) => (
+                    <tr
+                      key={issue.id}
+                      className={`cursor-pointer ${overdue ? "bg-orange-100/70 hover:bg-orange-200/60" : "hover:bg-orange-100"}`}
+                      onClick={() => { setSelectedReservation(reservation); setLateCheckoutPanelOpen(false); }}
+                    >
+                      <td className="px-4 py-2 font-mono text-xs text-orange-800 whitespace-nowrap">
+                        {reservation.reservationNumber}
+                      </td>
+                      <td className="px-4 py-2 font-medium text-orange-900 whitespace-nowrap">
+                        {reservation.firstName} {reservation.lastName}
+                      </td>
+                      <td className="px-4 py-2 text-orange-700 text-xs whitespace-nowrap">
+                        {reservation.checkOutDate || issue.actionableDate}
+                      </td>
+                      <td className="px-4 py-2 text-orange-700 max-w-md">
+                        <div className="line-clamp-2">{issue.text}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Pending-tasks panel — expanded below the pill row, full width */}
           {upcomingUnresolved.length > 0 && taskAlertOpen && (

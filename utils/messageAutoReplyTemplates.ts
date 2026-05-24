@@ -183,10 +183,18 @@ function buildEarlyCheckinTemplate(): BuiltTemplate {
 
 // ─── Late checkout ───────────────────────────────────────────────────────────
 
+/**
+ * Operator policy (2026-05-24): checkout up to 11:00 is always fine —
+ * confirm immediately. Anything later depends on the next arrival and
+ * the cleaning schedule, so we promise to confirm on the day rather
+ * than commit. Both cases get the same message — it's accurate either
+ * way and keeps the reply tight. The lateCheckout task is created so
+ * the operator handles the "anything past 11" decision on departure day.
+ */
 function buildLateCheckoutTemplate(): BuiltTemplate {
   return {
     template:
-      'Hi {NAME}! Thank you for asking. I will check whether late checkout is possible on your departure day and confirm as soon as I can.',
+      'Hi {NAME}! Checkout by 11:00 is always fine. For anything later we’ll confirm on the day based on the next arrival.',
     substitutions: {
       NAME: '{NAME}',
     },
