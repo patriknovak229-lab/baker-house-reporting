@@ -184,9 +184,24 @@ const CAT_CFG: Record<IssueCategory, { bg: string; icon: React.ReactNode }> = {
   },
 };
 
-// Renders a coloured badge with a CSS-hover tooltip showing the issue text.
+// Human-readable header rendered as the first tooltip line so the
+// operator always sees what the badge stands for, even when an Issue has
+// no free-text note (e.g. an early-checkin request added by category alone).
+const CATEGORY_TOOLTIP_LABEL: Record<IssueCategory, string> = {
+  problem: "Issue",
+  invoice: "Invoice task",
+  cleaning: "Mid-stay cleaning",
+  special: "Special treatment",
+  earlyCheckin: "Early check-in request",
+  lateCheckout: "Late checkout request",
+};
+
+// Renders a coloured badge with a CSS-hover tooltip showing the category
+// label and any optional free-text notes below.
 function IssueBadge({ category, texts }: { category: IssueCategory; texts: string[] }) {
   const { bg, icon } = CAT_CFG[category];
+  const label = CATEGORY_TOOLTIP_LABEL[category];
+  const notes = texts.map((t) => t?.trim()).filter((t): t is string => !!t);
   return (
     <span className="relative group/badge inline-flex">
       <span
@@ -197,7 +212,10 @@ function IssueBadge({ category, texts }: { category: IssueCategory; texts: strin
       {/* Tooltip */}
       <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/badge:flex flex-col gap-0.5 z-30 min-w-[160px] max-w-[240px]">
         <span className="bg-gray-900 text-white text-[11px] rounded px-2.5 py-1.5 shadow-lg whitespace-normal">
-          {texts.map((t, i) => <span key={i} className="block">{t}</span>)}
+          <span className="block font-semibold">{label}</span>
+          {notes.map((t, i) => (
+            <span key={i} className="block text-gray-200 mt-1">{t}</span>
+          ))}
         </span>
         <span className="self-center border-4 border-transparent border-t-gray-900 w-0 h-0" />
       </span>
@@ -701,11 +719,17 @@ export default function ReservationTable({
                       <div className="flex flex-wrap gap-1 items-center">
                         <AdditionalPaymentBadge payments={res.additionalPayments ?? []} />
                         {(Object.keys(CAT_CFG) as IssueCategory[]).map((cat) => {
-                          const texts = (res.issues ?? [])
-                            .filter((i) => !i.resolved && (i.category ?? "problem") === cat)
-                            .map((i) => i.text);
-                          if (texts.length === 0) return null;
-                          return <IssueBadge key={cat} category={cat} texts={texts} />;
+                          const matching = (res.issues ?? []).filter(
+                            (i) => !i.resolved && (i.category ?? "problem") === cat,
+                          );
+                          if (matching.length === 0) return null;
+                          return (
+                            <IssueBadge
+                              key={cat}
+                              category={cat}
+                              texts={matching.map((i) => i.text)}
+                            />
+                          );
                         })}
                         {stayStatuses.map((status) => {
                           if (status === "checking-in") return (

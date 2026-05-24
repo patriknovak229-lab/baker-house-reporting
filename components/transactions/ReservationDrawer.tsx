@@ -1371,11 +1371,11 @@ export default function ReservationDrawer({
   }
 
   function addIssue() {
+    // Only "problem" and "special" require a note — for early-checkin
+    // and late-checkout the category itself is the request; any free-text
+    // is optional context the operator might add.
     const textRequired =
-      newIssueCategory === "problem" ||
-      newIssueCategory === "special" ||
-      newIssueCategory === "earlyCheckin" ||
-      newIssueCategory === "lateCheckout";
+      newIssueCategory === "problem" || newIssueCategory === "special";
     if (textRequired && !newIssueText.trim()) return;
     const issue: Issue = {
       id: Date.now().toString(),
@@ -2919,9 +2919,7 @@ export default function ReservationDrawer({
                     onClick={addIssue}
                     disabled={(
                       newIssueCategory === "problem" ||
-                      newIssueCategory === "special" ||
-                      newIssueCategory === "earlyCheckin" ||
-                      newIssueCategory === "lateCheckout"
+                      newIssueCategory === "special"
                     ) && !newIssueText.trim()}
                     className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                       issueSaved ? "bg-green-600" : CATEGORY_CONFIG[newIssueCategory].buttonBg
