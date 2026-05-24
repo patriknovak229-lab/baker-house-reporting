@@ -159,10 +159,22 @@ function buildMinibarTemplate(reservation: Reservation): BuiltTemplate | null {
 
 // ─── Early check-in ──────────────────────────────────────────────────────────
 
+/**
+ * Operator policy (2026-05-24): early check-ins are never guaranteed —
+ * coordinating them in real time around cleanings creates more problems
+ * than they solve. The standard offer is:
+ *   - Keys available from reception after 12:00
+ *   - Car can be parked in the garage at the same time
+ *   - We notify the guest when the apartment itself is ready
+ *
+ * The auto-reply is self-contained — guest gets a useful answer
+ * immediately. The "notify when ready" follow-up is captured as a red
+ * task on the reservation so the operator doesn't forget the ping.
+ */
 function buildEarlyCheckinTemplate(): BuiltTemplate {
   return {
     template:
-      'Hi {NAME}! Thank you for letting me know. I will check whether early check-in is possible for your arrival day and confirm as soon as I can.',
+      'Hi {NAME}! We can’t guarantee the apartment will be ready before 15:00, but we’ll let you know as soon as it is. In the meantime, you’re welcome to collect your keys at reception from 12:00 and park in the garage if needed.',
     substitutions: {
       NAME: '{NAME}', // placeholder kept for caller to fill via firstName
     },

@@ -753,14 +753,22 @@ async function appendIssueToReservation(
     ? dayBefore(refDate)
     : new Date().toISOString().slice(0, 10);
 
+  // Phrased explicitly as a REQUEST so it's clear nothing has been
+  // auto-approved — the operator decides whether to accommodate. The
+  // category gets its own visual lane (teal for early, orange for late),
+  // distinct from the red "problem" lane which is reserved for actual
+  // host-side issues.
   const text =
     category === 'early-checkin'
-      ? `Early check-in requested: "${trimQuote(originalMessage)}"`
-      : `Late checkout requested: "${trimQuote(originalMessage)}"`;
+      ? `REQUEST · early check-in — guest wrote: "${trimQuote(originalMessage)}". Auto-reply offered keys from 12:00 + notify when ready. Operator to confirm timing on the day.`
+      : `REQUEST · late checkout — guest wrote: "${trimQuote(originalMessage)}". Auto-reply said we'll confirm. Operator to decide on the day.`;
+
+  const issueCategory: Issue['category'] =
+    category === 'early-checkin' ? 'earlyCheckin' : 'lateCheckout';
 
   const newIssue: Issue = {
     id: `auto-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    category: 'problem', // user requested red task
+    category: issueCategory,
     text,
     actionableDate,
     resolved: false,

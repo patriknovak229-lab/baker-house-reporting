@@ -159,6 +159,29 @@ const CAT_CFG: Record<IssueCategory, { bg: string; icon: React.ReactNode }> = {
       </svg>
     ),
   },
+  // Distinct from "problem" — these are guest-driven REQUESTS, not host
+  // problems. Teal = early arrival (going UP into the apartment sooner),
+  // orange = late departure (staying past the deadline).
+  earlyCheckin: {
+    bg: "bg-teal-500",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {/* Clock face with an up-arrow indicating "earlier" */}
+        <circle cx="12" cy="12" r="9" strokeWidth={2.5} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 7v5l3 2" />
+      </svg>
+    ),
+  },
+  lateCheckout: {
+    bg: "bg-orange-500",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {/* Hourglass — visually distinct from the early-checkin clock */}
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M6 3h12M6 21h12M8 3v3a4 4 0 008 0V3M8 21v-3a4 4 0 018-0v3" />
+      </svg>
+    ),
+  },
 };
 
 // Renders a coloured badge with a CSS-hover tooltip showing the issue text.

@@ -693,6 +693,8 @@ export default function TransactionsPage() {
                       invoice: "Send Invoice",
                       cleaning: "Mid-stay Cleaning",
                       special: "Special Treatment",
+                      earlyCheckin: "Early Check-in Request",
+                      lateCheckout: "Late Checkout Request",
                     };
                     const todayMs = new Date(new Date().toLocaleDateString("sv-SE") + "T00:00:00").getTime();
                     const dueMs = new Date(issue.actionableDate + "T00:00:00").getTime();

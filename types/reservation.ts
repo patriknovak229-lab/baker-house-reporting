@@ -18,10 +18,12 @@ export type RatingStatus = "none" | "good" | "bad";
 export type InvoiceStatus = "Not Issued" | "Issued" | "Sent";
 
 export type IssueCategory =
-  | "problem"   // General problem/issue — red !
-  | "invoice"   // Send invoice task — amber envelope
-  | "cleaning"  // Mid-stay cleaning task — blue sparkles
-  | "special";  // Special treatment / VIP — purple gift
+  | "problem"        // General problem/issue — red !
+  | "invoice"        // Send invoice task — amber envelope
+  | "cleaning"       // Mid-stay cleaning task — blue sparkles
+  | "special"        // Special treatment / VIP — purple gift
+  | "earlyCheckin"   // Guest-requested early check-in — teal clock ↑ (PENDING decision, not approved)
+  | "lateCheckout";  // Guest-requested late checkout — orange clock ↓ (PENDING decision, not approved)
 
 export interface Issue {
   id: string;              // timestamp-based unique ID

@@ -872,6 +872,34 @@ const CATEGORY_CONFIG: Record<IssueCategory, {
       </svg>
     ),
   },
+  // Guest-driven REQUESTS — distinct from operator-side "problems".
+  // Same teal/orange palette as the table badges in ReservationTable.tsx.
+  earlyCheckin: {
+    label: "Early Check-in Request",
+    badgeBg: "bg-teal-500",
+    cardBg: "bg-teal-50",
+    cardBorder: "border-teal-100",
+    buttonBg: "bg-teal-600 hover:bg-teal-700",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" strokeWidth={2.5} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 7v5l3 2" />
+      </svg>
+    ),
+  },
+  lateCheckout: {
+    label: "Late Checkout Request",
+    badgeBg: "bg-orange-500",
+    cardBg: "bg-orange-50",
+    cardBorder: "border-orange-100",
+    buttonBg: "bg-orange-600 hover:bg-orange-700",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M6 3h12M6 21h12M8 3v3a4 4 0 008 0V3M8 21v-3a4 4 0 018-0v3" />
+      </svg>
+    ),
+  },
 };
 
 // ── Invoice preview rendered inside the drawer ────────────────────────────────
@@ -1343,7 +1371,11 @@ export default function ReservationDrawer({
   }
 
   function addIssue() {
-    const textRequired = newIssueCategory === "problem" || newIssueCategory === "special";
+    const textRequired =
+      newIssueCategory === "problem" ||
+      newIssueCategory === "special" ||
+      newIssueCategory === "earlyCheckin" ||
+      newIssueCategory === "lateCheckout";
     if (textRequired && !newIssueText.trim()) return;
     const issue: Issue = {
       id: Date.now().toString(),
@@ -2885,7 +2917,12 @@ export default function ReservationDrawer({
                 <div className="flex items-end">
                   <button
                     onClick={addIssue}
-                    disabled={(newIssueCategory === "problem" || newIssueCategory === "special") && !newIssueText.trim()}
+                    disabled={(
+                      newIssueCategory === "problem" ||
+                      newIssueCategory === "special" ||
+                      newIssueCategory === "earlyCheckin" ||
+                      newIssueCategory === "lateCheckout"
+                    ) && !newIssueText.trim()}
                     className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                       issueSaved ? "bg-green-600" : CATEGORY_CONFIG[newIssueCategory].buttonBg
                     }`}
