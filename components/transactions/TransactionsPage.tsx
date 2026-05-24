@@ -7,6 +7,7 @@ import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
+import type { PendingDraft, PendingOther } from "@/app/api/webhook/beds24-message/route";
 import FilterPanel, { defaultFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
@@ -95,6 +96,14 @@ export default function TransactionsPage() {
   // Drives the "X unread messages" pill panel near the top of the page.
   const [unreadBookings, setUnreadBookings] = useState<UnreadBookingSummary[]>([]);
   const [unreadPanelOpen, setUnreadPanelOpen] = useState(false);
+  // Pending operator-approval drafts (Section A in the panel) and queued
+  // `other`-category messages (Section B). Both arrive from the same
+  // /api/messages/unread poll. Edit state is per-messageId so the
+  // operator can tweak one draft without losing changes on the others.
+  const [pendingDrafts, setPendingDrafts] = useState<PendingDraft[]>([]);
+  const [pendingOthers, setPendingOthers] = useState<PendingOther[]>([]);
+  const [draftEdits, setDraftEdits] = useState<Record<number, string>>({});
+  const [draftBusy, setDraftBusy] = useState<Record<number, 'sending' | 'dismissing' | undefined>>({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlackoutModal, setShowBlackoutModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -237,10 +246,16 @@ export default function TransactionsPage() {
       try {
         const res = await fetch('/api/messages/unread');
         if (!res.ok) return;
-        const body: { bookingIds: number[]; bookings?: UnreadBookingSummary[] } =
-          await res.json();
+        const body: {
+          bookingIds: number[];
+          bookings?: UnreadBookingSummary[];
+          pendingDrafts?: PendingDraft[];
+          pendingOthers?: PendingOther[];
+        } = await res.json();
         setUnreadBookingIds(new Set(body.bookingIds));
         setUnreadBookings(body.bookings ?? []);
+        setPendingDrafts(body.pendingDrafts ?? []);
+        setPendingOthers(body.pendingOthers ?? []);
       } catch {
         // fail silently — badge just won't update until next poll
       }
@@ -248,6 +263,69 @@ export default function TransactionsPage() {
     pollUnread();
     const id = setInterval(pollUnread, UNREAD_POLL_INTERVAL_MS);
     return () => clearInterval(id);
+  }, []);
+
+  // Approve a pending draft: optionally with edited text, send via the
+  // /api/messages/draft/[messageId] endpoint, then locally drop the
+  // entry so the panel updates immediately (next poll reconciles).
+  const approveDraft = useCallback(
+    async (messageId: number, text: string) => {
+      if (!text.trim()) return;
+      setDraftBusy((prev) => ({ ...prev, [messageId]: 'sending' }));
+      try {
+        const res = await fetch(`/api/messages/draft/${messageId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.error ?? `HTTP ${res.status}`);
+        }
+        setPendingDrafts((prev) => prev.filter((d) => d.beds24MessageId !== messageId));
+        setPendingOthers((prev) => prev.filter((o) => o.beds24MessageId !== messageId));
+        setDraftEdits((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+      } catch (err) {
+        alert(err instanceof Error ? err.message : 'Send failed');
+      } finally {
+        setDraftBusy((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
+  const dismissDraft = useCallback(async (messageId: number) => {
+    setDraftBusy((prev) => ({ ...prev, [messageId]: 'dismissing' }));
+    try {
+      const res = await fetch(`/api/messages/draft/${messageId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      setPendingDrafts((prev) => prev.filter((d) => d.beds24MessageId !== messageId));
+      setPendingOthers((prev) => prev.filter((o) => o.beds24MessageId !== messageId));
+      setDraftEdits((prev) => {
+        const next = { ...prev };
+        delete next[messageId];
+        return next;
+      });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Dismiss failed');
+    } finally {
+      setDraftBusy((prev) => {
+        const next = { ...prev };
+        delete next[messageId];
+        return next;
+      });
+    }
   }, []);
 
   const [search, setSearch] = useState("");
@@ -723,24 +801,49 @@ export default function TransactionsPage() {
                 </svg>
               </button>
             )}
-            {unreadBookings.length > 0 && (
-              <button
-                onClick={() => setUnreadPanelOpen((o) => !o)}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm font-medium hover:bg-indigo-100 transition-colors"
-              >
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-500 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-600" />
-                </span>
-                {unreadBookings.length} unread {unreadBookings.length === 1 ? "message" : "messages"}
-                <svg
-                  className={`w-3.5 h-3.5 transition-transform ${unreadPanelOpen ? "rotate-180" : ""}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            {(() => {
+              const pendingMsgIds = new Set<number>([
+                ...pendingDrafts.map((d) => d.beds24MessageId),
+                ...pendingOthers.map((o) => o.beds24MessageId),
+              ]);
+              const pendingBookingIds = new Set<number>([
+                ...pendingDrafts.map((d) => d.bookingId),
+                ...pendingOthers.map((o) => o.bookingId),
+              ]);
+              const unprocessedUnread = unreadBookings.filter(
+                (b) => !pendingBookingIds.has(b.bookingId),
+              );
+              const totalAttention =
+                pendingDrafts.length + pendingOthers.length + unprocessedUnread.length;
+              if (totalAttention === 0) return null;
+              void pendingMsgIds;
+              return (
+                <button
+                  onClick={() => setUnreadPanelOpen((o) => !o)}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm font-medium hover:bg-indigo-100 transition-colors"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            )}
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-500 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-600" />
+                  </span>
+                  {totalAttention} unread {totalAttention === 1 ? "message" : "messages"}
+                  {pendingDrafts.length > 0 && (
+                    <span
+                      className="ml-1 px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wide"
+                      title={`${pendingDrafts.length} AI ${pendingDrafts.length === 1 ? "draft" : "drafts"} awaiting approval`}
+                    >
+                      {pendingDrafts.length} AI
+                    </span>
+                  )}
+                  <svg
+                    className={`w-3.5 h-3.5 transition-transform ${unreadPanelOpen ? "rotate-180" : ""}`}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              );
+            })()}
           </div>
 
           {/* Early check-ins panel — expanded below pill row, full width */}
@@ -880,84 +983,278 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {/* Unread-messages panel — expanded below the pill row, full width */}
-          {unreadBookings.length > 0 && unreadPanelOpen && (
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-indigo-200">
-                    {["Guest", "Room", "Last message", "Activity", "Auto-replies"].map((h) => (
-                      <th key={h} className="px-4 py-2 text-xs font-medium text-indigo-700 uppercase tracking-wide text-left">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-indigo-100">
-                  {unreadBookings.map((u) => {
-                    const matchingReservation = reservations.find(
-                      (r) => r.reservationNumber === `BH-${u.bookingId}`,
-                    );
-                    const guestName = matchingReservation
-                      ? `${matchingReservation.firstName} ${matchingReservation.lastName}`.trim()
-                      : `BH-${u.bookingId}`;
-                    const room = matchingReservation?.room ?? "—";
-                    const arrivedMs = new Date(u.latestMessageTime).getTime();
-                    const ageMin = Math.max(0, Math.round((Date.now() - arrivedMs) / 60_000));
-                    const ageLabel =
-                      ageMin < 1 ? "just now"
-                      : ageMin < 60 ? `${ageMin} min ago`
-                      : ageMin < 24 * 60 ? `${Math.round(ageMin / 60)}h ago`
-                      : `${Math.round(ageMin / 60 / 24)}d ago`;
-                    const replyCounts = u.autoReplies.reduce<Record<string, number>>((acc, ar) => {
-                      acc[ar.category] = (acc[ar.category] ?? 0) + 1;
-                      return acc;
-                    }, {});
-                    return (
-                      <tr
-                        key={u.bookingId}
-                        className="cursor-pointer hover:bg-indigo-100/60"
-                        onClick={() => {
-                          if (matchingReservation) {
-                            setSelectedReservation(matchingReservation);
-                            setUnreadPanelOpen(false);
-                          }
-                        }}
-                      >
-                        <td className="px-4 py-2 font-medium text-indigo-900 whitespace-nowrap">{guestName}</td>
-                        <td className="px-4 py-2 text-indigo-700 text-xs whitespace-nowrap">{room}</td>
-                        <td className="px-4 py-2 text-indigo-800 max-w-md">
-                          <div className="line-clamp-2">{u.latestMessage}</div>
-                          {u.unreadCount > 1 && (
-                            <div className="text-[11px] text-indigo-500 mt-0.5">
-                              +{u.unreadCount - 1} more unread
+          {/* Unread-messages panel — restructured into two sections plus a
+              legacy fallback for any unread booking not yet picked up by
+              the auto-reply pipeline. */}
+          {unreadPanelOpen && (pendingDrafts.length > 0 || pendingOthers.length > 0 || unreadBookings.length > 0) && (
+            <div className="space-y-3">
+              {/* ── Section A: AI drafts pending approval ── */}
+              {pendingDrafts.length > 0 && (
+                <div className="rounded-lg border border-violet-200 bg-violet-50/60 overflow-hidden">
+                  <div className="px-4 py-2 bg-violet-100/60 border-b border-violet-200 flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-violet-800">
+                      AI response pending approval
+                    </span>
+                    <span className="text-[11px] text-violet-600">
+                      {pendingDrafts.length} {pendingDrafts.length === 1 ? "draft" : "drafts"} — review, edit if needed, then send
+                    </span>
+                  </div>
+                  <div className="divide-y divide-violet-100">
+                    {pendingDrafts.map((d) => {
+                      const matching = reservations.find((r) => r.reservationNumber === d.reservationNumber);
+                      const guestName = matching
+                        ? `${matching.firstName} ${matching.lastName}`.trim()
+                        : d.reservationNumber;
+                      const room = matching?.room ?? "—";
+                      const editedText = draftEdits[d.beds24MessageId] ?? d.draftText;
+                      const busy = draftBusy[d.beds24MessageId];
+                      return (
+                        <div key={d.beds24MessageId} className="px-4 py-3">
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="font-medium text-violet-900">{guestName}</span>
+                              <span className="text-violet-600">·</span>
+                              <span className="text-violet-700">{room}</span>
+                              <span className="text-violet-600">·</span>
+                              <span className="px-1.5 py-0.5 rounded bg-white ring-1 ring-violet-200 text-violet-700 font-medium uppercase tracking-wide text-[10px]">
+                                {d.category}
+                              </span>
+                              {d.language && (
+                                <>
+                                  <span className="text-violet-600">·</span>
+                                  <span className="text-violet-600 text-[11px]">{d.language}</span>
+                                </>
+                              )}
                             </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-2 text-indigo-600 text-xs whitespace-nowrap">{ageLabel}</td>
-                        <td className="px-4 py-2 text-xs">
-                          {Object.keys(replyCounts).length === 0 ? (
-                            <span className="text-gray-400 italic">none</span>
+                            {matching && (
+                              <button
+                                onClick={() => { setSelectedReservation(matching); }}
+                                className="text-[11px] text-violet-700 hover:text-violet-900 underline"
+                              >
+                                Open thread
+                              </button>
+                            )}
+                          </div>
+                          <div className="text-[13px] text-violet-900 mb-2 italic">
+                            <span className="text-violet-600 not-italic font-medium mr-1">Guest:</span>
+                            {d.guestMessageText}
+                          </div>
+                          <textarea
+                            value={editedText}
+                            onChange={(e) =>
+                              setDraftEdits((prev) => ({ ...prev, [d.beds24MessageId]: e.target.value }))
+                            }
+                            rows={Math.min(8, Math.max(3, editedText.split('\n').length + 1))}
+                            className="w-full text-sm bg-white border border-violet-200 rounded p-2 text-violet-900 focus:outline-none focus:ring-2 focus:ring-violet-300"
+                            disabled={Boolean(busy)}
+                          />
+                          <div className="mt-2 flex items-center gap-2 justify-end">
+                            <button
+                              onClick={() => dismissDraft(d.beds24MessageId)}
+                              disabled={Boolean(busy) || !role || !canMutate(role, "transactions")}
+                              className="text-xs px-3 py-1.5 rounded border border-violet-300 text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                            >
+                              {busy === 'dismissing' ? 'Dismissing…' : 'Dismiss'}
+                            </button>
+                            <button
+                              onClick={() => approveDraft(d.beds24MessageId, editedText)}
+                              disabled={Boolean(busy) || !editedText.trim() || !role || !canMutate(role, "transactions")}
+                              className="text-xs px-3 py-1.5 rounded bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                            >
+                              {busy === 'sending'
+                                ? 'Sending…'
+                                : editedText.trim() === d.draftText.trim()
+                                  ? 'Approve & send'
+                                  : 'Send edited reply'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Section B: Unread `other` messages — operator handles ── */}
+              {pendingOthers.length > 0 && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 overflow-hidden">
+                  <div className="px-4 py-2 bg-indigo-100/60 border-b border-indigo-200 flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-indigo-800">
+                      Unread messages
+                    </span>
+                    <span className="text-[11px] text-indigo-600">
+                      {pendingOthers.length} {pendingOthers.length === 1 ? "message" : "messages"} for the operator to handle
+                    </span>
+                  </div>
+                  <div className="divide-y divide-indigo-100">
+                    {pendingOthers.map((o) => {
+                      const matching = reservations.find((r) => r.reservationNumber === o.reservationNumber);
+                      const guestName = matching
+                        ? `${matching.firstName} ${matching.lastName}`.trim()
+                        : o.reservationNumber;
+                      const room = matching?.room ?? "—";
+                      const hasDraft = Boolean(o.draftText);
+                      const editedText = draftEdits[o.beds24MessageId] ?? o.draftText;
+                      const busy = draftBusy[o.beds24MessageId];
+                      return (
+                        <div key={o.beds24MessageId} className="px-4 py-3">
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="font-medium text-indigo-900">{guestName}</span>
+                              <span className="text-indigo-600">·</span>
+                              <span className="text-indigo-700">{room}</span>
+                              {o.language && (
+                                <>
+                                  <span className="text-indigo-600">·</span>
+                                  <span className="text-indigo-600 text-[11px]">{o.language}</span>
+                                </>
+                              )}
+                            </div>
+                            {matching && (
+                              <button
+                                onClick={() => { setSelectedReservation(matching); }}
+                                className="text-[11px] text-indigo-700 hover:text-indigo-900 underline"
+                              >
+                                Open thread
+                              </button>
+                            )}
+                          </div>
+                          <div className="text-[13px] text-indigo-900 mb-2 italic">
+                            <span className="text-indigo-600 not-italic font-medium mr-1">Guest:</span>
+                            {o.guestMessageText}
+                          </div>
+                          {hasDraft ? (
+                            <>
+                              <div className="text-[10px] text-indigo-600 uppercase tracking-wide mb-1">
+                                Suggested starting point (AI)
+                              </div>
+                              <textarea
+                                value={editedText}
+                                onChange={(e) =>
+                                  setDraftEdits((prev) => ({ ...prev, [o.beds24MessageId]: e.target.value }))
+                                }
+                                rows={Math.min(8, Math.max(3, editedText.split('\n').length + 1))}
+                                className="w-full text-sm bg-white border border-indigo-200 rounded p-2 text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                                disabled={Boolean(busy)}
+                              />
+                            </>
                           ) : (
-                            <div className="flex flex-wrap gap-1">
-                              {Object.entries(replyCounts).map(([category, count]) => (
-                                <span
-                                  key={category}
-                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-indigo-700 ring-1 ring-indigo-200"
-                                  title={`${count} auto-${count === 1 ? "reply" : "replies"} in past 24h`}
-                                >
-                                  ⚡ {category}
-                                  {count > 1 && <span className="ml-0.5 text-indigo-500">×{count}</span>}
-                                </span>
-                              ))}
-                            </div>
+                            <textarea
+                              value={draftEdits[o.beds24MessageId] ?? ''}
+                              onChange={(e) =>
+                                setDraftEdits((prev) => ({ ...prev, [o.beds24MessageId]: e.target.value }))
+                              }
+                              placeholder="Type a reply…"
+                              rows={3}
+                              className="w-full text-sm bg-white border border-indigo-200 rounded p-2 text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                              disabled={Boolean(busy)}
+                            />
                           )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          <div className="mt-2 flex items-center gap-2 justify-end">
+                            <button
+                              onClick={() => dismissDraft(o.beds24MessageId)}
+                              disabled={Boolean(busy) || !role || !canMutate(role, "transactions")}
+                              className="text-xs px-3 py-1.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                            >
+                              {busy === 'dismissing' ? 'Dismissing…' : 'Dismiss'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                const text = draftEdits[o.beds24MessageId] ?? o.draftText ?? '';
+                                approveDraft(o.beds24MessageId, text);
+                              }}
+                              disabled={
+                                Boolean(busy) ||
+                                !(draftEdits[o.beds24MessageId] ?? o.draftText ?? '').trim() ||
+                                !role ||
+                                !canMutate(role, "transactions")
+                              }
+                              className="text-xs px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                            >
+                              {busy === 'sending' ? 'Sending…' : 'Send reply'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Fallback: unread bookings the auto-reply pipeline hasn't picked up yet ── */}
+              {(() => {
+                const pendingBookingIds = new Set<number>([
+                  ...pendingDrafts.map((d) => d.bookingId),
+                  ...pendingOthers.map((o) => o.bookingId),
+                ]);
+                const unprocessed = unreadBookings.filter((b) => !pendingBookingIds.has(b.bookingId));
+                if (unprocessed.length === 0) return null;
+                return (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                    <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                        Unprocessed unread
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        not yet picked up by the auto-reply pipeline
+                      </span>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200">
+                          {["Guest", "Room", "Last message", "Activity"].map((h) => (
+                            <th key={h} className="px-4 py-2 text-xs font-medium text-slate-600 uppercase tracking-wide text-left">
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {unprocessed.map((u) => {
+                          const matchingReservation = reservations.find(
+                            (r) => r.reservationNumber === `BH-${u.bookingId}`,
+                          );
+                          const guestName = matchingReservation
+                            ? `${matchingReservation.firstName} ${matchingReservation.lastName}`.trim()
+                            : `BH-${u.bookingId}`;
+                          const room = matchingReservation?.room ?? "—";
+                          const arrivedMs = new Date(u.latestMessageTime).getTime();
+                          const ageMin = Math.max(0, Math.round((Date.now() - arrivedMs) / 60_000));
+                          const ageLabel =
+                            ageMin < 1 ? "just now"
+                            : ageMin < 60 ? `${ageMin} min ago`
+                            : ageMin < 24 * 60 ? `${Math.round(ageMin / 60)}h ago`
+                            : `${Math.round(ageMin / 60 / 24)}d ago`;
+                          return (
+                            <tr
+                              key={u.bookingId}
+                              className="cursor-pointer hover:bg-slate-100"
+                              onClick={() => {
+                                if (matchingReservation) {
+                                  setSelectedReservation(matchingReservation);
+                                  setUnreadPanelOpen(false);
+                                }
+                              }}
+                            >
+                              <td className="px-4 py-2 font-medium text-slate-800 whitespace-nowrap">{guestName}</td>
+                              <td className="px-4 py-2 text-slate-600 text-xs whitespace-nowrap">{room}</td>
+                              <td className="px-4 py-2 text-slate-700 max-w-md">
+                                <div className="line-clamp-2">{u.latestMessage}</div>
+                                {u.unreadCount > 1 && (
+                                  <div className="text-[11px] text-slate-500 mt-0.5">
+                                    +{u.unreadCount - 1} more unread
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-4 py-2 text-slate-500 text-xs whitespace-nowrap">{ageLabel}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

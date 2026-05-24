@@ -39,7 +39,7 @@ const SYSTEM_PROMPT = `You categorise hotel guest messages for Baker House Apart
 
 Pick ONE category that best matches the guest's INTENT:
 
-- parking — asking about parking (availability, location, instructions, how to enter the garage, where to leave the car). Includes EV charging questions.
+- parking — asking about general parking (availability, location, garage access/entry, where to leave the car, basic parking instructions). Do NOT classify under parking if the guest asks about any of: EV charging, vehicle height/size limits, a second parking spot or two cars, or keeping the car parked outside of their stay — those compound/edge-case questions go to "other" so the operator handles them.
 - wifi — asking for wifi password, network name, or how to connect.
 - minibar — asking about the minibar (what's inside, prices, can they take items, restock).
 - early-checkin — asking to check in EARLIER than the standard 15:00. Includes "we'll arrive at noon, can we go up?".

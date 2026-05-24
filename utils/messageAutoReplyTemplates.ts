@@ -88,8 +88,9 @@ function buildParkingTemplate(
 
   return {
     template:
-      'Hi {NAME}! Your parking space is number {SPACE} on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82. ' +
-      'You can drive in directly — the entrance opens automatically when you approach.',
+      'Hi {NAME}! Your parking space is number {SPACE} on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n' +
+      'Before entering the garage, please stop at reception first to pick up your keys — they include the chip that opens the garage door. You can park briefly in front of the entrance while you collect them (1–2 minutes).\n\n' +
+      'Note that the entrance to the underground parking is NOT the first gate next to the main entrance — that is a service/emergency door. Use the gate next to it, approximately 20 metres from the reception door.',
     substitutions: {
       NAME: reservation.firstName || 'there',
       SPACE: assignment.space,

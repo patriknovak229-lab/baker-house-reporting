@@ -46,6 +46,7 @@ import {
   buildTemplate,
   renderAutoReply,
 } from '@/utils/messageAutoReplyTemplates';
+import { draftAutoReply } from '@/utils/messageAutoReplyDrafter';
 import { isInvoiceRequest } from '@/utils/invoiceRequestParser';
 import {
   extractInvoiceFields,
@@ -90,6 +91,32 @@ const LOG_KEY = 'baker:auto-reply:log';             // AutoReplyLogEntry[]
 const RATE_LIMIT_PREFIX = 'baker:auto-reply:count'; // :{bookingId}:{yyyymmdd}
 const BOOKINGS_CACHE_KEY = 'baker:beds24-bookings-cache';
 const LOCAL_STATE_KEY = 'baker:reservation-overrides';
+
+/**
+ * One-shot per-booking per-category lock. Set after a successful auto-send
+ * for a given (bookingId, category) pair; while it's set, follow-up
+ * messages on that same category get routed to the operator-approval
+ * queue (pending-drafts) instead of auto-sending again. 14-day TTL so a
+ * fresh stay reuses the same booking without inheriting the lock from a
+ * previous reservation under that id (Beds24 ids are unique, but the
+ * TTL is a belt-and-braces hygiene measure).
+ */
+const CATEGORY_SENT_PREFIX = 'baker:auto-reply:category-sent'; // :{bookingId}:{category}
+const CATEGORY_LOCK_TTL_SECONDS = 14 * 24 * 60 * 60;
+
+/**
+ * Pending drafts hash — messages for which the AI drafted a reply that
+ * needs operator approval before sending. Field = beds24 messageId,
+ * value = JSON of PendingDraft. Hashes don't support per-field TTL on
+ * Upstash; we clean up on read (entries older than 14 days are HDEL'd).
+ */
+const PENDING_DRAFTS_KEY = 'baker:auto-reply:pending-drafts';
+/**
+ * Unread `other`-category messages awaiting operator handling. Same
+ * shape considerations as pending-drafts. Cleanup of stale (>14d)
+ * entries happens on read in /api/messages/unread.
+ */
+const PENDING_OTHERS_KEY = 'baker:auto-reply:pending-others';
 
 const MAX_AUTO_REPLIES_PER_BOOKING_PER_DAY = 3;
 const CONFIDENCE_THRESHOLD = 0.8;
@@ -172,7 +199,18 @@ interface AutoReplyLogEntry {
   category: string;
   confidence: number;
   language: string;
-  action: 'sent' | 'sent-with-task' | 'skipped-other' | 'skipped-rate-limit' | 'skipped-no-template' | 'errored';
+  action:
+    | 'sent'
+    | 'sent-with-task'
+    | 'skipped-other'        // legacy; superseded by 'queued-other'
+    | 'skipped-rate-limit'
+    | 'skipped-no-template'
+    | 'queued-draft'         // category matched, but lock was set → drafted for operator approval
+    | 'queued-other'         // category=other or low confidence → queued for operator handling
+    | 'approved'             // operator approved a pending draft and it was sent
+    | 'edited-approved'      // operator edited then approved a pending draft
+    | 'dismissed'            // operator dismissed a pending draft / other entry
+    | 'errored';
   sentText: string | null;
   detail?: string;
   decidedAt: string;
@@ -420,13 +458,49 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 
   // invoice-request shouldn't reach this function — tryInvoiceFlow above
   // handles it — but if it does (e.g. confidence below threshold for
-  // the invoice path), treat it as "other" and skip rather than passing
-  // an unsupported category to buildTemplate.
+  // the invoice path), treat it as "other" and queue for the operator
+  // rather than passing an unsupported category to buildTemplate.
   if (
     detection.category === 'other' ||
     detection.category === 'invoice-request' ||
     detection.confidence < CONFIDENCE_THRESHOLD
   ) {
+    // Queue for the operator's "Unread messages" panel. We still try to
+    // draft a candidate reply so the operator doesn't type from scratch
+    // — but it's best-effort; empty draft is fine.
+    let draftText = '';
+    try {
+      const draftReservation = await buildReservationContext(redis, bookingId, booking);
+      if (draftReservation) {
+        const result = await draftAutoReply({
+          guestMessage: messageText,
+          category: detection.category,
+          language: detection.language,
+          reservation: draftReservation,
+        });
+        // The drafter returns the literal "SKIP" when it doesn't have
+        // enough grounding to write something useful. Treat that as
+        // "no draft" so the operator gets a clean slate.
+        draftText = result.draftText === 'SKIP' ? '' : result.draftText;
+      }
+    } catch (err) {
+      console.warn(`[auto-reply] draft for other-message ${messageId} failed:`, err);
+    }
+
+    if (redis) {
+      await persistPendingOther(redis, {
+        beds24MessageId: messageId,
+        bookingId,
+        reservationNumber,
+        guestMessageText: messageText,
+        guestMessageTime: new Date().toISOString(),
+        draftText,
+        confidence: detection.confidence,
+        language: detection.language,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
     await appendLog(redis, {
       id: makeLogId(),
       beds24MessageId: messageId,
@@ -436,12 +510,76 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
       category: detection.category,
       confidence: detection.confidence,
       language: detection.language,
-      action: 'skipped-other',
+      action: 'queued-other',
       sentText: null,
-      detail: `confidence ${detection.confidence.toFixed(2)} below threshold or category=other`,
+      detail:
+        detection.category === 'other'
+          ? 'classified as other — queued for operator'
+          : `confidence ${detection.confidence.toFixed(2)} below threshold — queued for operator`,
       decidedAt: new Date().toISOString(),
     });
     return;
+  }
+
+  // ── One-shot per-category lock check ───────────────────────────────────────
+  // Even if this is a recognised, high-confidence category, only the FIRST
+  // such question per booking auto-sends. Subsequent messages on the same
+  // category get drafted for operator approval — protects against the
+  // canned reply firing on every follow-up.
+  if (redis) {
+    const locked = await isCategoryLocked(redis, bookingId, detection.category);
+    if (locked) {
+      // Build reservation context so the drafter has guest name + room.
+      // If it fails (cache miss) we still queue the message with empty
+      // draft — operator sees the question and types the reply.
+      let draftText = '';
+      const draftReservation = await buildReservationContext(redis, bookingId, booking);
+      if (draftReservation) {
+        try {
+          const result = await draftAutoReply({
+            guestMessage: messageText,
+            category: detection.category,
+            language: detection.language,
+            reservation: draftReservation,
+          });
+          draftText = result.draftText === 'SKIP' ? '' : result.draftText;
+        } catch (err) {
+          console.warn(`[auto-reply] draft for follow-up ${messageId} failed:`, err);
+        }
+      }
+
+      await persistPendingDraft(redis, {
+        beds24MessageId: messageId,
+        bookingId,
+        reservationNumber,
+        guestMessageText: messageText,
+        guestMessageTime: new Date().toISOString(),
+        category: detection.category,
+        confidence: detection.confidence,
+        language: detection.language,
+        draftText,
+        createdAt: new Date().toISOString(),
+      });
+
+      await appendLog(redis, {
+        id: makeLogId(),
+        beds24MessageId: messageId,
+        beds24SentMessageId: null,
+        bookingId,
+        reservationNumber,
+        category: detection.category,
+        confidence: detection.confidence,
+        language: detection.language,
+        action: 'queued-draft',
+        sentText: null,
+        detail: `category ${detection.category} already auto-replied for this booking — drafted for operator`,
+        decidedAt: new Date().toISOString(),
+      });
+      console.log(
+        `[auto-reply] booking ${bookingId} ${detection.category} already auto-replied — drafted follow-up for operator`,
+      );
+      return;
+    }
   }
 
   // ── Step 3: rate limit ─────────────────────────────────────────────────────
@@ -543,13 +681,18 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
     return;
   }
 
-  // ── Step 7: rate-limit counter + task creation for early/late ──────────────
+  // ── Step 7: rate-limit counter + per-category lock + task creation ─────────
   let action: AutoReplyLogEntry['action'] = 'sent';
   if (redis) {
     const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const counterKey = `${RATE_LIMIT_PREFIX}:${bookingId}:${day}`;
     await redis.incr(counterKey);
     await redis.expire(counterKey, 48 * 60 * 60); // 48h auto-cleanup
+
+    // Set the one-shot per-category lock so any follow-up message in this
+    // category for this booking goes through the operator approval queue
+    // rather than auto-sending again.
+    await lockCategory(redis, bookingId, detection.category);
 
     if (detection.category === 'early-checkin' || detection.category === 'late-checkout') {
       await appendIssueToReservation(
@@ -731,6 +874,83 @@ async function loadAllReservations(redis: Redis | null): Promise<Reservation[]> 
 }
 
 // ─── Task creation (early-checkin / late-checkout) ───────────────────────────
+
+// ─── Pending drafts & pending others (operator approval queue) ───────────────
+
+/**
+ * A message that the auto-reply pipeline classified into a known category
+ * BUT did NOT auto-send — because the per-booking per-category one-shot
+ * lock had already fired. The drafter wrote a candidate reply; the
+ * operator approves, edits, or dismisses from the unread-messages panel.
+ */
+export interface PendingDraft {
+  beds24MessageId: number;
+  bookingId: number;
+  reservationNumber: string;
+  guestMessageText: string;
+  guestMessageTime: string;
+  category: AutoReplyCategory;
+  confidence: number;
+  language: string;
+  draftText: string;
+  /** ISO timestamp when the draft was created (used for stale cleanup). */
+  createdAt: string;
+}
+
+/**
+ * An unread guest message that classified as `other` (or below the
+ * confidence threshold). The operator handles these manually — we still
+ * draft a candidate reply when possible, but it's optional context for
+ * the operator, not a queued auto-send.
+ */
+export interface PendingOther {
+  beds24MessageId: number;
+  bookingId: number;
+  reservationNumber: string;
+  guestMessageText: string;
+  guestMessageTime: string;
+  /** AI's best-effort draft for the operator to use as a starting point.
+   *  Empty string when the drafter declined (e.g. SKIP) or errored. */
+  draftText: string;
+  confidence: number;
+  language: string;
+  createdAt: string;
+}
+
+function categoryLockKey(bookingId: number, category: AutoReplyCategory): string {
+  return `${CATEGORY_SENT_PREFIX}:${bookingId}:${category}`;
+}
+
+async function isCategoryLocked(
+  redis: Redis,
+  bookingId: number,
+  category: AutoReplyCategory,
+): Promise<boolean> {
+  const v = await redis.get(categoryLockKey(bookingId, category));
+  return v !== null && v !== undefined;
+}
+
+async function lockCategory(
+  redis: Redis,
+  bookingId: number,
+  category: AutoReplyCategory,
+): Promise<void> {
+  await redis.set(categoryLockKey(bookingId, category), Date.now(), {
+    ex: CATEGORY_LOCK_TTL_SECONDS,
+  });
+}
+
+async function persistPendingDraft(redis: Redis, entry: PendingDraft): Promise<void> {
+  await redis.hset(PENDING_DRAFTS_KEY, {
+    [String(entry.beds24MessageId)]: JSON.stringify(entry),
+  });
+}
+
+async function persistPendingOther(redis: Redis, entry: PendingOther): Promise<void> {
+  await redis.hset(PENDING_OTHERS_KEY, {
+    [String(entry.beds24MessageId)]: JSON.stringify(entry),
+  });
+}
 
 async function appendIssueToReservation(
   redis: Redis,

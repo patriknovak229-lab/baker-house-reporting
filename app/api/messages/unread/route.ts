@@ -1,10 +1,19 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { getAccessToken } from '@/utils/beds24Auth';
+import type {
+  PendingDraft,
+  PendingOther,
+} from '@/app/api/webhook/beds24-message/route';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const ACTIVE_WINDOW_MS = 120 * 60 * 1000; // 120 minutes
 const AUTO_REPLY_LOG_KEY = 'baker:auto-reply:log';
+const PENDING_DRAFTS_KEY = 'baker:auto-reply:pending-drafts';
+const PENDING_OTHERS_KEY = 'baker:auto-reply:pending-others';
+/** Drop pending entries older than 14 days on read — bounded backstop in
+ *  case the operator never approves or dismisses them. */
+const PENDING_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 /** Auto-replies considered "recent enough to mention" alongside an unread
  *  message. 24 hours captures the same multi-turn conversation cleanly
  *  without dragging in old activity. */
@@ -162,7 +171,72 @@ export async function GET() {
     );
   }
 
-  return NextResponse.json({ bookingIds, bookings });
+  // Pending operator-approval drafts + queued `other` messages
+  let pendingDrafts: PendingDraft[] = [];
+  let pendingOthers: PendingOther[] = [];
+  if (redis) {
+    pendingDrafts = await readAndCleanHash<PendingDraft>(redis, PENDING_DRAFTS_KEY);
+    pendingOthers = await readAndCleanHash<PendingOther>(redis, PENDING_OTHERS_KEY);
+  }
+
+  return NextResponse.json({ bookingIds, bookings, pendingDrafts, pendingOthers });
+}
+
+/**
+ * Read a Redis hash of JSON-encoded pending entries, sort newest first,
+ * and HDEL anything older than PENDING_MAX_AGE_MS. Bounded cleanup means
+ * the hash can't grow indefinitely if the operator stops triaging.
+ */
+async function readAndCleanHash<T extends { createdAt: string; beds24MessageId: number }>(
+  redis: Redis,
+  key: string,
+): Promise<T[]> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await redis.hgetall<Record<string, unknown>>(key)) ?? {};
+  } catch (err) {
+    console.warn(`[messages/unread] hgetall ${key} failed:`, err);
+    return [];
+  }
+
+  const cutoff = Date.now() - PENDING_MAX_AGE_MS;
+  const staleFields: string[] = [];
+  const entries: T[] = [];
+  for (const [field, val] of Object.entries(raw)) {
+    let parsed: T | null = null;
+    try {
+      // Upstash sometimes auto-parses JSON values; handle both cases.
+      parsed = typeof val === 'string' ? (JSON.parse(val) as T) : (val as T);
+    } catch {
+      // Malformed — drop it.
+      staleFields.push(field);
+      continue;
+    }
+    if (!parsed) {
+      staleFields.push(field);
+      continue;
+    }
+    const t = new Date(parsed.createdAt).getTime();
+    if (Number.isFinite(t) && t < cutoff) {
+      staleFields.push(field);
+      continue;
+    }
+    entries.push(parsed);
+  }
+
+  if (staleFields.length > 0) {
+    try {
+      await redis.hdel(key, ...staleFields);
+    } catch (err) {
+      console.warn(`[messages/unread] hdel ${key} cleanup failed:`, err);
+    }
+  }
+
+  // Newest first
+  entries.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+  return entries;
 }
 
 async function triggerAutoReplyPoll(): Promise<void> {
