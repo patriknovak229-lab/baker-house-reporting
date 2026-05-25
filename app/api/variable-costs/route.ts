@@ -32,6 +32,19 @@ export const ROOM_TO_BEDS24_ID: Record<string, string> = Object.fromEntries(
 interface CleanersConfig {
   cleaners: { id: string; name: string }[];
   rates: Record<string, Record<string, number>>; // rates[cleanerId][roomId]
+  /** Cleaners archived from a slot — historical fee lookups fall back here. */
+  archived?: ArchivedCleaner[];
+}
+
+/** Mirrors cleaning app's ArchivedCleaner — kept inline to avoid a shared dep. */
+interface ArchivedCleaner {
+  id: string;
+  originalSlotId: string;
+  name: string;
+  color: string;
+  deactivatedAt: string;
+  archivedAt: string;
+  rates: Record<string, number>;
 }
 
 interface LaundryConfig {
@@ -102,7 +115,12 @@ export async function GET() {
     redis.get(KEY_CONSUMABLE_ENTRIES),
   ]);
 
-  const cleanersConfig = (cleanersRaw ?? { cleaners: [], rates: {} }) as CleanersConfig;
+  const cleanersConfig = (cleanersRaw ?? { cleaners: [], rates: {}, archived: [] }) as CleanersConfig;
+  // Merge archived cleaner rates into the lookup so historical assignments
+  // that now reference an archive id still resolve to the correct fee.
+  for (const a of cleanersConfig.archived ?? []) {
+    cleanersConfig.rates[a.id] = { ...a.rates };
+  }
   const cleaningAssignments = (assignmentsRaw ?? {}) as CleaningAssignmentsNested;
   const manualCleaningEvents = (Array.isArray(manualCleaningRaw) ? manualCleaningRaw : []) as ManualCleaningEvent[];
   const laundryConfig = (laundryRaw ?? { providers: [], rates: {} }) as LaundryConfig;
