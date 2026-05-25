@@ -50,6 +50,18 @@ interface ArchivedCleaner {
 interface LaundryConfig {
   providers: { id: string; name: string }[];
   rates: Record<string, Record<string, number>>; // rates[providerId][roomId]
+  /** Providers archived from a slot — historical fee lookups fall back here. */
+  archived?: ArchivedLaundryProvider[];
+}
+
+/** Mirrors cleaning app's ArchivedLaundryProvider. */
+interface ArchivedLaundryProvider {
+  id: string;
+  originalSlotId: string;
+  name: string;
+  deactivatedAt: string;
+  archivedAt: string;
+  rates: Record<string, number>;
 }
 
 // Cleaning assignments: nested date → roomId → cleanerId
@@ -123,7 +135,12 @@ export async function GET() {
   }
   const cleaningAssignments = (assignmentsRaw ?? {}) as CleaningAssignmentsNested;
   const manualCleaningEvents = (Array.isArray(manualCleaningRaw) ? manualCleaningRaw : []) as ManualCleaningEvent[];
-  const laundryConfig = (laundryRaw ?? { providers: [], rates: {} }) as LaundryConfig;
+  const laundryConfig = (laundryRaw ?? { providers: [], rates: {}, archived: [] }) as LaundryConfig;
+  // Same merge for archived laundry providers — historical (date, roomId)
+  // entries that reference an archive id need to find their snapshotted rate.
+  for (const a of laundryConfig.archived ?? []) {
+    laundryConfig.rates[a.id] = { ...a.rates };
+  }
   const laundryAssignments = (laundryAssignmentsRaw ?? {}) as LaundryAssignmentsFlat;
   const consumableEntries = (entriesRaw ?? []) as ConsumableEntry[];
 
