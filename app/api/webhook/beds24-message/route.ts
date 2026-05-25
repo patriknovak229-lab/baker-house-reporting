@@ -52,6 +52,7 @@ import {
   extractInvoiceFields,
   mergeInvoiceFields,
   missingMandatoryFields,
+  sanitizeInvoiceEmail,
   type ExtractedInvoiceFields,
 } from '@/utils/invoiceFieldExtractor';
 import {
@@ -779,11 +780,17 @@ async function buildReservationContext(
     }
   }
 
-  // Apply local-state overrides (parkingOverride)
+  // Apply local-state overrides (parkingOverride + additionalEmail).
+  // additionalEmail is needed by autoCompleteInvoiceRequest as a fallback
+  // when the chat extraction couldn't pull an email.
   let parkingOverride: string | undefined;
+  let additionalEmail = '';
   if (redis) {
-    const overrides = (await redis.get<Record<string, { parkingOverride?: string }>>(LOCAL_STATE_KEY)) ?? {};
-    parkingOverride = overrides[`BH-${bookingId}`]?.parkingOverride;
+    const overrides =
+      (await redis.get<Record<string, { parkingOverride?: string; additionalEmail?: string }>>(LOCAL_STATE_KEY)) ?? {};
+    const own = overrides[`BH-${bookingId}`];
+    parkingOverride = own?.parkingOverride;
+    additionalEmail = own?.additionalEmail ?? '';
   }
 
   // Build a minimal Reservation just for what the templates need.
@@ -811,7 +818,7 @@ async function buildReservationContext(
     amountPaid: 0,
     commissionAmount: 0,
     paymentChargeAmount: 0,
-    additionalEmail: '',
+    additionalEmail,
     paymentStatusOverride: null,
     notes: '',
     manualFlagOverrides: {},
@@ -1085,8 +1092,20 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
   }
 
   if (completed) {
-    // The conversation has moved on; no further auto-action.
-    return false;
+    // Invoice already auto-completed (or operator-accepted). If the guest
+    // is just reassuring / clarifying ("issue it for 1 person", "thanks,
+    // looking forward"), AI-draft a short acknowledgement and AUTO-SEND
+    // it. The drafter's `invoice-followup` mode is held to a higher bar:
+    // any substantive change (cancel, different company, different email,
+    // dispute) returns SKIP and falls through to the operator queue.
+    const handled = await tryInvoiceFollowUpAutoSend({
+      redis,
+      bookingId,
+      messageId,
+      messageText,
+      completed,
+    });
+    return handled;
   }
 
   // No existing record — is THIS message a new invoice request?
@@ -1111,6 +1130,107 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
     language,
     allRequests: all,
   });
+  return true;
+}
+
+interface InvoiceFollowUpArgs {
+  redis: Redis;
+  bookingId: number;
+  messageId: number;
+  messageText: string;
+  completed: InvoiceRequest;
+}
+
+/**
+ * Decide whether to AUTO-SEND an AI-drafted reply to an invoice follow-up
+ * message. Returns `true` when handled (auto-sent OR explicitly decided
+ * to ignore), `false` to fall through to the regular operator queue.
+ *
+ * Returns `false` (= fall through) when:
+ *   - Message doesn't look invoice-related (low confidence + no keyword
+ *     hit) → it's probably about something else, regular pipeline picks
+ *     it up.
+ *   - Drafter returns SKIP → guest is asking for a substantive change
+ *     the operator must handle.
+ *   - Reservation context can't be built (cache miss) → operator handles.
+ *   - sendBeds24Message throws → log the error, fall through so the
+ *     operator at least sees the message in the queue.
+ */
+async function tryInvoiceFollowUpAutoSend(args: InvoiceFollowUpArgs): Promise<boolean> {
+  const { redis, bookingId, messageId, messageText, completed } = args;
+
+  // First: does this message even look invoice-related? Avoid drafting
+  // for every random message on a booking that happens to have a
+  // completed invoice request.
+  const detection = await detectAutoReplyCategory(messageText);
+  const looksInvoiceRelated =
+    isInvoiceRequest(messageText) ||
+    (detection.category === 'invoice-request' && detection.confidence >= 0.8);
+  if (!looksInvoiceRelated) {
+    return false;
+  }
+
+  // Build reservation context for the drafter (guest name + room).
+  const reservation = await buildReservationContext(redis, bookingId);
+  if (!reservation) {
+    return false;
+  }
+
+  // Draft a candidate reply. Mode='invoice-followup' tells the drafter
+  // to SKIP anything substantive.
+  let draft;
+  try {
+    draft = await draftAutoReply({
+      guestMessage: messageText,
+      category: 'invoice-request',
+      language: detection.language,
+      reservation,
+      mode: 'invoice-followup',
+    });
+  } catch (err) {
+    console.error(`[invoice follow-up] drafter failed for ${bookingId}:`, err);
+    return false;
+  }
+
+  const trimmed = (draft.draftText ?? '').trim();
+  if (!trimmed || trimmed === 'SKIP') {
+    // Substantive change OR no useful draft — operator handles via queue.
+    return false;
+  }
+
+  // Auto-send with the standard "— Zuzana" sign-off + 10s natural-feel
+  // delay so it doesn't feel bot-instantaneous.
+  const replyText = `${trimmed}\n\n— Zuzana`;
+  await sleep(NATURAL_FEEL_DELAY_MS);
+
+  let sentMessageId: number | null = null;
+  try {
+    const result = await sendBeds24Message(bookingId, replyText);
+    sentMessageId = result.messageId;
+  } catch (err) {
+    console.error(`[invoice follow-up] auto-send failed for ${bookingId}:`, err);
+    // Don't mark as handled — let the operator queue pick it up so the
+    // guest still gets a response.
+    return false;
+  }
+
+  await appendLog(redis, {
+    id: makeLogId(),
+    beds24MessageId: messageId,
+    beds24SentMessageId: sentMessageId,
+    bookingId,
+    reservationNumber: completed.reservationNumber,
+    category: 'invoice-request',
+    confidence: detection.confidence,
+    language: detection.language,
+    action: 'sent',
+    sentText: replyText,
+    detail: 'invoice follow-up auto-sent via AI drafter',
+    decidedAt: new Date().toISOString(),
+  });
+  console.log(
+    `[invoice follow-up] booking ${bookingId} — AI follow-up auto-sent`,
+  );
   return true;
 }
 
@@ -1306,12 +1426,17 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     vatNumber: '',
     billingEmail: '',
   };
+  // Fall back to additionalEmail from the reservation when the chat
+  // extraction didn't pull an email (e.g. guest provided company/ICO but
+  // assumed we already have their email on file). Same OTA-conduit
+  // rejection applies so we never write back @guest.booking.com etc.
+  const fallbackEmail = sanitizeInvoiceEmail(reservation?.additionalEmail);
   const newInvoiceData: InvoiceData = {
     companyName: existing.companyName || request.companyName || '',
     companyAddress: existing.companyAddress || request.companyAddress || '',
     ico: existing.ico || request.ico || '',
     vatNumber: existing.vatNumber || request.dic || '',
-    billingEmail: existing.billingEmail || request.email || '',
+    billingEmail: existing.billingEmail || request.email || fallbackEmail || '',
   };
 
   // Issue (red task per operator) actionable on checkout day

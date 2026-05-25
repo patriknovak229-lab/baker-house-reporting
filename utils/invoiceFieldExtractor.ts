@@ -167,3 +167,12 @@ function cleanEmail(v: unknown): string | null {
   }
   return s;
 }
+
+/**
+ * Exported guard so other modules (e.g. autoCompleteInvoiceRequest) can
+ * apply the same OTA-conduit rejection when falling back to alternative
+ * email sources like reservation.additionalEmail.
+ */
+export function sanitizeInvoiceEmail(v: unknown): string | null {
+  return cleanEmail(v);
+}

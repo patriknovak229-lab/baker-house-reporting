@@ -12,6 +12,7 @@
  */
 
 import { translateText } from '@/utils/googleTranslate';
+import { applyGreeting } from '@/utils/greeting';
 
 const SIGN_OFF = '\n\n— Zuzana';
 
@@ -34,12 +35,13 @@ export async function renderMissingFieldsReply(
   // translation so it flows naturally in the translated sentence.
   const safeName = firstName || 'there';
   const template =
-    `Hi ${safeName}! Thank you for the invoice request. To prepare it we still need:\n\n` +
+    `{{GREETING}} ${safeName}! Thank you for the invoice request. To prepare it we still need:\n\n` +
     `{BULLETS}\n\n` +
     `Please reply with these in one message and we'll take care of the rest.`;
 
   let body = template.replace('{BULLETS}', bullets);
   body = await translateIfNeeded(body, language);
+  body = applyGreeting(body, language);
   return body + SIGN_OFF;
 }
 
@@ -57,12 +59,13 @@ export async function renderInvoiceConfirmation(
   const safeName = firstName || 'there';
   // Pre-translation template — name inlined, email and date kept as tokens
   const template =
-    `Hi ${safeName}! Thank you, we have everything we need. The invoice will be sent to {EMAIL} after your checkout on {DATE}.`;
+    `{{GREETING}} ${safeName}! Thank you, we have everything we need. The invoice will be sent to {EMAIL} after your checkout on {DATE}.`;
 
   let body = await translateIfNeeded(template, language);
   body = body
     .replace(/\{EMAIL\}/g, email)
     .replace(/\{DATE\}/g, formatDate(checkoutDate, language));
+  body = applyGreeting(body, language);
   return body + SIGN_OFF;
 }
 

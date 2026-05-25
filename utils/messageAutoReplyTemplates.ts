@@ -15,6 +15,7 @@ import type { ParkingResult } from '@/utils/parkingUtils';
 import { PARKING_SPACES } from '@/utils/parkingUtils';
 import { roomToCategory } from '@/utils/roomCategory';
 import { translateText } from '@/utils/googleTranslate';
+import { applyGreeting, GREETING_TOKEN } from '@/utils/greeting';
 
 const SIGN_OFF = '\n\n— Zuzana';
 
@@ -64,7 +65,7 @@ function buildParkingTemplate(
   if (reservation.parkingOverride === 'none') {
     return {
       template:
-        'Hi {NAME}! Unfortunately parking is not included with your reservation. ' +
+        '{{GREETING}} {NAME}! Unfortunately parking is not included with your reservation. ' +
         'There is paid public parking available nearby at Park Parkoviště (Bratislavská).',
       substitutions: {
         NAME: reservation.firstName || 'there',
@@ -78,7 +79,7 @@ function buildParkingTemplate(
   if (!assignment) {
     return {
       template:
-        'Hi {NAME}! Let me confirm your parking arrangement and get back to you shortly.',
+        '{{GREETING}} {NAME}! Let me confirm your parking arrangement and get back to you shortly.',
       substitutions: { NAME: reservation.firstName || 'there' },
     };
   }
@@ -88,7 +89,7 @@ function buildParkingTemplate(
 
   return {
     template:
-      'Hi {NAME}! Your parking space is number {SPACE} on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n' +
+      '{{GREETING}} {NAME}! Your parking space is number {SPACE} on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n' +
       'Before entering the garage, please stop at reception first to pick up your keys — they include the chip that opens the garage door. You can park briefly in front of the entrance while you collect them (1–2 minutes).\n\n' +
       'Note that the entrance to the underground parking is NOT the first gate next to the main entrance — that is a service/emergency door. Use the gate next to it, approximately 20 metres from the reception door.',
     substitutions: {
@@ -121,7 +122,7 @@ function buildWifiTemplate(reservation: Reservation): BuiltTemplate {
   if (list.length > 1) {
     return {
       template:
-        'Hi {NAME}! Your apartments have their own WiFi networks:\n\n{CREDS}\n\nLet me know if you have any trouble connecting.',
+        '{{GREETING}} {NAME}! Your apartments have their own WiFi networks:\n\n{CREDS}\n\nLet me know if you have any trouble connecting.',
       substitutions: {
         NAME: reservation.firstName || 'there',
         CREDS: creds,
@@ -130,7 +131,7 @@ function buildWifiTemplate(reservation: Reservation): BuiltTemplate {
   }
   return {
     template:
-      'Hi {NAME}! Here are your WiFi details:\n\n{CREDS}\n\nLet me know if you have any trouble connecting.',
+      '{{GREETING}} {NAME}! Here are your WiFi details:\n\n{CREDS}\n\nLet me know if you have any trouble connecting.',
     substitutions: {
       NAME: reservation.firstName || 'there',
       CREDS: creds,
@@ -150,7 +151,7 @@ function buildMinibarTemplate(reservation: Reservation): BuiltTemplate | null {
 
   return {
     template:
-      'Hi {NAME}! Your apartment has a minibar stocked with drinks and snacks — and the good news is it is complimentary, our gift to you. Help yourself and enjoy. ' +
+      '{{GREETING}} {NAME}! Your apartment has a minibar stocked with drinks and snacks — and the good news is it is complimentary, our gift to you. Help yourself and enjoy. ' +
       'No need to keep track of what you used; we will restock after you check out.',
     substitutions: {
       NAME: reservation.firstName || 'there',
@@ -175,7 +176,7 @@ function buildMinibarTemplate(reservation: Reservation): BuiltTemplate | null {
 function buildEarlyCheckinTemplate(): BuiltTemplate {
   return {
     template:
-      'Hi {NAME}! We can’t guarantee the apartment will be ready before 15:00, but we’ll let you know as soon as it is. In the meantime, you’re welcome to collect your keys at reception from 12:00 and park in the garage if needed.',
+      '{{GREETING}} {NAME}! We can’t guarantee the apartment will be ready before 15:00, but we’ll let you know as soon as it is. In the meantime, you’re welcome to collect your keys at reception from 12:00 and park in the garage if needed.',
     substitutions: {
       NAME: '{NAME}', // placeholder kept for caller to fill via firstName
     },
@@ -195,7 +196,7 @@ function buildEarlyCheckinTemplate(): BuiltTemplate {
 function buildLateCheckoutTemplate(): BuiltTemplate {
   return {
     template:
-      'Hi {NAME}! Checkout by 11:00 is always fine. For anything later we’ll confirm on the day based on the next arrival.',
+      '{{GREETING}} {NAME}! Checkout by 11:00 is always fine. For anything later we’ll confirm on the day based on the next arrival.',
     substitutions: {
       NAME: '{NAME}',
     },
@@ -256,5 +257,12 @@ export async function renderAutoReply(
     final = final.replace(new RegExp(`\\{${token}\\}`, 'g'), value);
   }
 
+  // Greeting substituted last so the translator passes the placeholder
+  // through and the chosen formal greeting lands as-authored.
+  final = applyGreeting(final, language);
+
   return final + SIGN_OFF;
 }
+
+// Referenced for type-only callers; keeps the const usable elsewhere too.
+export { GREETING_TOKEN };
