@@ -1758,16 +1758,15 @@ async function maybeNotifyNewBooking(
     `💰 ${price}`,
   ].join('\n');
 
-  // Fire-and-forget so a slow Telegram API call doesn't stretch the
-  // function lifetime (risking maxDuration overrun). The dedupe lock
-  // was set above so even if this promise loses to a parallel webhook
-  // fire, only one Telegram will go out.
-  void sendTelegram(text).catch((err) =>
-    console.error(
-      `[beds24 webhook] sendTelegram failed for booking ${bookingId}:`,
-      err,
-    ),
-  );
+  // IMPORTANT: must be `await`, not fire-and-forget. Vercel's
+  // `after()` only extends function lifetime for promises it can see
+  // awaited — an orphaned `void sendTelegram(...)` gets killed mid-flight
+  // when the surrounding async function returns, before the fetch to
+  // api.telegram.org completes, and silently drops the Telegram (the
+  // dedupe lock is already set, so retries skip too). A 1-3s wait here
+  // is well under our 60s maxDuration, so the original concern about
+  // stretching the function isn't worth the silent-drop risk.
+  await sendTelegram(text);
 }
 
 async function sendTelegram(message: string): Promise<void> {
