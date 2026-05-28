@@ -12,7 +12,7 @@
  */
 
 import { translateText } from '@/utils/googleTranslate';
-import { applyGreeting } from '@/utils/greeting';
+import { formalGreeting } from '@/utils/greeting';
 
 const SIGN_OFF = '\n\n— Zuzana';
 
@@ -34,15 +34,16 @@ export async function renderMissingFieldsReply(
   // Build EN template — the guest's name goes in inline before
   // translation so it flows naturally in the translated sentence.
   const safeName = firstName || 'there';
+  // Greeting prepended OUTSIDE translation — Google Translate `format:'text'`
+  // mangles in-string placeholders even with unusual delimiters.
   const template =
-    `{{GREETING}} ${safeName}! Thank you for the invoice request. To prepare it we still need:\n\n` +
+    `${safeName}! Thank you for the invoice request. To prepare it we still need:\n\n` +
     `{BULLETS}\n\n` +
     `Please reply with these in one message and we'll take care of the rest.`;
 
   let body = template.replace('{BULLETS}', bullets);
   body = await translateIfNeeded(body, language);
-  body = applyGreeting(body, language);
-  return body + SIGN_OFF;
+  return `${formalGreeting(language)} ${body}${SIGN_OFF}`;
 }
 
 /**
@@ -57,16 +58,16 @@ export async function renderInvoiceConfirmation(
   language: string,
 ): Promise<string> {
   const safeName = firstName || 'there';
-  // Pre-translation template — name inlined, email and date kept as tokens
+  // Greeting prepended OUTSIDE translation (see renderMissingFieldsReply
+  // for the why). Name stays in the body so vocative inflection works.
   const template =
-    `{{GREETING}} ${safeName}! Thank you, we have everything we need. The invoice will be sent to {EMAIL} after your checkout on {DATE}.`;
+    `${safeName}! Thank you, we have everything we need. The invoice will be sent to {EMAIL} after your checkout on {DATE}.`;
 
   let body = await translateIfNeeded(template, language);
   body = body
     .replace(/\{EMAIL\}/g, email)
     .replace(/\{DATE\}/g, formatDate(checkoutDate, language));
-  body = applyGreeting(body, language);
-  return body + SIGN_OFF;
+  return `${formalGreeting(language)} ${body}${SIGN_OFF}`;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
