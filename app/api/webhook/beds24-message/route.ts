@@ -249,27 +249,44 @@ export async function POST(req: NextRequest) {
 
   const redis = getRedis();
 
-  // ── Debounce ──
+  // ── New-booking Telegram path: runs on EVERY SYNC_ROOM, no debounce ──
+  // This is intentionally OUTSIDE the debounce window below. Two reasons:
+  //   1) New-booking detection has its own per-booking dedupe lock
+  //      (`notified:booking:{id}`, 2h TTL) so running it on every fire is
+  //      idempotent — at most one Telegram per booking regardless of how
+  //      many SYNC_ROOMs land.
+  //   2) Beds24 fires SYNC_ROOM in bursts on price/inventory changes. The
+  //      auto-reply debounce collapses those bursts, but if a real new
+  //      booking happens to arrive during a burst it would get debounced
+  //      behind unrelated traffic and the Telegram would be delayed by
+  //      tens of seconds. Keeping this path debounce-free puts Telegram
+  //      latency back to ~1-2s.
+  after(async () => {
+    try {
+      await pollAndNotifyNewBookings(redis);
+    } catch (err) {
+      console.error('[beds24 webhook] new-booking poll failed:', err);
+    }
+  });
+
+  // ── Auto-reply debounce ──
+  // The auto-reply pipeline is expensive (Claude Haiku call per message,
+  // Beds24 fetch, 10s natural-feel sleep). Collapsing SYNC_ROOM bursts
+  // into one pass per 15s avoids hammering Beds24 and Anthropic during
+  // price-update storms.
   if (redis) {
     const now = Date.now();
     const debounceUntil = await redis.get<number>(DEBOUNCE_KEY);
     if (debounceUntil && now < debounceUntil) {
-      return NextResponse.json({ ok: true, reason: 'debounced' });
+      return NextResponse.json({ ok: true, reason: 'debounced-auto-reply' });
     }
     await redis.set(DEBOUNCE_KEY, now + POLL_DEBOUNCE_MS, { ex: 60 });
     await redis.set(LAST_POLL_KEY, now); // persistent — no TTL
   }
 
-  // Heavy work runs after we return 200 to Beds24
   after(async () => {
     try {
-      // Run both flows in parallel — message auto-reply is the
-      // headline feature; Telegram new-booking notification piggybacks
-      // on the same trigger.
-      await Promise.all([
-        pollAndProcessUnreadMessages(redis),
-        pollAndNotifyNewBookings(redis),
-      ]);
+      await pollAndProcessUnreadMessages(redis);
     } catch (err) {
       console.error('[auto-reply webhook] after() handler failed:', err);
     }
@@ -397,19 +414,69 @@ async function fetchUnreadGuestMessages(): Promise<UnreadGuestMessage[]> {
 // ─── Pull-style: new bookings Telegram notification ──────────────────────────
 
 /**
- * Scan the bookings cache for any reservation whose `bookingTime` is
- * within the last 30 min AND that hasn't already been notified. Sends
- * Telegram for each. This replaces the old direct-payload mechanism in
- * /api/webhook/new-booking — same dedupe (Redis `notified:booking:*`),
- * same filtering rules, just driven by a poll instead of the payload.
+ * Fetch recently-modified bookings DIRECTLY from Beds24 and fire a
+ * Telegram notification for any that are brand-new (bookingTime within
+ * the last 30 min) and not already notified.
+ *
+ * We deliberately do NOT read `baker:beds24-bookings-cache` here. That
+ * cache only refreshes when an operator opens the dashboard — so a
+ * booking landing outside operator hours would never appear in the
+ * cache, and the Telegram would never fire until somebody loaded the
+ * app. Hitting Beds24 directly removes that dependency: Telegram now
+ * arrives within seconds regardless of dashboard activity.
+ *
+ * Cost: one extra Beds24 `/bookings?modifiedFrom=...` call per webhook
+ * fire (typically <500ms, returns at most a handful of recently-modified
+ * bookings). The per-booking `notified:booking:*` lock prevents duplicate
+ * sends across overlapping polls.
  */
 async function pollAndNotifyNewBookings(redis: Redis | null): Promise<void> {
+  // Redis is needed for the per-booking dedupe lock further down the
+  // pipeline. Without it we'd risk re-sending the same Telegram on every
+  // SYNC_ROOM fire, so just bail.
   if (!redis) return;
-  const cached =
-    (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
-  const now = Date.now();
 
-  for (const b of Object.values(cached)) {
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    console.error('[new-booking poll] Beds24 token fetch failed:', err);
+    return;
+  }
+
+  // 5-minute lookback is wider than (debounce ✕ retry-burst) + Vercel
+  // cold-start budget, so a SYNC_ROOM landing slightly late still picks
+  // up the booking. Per-booking dedupe handles the resulting overlap.
+  const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const params = new URLSearchParams();
+  params.set('modifiedFrom', since);
+  // Only statuses we'd actually notify on — keeps the payload small and
+  // avoids parsing cancelled/black bookings just to discard them.
+  params.append('status', 'confirmed');
+  params.append('status', 'new');
+
+  let fetched: CachedBooking[];
+  try {
+    const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
+      headers: { token },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error(
+        `[new-booking poll] Beds24 ${res.status}: ${text.slice(0, 200)}`,
+      );
+      return;
+    }
+    const json = await res.json();
+    fetched = Array.isArray(json) ? json : (json.data ?? []);
+  } catch (err) {
+    console.error('[new-booking poll] Beds24 fetch failed:', err);
+    return;
+  }
+
+  const now = Date.now();
+  for (const b of fetched) {
     if (!b.bookingTime) continue;
     const age = now - new Date(b.bookingTime).getTime();
     if (age > NEW_BOOKING_WINDOW_MS || age < 0) continue;
@@ -1691,7 +1758,16 @@ async function maybeNotifyNewBooking(
     `💰 ${price}`,
   ].join('\n');
 
-  await sendTelegram(text);
+  // Fire-and-forget so a slow Telegram API call doesn't stretch the
+  // function lifetime (risking maxDuration overrun). The dedupe lock
+  // was set above so even if this promise loses to a parallel webhook
+  // fire, only one Telegram will go out.
+  void sendTelegram(text).catch((err) =>
+    console.error(
+      `[beds24 webhook] sendTelegram failed for booking ${bookingId}:`,
+      err,
+    ),
+  );
 }
 
 async function sendTelegram(message: string): Promise<void> {
