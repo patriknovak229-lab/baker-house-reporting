@@ -1,12 +1,18 @@
 'use client';
 import { useState } from 'react';
 
+// Physical rooms only — Beds24 inventory overrides are set on physical
+// inventory (the virtual rooms 648816 / 679714 are sellable abstractions,
+// not actual blockable inventory).
 const ROOM_OPTIONS = [
-  { label: 'K.201', roomId: 656437 },
-  { label: 'K.202', roomId: 648596 },
-  { label: 'K.203', roomId: 648772 },
-  { label: 'O.308', roomId: 674672 },
-];
+  { label: 'K.102', roomId: 679703, category: 'Urban' },
+  { label: 'K.103', roomId: 679704, category: 'Urban' },
+  { label: 'K.106', roomId: 679705, category: 'Urban' },
+  { label: 'K.201', roomId: 656437, category: 'Deluxe' },
+  { label: 'K.202', roomId: 648596, category: 'Deluxe' },
+  { label: 'K.203', roomId: 648772, category: 'Deluxe' },
+  { label: 'O.308', roomId: 674672, category: 'Deluxe' },
+] as const;
 
 interface Props {
   onClose: () => void;
@@ -14,14 +20,17 @@ interface Props {
 }
 
 interface FormState {
-  roomId: number;
+  // Multi-select — operators frequently blackout several rooms at once
+  // (e.g. "close everything for renovation week"), and Beds24's calendar
+  // endpoint accepts a multi-room payload in a single POST.
+  roomIds: number[];
   arrival: string;
   departure: string;
   notes: string;
 }
 
 const DEFAULT_FORM: FormState = {
-  roomId: 648596,
+  roomIds: [],
   arrival: '',
   departure: '',
   notes: '',
@@ -39,7 +48,28 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
+  function toggleRoom(roomId: number) {
+    setForm((f) => ({
+      ...f,
+      roomIds: f.roomIds.includes(roomId)
+        ? f.roomIds.filter((id) => id !== roomId)
+        : [...f.roomIds, roomId],
+    }));
+  }
+
+  function selectAll() {
+    setForm((f) => ({ ...f, roomIds: ROOM_OPTIONS.map((r) => r.roomId) }));
+  }
+
+  function clearAll() {
+    setForm((f) => ({ ...f, roomIds: [] }));
+  }
+
   async function handleSubmit() {
+    if (form.roomIds.length === 0) {
+      setError('Pick at least one room to black out.');
+      return;
+    }
     if (!form.arrival || !form.departure) {
       setError('Pick both an arrival and a departure date.');
       return;
@@ -55,7 +85,12 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
       const res = await fetch('/api/bookings/blackout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          roomIds: form.roomIds,
+          arrival: form.arrival,
+          departure: form.departure,
+          notes: form.notes,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed to create blackout');
@@ -66,6 +101,10 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
       setSubmitting(false);
     }
   }
+
+  // Group rooms by building so the checkbox grid mirrors the calendar layout
+  const urbanRooms = ROOM_OPTIONS.filter((r) => r.category === 'Urban');
+  const deluxeRooms = ROOM_OPTIONS.filter((r) => r.category === 'Deluxe');
 
   return (
     <div
@@ -79,9 +118,9 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-base font-semibold text-gray-900">Black Out Room</h2>
+            <h2 className="text-base font-semibold text-gray-900">Black Out Rooms</h2>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Closes the room for the date range — channel managers will not sell it.
+              Inventory override — same as Beds24&apos;s &ldquo;Blackout&rdquo; option in the calendar.
             </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -97,20 +136,58 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
         </div>
 
         <div className="px-6 py-5 space-y-4">
-          {/* Room */}
+          {/* Rooms */}
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Room *</label>
-            <select
-              value={form.roomId}
-              onChange={(e) => update('roomId', Number(e.target.value))}
-              className={inputCls}
-            >
-              {ROOM_OPTIONS.map((r) => (
-                <option key={r.roomId} value={r.roomId}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-gray-600">
+                Rooms * <span className="text-gray-400 font-normal">({form.roomIds.length} selected)</span>
+              </label>
+              <div className="flex items-center gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={selectAll}
+                  className="text-indigo-600 hover:text-indigo-800"
+                >
+                  All
+                </button>
+                <span className="text-gray-300">|</span>
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {[
+              { label: 'Urban', rooms: urbanRooms },
+              { label: 'Deluxe', rooms: deluxeRooms },
+            ].map(({ label, rooms }) => (
+              <div key={label} className="mb-2 last:mb-0">
+                <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{label}</p>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {rooms.map((r) => {
+                    const selected = form.roomIds.includes(r.roomId);
+                    return (
+                      <button
+                        key={r.roomId}
+                        type="button"
+                        onClick={() => toggleRoom(r.roomId)}
+                        className={`px-2 py-1.5 text-xs font-medium rounded-md border transition-colors ${
+                          selected
+                            ? 'bg-rose-600 border-rose-600 text-white'
+                            : 'bg-white border-gray-200 text-gray-700 hover:border-rose-300 hover:bg-rose-50'
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Dates */}
@@ -138,7 +215,7 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
           {/* Reason */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
-              Reason <span className="text-gray-400 font-normal">(optional)</span>
+              Reason <span className="text-gray-400 font-normal">(optional, local-only)</span>
             </label>
             <input
               type="text"
@@ -147,6 +224,9 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
               placeholder="e.g. Renovation, Owner stay, Maintenance"
               className={inputCls}
             />
+            <p className="text-[10px] text-gray-400 mt-1">
+              Beds24 calendar overrides don&apos;t carry comments — the reason is just a note for you.
+            </p>
           </div>
 
           {error && (
@@ -168,7 +248,11 @@ export default function BlackoutModal({ onClose, onCreated }: Props) {
               disabled={submitting}
               className="flex-1 py-2.5 bg-rose-600 text-white text-sm font-medium rounded-lg hover:bg-rose-700 disabled:opacity-40 transition-colors"
             >
-              {submitting ? 'Creating…' : 'Black Out'}
+              {submitting
+                ? 'Creating…'
+                : form.roomIds.length > 1
+                ? `Black Out ${form.roomIds.length} rooms`
+                : 'Black Out'}
             </button>
           </div>
         </div>

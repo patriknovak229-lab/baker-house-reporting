@@ -909,9 +909,181 @@ export async function GET(req: NextRequest) {
 
     const withStripeFees = await aggregateStripeFees(reservations);
     const withOverlapFlags = tagOverlappingReservations(withStripeFees);
-    return NextResponse.json(withOverlapFlags);
+
+    // ── Inventory-calendar blackout overrides ──
+    // Blackouts created in Beds24's UI live on a separate endpoint
+    // (POST /inventory/rooms/calendar with override="blackout"); they are
+    // invisible to GET /bookings. Fetch them here and merge as synthetic
+    // Reservation rows so the calendar + reservation list see them too.
+    const overrideBlackouts = await fetchOverrideBlackouts(token).catch((err) => {
+      console.error('[bookings] inventory-override fetch failed:', err);
+      return [] as Reservation[];
+    });
+
+    return NextResponse.json([...withOverlapFlags, ...overrideBlackouts]);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+// ─── Inventory-calendar blackout overrides ───────────────────────────────────
+//
+// Beds24's UI creates blackouts as inventory overrides, not as bookings.
+// They live at `GET /inventory/rooms/calendar?includeOverride=true`. We
+// fetch them per physical room over a wide window and convert each
+// override=blackout range into a synthetic Reservation row.
+
+/** Physical rooms only — overrides are always set on physical inventory. */
+const PHYSICAL_ROOM_IDS: number[] = [
+  656437, // K.201
+  648596, // K.202
+  648772, // K.203
+  674672, // O.308
+  679703, // K.102
+  679704, // K.103
+  679705, // K.106
+];
+
+interface Beds24CalendarEntry {
+  from?: string;
+  to?: string;
+  override?: string;
+}
+
+/**
+ * Walk a Beds24 calendar response and pull out every blackout-override
+ * range. The response shape varies (sometimes `{ data: [{ calendar: [...] }] }`,
+ * sometimes a bare `[{ calendar: [...] }]`, sometimes per-day entries with
+ * just `date`, sometimes range entries with `from`/`to`), so we recurse
+ * permissively the same way price-check does. Adjacent same-room days get
+ * coalesced into one range below.
+ */
+function extractBlackoutRanges(payload: unknown): Beds24CalendarEntry[] {
+  const raw: Beds24CalendarEntry[] = [];
+  const walk = (v: unknown): void => {
+    if (!v) return;
+    if (Array.isArray(v)) { for (const item of v) walk(item); return; }
+    if (typeof v !== 'object') return;
+    const obj = v as Record<string, unknown>;
+    const override = typeof obj.override === 'string' ? obj.override : undefined;
+    if (override === 'blackout') {
+      // Range shape: { from, to, override }
+      const from = typeof obj.from === 'string' ? obj.from : undefined;
+      const to = typeof obj.to === 'string' ? obj.to : undefined;
+      if (from && to && /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        raw.push({ from, to, override });
+      } else {
+        // Per-day shape: { date, override } — treat as single-day range
+        const date = typeof obj.date === 'string' ? obj.date : undefined;
+        if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          raw.push({ from: date, to: date, override });
+        }
+      }
+    }
+    for (const key of Object.keys(obj)) walk(obj[key]);
+  };
+  walk(payload);
+
+  // Coalesce contiguous days into ranges so a 7-day blackout shows up as
+  // one synthetic Reservation row rather than seven daily entries. Sort by
+  // `from`, then walk forward merging anything whose `from` is the day
+  // after the previous entry's `to`.
+  if (raw.length <= 1) return raw;
+  const sorted = [...raw].sort((a, b) => (a.from ?? '').localeCompare(b.from ?? ''));
+  const merged: Beds24CalendarEntry[] = [];
+  for (const entry of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && last.to && entry.from) {
+      const expectedNext = nextDay(last.to);
+      if (entry.from === expectedNext || entry.from <= last.to) {
+        // Contiguous or overlapping — extend the range
+        if (entry.to && entry.to > (last.to ?? '')) last.to = entry.to;
+        continue;
+      }
+    }
+    merged.push({ ...entry });
+  }
+  return merged;
+}
+
+/** Add one day to a YYYY-MM-DD string. */
+function nextDay(yyyymmdd: string): string {
+  const d = new Date(yyyymmdd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+async function fetchOverrideBlackouts(token: string): Promise<Reservation[]> {
+  // Match the bookings cache window — 1 year back, 1 year forward — so
+  // historical overrides for performance/occupancy stats stay visible.
+  const from = new Date();
+  from.setFullYear(from.getFullYear() - 1);
+  const to = new Date();
+  to.setFullYear(to.getFullYear() + 1);
+  const startDate = from.toISOString().slice(0, 10);
+  const endDate = to.toISOString().slice(0, 10);
+
+  const results: Reservation[] = [];
+  // One request per room — Beds24's calendar GET doesn't accept multiple
+  // roomIds in a single query (per Swagger). Run in parallel.
+  await Promise.all(PHYSICAL_ROOM_IDS.map(async (roomId) => {
+    const params = new URLSearchParams({
+      roomId: String(roomId),
+      startDate,
+      endDate,
+      includeOverride: 'true',
+    });
+    const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params}`, {
+      headers: { token },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error(`[bookings] calendar(${roomId}) ${res.status}: ${text.slice(0, 200)}`);
+      return;
+    }
+    const json = await res.json().catch(() => null);
+    const ranges = extractBlackoutRanges(json);
+    const roomName = mapRoom(roomId);
+    for (const r of ranges) {
+      if (!r.from || !r.to) continue;
+      // Convert Beds24's inclusive `to` back to our checkout-morning convention.
+      const checkOutDate = nextDay(r.to);
+      const nights =
+        Math.round((new Date(checkOutDate + 'T00:00:00Z').getTime() - new Date(r.from + 'T00:00:00Z').getTime()) / 86_400_000);
+      results.push({
+        reservationNumber: `OV-${roomId}-${r.from}-${r.to}`,
+        isBlackout: true,
+        firstName: 'Blackout',
+        lastName: '',
+        channel: 'Direct',
+        room: roomName,
+        checkInDate: r.from,
+        checkOutDate,
+        reservationDate: '',
+        bookingTimestamp: '',
+        numberOfNights: nights,
+        numberOfGuests: 0,
+        email: '',
+        phone: '',
+        price: 0,
+        nationality: '',
+        cleaningStatus: 'Completed',
+        paymentStatus: 'Unpaid',
+        amountPaid: 0,
+        commissionAmount: 0,
+        paymentChargeAmount: 0,
+        additionalEmail: '',
+        paymentStatusOverride: null,
+        notes: '',
+        manualFlagOverrides: {},
+        ratingStatus: 'none',
+        invoiceData: null,
+        invoiceStatus: 'Not Issued',
+      });
+    }
+  }));
+
+  return results;
 }

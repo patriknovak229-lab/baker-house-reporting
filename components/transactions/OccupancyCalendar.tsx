@@ -70,6 +70,7 @@ function roomMatches(r: Reservation, room: string): boolean {
 function isRoomBooked(reservations: Reservation[], room: Room, date: string): boolean {
   return reservations.some(
     (r) =>
+      !r.isBlackout && // blackouts get their own dedicated cell treatment
       roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
@@ -77,9 +78,36 @@ function isRoomBooked(reservations: Reservation[], room: Room, date: string): bo
   );
 }
 
+/**
+ * True when this (room, date) is covered by a blackout override AND there
+ * is no real booking on the same cell. When a blackout overlaps a real
+ * stay (operator blacked out a date that already had a guest booked),
+ * the guest takes visual priority — Beds24's override only blocks NEW
+ * sales, the existing booking is still honoured.
+ */
+function isRoomBlackoutOnly(reservations: Reservation[], room: Room, date: string): boolean {
+  const hasReal = reservations.some(
+    (r) =>
+      !r.isBlackout &&
+      roomMatches(r, room) &&
+      r.paymentStatus !== "Refunded" &&
+      r.checkInDate <= date &&
+      r.checkOutDate > date,
+  );
+  if (hasReal) return false;
+  return reservations.some(
+    (r) =>
+      r.isBlackout &&
+      roomMatches(r, room) &&
+      r.checkInDate <= date &&
+      r.checkOutDate > date,
+  );
+}
+
 function getGuest(reservations: Reservation[], room: Room, date: string): { name: string; initials: string } | null {
   const res = reservations.find(
     (r) =>
+      !r.isBlackout &&
       roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
@@ -300,10 +328,33 @@ export default function OccupancyCalendar({ reservations }: Props) {
                     {/* Day cells */}
                     {days.map((date) => {
                       const booked = isRoomBooked(reservations, room, date);
+                      const blackout = !booked && isRoomBlackoutOnly(reservations, room, date);
                       const isToday = date === todayStr;
                       const bookedCount = ROOMS.filter((r) => isRoomBooked(reservations, r, date)).length;
                       const { filled } = getOccupancyStyle(bookedCount, ROOMS.length);
                       const guest = booked ? getGuest(reservations, room, date) : null;
+
+                      // Blackout cells: dark slate background with a diagonal
+                      // stripe pattern + "BLK" label so they're instantly
+                      // distinguishable from regular bookings. Bookings on a
+                      // blacked-out date still render as the guest stay (see
+                      // isRoomBlackoutOnly comment).
+                      let cellClass: string;
+                      let label: string | null = null;
+                      let title: string;
+                      if (booked) {
+                        cellClass = filled;
+                        label = guest?.initials ?? null;
+                        title = `${room} — ${guest?.name ?? 'booked'}`;
+                      } else if (blackout) {
+                        cellClass =
+                          'bg-slate-700 bg-[repeating-linear-gradient(45deg,rgba(255,255,255,0.12)_0_3px,transparent_3px_6px)]';
+                        label = 'BLK';
+                        title = `${room} — blacked out`;
+                      } else {
+                        cellClass = 'bg-gray-100';
+                        title = `${room} — free`;
+                      }
 
                       return (
                         <td
@@ -311,12 +362,12 @@ export default function OccupancyCalendar({ reservations }: Props) {
                           className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}
                         >
                           <div
-                            className={`h-5 rounded-sm flex items-center justify-center ${booked ? filled : "bg-gray-100"}`}
-                            title={booked ? `${room} — ${guest?.name ?? "booked"}` : `${room} — free`}
+                            className={`h-5 rounded-sm flex items-center justify-center ${cellClass}`}
+                            title={title}
                           >
-                            {guest?.initials && (
-                              <span className="text-[9px] font-bold text-white leading-none select-none">
-                                {guest.initials}
+                            {label && (
+                              <span className="text-[9px] font-bold text-white leading-none select-none tracking-tight">
+                                {label}
                               </span>
                             )}
                           </div>
