@@ -760,16 +760,28 @@ export default function TransactionsPage() {
             {upcomingUnresolved.length > 0 && (
               <button
                 onClick={() => setTaskAlertOpen((o) => !o)}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
+                // Pill is RED when anything is overdue (real urgency), AMBER
+                // when everything's still upcoming (heads-up only). Stops the
+                // "everything is red" anxiety when the only pending items
+                // are e.g. invoice-send tasks dated for next week's checkout.
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                  overdueCount > 0
+                    ? 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100'
+                    : 'bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100'
+                }`}
               >
-                <span className="flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold animate-pulse shrink-0">!</span>
+                <span
+                  className={`flex items-center justify-center w-4 h-4 rounded-full text-white text-[9px] font-bold shrink-0 ${
+                    overdueCount > 0 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                >!</span>
                 {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"}
                 {overdueCount > 0 && (
                   <span className="ml-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wide">
                     {overdueCount} overdue
                   </span>
                 )}
-                <span className="text-red-500 font-normal">· next 7 days</span>
+                <span className={`font-normal ${overdueCount > 0 ? 'text-red-500' : 'text-amber-600'}`}>· next 7 days</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
@@ -1001,20 +1013,39 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {/* Pending-tasks panel — expanded below the pill row, full width */}
+          {/* Pending-tasks panel — expanded below the pill row, full width.
+              Container theme follows the pill: red when overdue items exist,
+              amber when everything's upcoming. Individual rows are then
+              further differentiated — overdue rows always render red
+              regardless of overall theme, upcoming rows render amber. */}
           {upcomingUnresolved.length > 0 && taskAlertOpen && (
-            <div className="rounded-lg border border-red-200 bg-red-50 overflow-hidden">
+            <div
+              className={`rounded-lg border overflow-hidden ${
+                overdueCount > 0
+                  ? 'border-red-200 bg-red-50'
+                  : 'border-amber-200 bg-amber-50'
+              }`}
+            >
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-red-200">
+                  <tr
+                    className={`border-b ${overdueCount > 0 ? 'border-red-200' : 'border-amber-200'}`}
+                  >
                     {["Guest", "Type", "Task / Issue", "Date"].map((h) => (
-                      <th key={h} className="px-4 py-2 text-xs font-medium text-red-700 uppercase tracking-wide text-left">
+                      <th
+                        key={h}
+                        className={`px-4 py-2 text-xs font-medium uppercase tracking-wide text-left ${
+                          overdueCount > 0 ? 'text-red-700' : 'text-amber-700'
+                        }`}
+                      >
                         {h}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-red-100">
+                <tbody
+                  className={`divide-y ${overdueCount > 0 ? 'divide-red-100' : 'divide-amber-100'}`}
+                >
                   {upcomingUnresolved.map(({ reservation, issue, overdue }) => {
                     const cat = (issue.category ?? "problem") as IssueCategory;
                     const catLabels: Record<IssueCategory, string> = {
@@ -1028,18 +1059,27 @@ export default function TransactionsPage() {
                     const todayMs = new Date(new Date().toLocaleDateString("sv-SE") + "T00:00:00").getTime();
                     const dueMs = new Date(issue.actionableDate + "T00:00:00").getTime();
                     const daysLate = Math.round((todayMs - dueMs) / 86_400_000);
+                    // Per-row classes: overdue rows render red regardless of
+                    // overall panel theme so they stand out even in an
+                    // otherwise-calm (amber) view; upcoming rows render amber.
+                    const rowBg = overdue
+                      ? 'bg-red-100/70 hover:bg-red-200/60'
+                      : 'hover:bg-amber-100';
+                    const textName = overdue ? 'text-red-900' : 'text-amber-900';
+                    const textMuted = overdue ? 'text-red-600' : 'text-amber-700';
+                    const textBody = overdue ? 'text-red-700' : 'text-amber-800';
                     return (
                       <tr
                         key={issue.id}
-                        className={`cursor-pointer ${overdue ? "bg-red-100/70 hover:bg-red-200/60" : "hover:bg-red-100"}`}
+                        className={`cursor-pointer ${rowBg}`}
                         onClick={() => { setSelectedReservation(reservation); setTaskAlertOpen(false); }}
                       >
-                        <td className="px-4 py-2 font-medium text-red-900 whitespace-nowrap">
+                        <td className={`px-4 py-2 font-medium whitespace-nowrap ${textName}`}>
                           {reservation.firstName} {reservation.lastName}
                         </td>
-                        <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">{catLabels[cat]}</td>
-                        <td className="px-4 py-2 text-red-700">{issue.text}</td>
-                        <td className="px-4 py-2 text-red-600 text-xs whitespace-nowrap">
+                        <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>{catLabels[cat]}</td>
+                        <td className={`px-4 py-2 ${textBody}`}>{issue.text}</td>
+                        <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>
                           <div className="flex items-center gap-1.5">
                             <span>{issue.actionableDate}</span>
                             {overdue && (
