@@ -25,15 +25,38 @@ export const PERIOD_OPTIONS: PeriodOption[] = [
   { key: "custom",        label: "Custom Range" },
 ];
 
-// Returns today as a YYYY-MM-DD string
+// ── Date arithmetic helpers (UTC-consistent) ────────────────────────────────
+//
+// The previous implementation mixed `new Date(yyyy-mm-dd)` (parses as UTC
+// midnight) with `getMonth() / setDate() / setMonth()` (LOCAL-time
+// accessors) and roundtripped through `toISOString()` (back to UTC). On
+// any non-UTC operator (Czech summer = UTC+2), that produced two bugs:
+//
+//   1. `endOfMonth("2026-05-15")` returned "2026-05-30" instead of
+//      "2026-05-31" — the LAST day of every month was silently dropped
+//      from "current/last/next month" ranges.
+//   2. `addMonths("2026-05-31", -1)` returned "2026-05-01" instead of
+//      "2026-04-30" — JS rollover ("April 31 → May 1") combined with the
+//      UTC back-shift produced a wrong month entirely.
+//
+// Symptom: on May 31, current-month and last-month preset both computed
+// to "May 1 → May 30", so the operator saw IDENTICAL numbers when
+// toggling between them and May 31 nights never counted.
+//
+// Fix: all arithmetic goes through `Date.UTC(...)` constructors and UTC
+// accessors. The only local-aware call is `today()` so the period
+// boundary turns over at the operator's midnight, not UTC's.
+
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  // sv-SE locale formats as YYYY-MM-DD — saves us a manual split. Local
+  // time so "current month" on the operator's clock matches what they
+  // see in the UI even close to midnight.
+  return new Date().toLocaleDateString("sv-SE");
 }
 
-// Add/subtract days from a YYYY-MM-DD string
 function addDays(dateStr: string, days: number): string {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -42,15 +65,23 @@ function startOfMonth(dateStr: string): string {
 }
 
 function endOfMonth(dateStr: string): string {
-  const d = new Date(dateStr);
-  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const d = new Date(dateStr + "T00:00:00Z");
+  // Day 0 of next month = last day of this month
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
   return last.toISOString().slice(0, 10);
 }
 
 function addMonths(dateStr: string, months: number): string {
-  const d = new Date(dateStr);
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
+  // Clamp the day-of-month to the target month's last day. Otherwise
+  // adding 1 month to Jan 31 would roll over into March, and subtracting
+  // 1 month from May 31 would land on May 1.
+  const d = new Date(dateStr + "T00:00:00Z");
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth() + months;
+  const day = d.getUTCDate();
+  const lastDayOfTarget = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const clampedDay = Math.min(day, lastDayOfTarget);
+  return new Date(Date.UTC(year, month, clampedDay)).toISOString().slice(0, 10);
 }
 
 export function getPeriodDateRange(

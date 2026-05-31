@@ -62,9 +62,15 @@ export default function PerformancePage() {
   }, [fetchReservations]);
 
   const [period, setPeriod] = useState<PeriodKey>("current-month");
-  const [customRange, setCustomRange] = useState<DateRange>({
-    start: new Date().toISOString().slice(0, 8) + "01",
-    end: new Date().toISOString().slice(0, 10),
+  const [customRange, setCustomRange] = useState<DateRange>(() => {
+    // Local date — same convention as utils/periodUtils.today(). Using
+    // toISOString() here would silently drift to UTC dates around midnight
+    // (Czech summer = UTC+2 ⇒ 22:00 local is already "tomorrow" in UTC).
+    const localToday = new Date().toLocaleDateString("sv-SE");
+    return {
+      start: localToday.slice(0, 8) + "01",
+      end: localToday,
+    };
   });
   const [selectedRooms, setSelectedRooms] = useState<Room[]>([...ALL_ROOMS]);
 
