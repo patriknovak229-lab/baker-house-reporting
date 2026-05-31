@@ -649,18 +649,32 @@ const LIVE_REFRESH_LOOKBACK_DAYS = 60;             // covers monthly stays curre
 const ALL_BOOKING_STATUSES = ['confirmed', 'new', 'request', 'cancelled', 'black'] as const;
 
 /**
- * One paginated `/bookings` call with the given params. Extracted so the
- * delta sync and the live-window refresh can share pagination + error
- * handling without duplicating code.
+ * One paginated `/bookings` call with the given params. Beds24 V2's
+ * pagination shape (per Swagger):
+ *
+ *   Response: { pages: { nextPageExists: boolean, nextPageLink: string }, data: [...] }
+ *   Request:  ?page=N integer query parameter (page=1 implicit)
+ *
+ * The previous version looked for a non-existent `json.nextPageToken`
+ * field and so always exited after page 1 — silently dropping every
+ * subsequent page (Beds24 returns ~100 bookings per page). The full
+ * year-back sync that should have returned ~hundreds of bookings was
+ * returning only the first batch. This is what caused the operator's
+ * "missing historical reservations" report on 2026-05-31.
+ *
+ * Belt-and-braces: cap iterations at 200 pages so a buggy response
+ * (nextPageExists=true forever) can't lock the function up.
  */
 async function paginateBookings(
   token: string,
   params: URLSearchParams,
 ): Promise<Beds24Booking[]> {
   const fetched: Beds24Booking[] = [];
-  let pageToken: string | undefined;
-  do {
-    if (pageToken) params.set("pageToken", pageToken);
+  const MAX_PAGES = 200; // defensive — Beds24's largest plausible page count for our scale
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    if (page > 1) params.set("page", String(page));
+    else params.delete("page");
+
     const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
       headers: { token },
       cache: "no-store",
@@ -670,10 +684,15 @@ async function paginateBookings(
       throw new Error(`Beds24 ${res.status}: ${text}`);
     }
     const json = await res.json();
-    const page: Beds24Booking[] = Array.isArray(json) ? json : (json.data ?? []);
-    fetched.push(...page);
-    pageToken = Array.isArray(json) ? undefined : json.nextPageToken;
-  } while (pageToken);
+    const data: Beds24Booking[] = Array.isArray(json) ? json : (json.data ?? []);
+    fetched.push(...data);
+
+    // Beds24 wraps paginated responses in { pages, data, ... }. A bare-array
+    // response is single-page by definition (no wrapper, no next-page flag).
+    if (Array.isArray(json)) break;
+    const pages = (json as { pages?: { nextPageExists?: boolean } }).pages;
+    if (!pages?.nextPageExists) break;
+  }
   return fetched;
 }
 
