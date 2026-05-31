@@ -75,6 +75,15 @@ export interface Reservation {
   blackoutCreatedBy?: string;
   /** Free-text reason ("Renovation", "Owner stay", etc.) — also from comments. */
   blackoutReason?: string;
+  /**
+   * True when this reservation sits on a virtual room (e.g. 1KK Urban Studios
+   * VR 679714, 1KK Deluxe Twin VR 648816) WITHOUT a physical-room allocation.
+   * Happens when Beds24 cannot auto-allocate because no single physical
+   * room is free for the full stay — operator must manually assign in
+   * Beds24's calendar. Rendered with a "Room unassigned" badge in the
+   * reservation list and surfaces as a pending task in the alert bar.
+   */
+  isUnallocatedVR?: boolean;
   // Set when this reservation spans multiple physical rooms (package/virtual room booking).
   // Each entry is a physical room name. Used by performance views to split revenue per room.
   linkedRooms?: string[];

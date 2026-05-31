@@ -335,6 +335,7 @@ export default function TransactionsPage() {
   const [taskAlertOpen, setTaskAlertOpen] = useState(false);
   const [earlyCheckinPanelOpen, setEarlyCheckinPanelOpen] = useState(false);
   const [lateCheckoutPanelOpen, setLateCheckoutPanelOpen] = useState(false);
+  const [unallocatedPanelOpen, setUnallocatedPanelOpen] = useState(false);
 
   interface DataIssue {
     reservation: Reservation;
@@ -396,6 +397,19 @@ export default function TransactionsPage() {
   const overdueCount = useMemo(
     () => upcomingUnresolved.filter((x) => x.overdue).length,
     [upcomingUnresolved],
+  );
+
+  /**
+   * Reservations sitting on a virtual room with no physical allocation —
+   * Beds24 couldn't auto-allocate (e.g. no single room is free for the
+   * whole stay). Surfaced as a dedicated amber pill in the task bar so
+   * the operator can jump into Beds24 and manually assign. This is
+   * computed from `Reservation.isUnallocatedVR` (set in /api/bookings)
+   * and clears itself the moment the operator transfers the booking.
+   */
+  const unallocatedReservations = useMemo(
+    () => reservations.filter((r) => r.isUnallocatedVR),
+    [reservations],
   );
 
   // ── Unpaid additional payments (Stripe payment links not yet paid) ───────────
@@ -738,7 +752,8 @@ export default function TransactionsPage() {
       {(upcomingUnresolved.length > 0
         || unreadBookings.length > 0
         || upcomingEarlyCheckins.length > 0
-        || upcomingLateCheckouts.length > 0) && (
+        || upcomingLateCheckouts.length > 0
+        || unallocatedReservations.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row */}
           <div className="flex flex-wrap items-start gap-2">
@@ -757,6 +772,22 @@ export default function TransactionsPage() {
                 <span className="text-red-500 font-normal">· next 7 days</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {unallocatedReservations.length > 0 && (
+              <button
+                onClick={() => setUnallocatedPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-sm font-medium hover:bg-amber-100 transition-colors"
+              >
+                <span className="flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[10px] font-bold shrink-0">⚠</span>
+                {unallocatedReservations.length} room {unallocatedReservations.length === 1 ? "assignment" : "assignments"} needed
+                <span className="text-amber-600 font-normal">· assign in Beds24</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${unallocatedPanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -917,6 +948,52 @@ export default function TransactionsPage() {
                       <td className="px-4 py-2 text-orange-700 max-w-md">
                         <div className="line-clamp-2">{issue.text}</div>
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Unallocated VR panel — expanded below the pill row. Click a row
+              to open the regular drawer; operator then jumps to Beds24's
+              calendar to manually assign a physical room. */}
+          {unallocatedReservations.length > 0 && unallocatedPanelOpen && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 overflow-hidden">
+              <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-300 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                  Room assignment needed
+                </span>
+                <span className="text-[11px] text-amber-700">
+                  Beds24 couldn&apos;t auto-allocate · manually assign in the Beds24 calendar
+                </span>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-amber-200">
+                    {["Guest", "Room type", "Dates", "Channel", "Booking #"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-200">
+                  {unallocatedReservations.map((r) => (
+                    <tr
+                      key={r.reservationNumber}
+                      className="cursor-pointer hover:bg-amber-100/70"
+                      onClick={() => { setSelectedReservation(r); setUnallocatedPanelOpen(false); }}
+                    >
+                      <td className="px-4 py-2 font-medium text-amber-900 whitespace-nowrap">
+                        {r.firstName} {r.lastName}
+                      </td>
+                      <td className="px-4 py-2 text-amber-800 whitespace-nowrap">{r.room}</td>
+                      <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">
+                        {r.checkInDate} → {r.checkOutDate} · {r.numberOfNights}n
+                      </td>
+                      <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.channel}</td>
+                      <td className="px-4 py-2 font-mono text-amber-600 text-xs whitespace-nowrap">{r.reservationNumber}</td>
                     </tr>
                   ))}
                 </tbody>

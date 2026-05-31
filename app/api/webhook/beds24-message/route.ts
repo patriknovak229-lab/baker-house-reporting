@@ -136,19 +136,22 @@ const UNIT_MAP: Record<number, Room> = {
   679705: 'K.106',
 };
 
-// New-booking notification — extended map including virtual rooms so the
-// Telegram label is human-friendly for direct-web bookings that land on
-// the VR before Beds24 allocates the physical sub-room.
+// New-booking notification — extended map including virtual rooms.
+// For VRs we use the room-TYPE label (not the slash-joined physical list)
+// because Beds24 doesn't auto-split VR bookings across nights — they sit
+// on the VR until manually allocated. The Telegram should reflect that
+// the operator booked an "Urban 1KK" and not pretend a specific physical
+// room (K.102/K.103/K.106) has been assigned yet.
 const ROOM_LABEL_MAP: Record<string, string> = {
   '656437': 'K.201',
   '648596': 'K.202',
   '648772': 'K.203',
   '674672': 'O.308',
-  '648816': 'K.202 / K.203', // 1KK Deluxe Twin VR
+  '648816': '1KK Deluxe Twin', // Twin VR — physical sub allocated later
   '679703': 'K.102',
   '679704': 'K.103',
   '679705': 'K.106',
-  '679714': 'K.102 / K.103 / K.106', // 1KK Urban Studios VR
+  '679714': '1KK Urban Studios', // Urban VR — manual allocation required
 };
 
 const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000;       // 30 min — anything older is a modification

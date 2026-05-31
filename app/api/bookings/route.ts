@@ -98,8 +98,38 @@ function mapChannel(apiSource = "", referer = "", comments = ""): Channel {
 }
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
+/**
+ * Virtual-room (room TYPE) labels. Beds24 keeps a booking on a VR roomId
+ * until a physical room is assigned. Per operator policy these are NOT
+ * auto-split across nights — the booking stays on the VR until manually
+ * allocated. We surface this state explicitly to the operator rather than
+ * silently picking a random physical room.
+ */
+const VR_ROOM_LABELS: Record<number, string> = {
+  679714: "1KK Urban Studios",
+  648816: "1KK Deluxe Twin",
+};
+
+/**
+ * Map a Beds24 roomId to its display name.
+ *
+ * - Physical roomId → physical room name (K.201, K.102, etc.)
+ * - VR roomId (no physical allocation yet) → room TYPE label (e.g. "1KK Urban Studios"),
+ *   paired with `isUnallocatedVR: true` on the resulting Reservation so the
+ *   table + task bar can flag it.
+ * - Anything else → "Unknown room {id}" — better to scream than silently
+ *   misattribute (previous code fell back to literal "K.202", which made
+ *   unallocated bookings appear as that room — see commit history).
+ */
 function mapRoom(roomId: number): Room {
-  return UNIT_MAP[roomId] ?? "K.202";
+  if (UNIT_MAP[roomId]) return UNIT_MAP[roomId];
+  if (VR_ROOM_LABELS[roomId]) return VR_ROOM_LABELS[roomId];
+  return `Unknown room ${roomId}`;
+}
+
+/** Is this a VR roomId (no physical allocation yet)? */
+function isVirtualRoomId(roomId: number): boolean {
+  return VR_ROOM_LABELS[roomId] != null;
 }
 
 // ─── Cleaning status (date-based until cleaning app is wired) ──────────────────
@@ -460,11 +490,22 @@ function mapToReservation(b: Beds24Booking): Reservation {
     ? linkedRooms.join(" + ")
     : mapRoom(b.roomId);
 
+  // Unallocated VR detection: the booking sits on a virtual roomId AND
+  // mergeGroupedBookings didn't pair it with any physical sub. That's the
+  // "Beds24 couldn't auto-allocate, manual intervention needed" state.
+  // Once the operator transfers the booking, roomId switches to the
+  // physical and this flag drops back to false automatically.
+  const isUnallocatedVR =
+    !isBlackout &&
+    isVirtualRoomId(b.roomId) &&
+    !(linkedRooms && linkedRooms.length > 0);
+
   const blackoutMeta = isBlackout ? parseBlackoutMeta(b.comments ?? '') : {};
 
   return {
     reservationNumber: `BH-${b.id}`,
     ...(isBlackout ? { isBlackout: true } : {}),
+    ...(isUnallocatedVR ? { isUnallocatedVR: true } : {}),
     ...(blackoutMeta.createdBy ? { blackoutCreatedBy: blackoutMeta.createdBy } : {}),
     ...(blackoutMeta.reason ? { blackoutReason: blackoutMeta.reason } : {}),
     firstName: b.firstName ?? "",

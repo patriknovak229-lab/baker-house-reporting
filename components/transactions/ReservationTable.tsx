@@ -364,8 +364,15 @@ function ReservationCard({
       </div>
 
       {/* Row 2: Room · channel · res# */}
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
         <span className={roomChipClasses(res.room)}>{res.room}</span>
+        {res.isUnallocatedVR && (
+          <span title="Beds24 couldn't allocate a physical room — assign manually in Beds24">
+            <Badge variant="amber-filled" size="xs">
+              ⚠ Room unassigned
+            </Badge>
+          </span>
+        )}
         <Badge variant={channelBadgeVariant(res.channel)} size="xs">{res.channel}</Badge>
         <span className="ml-auto font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
       </div>
@@ -717,6 +724,13 @@ export default function ReservationTable({
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1 items-center">
+                        {res.isUnallocatedVR && (
+                          <span title="Beds24 couldn't allocate a physical room — operator must assign manually in Beds24">
+                            <Badge variant="amber-filled" size="xs">
+                              ⚠ Room unassigned
+                            </Badge>
+                          </span>
+                        )}
                         <AdditionalPaymentBadge payments={res.additionalPayments ?? []} />
                         {(Object.keys(CAT_CFG) as IssueCategory[]).map((cat) => {
                           const matching = (res.issues ?? []).filter(
