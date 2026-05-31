@@ -1,39 +1,71 @@
 'use client';
 import { useEffect, useState } from "react";
 
-// Operator-facing manual bookings target SELLING UNITS only — Beds24 handles
-// physical-unit allocation underneath. Physical room IDs (K.102, K.201, …)
-// are intentionally NOT in this dropdown; they're inferred from Beds24's
-// sub-bookings after the master is created.
+// Operator-facing manual bookings target one of TWO unit kinds:
 //
-// Selling units:
-//   • 1KK Urban Studios — VR 679714, qty 1..3 (allocates K.102/103/106)
+//   1. SELLABLE (default) — virtual or single-physical inventory rows
+//      operators normally use. Beds24 handles physical-unit allocation
+//      underneath (e.g. "1KK Urban Studios" → K.102/K.103/K.106).
+//
+//   2. PHYSICAL (force room) — explicit physical roomId. Use case: guest
+//      wants to extend the stay in their current physical room (Beds24's
+//      VR allocator wouldn't necessarily pick the same room), operator
+//      wants to honour an OTA "we promised K.202 specifically" request,
+//      or any flow where the operator needs to bypass the allocator.
+//
+// Both produce a normal Beds24 booking — the POST shape is identical;
+// only the roomId differs.
+//
+// Sellable units:
+//   • 1KK Urban Studios — VR 679714, qty 1..3 (auto-allocates K.102/103/106)
 //   • K.201             — physical, qty fixed at 1 (only one unit exists)
-//   • 1KK Deluxe        — VR 648816, qty 1..2 (allocates K.202/203). The
-//                         operator-facing name is "1KK Deluxe"; "Twin
+//   • 1KK Deluxe        — VR 648816, qty 1..2 (auto-allocates K.202/203).
+//                         The operator-facing name is "1KK Deluxe"; "Twin
 //                         Apartments" is an Airbnb-only listing concept.
 //   • O.308 (2 Bedroom) — physical, qty fixed at 1 (only one unit exists)
+//
+// Physical units (force room):
+//   • K.102, K.103, K.106 — Urban physical rooms (force-allocate one)
+//   • K.202, K.203        — Deluxe Twin physical rooms (force-allocate one)
+//   (K.201 + O.308 are NOT duplicated here — their sellable row IS the
+//    physical room, same roomId.)
 interface SellingUnit {
   roomId: number;
   label: string;
   category: 'Urban' | 'Deluxe';
+  kind: 'sellable' | 'physical';
   maxQty: number;
 }
 
 const SELLING_UNITS: SellingUnit[] = [
-  { roomId: 679714, label: '1KK Urban Studios',         category: 'Urban',  maxQty: 3 },
-  { roomId: 656437, label: 'K.201 (2KK Deluxe)',        category: 'Deluxe', maxQty: 1 },
-  { roomId: 648816, label: '1KK Deluxe',                category: 'Deluxe', maxQty: 2 },
-  { roomId: 674672, label: 'O.308 (2 Bedroom)',         category: 'Deluxe', maxQty: 1 },
+  // ── Sellable (default) ────────────────────────────────────────────────
+  { roomId: 679714, label: '1KK Urban Studios',         category: 'Urban',  kind: 'sellable', maxQty: 3 },
+  { roomId: 656437, label: 'K.201 (2KK Deluxe)',        category: 'Deluxe', kind: 'sellable', maxQty: 1 },
+  { roomId: 648816, label: '1KK Deluxe',                category: 'Deluxe', kind: 'sellable', maxQty: 2 },
+  { roomId: 674672, label: 'O.308 (2 Bedroom)',         category: 'Deluxe', kind: 'sellable', maxQty: 1 },
+  // ── Force physical room (extend-stay, OTA-specific requests, etc.) ────
+  { roomId: 679703, label: 'K.102 (force)',             category: 'Urban',  kind: 'physical', maxQty: 1 },
+  { roomId: 679704, label: 'K.103 (force)',             category: 'Urban',  kind: 'physical', maxQty: 1 },
+  { roomId: 679705, label: 'K.106 (force)',             category: 'Urban',  kind: 'physical', maxQty: 1 },
+  { roomId: 648596, label: 'K.202 (force)',             category: 'Deluxe', kind: 'physical', maxQty: 1 },
+  { roomId: 648772, label: 'K.203 (force)',             category: 'Deluxe', kind: 'physical', maxQty: 1 },
 ];
 
 const SELLING_UNIT_BY_ROOM_ID: Record<number, SellingUnit> = Object.fromEntries(
   SELLING_UNITS.map((s) => [s.roomId, s]),
 );
 
+// Two-level grouping for the dropdown: kind first (sellable vs force-physical),
+// then category (Urban / Deluxe) so operators can find what they need fast.
 const SELLING_UNIT_GROUPS = [
-  { category: 'Urban'  as const, options: SELLING_UNITS.filter((s) => s.category === 'Urban') },
-  { category: 'Deluxe' as const, options: SELLING_UNITS.filter((s) => s.category === 'Deluxe') },
+  {
+    label: 'Sellable',
+    options: SELLING_UNITS.filter((s) => s.kind === 'sellable'),
+  },
+  {
+    label: 'Force physical room',
+    options: SELLING_UNITS.filter((s) => s.kind === 'physical'),
+  },
 ];
 
 interface Props {
@@ -213,12 +245,22 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         }
       }
 
-      // Fill each row — multiply per-unit price by the row's qty
+      // Fill each row — multiply per-unit price by the row's qty.
+      // Force-physical rows aren't priced by the offers endpoint (which
+      // only quotes sellable IDs) — skip them from both filled & missing
+      // counts so the operator isn't told "unavailable" when they're
+      // simply expected to enter a manual rate.
       let filled = 0;
       let missing = 0;
+      let physicalSkipped = 0;
       setForm((prev) => ({
         ...prev,
         units: prev.units.map((u) => {
+          const su = SELLING_UNIT_BY_ROOM_ID[u.roomId];
+          if (su?.kind === 'physical') {
+            physicalSkipped += 1;
+            return u; // operator enters price manually for force-physical rows
+          }
           const perUnit = perUnitByRoomId.get(u.roomId);
           if (perUnit == null) {
             missing += 1;
@@ -230,12 +272,18 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         }),
       }));
 
-      if (filled === 0) {
-        setPriceFetchNote('None of the selected units are available for these dates — enter prices manually.');
+      const physicalNote =
+        physicalSkipped > 0
+          ? ` (${physicalSkipped} force-physical row${physicalSkipped === 1 ? '' : 's'} skipped — enter manually)`
+          : '';
+      if (filled === 0 && missing === 0) {
+        setPriceFetchNote(`Nothing to auto-fill${physicalNote}.`);
+      } else if (filled === 0) {
+        setPriceFetchNote(`None of the selected units are available for these dates — enter prices manually${physicalNote}.`);
       } else if (missing > 0) {
-        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'}; ${missing} unavailable for these dates — enter those manually.`);
+        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'}; ${missing} unavailable for these dates — enter those manually${physicalNote}.`);
       } else {
-        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'} with the rates these units sell at.`);
+        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'} with the rates these units sell at${physicalNote}.`);
       }
       setTimeout(() => setPriceFetchNote(null), 4000);
     } catch (e) {
@@ -734,7 +782,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                       className={inputCls}
                     >
                       {SELLING_UNIT_GROUPS.map((group) => (
-                        <optgroup key={group.category} label={group.category}>
+                        <optgroup key={group.label} label={group.label}>
                           {group.options.map((o) => (
                             <option key={o.roomId} value={o.roomId}>{o.label}</option>
                           ))}
