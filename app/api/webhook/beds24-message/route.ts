@@ -65,10 +65,26 @@ import { computeParking } from '@/utils/parkingUtils';
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const POLL_DEBOUNCE_MS = 15_000; // 15s — collapses bursts of SYNC_ROOM events
 /**
+ * New-booking poll debounce. Slightly longer than the auto-reply
+ * debounce because new-booking detection doesn't need millisecond
+ * resolution — a 20s window costs the operator at most ~20s extra
+ * Telegram latency in exchange for ~80% fewer Beds24 calls during
+ * Beds24's frequent SYNC_ROOM bursts from channel price re-syncs
+ * (which are most SYNC_ROOM events and return zero new bookings).
+ */
+const NEW_BOOKING_DEBOUNCE_MS = 20_000;
+/**
  * Short-TTL "we're polling now" lock used purely for debouncing bursts.
  * Expires fast so a crashed handler doesn't permanently block future polls.
  */
 const DEBOUNCE_KEY = 'baker:auto-reply:debounce-until';
+/**
+ * Independent debounce key for the new-booking notification flow.
+ * Kept separate from DEBOUNCE_KEY so the two flows don't gate each
+ * other — auto-reply debounce status shouldn't block Telegram, and
+ * a fresh new-booking poll shouldn't reset the auto-reply window.
+ */
+const NEW_BOOKING_DEBOUNCE_KEY = 'baker:new-booking:debounce-until';
 /**
  * Persistent diagnostic key — last time a webhook successfully kicked off
  * the after() block. Surfaced on /auto-reply-log as "Last webhook poll"
@@ -252,20 +268,25 @@ export async function POST(req: NextRequest) {
 
   const redis = getRedis();
 
-  // ── New-booking Telegram path: runs on EVERY SYNC_ROOM, no debounce ──
-  // This is intentionally OUTSIDE the debounce window below. Two reasons:
-  //   1) New-booking detection has its own per-booking dedupe lock
-  //      (`notified:booking:{id}`, 2h TTL) so running it on every fire is
-  //      idempotent — at most one Telegram per booking regardless of how
-  //      many SYNC_ROOMs land.
-  //   2) Beds24 fires SYNC_ROOM in bursts on price/inventory changes. The
-  //      auto-reply debounce collapses those bursts, but if a real new
-  //      booking happens to arrive during a burst it would get debounced
-  //      behind unrelated traffic and the Telegram would be delayed by
-  //      tens of seconds. Keeping this path debounce-free puts Telegram
-  //      latency back to ~1-2s.
+  // ── New-booking Telegram path ──
+  // Runs in its OWN debounce window (NEW_BOOKING_DEBOUNCE_KEY), separate
+  // from the auto-reply path so the two flows don't gate each other.
+  // The new-booking-specific debounce is necessary because Beds24 fires
+  // SYNC_ROOM in bursts for every price-list re-sync, availability tweak,
+  // and channel update — most of which return zero new bookings but each
+  // costs a Beds24 API credit. A 20s window collapses those bursts
+  // without harming operator-perceived latency.
+  //
+  // Per-booking dedupe (`notified:booking:{id}`, 2h TTL) still prevents
+  // duplicate Telegrams if multiple SYNC_ROOMs slip past the debounce.
   after(async () => {
     try {
+      if (redis) {
+        const now = Date.now();
+        const until = await redis.get<number>(NEW_BOOKING_DEBOUNCE_KEY);
+        if (until && now < until) return;
+        await redis.set(NEW_BOOKING_DEBOUNCE_KEY, now + NEW_BOOKING_DEBOUNCE_MS, { ex: 60 });
+      }
       await pollAndNotifyNewBookings(redis);
     } catch (err) {
       console.error('[beds24 webhook] new-booking poll failed:', err);
