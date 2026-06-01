@@ -1076,7 +1076,26 @@ function nextDay(yyyymmdd: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Redis cache for the override-blackout fetch — 7 Beds24 calls per
+ * `/api/bookings` GET adds up fast (especially with multi-operator
+ * dashboards + auto-reply self-nudges every 30s, which hit Beds24's
+ * credit-bucket rate limit). Blackouts change rarely so a 5-minute
+ * cache is essentially invisible to operators; the POST/DELETE
+ * endpoints in /api/bookings/blackout invalidate this key so manual
+ * blackout changes propagate immediately.
+ */
+const OVERRIDE_BLACKOUTS_CACHE_KEY = 'baker:override-blackouts-cache';
+const OVERRIDE_BLACKOUTS_TTL_SECONDS = 5 * 60;
+
 async function fetchOverrideBlackouts(token: string): Promise<Reservation[]> {
+  // ── Redis cache lookup ──
+  const redis = getRedis();
+  if (redis) {
+    const cached = await redis.get<Reservation[]>(OVERRIDE_BLACKOUTS_CACHE_KEY);
+    if (cached) return cached;
+  }
+
   // Match the bookings cache window — 1 year back, 1 year forward — so
   // historical overrides for performance/occupancy stats stay visible.
   const from = new Date();
@@ -1147,5 +1166,11 @@ async function fetchOverrideBlackouts(token: string): Promise<Reservation[]> {
     }
   }));
 
+  // Write through to cache for subsequent /api/bookings GETs.
+  if (redis) {
+    await redis.set(OVERRIDE_BLACKOUTS_CACHE_KEY, results, {
+      ex: OVERRIDE_BLACKOUTS_TTL_SECONDS,
+    });
+  }
   return results;
 }

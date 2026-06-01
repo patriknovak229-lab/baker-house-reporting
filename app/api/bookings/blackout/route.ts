@@ -26,10 +26,32 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
+/** Same key as /api/bookings — must invalidate so manual blackout
+ *  changes show up on the next dashboard refresh instead of waiting
+ *  for the 5-min TTL to expire. */
+const OVERRIDE_BLACKOUTS_CACHE_KEY = 'baker:override-blackouts-cache';
+
+function getRedis(): Redis | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
+
+async function invalidateOverrideBlackoutsCache(): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+  try {
+    await redis.del(OVERRIDE_BLACKOUTS_CACHE_KEY);
+  } catch (err) {
+    console.warn('[blackout] cache invalidation failed:', err);
+  }
+}
 
 /** Subtract one day from YYYY-MM-DD. Departure (checkout-morning) → inclusive last night. */
 function previousDay(yyyymmdd: string): string {
@@ -123,6 +145,7 @@ export async function POST(req: NextRequest) {
   }
 
   const json = await res.json();
+  await invalidateOverrideBlackoutsCache();
   return NextResponse.json({ ok: true, data: json });
 }
 
@@ -198,5 +221,6 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
+  await invalidateOverrideBlackoutsCache();
   return NextResponse.json({ ok: true });
 }
