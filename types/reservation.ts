@@ -34,6 +34,25 @@ export interface Issue {
   createdAt: string;       // ISO timestamp
 }
 
+/**
+ * A frozen snapshot of a booking's user-visible fields, used as the
+ * baseline for "what changed?" diff display on past-stay modifications.
+ * Captured client-side at acknowledgment time and persisted under
+ * `baker:reservation-overrides`. Only includes fields the operator
+ * cares about for cross-channel re-import drift — not every booking
+ * column.
+ */
+export interface BookingSnapshot {
+  capturedAt: string;       // ISO timestamp — when snapshot was taken
+  checkInDate: string;      // YYYY-MM-DD
+  checkOutDate: string;     // YYYY-MM-DD
+  numberOfNights: number;
+  numberOfGuests: number;
+  price: number;            // CZK
+  room: string;             // physical or virtual label
+  channel: string;          // Channel string
+}
+
 export interface InvoiceData {
   companyName: string;
   companyAddress: string;
@@ -100,6 +119,14 @@ export interface Reservation {
    * remain unacked and keep showing.
    */
   postStayAcknowledgedAt?: string;
+  /**
+   * Booking state captured at the moment the operator last acknowledged
+   * a past-stay modification. Compared against current Beds24 state to
+   * show "what changed since you last looked at this booking" — e.g.
+   * `checkOutDate: 2026-05-30 → 2026-06-01`. Beds24 doesn't expose
+   * history so this self-snapshot is the only way to surface diffs.
+   */
+  postStaySnapshot?: BookingSnapshot;
   // Set when this reservation spans multiple physical rooms (package/virtual room booking).
   // Each entry is a physical room name. Used by performance views to split revenue per room.
   linkedRooms?: string[];

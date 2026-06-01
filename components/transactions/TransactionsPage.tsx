@@ -41,6 +41,7 @@ type LocalFields = {
   parkingOverride?: string;
   invoiceModifications?: import('@/types/reservation').InvoiceModification[];
   postStayAcknowledgedAt?: string;
+  postStaySnapshot?: import('@/types/reservation').BookingSnapshot;
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -57,7 +58,33 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.parkingOverride !== undefined) local.parkingOverride = r.parkingOverride;
   if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
   if (r.postStayAcknowledgedAt) local.postStayAcknowledgedAt = r.postStayAcknowledgedAt;
+  if (r.postStaySnapshot) local.postStaySnapshot = r.postStaySnapshot;
   return local;
+}
+
+/**
+ * Diff a reservation's CURRENT state against the snapshot captured at
+ * the last acknowledgment. Returns a list of human-readable change
+ * descriptions, or empty if no diff (or no snapshot to compare against).
+ *
+ * Only checks the fields stored in BookingSnapshot — these are what
+ * operators typically care about when a channel re-import drifts a
+ * past booking (dates, price, room, channel, guest count).
+ */
+function computePostStayDiff(r: Reservation): string[] {
+  const snap = r.postStaySnapshot;
+  if (!snap) return [];
+  const diffs: string[] = [];
+  if (snap.checkInDate !== r.checkInDate)     diffs.push(`Check-in: ${snap.checkInDate} → ${r.checkInDate}`);
+  if (snap.checkOutDate !== r.checkOutDate)   diffs.push(`Check-out: ${snap.checkOutDate} → ${r.checkOutDate}`);
+  if (snap.numberOfNights !== r.numberOfNights) diffs.push(`Nights: ${snap.numberOfNights} → ${r.numberOfNights}`);
+  if (snap.numberOfGuests !== r.numberOfGuests) diffs.push(`Guests: ${snap.numberOfGuests} → ${r.numberOfGuests}`);
+  if (Math.round(snap.price) !== Math.round(r.price)) {
+    diffs.push(`Price: ${snap.price.toLocaleString('cs-CZ')} → ${r.price.toLocaleString('cs-CZ')} Kč`);
+  }
+  if (snap.room !== r.room)         diffs.push(`Room: ${snap.room} → ${r.room}`);
+  if (snap.channel !== r.channel)   diffs.push(`Channel: ${snap.channel} → ${r.channel}`);
+  return diffs;
 }
 
 function mergeLocal(reservations: Reservation[], state: Record<string, LocalFields>): Reservation[] {
@@ -472,11 +499,26 @@ export default function TransactionsPage() {
     if (!reservation.modifiedAt) return;
     setAckingPostStayId(reservation.reservationNumber);
     try {
-      // Merge: keep all existing local overrides, just stamp the ack.
+      // Merge: keep all existing local overrides, just stamp the ack
+      // AND snapshot the current state. The snapshot becomes the
+      // baseline for future diff display — if Beds24 modifies the
+      // booking again, the next alert will show exactly which fields
+      // drifted from this state.
+      //
       // We persist EVERY local field because /api/local-state POST
       // replaces (not merges) the per-reservation entry server-side.
       const fields = extractLocalFields(reservation);
       fields.postStayAcknowledgedAt = reservation.modifiedAt;
+      fields.postStaySnapshot = {
+        capturedAt: new Date().toISOString(),
+        checkInDate:    reservation.checkInDate,
+        checkOutDate:   reservation.checkOutDate,
+        numberOfNights: reservation.numberOfNights,
+        numberOfGuests: reservation.numberOfGuests,
+        price:          reservation.price,
+        room:           reservation.room,
+        channel:        reservation.channel,
+      };
       await persistOverride(reservation.reservationNumber, fields);
       await fetchReservations();
     } catch (e) {
@@ -1129,7 +1171,7 @@ export default function TransactionsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-purple-200">
-                    {["Guest", "Room", "Checkout", "Modified at", "Channel", ""].map((h, i) => (
+                    {["Guest", "Room", "Checkout", "Modified at", "What changed", ""].map((h, i) => (
                       <th
                         key={i}
                         className="px-4 py-2 text-xs font-medium text-purple-700 uppercase tracking-wide text-left"
@@ -1142,6 +1184,7 @@ export default function TransactionsPage() {
                 <tbody className="divide-y divide-purple-200">
                   {postStayChanges.map((r) => {
                     const pending = ackingPostStayId === r.reservationNumber;
+                    const diffs = computePostStayDiff(r);
                     return (
                       <tr
                         key={r.reservationNumber}
@@ -1156,12 +1199,38 @@ export default function TransactionsPage() {
                         <td className="px-4 py-2 text-purple-700 text-xs whitespace-nowrap">
                           {r.modifiedAt ? r.modifiedAt.slice(0, 16).replace('T', ' ') : '—'}
                         </td>
-                        <td className="px-4 py-2 text-purple-700 text-xs whitespace-nowrap">{r.channel}</td>
-                        <td className="px-4 py-2 text-right whitespace-nowrap">
+                        <td className="px-4 py-2 text-xs">
+                          {/* Diff column behaviour:
+                              - No snapshot yet → first-time detection. Show
+                                "Set baseline" hint; acknowledging captures
+                                the snapshot for future comparisons.
+                              - Snapshot exists but no diff → Beds24 bumped
+                                modifiedAt without changing tracked fields
+                                (often happens on price-list re-sync that
+                                touches internal flags only).
+                              - Snapshot + diffs → enumerate them as
+                                "Field: was → now" pairs. */}
+                          {!r.postStaySnapshot ? (
+                            <span className="italic text-purple-500">
+                              No baseline yet — ack to set one for future changes
+                            </span>
+                          ) : diffs.length === 0 ? (
+                            <span className="italic text-purple-500">
+                              Touched but no tracked field changed
+                            </span>
+                          ) : (
+                            <div className="flex flex-col gap-0.5 text-purple-900">
+                              {diffs.map((d, i) => (
+                                <span key={i} className="whitespace-nowrap">{d}</span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-right whitespace-nowrap align-top">
                           <button
                             onClick={(e) => { e.stopPropagation(); acknowledgePostStayChange(r); }}
                             disabled={pending || ackingPostStayId !== null}
-                            title="Mark as reviewed — drops out of this list"
+                            title="Mark as reviewed and snapshot current state — drops out of this list"
                             className="px-2.5 py-1 rounded-md border border-purple-300 bg-white text-purple-700 text-xs font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
                           >
                             {pending ? 'Saving…' : 'Acknowledge'}
