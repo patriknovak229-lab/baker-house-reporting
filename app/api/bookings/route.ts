@@ -175,7 +175,8 @@ interface Beds24Booking {
   country2: string | null; // uppercase ISO 2-letter (e.g. "CZ", "UA")
   apiSource: string;      // "Booking.com" | "Airbnb" | "API" (V2 POST) | "Direct" (Beds24 UI) | ""
   referer: string;        // e.g. "PhoneDirect" (our app), "DirectWeb" (rental site), or empty
-  bookingTime: string;    // ISO timestamp
+  bookingTime: string;    // ISO timestamp — when the booking was created
+  modifiedTime?: string;  // ISO timestamp — when Beds24 last changed any field
   status: string;         // "new" | "confirmed" | "cancelled"
   comments: string;       // contains "PRE-PAID" for prepaid reservations
 }
@@ -508,6 +509,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     ...(isUnallocatedVR ? { isUnallocatedVR: true } : {}),
     ...(blackoutMeta.createdBy ? { blackoutCreatedBy: blackoutMeta.createdBy } : {}),
     ...(blackoutMeta.reason ? { blackoutReason: blackoutMeta.reason } : {}),
+    ...(b.modifiedTime ? { modifiedAt: b.modifiedTime } : {}),
     firstName: b.firstName ?? "",
     lastName: b.lastName ?? "",
     channel: mapChannel(b.apiSource, b.referer, b.comments ?? ""),

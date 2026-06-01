@@ -84,6 +84,22 @@ export interface Reservation {
    * reservation list and surfaces as a pending task in the alert bar.
    */
   isUnallocatedVR?: boolean;
+  /**
+   * ISO timestamp from Beds24's `modifiedTime` field — last time any
+   * booking field changed on Beds24's side. Used to detect channel
+   * re-imports that overwrite operator changes after a stay has
+   * completed (`modifiedAt > checkOutDate` ⇒ post-stay modification
+   * worth flagging for operator review).
+   */
+  modifiedAt?: string;
+  /**
+   * ISO timestamp of when the operator last acknowledged a post-stay
+   * modification on this reservation. Stored locally in Redis under
+   * `baker:reservation-overrides`. Used to filter the "past-stay
+   * changes" task pill — entries with `modifiedAt > postStayAcknowledgedAt`
+   * remain unacked and keep showing.
+   */
+  postStayAcknowledgedAt?: string;
   // Set when this reservation spans multiple physical rooms (package/virtual room booking).
   // Each entry is a physical room name. Used by performance views to split revenue per room.
   linkedRooms?: string[];

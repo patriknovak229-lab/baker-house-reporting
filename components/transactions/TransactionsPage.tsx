@@ -40,6 +40,7 @@ type LocalFields = {
   issues?: Issue[];
   parkingOverride?: string;
   invoiceModifications?: import('@/types/reservation').InvoiceModification[];
+  postStayAcknowledgedAt?: string;
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -55,6 +56,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.issues && r.issues.length > 0) local.issues = r.issues;
   if (r.parkingOverride !== undefined) local.parkingOverride = r.parkingOverride;
   if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
+  if (r.postStayAcknowledgedAt) local.postStayAcknowledgedAt = r.postStayAcknowledgedAt;
   return local;
 }
 
@@ -341,6 +343,8 @@ export default function TransactionsPage() {
    *  "Remove" button responsive when the operator clicks multiple in
    *  quick succession. */
   const [removingBlackoutId, setRemovingBlackoutId] = useState<string | null>(null);
+  const [postStayPanelOpen, setPostStayPanelOpen] = useState(false);
+  const [ackingPostStayId, setAckingPostStayId] = useState<string | null>(null);
 
   interface DataIssue {
     reservation: Reservation;
@@ -431,6 +435,56 @@ export default function TransactionsPage() {
       .filter((r) => r.isBlackout && r.checkOutDate > today)
       .sort((a, b) => a.checkInDate.localeCompare(b.checkInDate));
   }, [reservations]);
+
+  /**
+   * Post-stay modifications: reservations whose `modifiedAt` is after
+   * the checkout date. Catches the failure mode the operator described:
+   * they extend a guest's stay in Beds24, then later a channel
+   * (Booking.com / Airbnb) re-syncs and reverts the change to the
+   * original dates. Either side of that flip-flop bumps `modifiedAt`,
+   * so we surface it as a heads-up rather than silently letting the
+   * data revert without the operator noticing.
+   *
+   * Already-acknowledged modifications drop out (the ack timestamp
+   * stored on the reservation must be ≥ `modifiedAt` for the flag to
+   * clear). Blackouts excluded — their data changes are operator-driven
+   * by design.
+   */
+  const postStayChanges = useMemo(() => {
+    const today = new Date().toLocaleDateString("sv-SE");
+    return reservations
+      .filter((r) => {
+        if (r.isBlackout) return false;
+        if (!r.checkOutDate || !r.modifiedAt) return false;
+        if (r.checkOutDate >= today) return false;
+        const modifiedDate = r.modifiedAt.slice(0, 10);
+        if (modifiedDate <= r.checkOutDate) return false;
+        if (r.postStayAcknowledgedAt && r.postStayAcknowledgedAt >= r.modifiedAt) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? ''));
+  }, [reservations]);
+
+  async function acknowledgePostStayChange(reservation: Reservation) {
+    if (ackingPostStayId) return;
+    if (!reservation.modifiedAt) return;
+    setAckingPostStayId(reservation.reservationNumber);
+    try {
+      // Merge: keep all existing local overrides, just stamp the ack.
+      // We persist EVERY local field because /api/local-state POST
+      // replaces (not merges) the per-reservation entry server-side.
+      const fields = extractLocalFields(reservation);
+      fields.postStayAcknowledgedAt = reservation.modifiedAt;
+      await persistOverride(reservation.reservationNumber, fields);
+      await fetchReservations();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to acknowledge change');
+    } finally {
+      setAckingPostStayId(null);
+    }
+  }
 
   async function removeBlackout(reservationNumber: string) {
     if (removingBlackoutId) return; // one at a time
@@ -806,7 +860,8 @@ export default function TransactionsPage() {
         || upcomingEarlyCheckins.length > 0
         || upcomingLateCheckouts.length > 0
         || unallocatedReservations.length > 0
-        || activeBlackouts.length > 0) && (
+        || activeBlackouts.length > 0
+        || postStayChanges.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row */}
           <div className="flex flex-wrap items-start gap-2">
@@ -853,6 +908,24 @@ export default function TransactionsPage() {
                 <span className="text-amber-600 font-normal">· assign in Beds24</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${unallocatedPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {postStayChanges.length > 0 && (
+              <button
+                onClick={() => setPostStayPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-800 text-sm font-medium hover:bg-purple-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {postStayChanges.length} past-stay {postStayChanges.length === 1 ? "change" : "changes"}
+                <span className="text-purple-600 font-normal">· review</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${postStayPanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1033,6 +1106,70 @@ export default function TransactionsPage() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Past-stay changes panel — reservations whose Beds24 record was
+              modified AFTER the guest checked out. Most common cause: a
+              channel re-import overwrote an operator's manual change to
+              dates/price. Operator reviews, either accepts (acknowledge)
+              or re-applies the change in Beds24. */}
+          {postStayChanges.length > 0 && postStayPanelOpen && (
+            <div className="rounded-lg border border-purple-200 bg-purple-50 overflow-hidden">
+              <div className="px-4 py-2 bg-purple-100/60 border-b border-purple-200 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-purple-900">
+                  Past-stay modifications
+                </span>
+                <span className="text-[11px] text-purple-700">
+                  Beds24 reported a change after checkout · review then acknowledge
+                </span>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-purple-200">
+                    {["Guest", "Room", "Checkout", "Modified at", "Channel", ""].map((h, i) => (
+                      <th
+                        key={i}
+                        className="px-4 py-2 text-xs font-medium text-purple-700 uppercase tracking-wide text-left"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-purple-200">
+                  {postStayChanges.map((r) => {
+                    const pending = ackingPostStayId === r.reservationNumber;
+                    return (
+                      <tr
+                        key={r.reservationNumber}
+                        className="hover:bg-purple-100/60 cursor-pointer"
+                        onClick={() => { setSelectedReservation(r); setPostStayPanelOpen(false); }}
+                      >
+                        <td className="px-4 py-2 font-medium text-purple-900 whitespace-nowrap">
+                          {r.firstName} {r.lastName}
+                        </td>
+                        <td className="px-4 py-2 text-purple-800 whitespace-nowrap">{r.room}</td>
+                        <td className="px-4 py-2 text-purple-700 text-xs whitespace-nowrap">{r.checkOutDate}</td>
+                        <td className="px-4 py-2 text-purple-700 text-xs whitespace-nowrap">
+                          {r.modifiedAt ? r.modifiedAt.slice(0, 16).replace('T', ' ') : '—'}
+                        </td>
+                        <td className="px-4 py-2 text-purple-700 text-xs whitespace-nowrap">{r.channel}</td>
+                        <td className="px-4 py-2 text-right whitespace-nowrap">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); acknowledgePostStayChange(r); }}
+                            disabled={pending || ackingPostStayId !== null}
+                            title="Mark as reviewed — drops out of this list"
+                            className="px-2.5 py-1 rounded-md border border-purple-300 bg-white text-purple-700 text-xs font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
+                          >
+                            {pending ? 'Saving…' : 'Acknowledge'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
