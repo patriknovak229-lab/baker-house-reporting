@@ -10,6 +10,13 @@ import {
 
 interface Props {
   reservations: Reservation[];
+  /**
+   * Click handler for booked or blacked-out day cells. Receives the
+   * matching Reservation so the parent can open its drawer (which
+   * already handles both regular reservations and blackouts via
+   * BlackoutDrawerView). Empty/free cells are not clickable.
+   */
+  onReservationClick?: (reservation: Reservation) => void;
 }
 
 // All rooms across both categories — used for the overall occupancy counters
@@ -104,6 +111,37 @@ function isRoomBlackoutOnly(reservations: Reservation[], room: Room, date: strin
   );
 }
 
+/**
+ * Find the reservation occupying a given (room, date) cell. Returns:
+ * - The real-guest reservation if one exists (preferred — even when a
+ *   blackout overlaps the same date, the real stay is the actionable record)
+ * - Otherwise the blackout reservation if one exists
+ * - null if the cell is free
+ */
+function findReservationForCell(
+  reservations: Reservation[],
+  room: Room,
+  date: string,
+): Reservation | null {
+  const real = reservations.find(
+    (r) =>
+      !r.isBlackout &&
+      roomMatches(r, room) &&
+      r.paymentStatus !== "Refunded" &&
+      r.checkInDate <= date &&
+      r.checkOutDate > date,
+  );
+  if (real) return real;
+  const blackout = reservations.find(
+    (r) =>
+      r.isBlackout &&
+      roomMatches(r, room) &&
+      r.checkInDate <= date &&
+      r.checkOutDate > date,
+  );
+  return blackout ?? null;
+}
+
 function getGuest(reservations: Reservation[], room: Room, date: string): { name: string; initials: string } | null {
   const res = reservations.find(
     (r) =>
@@ -142,7 +180,7 @@ function formatRoomForTooltip(room: string): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function OccupancyCalendar({ reservations }: Props) {
+export default function OccupancyCalendar({ reservations, onReservationClick }: Props) {
   const todayStr = getTodayStr();
   const [startOffset, setStartOffset] = useState(0);
   const [showParking, setShowParking] = useState(false);
@@ -356,14 +394,28 @@ export default function OccupancyCalendar({ reservations }: Props) {
                         title = `${room} — free`;
                       }
 
+                      // Booked + blackout cells are clickable; empty cells aren't.
+                      // Click resolves the cell back to its source Reservation
+                      // and hands it to the parent, which opens the regular
+                      // drawer (handles both guest + blackout shapes).
+                      const clickable = (booked || blackout) && !!onReservationClick;
+                      const handleClick = clickable
+                        ? () => {
+                            const res = findReservationForCell(reservations, room, date);
+                            if (res) onReservationClick!(res);
+                          }
+                        : undefined;
                       return (
                         <td
                           key={date}
                           className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}
                         >
                           <div
-                            className={`h-5 rounded-sm flex items-center justify-center ${cellClass}`}
+                            className={`h-5 rounded-sm flex items-center justify-center ${cellClass} ${
+                              clickable ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''
+                            }`}
                             title={title}
+                            onClick={handleClick}
                           >
                             {label && (
                               <span className="text-[9px] font-bold text-white leading-none select-none tracking-tight">

@@ -336,6 +336,11 @@ export default function TransactionsPage() {
   const [earlyCheckinPanelOpen, setEarlyCheckinPanelOpen] = useState(false);
   const [lateCheckoutPanelOpen, setLateCheckoutPanelOpen] = useState(false);
   const [unallocatedPanelOpen, setUnallocatedPanelOpen] = useState(false);
+  const [blackoutsPanelOpen, setBlackoutsPanelOpen] = useState(false);
+  /** Per-blackout deletion state (reservationNumber → pending). Keeps the
+   *  "Remove" button responsive when the operator clicks multiple in
+   *  quick succession. */
+  const [removingBlackoutId, setRemovingBlackoutId] = useState<string | null>(null);
 
   interface DataIssue {
     reservation: Reservation;
@@ -411,6 +416,48 @@ export default function TransactionsPage() {
     () => reservations.filter((r) => r.isUnallocatedVR),
     [reservations],
   );
+
+  /**
+   * Active blackouts = blackouts that are still blocking future dates
+   * (checkOutDate > today). Past blackouts stay in the data — they're
+   * useful for occupancy/historical metrics — but they're not
+   * actionable, so we hide them from the "remove blackout" panel.
+   *
+   * Sorted by start date so the soonest-active is at the top.
+   */
+  const activeBlackouts = useMemo(() => {
+    const today = new Date().toLocaleDateString("sv-SE");
+    return reservations
+      .filter((r) => r.isBlackout && r.checkOutDate > today)
+      .sort((a, b) => a.checkInDate.localeCompare(b.checkInDate));
+  }, [reservations]);
+
+  async function removeBlackout(reservationNumber: string) {
+    if (removingBlackoutId) return; // one at a time
+    if (!confirm('Remove this blackout? The room will be re-opened for sale on those dates.')) {
+      return;
+    }
+    setRemovingBlackoutId(reservationNumber);
+    try {
+      const res = await fetch(
+        `/api/bookings/blackout?id=${encodeURIComponent(reservationNumber)}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      // Force a fresh fetch so the calendar + reservation list update
+      // immediately. The override-blackout fetch path also re-runs on
+      // every /api/bookings GET, so the removed override drops out of
+      // the synthetic-reservation list naturally.
+      await fetchReservations();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to remove blackout');
+    } finally {
+      setRemovingBlackoutId(null);
+    }
+  }
 
   // ── Unpaid additional payments (Stripe payment links not yet paid) ───────────
   const unpaidAdditionalPayments = useMemo(() => {
@@ -518,7 +565,12 @@ export default function TransactionsPage() {
   return (
     <div className="max-w-screen-2xl mx-auto px-6 py-6">
       {/* Availability calendar */}
-      {!isLoading && <OccupancyCalendar reservations={reservations} />}
+      {!isLoading && (
+        <OccupancyCalendar
+          reservations={reservations}
+          onReservationClick={setSelectedReservation}
+        />
+      )}
 
 {/* large banner removed — compact pill lives above the filter instead */}
 
@@ -753,7 +805,8 @@ export default function TransactionsPage() {
         || unreadBookings.length > 0
         || upcomingEarlyCheckins.length > 0
         || upcomingLateCheckouts.length > 0
-        || unallocatedReservations.length > 0) && (
+        || unallocatedReservations.length > 0
+        || activeBlackouts.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row */}
           <div className="flex flex-wrap items-start gap-2">
@@ -800,6 +853,24 @@ export default function TransactionsPage() {
                 <span className="text-amber-600 font-normal">· assign in Beds24</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${unallocatedPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {activeBlackouts.length > 0 && (
+              <button
+                onClick={() => setBlackoutsPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-50 border border-rose-300 text-rose-800 text-sm font-medium hover:bg-rose-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 105.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+                {activeBlackouts.length} active {activeBlackouts.length === 1 ? "blackout" : "blackouts"}
+                <span className="text-rose-600 font-normal">· manage</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${blackoutsPanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -962,6 +1033,65 @@ export default function TransactionsPage() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Active blackouts panel — only PROSPECTIVE ones (still blocking
+              future dates). Each row has an inline Remove button that calls
+              the override-clear endpoint and refetches. Operator can also
+              open the drawer (click row) to get the full blackout details. */}
+          {activeBlackouts.length > 0 && blackoutsPanelOpen && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 overflow-hidden">
+              <div className="px-4 py-2 bg-rose-100/60 border-b border-rose-200 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-rose-900">
+                  Active blackouts
+                </span>
+                <span className="text-[11px] text-rose-700">
+                  Showing only blackouts still blocking future dates · {activeBlackouts.length} total
+                </span>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-rose-200">
+                    {["Room", "From", "To", "Nights", ""].map((h, i) => (
+                      <th
+                        key={i}
+                        className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-rose-200">
+                  {activeBlackouts.map((b) => {
+                    const pending = removingBlackoutId === b.reservationNumber;
+                    return (
+                      <tr
+                        key={b.reservationNumber}
+                        className="hover:bg-rose-100/70 cursor-pointer"
+                        onClick={() => { setSelectedReservation(b); setBlackoutsPanelOpen(false); }}
+                      >
+                        <td className="px-4 py-2 font-medium text-rose-900 whitespace-nowrap">{b.room}</td>
+                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.checkInDate}</td>
+                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.checkOutDate}</td>
+                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.numberOfNights}</td>
+                        <td className="px-4 py-2 text-right whitespace-nowrap">
+                          <button
+                            // Stop the row click from also firing — operator
+                            // wants to remove, not open the drawer.
+                            onClick={(e) => { e.stopPropagation(); removeBlackout(b.reservationNumber); }}
+                            disabled={pending || removingBlackoutId !== null}
+                            className="px-2.5 py-1 rounded-md bg-rose-600 text-white text-xs font-medium hover:bg-rose-700 disabled:opacity-40 transition-colors"
+                          >
+                            {pending ? 'Removing…' : 'Remove'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
