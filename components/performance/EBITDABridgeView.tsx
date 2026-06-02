@@ -64,28 +64,38 @@ function computeGrossProfit(
   reservations: Reservation[],
   dateRange: DateRange,
   variableCosts: VariableCostsLookup,
-  byReservation: Record<string, VariableCostEntry>
+  byReservation: Record<string, VariableCostEntry>,
+  selectedRooms?: Room[]
 ): number {
   let netSales = 0;
-  let totalVariableCosts = 0;
-  const ZERO = { cleaning: 0, laundry: 0, consumables: 0 };
-
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
+  }
 
-    const checkoutInPeriod = r.checkOutDate >= dateRange.start && r.checkOutDate <= dateRange.end;
-    const roomId = ROOM_TO_BEDS24_ID[r.room];
-    const dateRoom =
-      checkoutInPeriod && roomId
-        ? variableCosts[`${r.checkOutDate}|${roomId}`] ?? ZERO
-        : ZERO;
-    const res = checkoutInPeriod ? byReservation[r.reservationNumber] ?? ZERO : ZERO;
-    totalVariableCosts +=
-      dateRoom.cleaning + dateRoom.laundry + dateRoom.consumables +
-      res.cleaning + res.laundry + res.consumables;
+  // Period sum across all variable costs in scope — matches the cleaning
+  // app's per-room totals (manual cleanings without reservations included).
+  const inScope = new Set<string>(
+    (selectedRooms ?? []).map((r) => ROOM_TO_BEDS24_ID[r]).filter(Boolean)
+  );
+  const allRoomsSelected = !selectedRooms || selectedRooms.length === 0;
+  let totalVariableCosts = 0;
+  for (const [key, v] of Object.entries(variableCosts)) {
+    const [date, roomId] = key.split("|");
+    if (!date || !roomId) continue;
+    if (date < dateRange.start || date > dateRange.end) continue;
+    if (!allRoomsSelected && !inScope.has(roomId)) continue;
+    totalVariableCosts += (v.cleaning ?? 0) + (v.laundry ?? 0) + (v.consumables ?? 0);
+  }
+  for (const r of reservations) {
+    if (r.paymentStatus === "Refunded") continue;
+    if (r.checkOutDate < dateRange.start || r.checkOutDate > dateRange.end) continue;
+    if (selectedRooms && !selectedRooms.includes(r.room)) continue;
+    const res = byReservation[r.reservationNumber];
+    if (!res) continue;
+    totalVariableCosts += res.cleaning + res.laundry + res.consumables;
   }
 
   return netSales - totalVariableCosts;
@@ -108,7 +118,7 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
     );
   }
 
-  const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts, variableCostsByReservation);
+  const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts, variableCostsByReservation, selectedRooms);
 
   // Fixed costs: per-selected-room monthly amount × number of calendar months in period
   const months = countMonths(dateRange.start, dateRange.end);

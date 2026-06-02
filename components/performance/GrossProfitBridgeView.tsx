@@ -8,7 +8,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import type { Reservation } from "@/types/reservation";
+import type { Reservation, Room } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { VariableCostEntry, VariableCostsLookup } from "@/app/api/variable-costs/route";
@@ -19,6 +19,8 @@ interface Props {
   dateRange: DateRange;
   variableCosts: VariableCostsLookup;
   variableCostsByReservation?: Record<string, VariableCostEntry>;
+  /** Rooms in scope from the page-level filter; used to scope cost sums. */
+  selectedRooms?: Room[];
 }
 
 const fmt = (n: number) =>
@@ -52,39 +54,53 @@ function computeTotals(
   reservations: Reservation[],
   dateRange: DateRange,
   variableCosts: VariableCostsLookup,
-  byReservation: Record<string, VariableCostEntry>
+  byReservation: Record<string, VariableCostEntry>,
+  selectedRooms?: Room[]
 ) {
+  // ── Net sales: per-reservation, fraction-of-stay within the period ────
   let netSales = 0;
-  let cleaning = 0;
-  let laundry = 0;
-  let consumables = 0;
-
-  const ZERO = { cleaning: 0, laundry: 0, consumables: 0 };
-
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
+  }
 
-    // Attribute variable costs when the reservation's checkout is in the
-    // period. Two sources:
-    //  - byDateRoom: legacy join on (checkOutDate, roomId) — picks up entries
-    //    without a reservationNumber.
-    //  - byReservation: entries that explicitly carry this reservation's
-    //    number (manual consumables / mid-stay cleanings / future auto-logs).
-    // The two maps are mutually exclusive by construction in the route, so
-    // we just sum.
-    const checkoutInPeriod = r.checkOutDate >= dateRange.start && r.checkOutDate <= dateRange.end;
-    const roomId = ROOM_TO_BEDS24_ID[r.room];
-    const dateRoom =
-      checkoutInPeriod && roomId
-        ? variableCosts[`${r.checkOutDate}|${roomId}`] ?? ZERO
-        : ZERO;
-    const res = checkoutInPeriod ? byReservation[r.reservationNumber] ?? ZERO : ZERO;
-    cleaning += dateRoom.cleaning + res.cleaning;
-    laundry += dateRoom.laundry + res.laundry;
-    consumables += dateRoom.consumables + res.consumables;
+  // ── Variable costs: sum every cell in the period for the rooms in scope,
+  //    regardless of whether the cell matches a current reservation. This
+  //    matches the cleaning app's per-room totals and captures manual
+  //    cleanings / consumables that aren't tied to a specific booking.
+  const inScopeRoomIds = new Set<string>(
+    (selectedRooms ?? []).map((r) => ROOM_TO_BEDS24_ID[r]).filter(Boolean)
+  );
+  const allRoomsSelected = !selectedRooms || selectedRooms.length === 0;
+  function roomInScope(roomId: string): boolean {
+    return allRoomsSelected || inScopeRoomIds.has(roomId);
+  }
+
+  let cleaning = 0;
+  let laundry = 0;
+  let consumables = 0;
+  for (const [key, v] of Object.entries(variableCosts)) {
+    const [date, roomId] = key.split("|");
+    if (!date || !roomId) continue;
+    if (date < dateRange.start || date > dateRange.end) continue;
+    if (!roomInScope(roomId)) continue;
+    cleaning += v.cleaning ?? 0;
+    laundry += v.laundry ?? 0;
+    consumables += v.consumables ?? 0;
+  }
+  // Per-reservation entries — only count those tied to reservations whose
+  // checkOut falls in the period AND whose room is in scope.
+  for (const r of reservations) {
+    if (r.paymentStatus === "Refunded") continue;
+    if (r.checkOutDate < dateRange.start || r.checkOutDate > dateRange.end) continue;
+    if (selectedRooms && !selectedRooms.includes(r.room)) continue;
+    const res = byReservation[r.reservationNumber];
+    if (!res) continue;
+    cleaning += res.cleaning;
+    laundry += res.laundry;
+    consumables += res.consumables;
   }
 
   const totalVariableCosts = cleaning + laundry + consumables;
@@ -97,6 +113,7 @@ export default function GrossProfitBridgeView({
   dateRange,
   variableCosts,
   variableCostsByReservation = {},
+  selectedRooms,
 }: Props) {
   if (reservations.length === 0) {
     return (
@@ -108,7 +125,7 @@ export default function GrossProfitBridgeView({
   }
 
   const { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit } =
-    computeTotals(reservations, dateRange, variableCosts, variableCostsByReservation);
+    computeTotals(reservations, dateRange, variableCosts, variableCostsByReservation, selectedRooms);
 
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
 

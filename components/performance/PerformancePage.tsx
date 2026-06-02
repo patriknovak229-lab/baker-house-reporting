@@ -223,7 +223,7 @@ export default function PerformancePage() {
           <ChannelMixView reservations={filteredReservations} dateRange={dateRange} />
           <GBVAdrView reservations={filteredReservations} dateRange={dateRange} />
           <NetSalesBridgeView reservations={filteredReservations} dateRange={dateRange} />
-          <GrossProfitBridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} />
+          <GrossProfitBridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} selectedRooms={selectedRooms} />
           <EBITDABridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} fixedCosts={fixedCosts} selectedRooms={selectedRooms} />
         </div>
       )}
