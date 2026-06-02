@@ -85,6 +85,8 @@ interface ManualCleaningEvent {
   price?: number;     // optional custom override price (CZK)
   cleanerName?: string;
   createdAt: string;
+  /** Cleaning-app reservation tie ("BH-{bookId}"). Optional for back-compat. */
+  reservationNumber?: string;
 }
 
 interface ConsumableEntry {
@@ -92,6 +94,8 @@ interface ConsumableEntry {
   date: string;
   roomId: string;
   amount: number;
+  /** Cleaning-app reservation tie ("BH-{bookId}"). Optional for back-compat. */
+  reservationNumber?: string;
 }
 
 export interface VariableCostEntry {
@@ -100,8 +104,14 @@ export interface VariableCostEntry {
   consumables: number;
 }
 
-// ── Response type: lookup by "date|roomId" (Beds24 roomId) ───────────────────
+// ── Response type: a flat map by "date|roomId" (legacy) + a byReservation
+//     map. Entries that carry a reservationNumber land in byReservation;
+//     entries without one fall back to byDateRoom so they still surface.
 export type VariableCostsLookup = Record<string, VariableCostEntry>;
+export interface VariableCostsResponse {
+  byDateRoom: VariableCostsLookup;
+  byReservation: Record<string, VariableCostEntry>;
+}
 
 function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -151,11 +161,18 @@ export async function GET() {
   const consumableEntries = (entriesRaw ?? []) as ConsumableEntry[];
 
   const lookup: VariableCostsLookup = {};
+  const byReservation: Record<string, VariableCostEntry> = {};
 
   function ensureEntry(date: string, roomId: string): VariableCostEntry {
     const key = `${date}|${roomId}`;
     if (!lookup[key]) lookup[key] = { cleaning: 0, laundry: 0, consumables: 0 };
     return lookup[key];
+  }
+  function ensureRes(reservationNumber: string): VariableCostEntry {
+    if (!byReservation[reservationNumber]) {
+      byReservation[reservationNumber] = { cleaning: 0, laundry: 0, consumables: 0 };
+    }
+    return byReservation[reservationNumber];
   }
 
   // ── Cleaning: nested assignments[date][roomId] → cleanerId → rate ────────
@@ -176,8 +193,14 @@ export async function GET() {
   //    is left in place; if neither exists the entry stays at 0.
   for (const event of manualCleaningEvents) {
     if (!event?.date || !event?.roomId) continue;
-    if (typeof event.price === 'number' && event.price > 0) {
-      ensureEntry(event.date, event.roomId).cleaning = event.price;
+    const hasPrice = typeof event.price === 'number' && event.price > 0;
+    if (event.reservationNumber) {
+      // Reservation-linked manual cleanings attribute their fee directly to
+      // that reservation in byReservation, NOT into the byDateRoom map
+      // (avoids double-counting on the dashboard side).
+      if (hasPrice) ensureRes(event.reservationNumber).cleaning += event.price!;
+    } else if (hasPrice) {
+      ensureEntry(event.date, event.roomId).cleaning = event.price!;
     } else {
       // Make sure the cell exists (so the room shows up in reporting even
       // when neither a price nor an assignment-rate is present yet).
@@ -196,12 +219,17 @@ export async function GET() {
     }
   }
 
-  // ── Consumables: sum entries by date+roomId ───────────────────────────────
+  // ── Consumables: sum entries — by reservation when linked, else by
+  //     date+roomId so legacy entries still surface somewhere.
   for (const entry of consumableEntries) {
-    if (entry.amount > 0) {
+    if (!entry.amount || entry.amount <= 0) continue;
+    if (entry.reservationNumber) {
+      ensureRes(entry.reservationNumber).consumables += entry.amount;
+    } else {
       ensureEntry(entry.date, entry.roomId).consumables += entry.amount;
     }
   }
 
-  return NextResponse.json(lookup);
+  const body: VariableCostsResponse = { byDateRoom: lookup, byReservation };
+  return NextResponse.json(body);
 }

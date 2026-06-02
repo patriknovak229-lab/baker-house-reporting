@@ -12,7 +12,7 @@ import {
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
 import type { Reservation, Room } from "@/types/reservation";
-import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
+import type { VariableCostEntry, VariableCostsLookup } from "@/app/api/variable-costs/route";
 import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
 import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
 
@@ -20,6 +20,7 @@ interface Props {
   reservations: Reservation[];
   dateRange: DateRange;
   variableCosts: VariableCostsLookup;
+  variableCostsByReservation?: Record<string, VariableCostEntry>;
   fixedCosts: FixedCostEntry[];
   selectedRooms: Room[];
 }
@@ -59,9 +60,15 @@ function WaterfallTooltip({ active, payload, label }: any) {
   );
 }
 
-function computeGrossProfit(reservations: Reservation[], dateRange: DateRange, variableCosts: VariableCostsLookup): number {
+function computeGrossProfit(
+  reservations: Reservation[],
+  dateRange: DateRange,
+  variableCosts: VariableCostsLookup,
+  byReservation: Record<string, VariableCostEntry>
+): number {
   let netSales = 0;
   let totalVariableCosts = 0;
+  const ZERO = { cleaning: 0, laundry: 0, consumables: 0 };
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
@@ -69,11 +76,16 @@ function computeGrossProfit(reservations: Reservation[], dateRange: DateRange, v
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
-    // Only attribute variable costs when checkout falls within the period (matches cleaners tab logic)
     const checkoutInPeriod = r.checkOutDate >= dateRange.start && r.checkOutDate <= dateRange.end;
     const roomId = ROOM_TO_BEDS24_ID[r.room];
-    const varCosts = checkoutInPeriod && roomId ? (variableCosts[`${r.checkOutDate}|${roomId}`] ?? { cleaning: 0, laundry: 0, consumables: 0 }) : { cleaning: 0, laundry: 0, consumables: 0 };
-    totalVariableCosts += varCosts.cleaning + varCosts.laundry + varCosts.consumables;
+    const dateRoom =
+      checkoutInPeriod && roomId
+        ? variableCosts[`${r.checkOutDate}|${roomId}`] ?? ZERO
+        : ZERO;
+    const res = checkoutInPeriod ? byReservation[r.reservationNumber] ?? ZERO : ZERO;
+    totalVariableCosts +=
+      dateRoom.cleaning + dateRoom.laundry + dateRoom.consumables +
+      res.cleaning + res.laundry + res.consumables;
   }
 
   return netSales - totalVariableCosts;
@@ -86,7 +98,7 @@ function roomFilteredMonthlyTotal(entry: FixedCostEntry, selectedRooms: Room[]):
   }, 0);
 }
 
-export default function EBITDABridgeView({ reservations, dateRange, variableCosts, fixedCosts, selectedRooms }: Props) {
+export default function EBITDABridgeView({ reservations, dateRange, variableCosts, variableCostsByReservation = {}, fixedCosts, selectedRooms }: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -96,7 +108,7 @@ export default function EBITDABridgeView({ reservations, dateRange, variableCost
     );
   }
 
-  const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts);
+  const grossProfit = computeGrossProfit(reservations, dateRange, variableCosts, variableCostsByReservation);
 
   // Fixed costs: per-selected-room monthly amount × number of calendar months in period
   const months = countMonths(dateRange.start, dateRange.end);

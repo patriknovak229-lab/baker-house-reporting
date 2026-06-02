@@ -11,13 +11,14 @@ import {
 import type { Reservation } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
-import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
+import type { VariableCostEntry, VariableCostsLookup } from "@/app/api/variable-costs/route";
 import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
 
 interface Props {
   reservations: Reservation[];
   dateRange: DateRange;
   variableCosts: VariableCostsLookup;
+  variableCostsByReservation?: Record<string, VariableCostEntry>;
 }
 
 const fmt = (n: number) =>
@@ -47,11 +48,18 @@ function WaterfallTooltip({ active, payload, label }: any) {
   );
 }
 
-function computeTotals(reservations: Reservation[], dateRange: DateRange, variableCosts: VariableCostsLookup) {
+function computeTotals(
+  reservations: Reservation[],
+  dateRange: DateRange,
+  variableCosts: VariableCostsLookup,
+  byReservation: Record<string, VariableCostEntry>
+) {
   let netSales = 0;
   let cleaning = 0;
   let laundry = 0;
   let consumables = 0;
+
+  const ZERO = { cleaning: 0, laundry: 0, consumables: 0 };
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
@@ -59,13 +67,24 @@ function computeTotals(reservations: Reservation[], dateRange: DateRange, variab
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
 
-    // Only attribute variable costs when checkout falls within the period (matches cleaners tab logic)
+    // Attribute variable costs when the reservation's checkout is in the
+    // period. Two sources:
+    //  - byDateRoom: legacy join on (checkOutDate, roomId) — picks up entries
+    //    without a reservationNumber.
+    //  - byReservation: entries that explicitly carry this reservation's
+    //    number (manual consumables / mid-stay cleanings / future auto-logs).
+    // The two maps are mutually exclusive by construction in the route, so
+    // we just sum.
     const checkoutInPeriod = r.checkOutDate >= dateRange.start && r.checkOutDate <= dateRange.end;
     const roomId = ROOM_TO_BEDS24_ID[r.room];
-    const varCosts = checkoutInPeriod && roomId ? (variableCosts[`${r.checkOutDate}|${roomId}`] ?? { cleaning: 0, laundry: 0, consumables: 0 }) : { cleaning: 0, laundry: 0, consumables: 0 };
-    cleaning += varCosts.cleaning;
-    laundry += varCosts.laundry;
-    consumables += varCosts.consumables;
+    const dateRoom =
+      checkoutInPeriod && roomId
+        ? variableCosts[`${r.checkOutDate}|${roomId}`] ?? ZERO
+        : ZERO;
+    const res = checkoutInPeriod ? byReservation[r.reservationNumber] ?? ZERO : ZERO;
+    cleaning += dateRoom.cleaning + res.cleaning;
+    laundry += dateRoom.laundry + res.laundry;
+    consumables += dateRoom.consumables + res.consumables;
   }
 
   const totalVariableCosts = cleaning + laundry + consumables;
@@ -73,7 +92,12 @@ function computeTotals(reservations: Reservation[], dateRange: DateRange, variab
   return { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit };
 }
 
-export default function GrossProfitBridgeView({ reservations, dateRange, variableCosts }: Props) {
+export default function GrossProfitBridgeView({
+  reservations,
+  dateRange,
+  variableCosts,
+  variableCostsByReservation = {},
+}: Props) {
   if (reservations.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
@@ -84,7 +108,7 @@ export default function GrossProfitBridgeView({ reservations, dateRange, variabl
   }
 
   const { netSales, cleaning, laundry, consumables, totalVariableCosts, grossProfit } =
-    computeTotals(reservations, dateRange, variableCosts);
+    computeTotals(reservations, dateRange, variableCosts, variableCostsByReservation);
 
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
 

@@ -14,13 +14,16 @@ import GBVAdrView from "./GBVAdrView";
 import NetSalesBridgeView from "./NetSalesBridgeView";
 import GrossProfitBridgeView from "./GrossProfitBridgeView";
 import EBITDABridgeView from "./EBITDABridgeView";
-import type { VariableCostsLookup } from "@/app/api/variable-costs/route";
+import type { VariableCostsLookup, VariableCostsResponse } from "@/app/api/variable-costs/route";
 import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
 import { expandLinkedReservations } from "@/utils/expandReservations";
 
 export default function PerformancePage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [variableCosts, setVariableCosts] = useState<VariableCostsLookup>({});
+  const [variableCostsByReservation, setVariableCostsByReservation] = useState<
+    VariableCostsResponse['byReservation']
+  >({});
   const [fixedCosts, setFixedCosts] = useState<FixedCostEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,8 +45,17 @@ export default function PerformancePage() {
       const data: Reservation[] = await bookingsRes.json();
       setReservations(data);
       if (costsRes.ok) {
-        const costs: VariableCostsLookup = await costsRes.json();
-        setVariableCosts(costs);
+        const body = (await costsRes.json()) as
+          | VariableCostsResponse
+          | VariableCostsLookup;
+        // Back-compat: older deployments returned the lookup directly.
+        if (body && typeof body === 'object' && 'byDateRoom' in body) {
+          setVariableCosts((body as VariableCostsResponse).byDateRoom);
+          setVariableCostsByReservation((body as VariableCostsResponse).byReservation ?? {});
+        } else {
+          setVariableCosts(body as VariableCostsLookup);
+          setVariableCostsByReservation({});
+        }
       }
       if (fixedCostsRes.ok) {
         const fc: FixedCostEntry[] = await fixedCostsRes.json();
@@ -211,8 +223,8 @@ export default function PerformancePage() {
           <ChannelMixView reservations={filteredReservations} dateRange={dateRange} />
           <GBVAdrView reservations={filteredReservations} dateRange={dateRange} />
           <NetSalesBridgeView reservations={filteredReservations} dateRange={dateRange} />
-          <GrossProfitBridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} />
-          <EBITDABridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} fixedCosts={fixedCosts} selectedRooms={selectedRooms} />
+          <GrossProfitBridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} />
+          <EBITDABridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} fixedCosts={fixedCosts} selectedRooms={selectedRooms} />
         </div>
       )}
     </div>
