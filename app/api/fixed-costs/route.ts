@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 
+// Read live Redis state on every request — Next.js otherwise caches the
+// build-time response for GET handlers.
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const KEY_FIXED_COSTS_CONFIG = 'baker:fixed-costs-config';
 
 interface FixedCostItemRaw {

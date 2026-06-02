@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 
+// Bypass Next.js's static route-handler cache — must read live Redis state
+// on every request, otherwise newly logged consumable / assignment / pickup
+// entries don't surface in the reporting dashboard until a redeploy.
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // ── Redis keys (must match baker-house-cleaning/src/lib/storage.ts) ──────────
 const KEY_CLEANERS_CONFIG = 'baker:cleaners-config';
 const KEY_CLEANING_ASSIGNMENTS = 'baker:cleaning-assignments';
