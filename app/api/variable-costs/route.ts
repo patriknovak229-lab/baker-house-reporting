@@ -53,9 +53,17 @@ interface ArchivedCleaner {
   rates: Record<string, number>;
 }
 
+interface LaundryProviderSlot {
+  id: string;
+  name: string;
+  /** Per-set pricing — cleaning-app's new model. */
+  deluxeSetPrice?: number;
+  urbanSetPrice?: number;
+}
+
 interface LaundryConfig {
-  providers: { id: string; name: string }[];
-  rates: Record<string, Record<string, number>>; // rates[providerId][roomId]
+  providers: LaundryProviderSlot[];
+  rates: Record<string, Record<string, number>>; // rates[providerId][roomId] (legacy)
   /** Providers archived from a slot — historical fee lookups fall back here. */
   archived?: ArchivedLaundryProvider[];
 }
@@ -68,6 +76,45 @@ interface ArchivedLaundryProvider {
   deactivatedAt: string;
   archivedAt: string;
   rates: Record<string, number>;
+  /** Snapshotted per-set prices at the time of archival. */
+  deluxeSetPrice?: number;
+  urbanSetPrice?: number;
+}
+
+/** baker:laundry-sets blob (subset we need here). */
+interface LaundrySetsConfig {
+  setsPerRoom: Record<string, number>;
+}
+
+/** Room → category map. Mirrors cleaning app's room-mapping.ts. */
+const ROOM_CATEGORIES: Record<string, 'deluxe' | 'urban'> = {
+  '656437': 'deluxe', // K.201
+  '648596': 'deluxe', // K.202
+  '648772': 'deluxe', // K.203
+  '674672': 'deluxe', // O.308
+  '679703': 'urban',  // K.102
+  '679704': 'urban',  // K.103
+  '679705': 'urban',  // K.106
+};
+
+/** Cost for a single laundry assignment given the per-set price model
+ *  with a fallback to the legacy per-room rates. Mirror of cleaning
+ *  app's getLaundryAssignmentCost in cleaning-types.ts. */
+function laundryCostForAssignment(
+  provider: LaundryProviderSlot | ArchivedLaundryProvider,
+  roomId: string,
+  setsPerRoom: Record<string, number>,
+  legacyRates: Record<string, Record<string, number>>
+): number {
+  const setsForRoom = setsPerRoom[roomId] ?? 1;
+  const category = ROOM_CATEGORIES[roomId];
+  let perSet: number | undefined;
+  if (category === 'deluxe') perSet = provider.deluxeSetPrice;
+  else if (category === 'urban') perSet = provider.urbanSetPrice;
+  if (typeof perSet === 'number' && perSet > 0) {
+    return Math.round(perSet * setsForRoom);
+  }
+  return legacyRates[provider.id]?.[roomId] ?? 0;
 }
 
 // Cleaning assignments: nested date → roomId → cleanerId
@@ -126,13 +173,14 @@ export async function GET() {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
   }
 
-  // Fetch all 6 keys in parallel
+  // Fetch all 7 keys in parallel
   const [
     cleanersRaw,
     assignmentsRaw,
     manualCleaningRaw,
     laundryRaw,
     laundryAssignmentsRaw,
+    laundrySetsRaw,
     entriesRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
@@ -140,6 +188,7 @@ export async function GET() {
     redis.get(KEY_MANUAL_CLEANING_EVENTS),
     redis.get(KEY_LAUNDRY_CONFIG),
     redis.get(KEY_LAUNDRY_ASSIGNMENTS),
+    redis.get('baker:laundry-sets'),
     redis.get(KEY_CONSUMABLE_ENTRIES),
   ]);
 
@@ -152,12 +201,17 @@ export async function GET() {
   const cleaningAssignments = (assignmentsRaw ?? {}) as CleaningAssignmentsNested;
   const manualCleaningEvents = (Array.isArray(manualCleaningRaw) ? manualCleaningRaw : []) as ManualCleaningEvent[];
   const laundryConfig = (laundryRaw ?? { providers: [], rates: {}, archived: [] }) as LaundryConfig;
-  // Same merge for archived laundry providers — historical (date, roomId)
-  // entries that reference an archive id need to find their snapshotted rate.
+  // Merge archived providers into the slot list so a per-set price snapshot
+  // on an archive id is also discoverable when we look up the provider.
+  const providerById = new Map<string, LaundryProviderSlot | ArchivedLaundryProvider>();
+  for (const p of laundryConfig.providers ?? []) providerById.set(p.id, p);
+  for (const a of laundryConfig.archived ?? []) providerById.set(a.id, a);
+  // Keep the legacy per-room map populated for the fallback path.
   for (const a of laundryConfig.archived ?? []) {
     laundryConfig.rates[a.id] = { ...a.rates };
   }
   const laundryAssignments = (laundryAssignmentsRaw ?? {}) as LaundryAssignmentsFlat;
+  const laundrySets = (laundrySetsRaw ?? { setsPerRoom: {} }) as LaundrySetsConfig;
   const consumableEntries = (entriesRaw ?? []) as ConsumableEntry[];
 
   const lookup: VariableCostsLookup = {};
@@ -208,14 +262,18 @@ export async function GET() {
     }
   }
 
-  // ── Laundry: flat assignments["date|roomId"] → providerId → rate ─────────
+  // ── Laundry: flat assignments["date|roomId"] → providerId → cost ─────────
+  //    Cost = sets × per-set price for the room's category, falling back to
+  //    legacy per-room rate when the provider hasn't migrated yet.
   for (const [key, providerId] of Object.entries(laundryAssignments)) {
     if (!providerId) continue;
     const [date, roomId] = key.split('|');
     if (!date || !roomId) continue;
-    const rate = laundryConfig.rates[providerId]?.[roomId] ?? 0;
-    if (rate > 0) {
-      ensureEntry(date, roomId).laundry = rate;
+    const provider = providerById.get(providerId);
+    if (!provider) continue;
+    const cost = laundryCostForAssignment(provider, roomId, laundrySets.setsPerRoom, laundryConfig.rates);
+    if (cost > 0) {
+      ensureEntry(date, roomId).laundry = cost;
     }
   }
 
