@@ -122,7 +122,7 @@ function computeTotals(
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
   }
 
-  // ── Variable costs: sum every cell in the period for the rooms in scope.
+  // ── Operational costs: sum every cell in the period for the rooms in scope.
   const inScopeRoomIds = new Set<string>(
     (selectedRooms ?? []).map((r) => ROOM_TO_BEDS24_ID[r]).filter(Boolean)
   );
@@ -275,7 +275,7 @@ export default function GrossProfitBridgeView({
         </div>
         <div className="bg-rose-50 rounded-xl p-4">
           <p className="text-xs font-medium text-rose-500 uppercase tracking-wide mb-1">
-            Variable Costs
+            Operational Costs
           </p>
           <p className="text-xl font-bold text-rose-600">−{fmt(totalVariableCosts)}</p>
           <p className="text-xs text-rose-400 mt-0.5">Cleaning · Laundry · Consumables · Subs · W&amp;T · Damages</p>
@@ -327,10 +327,10 @@ export default function GrossProfitBridgeView({
         </div>
       </div>
 
-      {/* Variable cost breakdown */}
+      {/* Operational cost breakdown */}
       <div className="border-t border-gray-100 pt-4">
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-          Variable Cost Detail
+          Operational Cost Detail
         </p>
         <table className="w-full text-sm">
           <thead>
@@ -360,7 +360,7 @@ export default function GrossProfitBridgeView({
           </tbody>
           <tfoot className="border-t border-gray-200">
             <tr>
-              <td className="py-2 text-xs font-medium text-gray-500">Total Variable</td>
+              <td className="py-2 text-xs font-medium text-gray-500">Total Operational</td>
               <td className="py-2 text-right text-xs font-bold text-rose-600">
                 −{fmt(totalVariableCosts)}
               </td>
