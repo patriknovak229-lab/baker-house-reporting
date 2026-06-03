@@ -13,9 +13,7 @@ import ChannelMixView from "./ChannelMixView";
 import GBVAdrView from "./GBVAdrView";
 import NetSalesBridgeView from "./NetSalesBridgeView";
 import GrossProfitBridgeView from "./GrossProfitBridgeView";
-import EBITDABridgeView from "./EBITDABridgeView";
 import type { VariableCostsLookup, VariableCostsResponse } from "@/app/api/variable-costs/route";
-import type { FixedCostEntry } from "@/app/api/fixed-costs/route";
 import { expandLinkedReservations } from "@/utils/expandReservations";
 
 export default function PerformancePage() {
@@ -24,7 +22,9 @@ export default function PerformancePage() {
   const [variableCostsByReservation, setVariableCostsByReservation] = useState<
     VariableCostsResponse['byReservation']
   >({});
-  const [fixedCosts, setFixedCosts] = useState<FixedCostEntry[]>([]);
+  const [subscriptionsByRoom, setSubscriptionsByRoom] = useState<
+    VariableCostsResponse['subscriptionsByRoom']
+  >({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -33,10 +33,9 @@ export default function PerformancePage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [bookingsRes, costsRes, fixedCostsRes] = await Promise.all([
+      const [bookingsRes, costsRes] = await Promise.all([
         fetch("/api/bookings"),
         fetch("/api/variable-costs"),
-        fetch("/api/fixed-costs"),
       ]);
       if (!bookingsRes.ok) {
         const json = await bookingsRes.json().catch(() => ({}));
@@ -52,14 +51,12 @@ export default function PerformancePage() {
         if (body && typeof body === 'object' && 'byDateRoom' in body) {
           setVariableCosts((body as VariableCostsResponse).byDateRoom);
           setVariableCostsByReservation((body as VariableCostsResponse).byReservation ?? {});
+          setSubscriptionsByRoom((body as VariableCostsResponse).subscriptionsByRoom ?? {});
         } else {
           setVariableCosts(body as VariableCostsLookup);
           setVariableCostsByReservation({});
+          setSubscriptionsByRoom({});
         }
-      }
-      if (fixedCostsRes.ok) {
-        const fc: FixedCostEntry[] = await fixedCostsRes.json();
-        setFixedCosts(fc);
       }
       setLastSynced(new Date());
     } catch (err) {
@@ -223,8 +220,14 @@ export default function PerformancePage() {
           <ChannelMixView reservations={filteredReservations} dateRange={dateRange} />
           <GBVAdrView reservations={filteredReservations} dateRange={dateRange} />
           <NetSalesBridgeView reservations={filteredReservations} dateRange={dateRange} />
-          <GrossProfitBridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} selectedRooms={selectedRooms} />
-          <EBITDABridgeView reservations={filteredReservations} dateRange={dateRange} variableCosts={variableCosts} variableCostsByReservation={variableCostsByReservation} fixedCosts={fixedCosts} selectedRooms={selectedRooms} />
+          <GrossProfitBridgeView
+            reservations={filteredReservations}
+            dateRange={dateRange}
+            variableCosts={variableCosts}
+            variableCostsByReservation={variableCostsByReservation}
+            subscriptionsByRoom={subscriptionsByRoom}
+            selectedRooms={selectedRooms}
+          />
         </div>
       )}
     </div>

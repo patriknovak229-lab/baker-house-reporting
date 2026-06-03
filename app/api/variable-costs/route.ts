@@ -14,6 +14,9 @@ const KEY_MANUAL_CLEANING_EVENTS = 'baker:manual-cleaning-events';
 const KEY_LAUNDRY_CONFIG = 'baker:laundry-config';
 const KEY_LAUNDRY_ASSIGNMENTS = 'baker:laundry-assignments';
 const KEY_CONSUMABLE_ENTRIES = 'baker:consumable-entries';
+const KEY_FIXED_COSTS_CONFIG = 'baker:fixed-costs-config';
+const KEY_WEAR_TEAR_EVENTS = 'baker:wear-tear-events';
+const KEY_DAMAGES_EVENTS = 'baker:damages-events';
 
 // ── Room mapping: Beds24 roomId → reporting display name ─────────────────────
 // Matches cleaning app src/lib/room-mapping.ts + reporting types/reservation.ts
@@ -145,19 +148,45 @@ interface ConsumableEntry {
   reservationNumber?: string;
 }
 
+/** Mirrors cleaning app's IncidentEvent (wear & tear / damages event log). */
+interface IncidentEvent {
+  id: string;
+  date: string;     // YYYY-MM-DD
+  roomId: string;
+  roomName?: string;
+  amount: number;
+  note?: string;
+  createdAt?: string;
+}
+
+/** Mirrors cleaning app's FixedCostItem (now exposed as Subscriptions). */
+interface SubscriptionItemRaw {
+  id: string;
+  label: string;
+  rooms: Record<string, { enabled: boolean; monthlyAmount: number }>;
+}
+
 export interface VariableCostEntry {
   cleaning: number;
   laundry: number;
   consumables: number;
+  /** Wear & Tear incident costs for this (date|roomId) or reservation. */
+  wearTear: number;
+  /** Damages incident costs for this (date|roomId) or reservation. */
+  damages: number;
 }
 
 // ── Response type: a flat map by "date|roomId" (legacy) + a byReservation
 //     map. Entries that carry a reservationNumber land in byReservation;
 //     entries without one fall back to byDateRoom so they still surface.
+//     Subscriptions are recurring monthly costs not tied to a date — exposed
+//     separately so the bridge can scale them by months-in-period.
 export type VariableCostsLookup = Record<string, VariableCostEntry>;
 export interface VariableCostsResponse {
   byDateRoom: VariableCostsLookup;
   byReservation: Record<string, VariableCostEntry>;
+  /** Subscriptions: monthlyAmount per Beds24 roomId (sum across line items). */
+  subscriptionsByRoom: Record<string, number>;
 }
 
 function getRedis(): Redis | null {
@@ -173,7 +202,7 @@ export async function GET() {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
   }
 
-  // Fetch all 8 keys in parallel — schedule snapshot lets us validate that
+  // Fetch all keys in parallel — schedule snapshot lets us validate that
   // a laundry assignment still has an underlying cleaning event (skip
   // orphans left behind by past cancellations).
   const [
@@ -185,6 +214,9 @@ export async function GET() {
     laundrySetsRaw,
     manualLaundryRaw,
     entriesRaw,
+    subscriptionsRaw,
+    wearTearRaw,
+    damagesRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
     redis.get(KEY_CLEANING_ASSIGNMENTS),
@@ -194,6 +226,9 @@ export async function GET() {
     redis.get('baker:laundry-sets'),
     redis.get('baker:manual-laundry-events'),
     redis.get(KEY_CONSUMABLE_ENTRIES),
+    redis.get(KEY_FIXED_COSTS_CONFIG),
+    redis.get(KEY_WEAR_TEAR_EVENTS),
+    redis.get(KEY_DAMAGES_EVENTS),
   ]);
 
   // Set of valid (date, roomId) cleanings — Beds24 tasks + manual laundry
@@ -245,12 +280,16 @@ export async function GET() {
 
   function ensureEntry(date: string, roomId: string): VariableCostEntry {
     const key = `${date}|${roomId}`;
-    if (!lookup[key]) lookup[key] = { cleaning: 0, laundry: 0, consumables: 0 };
+    if (!lookup[key]) {
+      lookup[key] = { cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0 };
+    }
     return lookup[key];
   }
   function ensureRes(reservationNumber: string): VariableCostEntry {
     if (!byReservation[reservationNumber]) {
-      byReservation[reservationNumber] = { cleaning: 0, laundry: 0, consumables: 0 };
+      byReservation[reservationNumber] = {
+        cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0,
+      };
     }
     return byReservation[reservationNumber];
   }
@@ -318,6 +357,37 @@ export async function GET() {
     }
   }
 
-  const body: VariableCostsResponse = { byDateRoom: lookup, byReservation };
+  // ── Wear & Tear: incident events (no reservation link). Aggregated by
+  //    (date, roomId) so they bucket into the same period+room scope as
+  //    cleaning/laundry/consumables.
+  const wearTearEvents = (Array.isArray(wearTearRaw) ? wearTearRaw : []) as IncidentEvent[];
+  for (const ev of wearTearEvents) {
+    if (!ev?.date || !ev?.roomId) continue;
+    if (!ev.amount || ev.amount <= 0) continue;
+    ensureEntry(ev.date, ev.roomId).wearTear += ev.amount;
+  }
+
+  // ── Damages: same shape as wear & tear.
+  const damagesEvents = (Array.isArray(damagesRaw) ? damagesRaw : []) as IncidentEvent[];
+  for (const ev of damagesEvents) {
+    if (!ev?.date || !ev?.roomId) continue;
+    if (!ev.amount || ev.amount <= 0) continue;
+    ensureEntry(ev.date, ev.roomId).damages += ev.amount;
+  }
+
+  // ── Subscriptions: recurring monthly per-room costs (internet, TV, …).
+  //    Sum across all line items into a single monthly per Beds24 roomId.
+  //    The bridge multiplies this by the number of months in the period.
+  const subscriptionItems = (Array.isArray(subscriptionsRaw) ? subscriptionsRaw : []) as SubscriptionItemRaw[];
+  const subscriptionsByRoom: Record<string, number> = {};
+  for (const item of subscriptionItems) {
+    for (const [roomId, cfg] of Object.entries(item.rooms ?? {})) {
+      if (!cfg?.enabled) continue;
+      if (!cfg.monthlyAmount || cfg.monthlyAmount <= 0) continue;
+      subscriptionsByRoom[roomId] = (subscriptionsByRoom[roomId] ?? 0) + cfg.monthlyAmount;
+    }
+  }
+
+  const body: VariableCostsResponse = { byDateRoom: lookup, byReservation, subscriptionsByRoom };
   return NextResponse.json(body);
 }
