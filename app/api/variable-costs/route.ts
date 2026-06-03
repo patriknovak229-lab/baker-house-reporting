@@ -164,6 +164,17 @@ interface SubscriptionItemRaw {
   id: string;
   label: string;
   rooms: Record<string, { enabled: boolean; monthlyAmount: number }>;
+  startDate?: string;
+  endDate?: string;
+}
+
+/** Subscription item shape returned to clients — same as raw + dates. */
+export interface SubscriptionItem {
+  id: string;
+  label: string;
+  rooms: Record<string, { enabled: boolean; monthlyAmount: number }>;
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface VariableCostEntry {
@@ -185,8 +196,13 @@ export type VariableCostsLookup = Record<string, VariableCostEntry>;
 export interface VariableCostsResponse {
   byDateRoom: VariableCostsLookup;
   byReservation: Record<string, VariableCostEntry>;
-  /** Subscriptions: monthlyAmount per Beds24 roomId (sum across line items). */
+  /** Subscriptions: monthlyAmount per Beds24 roomId (sum across line items)
+   *  — legacy snapshot, ignores effective dates. Callers that need
+   *  time-aware accounting should use `subscriptionItems`. */
   subscriptionsByRoom: Record<string, number>;
+  /** Raw subscription items with effective dates. Callers compute
+   *  months-active-in-range × monthlyAmount per scoped room. */
+  subscriptionItems: SubscriptionItem[];
 }
 
 function getRedis(): Redis | null {
@@ -376,9 +392,16 @@ export async function GET() {
   }
 
   // ── Subscriptions: recurring monthly per-room costs (internet, TV, …).
-  //    Sum across all line items into a single monthly per Beds24 roomId.
-  //    The bridge multiplies this by the number of months in the period.
-  const subscriptionItems = (Array.isArray(subscriptionsRaw) ? subscriptionsRaw : []) as SubscriptionItemRaw[];
+  //    Return raw items with effective dates for time-aware accounting,
+  //    plus a flat byRoom snapshot for legacy callers that ignore dates.
+  const subscriptionItemsRaw = (Array.isArray(subscriptionsRaw) ? subscriptionsRaw : []) as SubscriptionItemRaw[];
+  const subscriptionItems: SubscriptionItem[] = subscriptionItemsRaw.map((item) => ({
+    id: item.id,
+    label: item.label,
+    rooms: item.rooms ?? {},
+    ...(item.startDate ? { startDate: item.startDate } : {}),
+    ...(item.endDate ? { endDate: item.endDate } : {}),
+  }));
   const subscriptionsByRoom: Record<string, number> = {};
   for (const item of subscriptionItems) {
     for (const [roomId, cfg] of Object.entries(item.rooms ?? {})) {
@@ -388,6 +411,11 @@ export async function GET() {
     }
   }
 
-  const body: VariableCostsResponse = { byDateRoom: lookup, byReservation, subscriptionsByRoom };
+  const body: VariableCostsResponse = {
+    byDateRoom: lookup,
+    byReservation,
+    subscriptionsByRoom,
+    subscriptionItems,
+  };
   return NextResponse.json(body);
 }

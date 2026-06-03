@@ -12,7 +12,7 @@ import {
 import type { Reservation, Room } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
 import type { DateRange } from "@/utils/periodUtils";
-import type { VariableCostEntry, VariableCostsLookup } from "@/app/api/variable-costs/route";
+import type { VariableCostEntry, VariableCostsLookup, SubscriptionItem } from "@/app/api/variable-costs/route";
 import { ROOM_TO_BEDS24_ID } from "@/app/api/variable-costs/route";
 
 interface Props {
@@ -20,10 +20,36 @@ interface Props {
   dateRange: DateRange;
   variableCosts: VariableCostsLookup;
   variableCostsByReservation?: Record<string, VariableCostEntry>;
-  /** Subscriptions: monthly amount per Beds24 roomId. Scaled by months-in-period. */
-  subscriptionsByRoom?: Record<string, number>;
+  /** Raw subscription items with effective dates. Each (item × room)
+   *  contributes monthlyAmount × months-active-in-range. */
+  subscriptionItems?: SubscriptionItem[];
   /** Rooms in scope from the page-level filter; used to scope cost sums. */
   selectedRooms?: Room[];
+}
+
+/** Count distinct calendar months in inclusive [from, to] that overlap
+ *  with a subscription's active window. Mirrors cleaning-types.ts. */
+function subscriptionMonthsInRange(
+  item: { startDate?: string; endDate?: string },
+  from: string,
+  to: string
+): number {
+  const startMonth = (item.startDate ?? '0000-01').slice(0, 7);
+  const endMonth = (item.endDate ?? '9999-12').slice(0, 7);
+  const fromMonth = from.slice(0, 7);
+  const toMonth = to.slice(0, 7);
+  const [fy, fm] = fromMonth.split('-').map(Number);
+  const [ty, tm] = toMonth.split('-').map(Number);
+  let count = 0;
+  let cy = fy;
+  let cm = fm;
+  while (cy < ty || (cy === ty && cm <= tm)) {
+    const ym = `${cy}-${String(cm).padStart(2, '0')}`;
+    if (ym >= startMonth && ym <= endMonth) count += 1;
+    cm += 1;
+    if (cm > 12) { cm = 1; cy += 1; }
+  }
+  return count;
 }
 
 const fmt = (n: number) =>
@@ -84,7 +110,7 @@ function computeTotals(
   dateRange: DateRange,
   variableCosts: VariableCostsLookup,
   byReservation: Record<string, VariableCostEntry>,
-  subscriptionsByRoom: Record<string, number>,
+  subscriptionItems: SubscriptionItem[],
   selectedRooms?: Room[]
 ): Totals {
   // ── Net sales: per-reservation, fraction-of-stay within the period ────
@@ -136,12 +162,19 @@ function computeTotals(
     damages += res.damages ?? 0;
   }
 
-  // ── Subscriptions: scaled monthly per scoped room.
-  const months = countMonths(dateRange.start, dateRange.end);
+  // ── Subscriptions: per-item per-room months-active-in-range ×
+  //    monthlyAmount, so removed-mid-period items only count for the
+  //    months they were actually active.
   let subscriptions = 0;
-  for (const [roomId, monthly] of Object.entries(subscriptionsByRoom)) {
-    if (!roomInScope(roomId)) continue;
-    subscriptions += monthly * months;
+  for (const item of subscriptionItems) {
+    const monthsActive = subscriptionMonthsInRange(item, dateRange.start, dateRange.end);
+    if (monthsActive <= 0) continue;
+    for (const [roomId, cfg] of Object.entries(item.rooms ?? {})) {
+      if (!cfg?.enabled) continue;
+      if (!cfg.monthlyAmount || cfg.monthlyAmount <= 0) continue;
+      if (!roomInScope(roomId)) continue;
+      subscriptions += cfg.monthlyAmount * monthsActive;
+    }
   }
 
   const totalVariableCosts = cleaning + laundry + consumables + subscriptions + wearTear + damages;
@@ -164,7 +197,7 @@ export default function GrossProfitBridgeView({
   dateRange,
   variableCosts,
   variableCostsByReservation = {},
-  subscriptionsByRoom = {},
+  subscriptionItems = [],
   selectedRooms,
 }: Props) {
   if (reservations.length === 0) {
@@ -181,7 +214,7 @@ export default function GrossProfitBridgeView({
     dateRange,
     variableCosts,
     variableCostsByReservation,
-    subscriptionsByRoom,
+    subscriptionItems,
     selectedRooms
   );
   const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit } = totals;

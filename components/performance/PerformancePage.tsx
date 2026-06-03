@@ -22,9 +22,9 @@ export default function PerformancePage() {
   const [variableCostsByReservation, setVariableCostsByReservation] = useState<
     VariableCostsResponse['byReservation']
   >({});
-  const [subscriptionsByRoom, setSubscriptionsByRoom] = useState<
-    VariableCostsResponse['subscriptionsByRoom']
-  >({});
+  const [subscriptionItems, setSubscriptionItems] = useState<
+    VariableCostsResponse['subscriptionItems']
+  >([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -51,11 +51,11 @@ export default function PerformancePage() {
         if (body && typeof body === 'object' && 'byDateRoom' in body) {
           setVariableCosts((body as VariableCostsResponse).byDateRoom);
           setVariableCostsByReservation((body as VariableCostsResponse).byReservation ?? {});
-          setSubscriptionsByRoom((body as VariableCostsResponse).subscriptionsByRoom ?? {});
+          setSubscriptionItems((body as VariableCostsResponse).subscriptionItems ?? []);
         } else {
           setVariableCosts(body as VariableCostsLookup);
           setVariableCostsByReservation({});
-          setSubscriptionsByRoom({});
+          setSubscriptionItems([]);
         }
       }
       setLastSynced(new Date());
@@ -225,7 +225,7 @@ export default function PerformancePage() {
             dateRange={dateRange}
             variableCosts={variableCosts}
             variableCostsByReservation={variableCostsByReservation}
-            subscriptionsByRoom={subscriptionsByRoom}
+            subscriptionItems={subscriptionItems}
             selectedRooms={selectedRooms}
           />
         </div>
