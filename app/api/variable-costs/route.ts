@@ -173,7 +173,9 @@ export async function GET() {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
   }
 
-  // Fetch all 7 keys in parallel
+  // Fetch all 8 keys in parallel — schedule snapshot lets us validate that
+  // a laundry assignment still has an underlying cleaning event (skip
+  // orphans left behind by past cancellations).
   const [
     cleanersRaw,
     assignmentsRaw,
@@ -181,6 +183,7 @@ export async function GET() {
     laundryRaw,
     laundryAssignmentsRaw,
     laundrySetsRaw,
+    manualLaundryRaw,
     entriesRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
@@ -189,8 +192,31 @@ export async function GET() {
     redis.get(KEY_LAUNDRY_CONFIG),
     redis.get(KEY_LAUNDRY_ASSIGNMENTS),
     redis.get('baker:laundry-sets'),
+    redis.get('baker:manual-laundry-events'),
     redis.get(KEY_CONSUMABLE_ENTRIES),
   ]);
+
+  // Set of valid (date, roomId) cleanings — Beds24 tasks + manual laundry
+  // events. Used to reject orphan laundry assignments whose underlying
+  // event has been removed.
+  const validLaundryKeys = new Set<string>();
+  try {
+    const snapRaw = (await redis.get('baker:beds24-schedule-snapshot')) as {
+      schedule?: { tasks?: Array<{ date: string; roomId: string }> };
+    } | null;
+    for (const t of snapRaw?.schedule?.tasks ?? []) {
+      validLaundryKeys.add(`${t.date}|${t.roomId}`);
+    }
+  } catch {
+    /* if snapshot missing, fall back to counting every assignment */
+  }
+  const manualLaundryEvents = (Array.isArray(manualLaundryRaw) ? manualLaundryRaw : []) as Array<{
+    date: string;
+    roomId: string;
+  }>;
+  for (const m of manualLaundryEvents) {
+    validLaundryKeys.add(`${m.date}|${m.roomId}`);
+  }
 
   const cleanersConfig = (cleanersRaw ?? { cleaners: [], rates: {}, archived: [] }) as CleanersConfig;
   // Merge archived cleaner rates into the lookup so historical assignments
@@ -267,6 +293,10 @@ export async function GET() {
   //    legacy per-room rate when the provider hasn't migrated yet.
   for (const [key, providerId] of Object.entries(laundryAssignments)) {
     if (!providerId) continue;
+    // Skip orphan assignments (cleaning event has since been cancelled).
+    // If the snapshot wasn't available the set is empty — fall through and
+    // count everything to avoid silently zeroing the dashboard.
+    if (validLaundryKeys.size > 0 && !validLaundryKeys.has(key)) continue;
     const [date, roomId] = key.split('|');
     if (!date || !roomId) continue;
     const provider = providerById.get(providerId);
