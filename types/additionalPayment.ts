@@ -1,4 +1,33 @@
-export type AdditionalPaymentStatus = "unpaid" | "paid";
+export type AdditionalPaymentStatus =
+  | "unpaid"
+  | "paid"
+  | "partially-refunded"  // some money returned, some kept (paid - refunded > 0)
+  | "refunded";            // fully refunded (paid - refunded === 0)
+
+/**
+ * A single refund event against a paid AdditionalPayment. One payment can
+ * accumulate multiple partial refunds — sum to determine remaining balance.
+ * The Stripe refund object is the source of truth; this is our local mirror
+ * kept in sync via the charge.refunded webhook.
+ */
+export interface PaymentRefund {
+  /** Stripe refund id (re_…) — unique key. */
+  id: string;
+  /** Amount in CZK that was returned to the guest. Always positive. */
+  amountCzk: number;
+  /** ISO timestamp Stripe reported the refund created at. */
+  refundedAt: string;
+  /** Free-text note the operator entered when initiating (optional). */
+  reason?: string;
+  /** Operator email from the auth session when initiated via our app.
+   *  Empty when the refund was issued from the Stripe dashboard directly. */
+  refundedBy?: string;
+  /** Mirrors Stripe's refund.status. Most refunds go pending → succeeded
+   *  within seconds; failed is rare but possible (e.g. closed card account). */
+  status: 'pending' | 'succeeded' | 'failed' | 'canceled';
+  /** Stripe's failure_reason when status === 'failed'. */
+  failureReason?: string;
+}
 
 export interface AdditionalPayment {
   id: string;               // Stripe sessionId — unique key
@@ -26,4 +55,10 @@ export interface AdditionalPayment {
    * "Additional Payments" sub-list.
    */
   isMainPayment?: boolean;
+  /**
+   * Refund history. Empty/undefined for unrefunded payments. Synced
+   * automatically from Stripe via the charge.refunded webhook so both
+   * app-initiated AND dashboard-initiated refunds stay in sync.
+   */
+  refunds?: PaymentRefund[];
 }

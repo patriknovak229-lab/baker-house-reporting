@@ -213,9 +213,66 @@ function AdditionalPaymentRow({
   const [regenError, setRegenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Refund modal state
+  const [showRefundModal, setShowRefundModal] = useState(false);
+  const [refundAmount, setRefundAmount] = useState<string>('');
+  const [refundReason, setRefundReason] = useState<string>('');
+  const [refundSubmitting, setRefundSubmitting] = useState(false);
+  const [refundError, setRefundError] = useState<string | null>(null);
+
   const isUnpaid = ap.status === 'unpaid';
+  const isFullyRefunded = ap.status === 'refunded';
+  const isPartiallyRefunded = ap.status === 'partially-refunded';
+  const isRefundable = ap.status === 'paid' || isPartiallyRefunded;
   const ageMs = Date.now() - new Date(ap.createdAt).getTime();
   const linkExpired = isUnpaid && ageMs > PAYMENT_LINK_TTL_MS;
+
+  // Sum refunds (succeeded + pending) to compute remaining refundable
+  const refundsList = ap.refunds ?? [];
+  const totalRefunded = refundsList
+    .filter((r) => r.status === 'succeeded' || r.status === 'pending')
+    .reduce((sum, r) => sum + r.amountCzk, 0);
+  const remainingRefundable = Math.max(0, ap.amountCzk - totalRefunded);
+
+  function openRefundModal() {
+    setRefundAmount(String(remainingRefundable));
+    setRefundReason('');
+    setRefundError(null);
+    setShowRefundModal(true);
+  }
+
+  async function handleSubmitRefund() {
+    const amount = Number(refundAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setRefundError('Enter a positive amount');
+      return;
+    }
+    if (amount > remainingRefundable) {
+      setRefundError(`Max refundable is ${remainingRefundable.toLocaleString('cs-CZ')} Kč`);
+      return;
+    }
+    setRefundSubmitting(true);
+    setRefundError(null);
+    try {
+      const res = await fetch('/api/stripe/refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: ap.id,
+          amountCzk: amount,
+          reason: refundReason.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setShowRefundModal(false);
+      onRefresh?.();
+    } catch (err) {
+      setRefundError(err instanceof Error ? err.message : 'Refund failed');
+    } finally {
+      setRefundSubmitting(false);
+    }
+  }
 
   async function handleToggleStatus() {
     setBusy(true);
@@ -313,11 +370,53 @@ function AdditionalPaymentRow({
           <p className="text-xs font-medium text-gray-900">
             {ap.amountCzk.toLocaleString("cs-CZ")} Kč
           </p>
-          <span className={`text-[10px] font-medium ${isUnpaid ? "text-amber-600" : "text-emerald-600"}`}>
-            {isUnpaid ? (linkExpired ? "Pending · expired" : "Pending") : "Paid"}
+          <span
+            className={`text-[10px] font-medium ${
+              isUnpaid ? "text-amber-600"
+              : isFullyRefunded ? "text-rose-600"
+              : isPartiallyRefunded ? "text-orange-600"
+              : "text-emerald-600"
+            }`}
+          >
+            {isUnpaid
+              ? (linkExpired ? "Pending · expired" : "Pending")
+              : isFullyRefunded
+                ? "Refunded"
+                : isPartiallyRefunded
+                  ? `Partially refunded · ${remainingRefundable.toLocaleString("cs-CZ")} Kč left`
+                  : "Paid"}
           </span>
         </div>
       </div>
+
+      {/* Refund history — listed beneath the row when any refund exists */}
+      {refundsList.length > 0 && (
+        <div className="ml-7 space-y-0.5">
+          {refundsList.map((r) => (
+            <div
+              key={r.id}
+              className="flex items-center gap-1.5 text-[10px] text-gray-600"
+              title={`Refund ${r.id}${r.refundedBy ? ` · by ${r.refundedBy}` : ''}${r.failureReason ? ` · ${r.failureReason}` : ''}`}
+            >
+              <span className="text-rose-500">↩</span>
+              <span className="font-medium text-gray-800">
+                −{r.amountCzk.toLocaleString('cs-CZ')} Kč
+              </span>
+              <span className="text-gray-400">·</span>
+              <span>{r.refundedAt.slice(0, 10)}</span>
+              {r.status === 'pending' && (
+                <span className="text-amber-600">· pending</span>
+              )}
+              {r.status === 'failed' && (
+                <span className="text-red-600 font-medium">· failed</span>
+              )}
+              {r.reason && (
+                <span className="text-gray-500 italic truncate ml-1">&ldquo;{r.reason}&rdquo;</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Regenerated link preview (after Regenerate succeeds) */}
       {regeneratedUrl && (
@@ -377,6 +476,16 @@ function AdditionalPaymentRow({
           >
             Mark as {isUnpaid ? "paid" : "unpaid"}
           </button>
+          {isRefundable && remainingRefundable > 0 && (
+            <button
+              onClick={openRefundModal}
+              disabled={busy}
+              className="text-[10px] font-medium px-2 py-0.5 rounded border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-40 transition-colors"
+              title={`Issue a partial or full refund (up to ${remainingRefundable.toLocaleString('cs-CZ')} Kč remaining)`}
+            >
+              {isPartiallyRefunded ? "Refund more" : "Refund"}
+            </button>
+          )}
           <button
             onClick={() => setConfirmDelete(true)}
             disabled={busy}
@@ -402,6 +511,111 @@ function AdditionalPaymentRow({
           >
             Cancel
           </button>
+        </div>
+      )}
+
+      {/* Refund modal — opens when operator clicks "Refund" / "Refund more" */}
+      {showRefundModal && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={() => !refundSubmitting && setShowRefundModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h2 className="text-base font-semibold text-gray-900">Refund payment</h2>
+              <button
+                onClick={() => !refundSubmitting && setShowRefundModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+                disabled={refundSubmitting}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-3">
+              <div className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-[12px] space-y-0.5">
+                <div className="flex justify-between text-gray-600">
+                  <span>Original payment</span>
+                  <span className="text-gray-900 font-medium">{ap.amountCzk.toLocaleString("cs-CZ")} Kč</span>
+                </div>
+                {totalRefunded > 0 && (
+                  <div className="flex justify-between text-gray-600">
+                    <span>Already refunded</span>
+                    <span className="text-rose-700 font-medium">−{totalRefunded.toLocaleString("cs-CZ")} Kč</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-gray-700 pt-1 border-t border-gray-200 mt-1">
+                  <span className="font-medium">Available to refund</span>
+                  <span className="text-gray-900 font-semibold">
+                    {remainingRefundable.toLocaleString("cs-CZ")} Kč
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Amount to refund (CZK) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max={remainingRefundable}
+                  step="1"
+                  value={refundAmount}
+                  onChange={(e) => setRefundAmount(e.target.value)}
+                  placeholder={String(remainingRefundable)}
+                  disabled={refundSubmitting}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-300 disabled:bg-gray-50"
+                  autoFocus
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Max {remainingRefundable.toLocaleString("cs-CZ")} Kč — defaults to full available
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Reason <span className="text-gray-400 font-normal">(optional, for your records)</span>
+                </label>
+                <input
+                  type="text"
+                  value={refundReason}
+                  onChange={(e) => setRefundReason(e.target.value)}
+                  placeholder="e.g. Guest didn't use parking; double-charged extras"
+                  disabled={refundSubmitting}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-300 disabled:bg-gray-50"
+                />
+              </div>
+
+              {refundError && (
+                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {refundError}
+                </p>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+              <button
+                onClick={() => setShowRefundModal(false)}
+                disabled={refundSubmitting}
+                className="px-4 py-2 text-sm text-gray-700 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitRefund}
+                disabled={refundSubmitting || !refundAmount}
+                className="px-4 py-2 text-sm bg-rose-600 text-white rounded-md hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {refundSubmitting ? "Processing…" : "Confirm refund"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

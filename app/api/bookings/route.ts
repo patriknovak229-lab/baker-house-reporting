@@ -30,7 +30,14 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
   const allPayments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
   const feeByRes = new Map<string, number>();
   for (const ap of allPayments) {
-    if (ap.status !== "paid" || typeof ap.stripeFeeCzk !== "number") continue;
+    // Include paid / partially-refunded / refunded — the Stripe fee was
+    // incurred at charge time and stays with the operator even after a
+    // refund (Stripe doesn't return the processing fee on refund).
+    const counted =
+      ap.status === "paid" ||
+      ap.status === "partially-refunded" ||
+      ap.status === "refunded";
+    if (!counted || typeof ap.stripeFeeCzk !== "number") continue;
     feeByRes.set(ap.reservationNumber, (feeByRes.get(ap.reservationNumber) ?? 0) + ap.stripeFeeCzk);
   }
 

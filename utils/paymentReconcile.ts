@@ -96,9 +96,23 @@ export async function recomputePaymentOverride(
       ? (overridesRaw as Record<string, LocalFields>)
       : {};
 
+  // Sum net paid (amount minus successful/pending refunds) across all
+  // AdditionalPayments for this reservation. A fully-refunded payment
+  // contributes 0; partially-refunded contributes the remainder. Also
+  // include 'partially-refunded' and 'refunded' statuses (a refunded
+  // payment was once paid — the refund is reflected in the subtraction).
   const paidSum = allPayments
-    .filter((p) => p.reservationNumber === reservationNumber && p.status === 'paid')
-    .reduce((sum, p) => sum + (p.amountCzk ?? 0), 0);
+    .filter((p) =>
+      p.reservationNumber === reservationNumber &&
+      (p.status === 'paid' || p.status === 'partially-refunded' || p.status === 'refunded'),
+    )
+    .reduce((sum, p) => {
+      const refundedSum = (p.refunds ?? [])
+        .filter((r) => r.status === 'succeeded' || r.status === 'pending')
+        .reduce((s, r) => s + r.amountCzk, 0);
+      const net = Math.max(0, (p.amountCzk ?? 0) - refundedSum);
+      return sum + net;
+    }, 0);
 
   if (bookingPrice === null) {
     // Can't fetch price → can't decide. Leave override untouched.

@@ -19,7 +19,7 @@ import Stripe from 'stripe';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
-import type { AdditionalPayment } from '@/types/additionalPayment';
+import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';
 
@@ -40,8 +40,8 @@ interface DetailRow {
   id: string;
   amountCzk: number;
   description: string;
-  before: 'unpaid' | 'paid';
-  after: 'unpaid' | 'paid';
+  before: AdditionalPaymentStatus;
+  after: AdditionalPaymentStatus;
   stripeStatus: string | null;
   changed: boolean;
 }
