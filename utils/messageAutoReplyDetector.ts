@@ -27,28 +27,58 @@ export type AutoReplyCategory =
   | 'invoice-request'
   | 'other';
 
+/**
+ * Sub-classification of a `parking` message so the template path can pick
+ * the right reply. Only meaningful when category === 'parking'.
+ *   general  — where/how to park, where their assigned space is
+ *   ev       — EV charging question
+ *   early    — wants to park before check-in
+ *   late     — wants to keep the car past checkout
+ *   taken    — someone else is in their assigned space
+ *   multiple — wants more than one space
+ */
+export type ParkingIntent =
+  | 'general'
+  | 'ev'
+  | 'early'
+  | 'late'
+  | 'taken'
+  | 'multiple';
+
 export interface DetectionResult {
   category: AutoReplyCategory;
   /** 0-1 — Haiku's self-reported confidence. Caller compares against 0.8. */
   confidence: number;
   /** ISO 639-1 (en, cs, de, fr, it, pl, es, ru, ...). Empty when undetectable. */
   language: string;
+  /** Only set when category === 'parking' (defaults to 'general'); undefined
+   *  for every other category. Lets the template path pick the right reply. */
+  parkingIntent?: ParkingIntent;
 }
 
 const SYSTEM_PROMPT = `You categorise hotel guest messages for Baker House Apartments in Brno.
 
 Pick ONE category that best matches the guest's INTENT:
 
-- parking — asking about general parking (availability, location, garage access/entry, where to leave the car, basic parking instructions). Do NOT classify under parking if the guest asks about any of: EV charging, vehicle height/size limits, a second parking spot or two cars, or keeping the car parked outside of their stay — those compound/edge-case questions go to "other" so the operator handles them.
+- parking — the guest is asking about the car or the garage. When you choose this category you MUST also set "parkingIntent" to the closest match:
+    - "general": where/how to park, getting into the garage, where their assigned space is, basic parking instructions.
+    - "ev": charging an electric vehicle.
+    - "early": wants to park the car BEFORE their check-in time (e.g. "we arrive at 11:00, can we leave the car already?").
+    - "late": wants to keep the car in the garage AFTER checkout (e.g. "can the car stay until the afternoon?").
+    - "taken": reports that someone else is parked in their assigned space.
+    - "multiple": asks for more than one space or to park a second car.
+  Vehicle HEIGHT or size-limit questions do NOT go here — classify those as "other" for the operator.
 - wifi — asking for wifi password, network name, or how to connect.
 - minibar — asking about the minibar (what's inside, prices, can they take items, restock).
-- early-checkin — asking to check in EARLIER than the standard 15:00. Includes "we'll arrive at noon, can we go up?".
-- late-checkout — asking to check out LATER than the standard 11:00. Includes "can we keep the room until X".
+- early-checkin — asking to access the APARTMENT earlier than the standard 15:00 ("we'll arrive at noon, can we go up?"). If the guest only asks about parking the CAR early, that is parking with parkingIntent "early", not early-checkin.
+- late-checkout — asking to stay in the APARTMENT later than the standard 10:30 ("can we keep the room until X"). If the guest only asks about keeping the CAR in the garage later, that is parking with parkingIntent "late", not late-checkout.
 - invoice-request — asking for an invoice / fakturu / fakturovat / VAT receipt. Includes Booking.com's "I need an invoice" auto-template AND ad-hoc requests like "could you send me an invoice for company X, IČO Y". Also: messages that ONLY contain billing details ("our IČO is 12345678" or "Company name: ABC s.r.o.") — those are follow-ups to a prior invoice request and should be routed here too.
 - other — anything else (greetings, complaints, restaurant tips, lost items, etc.). When the message asks about TWO categories at once (e.g. parking AND wifi), return "other" — the operator handles compound queries.
 
 Output ONLY a single JSON object on one line, no preamble:
-{"category": "<one of the above>", "confidence": <0.0-1.0>, "language": "<ISO 639-1>"}
+{"category": "<one of the above>", "parkingIntent": "<general|ev|early|late|taken|multiple>", "confidence": <0.0-1.0>, "language": "<ISO 639-1>"}
+
+Only include "parkingIntent" when category is "parking"; omit it for every other category.
 
 Confidence guidance:
 - 0.95+ when the message clearly and only asks about that category
@@ -128,6 +158,9 @@ function parseJsonBlock(raw: string): DetectionResult | null {
   if (!category) return null;
   const confidence = Math.max(0, Math.min(1, Number(obj.confidence) || 0));
   const language = typeof obj.language === 'string' ? obj.language.trim().toLowerCase() : '';
+  if (category === 'parking') {
+    return { category, confidence, language, parkingIntent: normaliseParkingIntent(obj.parkingIntent) };
+  }
   return { category, confidence, language };
 }
 
@@ -145,5 +178,29 @@ function normaliseCategory(v: unknown): AutoReplyCategory | null {
       return s;
     default:
       return null;
+  }
+}
+
+/**
+ * Map the model's parkingIntent to our enum. Defaults to 'general' so a
+ * parking message without a usable sub-intent still gets the standard
+ * space-assignment reply rather than silently failing.
+ */
+function normaliseParkingIntent(v: unknown): ParkingIntent {
+  if (typeof v !== 'string') return 'general';
+  switch (v.trim().toLowerCase()) {
+    case 'ev':
+      return 'ev';
+    case 'early':
+      return 'early';
+    case 'late':
+      return 'late';
+    case 'taken':
+      return 'taken';
+    case 'multiple':
+      return 'multiple';
+    case 'general':
+    default:
+      return 'general';
   }
 }

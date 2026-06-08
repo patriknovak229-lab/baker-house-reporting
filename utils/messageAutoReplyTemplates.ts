@@ -10,7 +10,7 @@
  */
 
 import type { Reservation } from '@/types/reservation';
-import type { AutoReplyCategory } from '@/utils/messageAutoReplyDetector';
+import type { AutoReplyCategory, ParkingIntent } from '@/utils/messageAutoReplyDetector';
 import type { ParkingResult } from '@/utils/parkingUtils';
 import { PARKING_SPACES } from '@/utils/parkingUtils';
 import { roomToCategory } from '@/utils/roomCategory';
@@ -38,10 +38,11 @@ export function buildTemplate(
   category: Exclude<AutoReplyCategory, 'other' | 'invoice-request'>,
   reservation: Reservation,
   parking: ParkingResult,
+  parkingIntent: ParkingIntent = 'general',
 ): BuiltTemplate | null {
   switch (category) {
     case 'parking':
-      return buildParkingTemplate(reservation, parking);
+      return buildParkingTemplate(reservation, parking, parkingIntent);
     case 'wifi':
       return buildWifiTemplate(reservation);
     case 'minibar':
@@ -58,7 +59,16 @@ export function buildTemplate(
 function buildParkingTemplate(
   reservation: Reservation,
   parking: ParkingResult,
+  intent: ParkingIntent = 'general',
 ): BuiltTemplate | null {
+  // Specific parking sub-cases (EV, early/late parking, taken spot, extra
+  // space) get their own fixed denial/holding replies and don't depend on
+  // the assigned space. Only 'general' falls through to the space-assignment
+  // logic below.
+  if (intent !== 'general') {
+    return buildParkingSubIntentTemplate(reservation, intent);
+  }
+
   const assignment = parking.byReservation.get(reservation.reservationNumber);
 
   // Manual "no parking" → tell the guest honestly.
@@ -98,6 +108,50 @@ function buildParkingTemplate(
       SUBLEVEL: String(subLevel),
     },
   };
+}
+
+/**
+ * Fixed replies for the specific parking sub-cases. These are short policy
+ * answers that don't depend on the assigned space, so they short-circuit
+ * the space-assignment logic. Authored EN with a {NAME} slot; greeting +
+ * "— Zuzana" are added by renderAutoReply, and the body is translated.
+ */
+function buildParkingSubIntentTemplate(
+  reservation: Reservation,
+  intent: Exclude<ParkingIntent, 'general'>,
+): BuiltTemplate {
+  const NAME = reservation.firstName || 'there';
+  switch (intent) {
+    case 'ev':
+      return {
+        template: "{NAME}! Unfortunately EV charging isn't available in our garage.",
+        substitutions: { NAME },
+      };
+    case 'early':
+      return {
+        template:
+          "{NAME}! I'm sorry, but earlier parking isn't possible. You're welcome to park your car once your check-in begins.",
+        substitutions: { NAME },
+      };
+    case 'late':
+      return {
+        template:
+          "{NAME}! I'm sorry, but we're not able to keep cars in the garage after checkout. We'd kindly ask you to manage around the checkout time - 10:30.",
+        substitutions: { NAME },
+      };
+    case 'taken':
+      return {
+        template:
+          '{NAME}! I\'m sorry about that. For now please park in any free space marked "Baker House Apartments", and keep your phone reachable — I\'ll be in touch to sort it out.',
+        substitutions: { NAME },
+      };
+    case 'multiple':
+      return {
+        template:
+          "{NAME}! I'm sorry, but each apartment has exactly one parking space assigned to it, so we're unable to offer a second one.",
+        substitutions: { NAME },
+      };
+  }
 }
 
 // ─── WiFi ────────────────────────────────────────────────────────────────────
@@ -186,7 +240,7 @@ function buildEarlyCheckinTemplate(): BuiltTemplate {
 // ─── Late checkout ───────────────────────────────────────────────────────────
 
 /**
- * Operator policy (2026-05-24): checkout up to 11:00 is always fine —
+ * Operator policy (2026-05-24): checkout up to 10:30 is always fine —
  * confirm immediately. Anything later depends on the next arrival and
  * the cleaning schedule, so we promise to confirm on the day rather
  * than commit. Both cases get the same message — it's accurate either
@@ -196,7 +250,7 @@ function buildEarlyCheckinTemplate(): BuiltTemplate {
 function buildLateCheckoutTemplate(): BuiltTemplate {
   return {
     template:
-      '{NAME}! Checkout by 11:00 is always fine. For anything later we’ll confirm on the day based on the next arrival.',
+      '{NAME}! Checkout by 10:30 is always fine. For anything later we’ll confirm on the day based on the next arrival.',
     substitutions: {
       NAME: '{NAME}',
     },

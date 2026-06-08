@@ -31,8 +31,10 @@ export const PARKING_FACTS = `
 - The entrance to the underground parking is NOT the first gate next to
   the main entrance — that is a service/emergency door. The correct gate
   is the next one along, approximately 20 metres from the reception door.
-- On DEPARTURE DAY the guest may keep the car parked until 13:00, when
-  keys must be returned and the space made available for the next guest.
+- Parking is available only DURING the stay: the car cannot be parked
+  before the guest's check-in time, and on departure day it must be out
+  of the garage by checkout (10:30). We cannot hold the space later, even
+  when no one is arriving that day.
 - We do NOT offer separate parking outside the dates of the guest's stay.
 `.trim();
 
@@ -60,7 +62,7 @@ export const EARLY_CHECKIN_FACTS = `
 `.trim();
 
 export const LATE_CHECKOUT_FACTS = `
-- Standard checkout time is 11:00.
+- Standard checkout time is 10:30.
 - Late checkout MAY be possible but depends on the next reservation and
   cleaning timing. The operator decides on the day.
 - Never promise a specific later time without operator confirmation.

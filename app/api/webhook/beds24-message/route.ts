@@ -41,6 +41,7 @@ import { sendBeds24Message } from '@/utils/beds24Messages';
 import {
   detectAutoReplyCategory,
   type AutoReplyCategory,
+  type ParkingIntent,
 } from '@/utils/messageAutoReplyDetector';
 import {
   buildTemplate,
@@ -138,6 +139,18 @@ const PENDING_OTHERS_KEY = 'baker:auto-reply:pending-others';
 const MAX_AUTO_REPLIES_PER_BOOKING_PER_DAY = 3;
 const CONFIDENCE_THRESHOLD = 0.8;
 const NATURAL_FEEL_DELAY_MS = 10_000;
+
+/**
+ * Categories currently in REVIEW-ONLY mode. Instead of auto-sending, the
+ * fully-rendered reply (correct sub-case + translated) is queued for
+ * operator approval in `pending-drafts` — the same queue the operator
+ * already approves/edits/dismisses from. Lets us trial new reply logic
+ * safely before letting it auto-send.
+ *
+ * TEST started 2026-06-08 — parking sub-intent replies. Remove 'parking'
+ * from this set once the 1–2 week review trial is done to resume auto-send.
+ */
+const REVIEW_ONLY_CATEGORIES = new Set<AutoReplyCategory>(['parking']);
 
 // Beds24 roomId → physical Room name. Keep in sync with UNIT_MAP in
 // app/api/bookings/route.ts. Intentionally duplicated rather than imported
@@ -613,13 +626,105 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
     return;
   }
 
+  // ── Review-only gate (test phase) ──────────────────────────────────────────
+  // For categories under trial, never auto-send: render the EXACT reply that
+  // would have gone out (correct sub-case + translated) and queue it for
+  // operator approval (pending-drafts) instead. Bypasses the one-shot lock and
+  // daily rate limit so every message surfaces a fresh, correctly-classified
+  // draft. Remove the category from REVIEW_ONLY_CATEGORIES to resume auto-send.
+  if (REVIEW_ONLY_CATEGORIES.has(detection.category)) {
+    const reviewReservation = await buildReservationContext(redis, bookingId, booking);
+    if (!reviewReservation) {
+      await appendLog(redis, {
+        id: makeLogId(),
+        beds24MessageId: messageId,
+        beds24SentMessageId: null,
+        bookingId,
+        reservationNumber,
+        category: detection.category,
+        confidence: detection.confidence,
+        language: detection.language,
+        action: 'errored',
+        sentText: null,
+        detail: 'reservation context unavailable (review mode)',
+        decidedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    const reviewAll = await loadAllReservations(redis);
+    const reviewParking = computeParking(reviewAll.length > 0 ? reviewAll : [reviewReservation]);
+    const reviewBuilt = buildTemplate(
+      detection.category,
+      reviewReservation,
+      reviewParking,
+      detection.parkingIntent,
+    );
+    if (!reviewBuilt) {
+      await appendLog(redis, {
+        id: makeLogId(),
+        beds24MessageId: messageId,
+        beds24SentMessageId: null,
+        bookingId,
+        reservationNumber,
+        category: detection.category,
+        confidence: detection.confidence,
+        language: detection.language,
+        action: 'skipped-no-template',
+        sentText: null,
+        detail: `no template for ${detection.category} on room ${reviewReservation.room} (review mode)`,
+        decidedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    const reviewText = await renderAutoReply(
+      reviewBuilt,
+      reviewReservation.firstName,
+      detection.language,
+    );
+    if (redis) {
+      await persistPendingDraft(redis, {
+        beds24MessageId: messageId,
+        bookingId,
+        reservationNumber,
+        guestMessageText: messageText,
+        guestMessageTime: new Date().toISOString(),
+        category: detection.category,
+        confidence: detection.confidence,
+        language: detection.language,
+        draftText: reviewText,
+        parkingIntent: detection.parkingIntent,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    await appendLog(redis, {
+      id: makeLogId(),
+      beds24MessageId: messageId,
+      beds24SentMessageId: null,
+      bookingId,
+      reservationNumber,
+      category: detection.category,
+      confidence: detection.confidence,
+      language: detection.language,
+      action: 'queued-draft',
+      sentText: null,
+      detail: `review mode (${detection.category}${detection.parkingIntent ? `/${detection.parkingIntent}` : ''}) — rendered reply queued for operator approval`,
+      decidedAt: new Date().toISOString(),
+    });
+    console.log(
+      `[auto-reply] review mode — queued ${detection.category}/${detection.parkingIntent ?? '-'} draft for booking ${bookingId}`,
+    );
+    return;
+  }
+
   // ── One-shot per-category lock check ───────────────────────────────────────
   // Even if this is a recognised, high-confidence category, only the FIRST
   // such question per booking auto-sends. Subsequent messages on the same
   // category get drafted for operator approval — protects against the
-  // canned reply firing on every follow-up.
+  // canned reply firing on every follow-up. For parking the lock is keyed per
+  // sub-intent, so answering "where's my spot?" doesn't suppress a later
+  // "can I charge my EV?".
   if (redis) {
-    const locked = await isCategoryLocked(redis, bookingId, detection.category);
+    const locked = await isCategoryLocked(redis, bookingId, detection.category, detection.parkingIntent);
     if (locked) {
       // Build reservation context so the drafter has guest name + room.
       // If it fails (cache miss) we still queue the message with empty
@@ -723,7 +828,7 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
   // ── Step 5: build the template ─────────────────────────────────────────────
   const allReservations = await loadAllReservations(redis);
   const parking = computeParking(allReservations.length > 0 ? allReservations : [reservation]);
-  const built = buildTemplate(detection.category, reservation, parking);
+  const built = buildTemplate(detection.category, reservation, parking, detection.parkingIntent);
   if (!built) {
     console.log(`[auto-reply] no template for ${detection.category} on ${reservation.room} — skipping`);
     await appendLog(redis, {
@@ -783,8 +888,9 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 
     // Set the one-shot per-category lock so any follow-up message in this
     // category for this booking goes through the operator approval queue
-    // rather than auto-sending again.
-    await lockCategory(redis, bookingId, detection.category);
+    // rather than auto-sending again. Keyed per parking sub-intent so each
+    // distinct parking question can still auto-reply once.
+    await lockCategory(redis, bookingId, detection.category, detection.parkingIntent);
 
     if (detection.category === 'early-checkin' || detection.category === 'late-checkout') {
       await appendIssueToReservation(
@@ -988,6 +1094,9 @@ export interface PendingDraft {
   guestMessageText: string;
   guestMessageTime: string;
   category: AutoReplyCategory;
+  /** Parking sub-intent when category==='parking' — surfaced for the operator
+   *  and for audit. Undefined for every other category. */
+  parkingIntent?: ParkingIntent;
   confidence: number;
   language: string;
   draftText: string;
@@ -1015,16 +1124,25 @@ export interface PendingOther {
   createdAt: string;
 }
 
-function categoryLockKey(bookingId: number, category: AutoReplyCategory): string {
-  return `${CATEGORY_SENT_PREFIX}:${bookingId}:${category}`;
+// Optional `subKey` namespaces the lock below the category — used to key
+// the parking lock per sub-intent so each distinct parking question can
+// still auto-reply once.
+function categoryLockKey(
+  bookingId: number,
+  category: AutoReplyCategory,
+  subKey?: string,
+): string {
+  const base = `${CATEGORY_SENT_PREFIX}:${bookingId}:${category}`;
+  return subKey ? `${base}:${subKey}` : base;
 }
 
 async function isCategoryLocked(
   redis: Redis,
   bookingId: number,
   category: AutoReplyCategory,
+  subKey?: string,
 ): Promise<boolean> {
-  const v = await redis.get(categoryLockKey(bookingId, category));
+  const v = await redis.get(categoryLockKey(bookingId, category, subKey));
   return v !== null && v !== undefined;
 }
 
@@ -1032,8 +1150,9 @@ async function lockCategory(
   redis: Redis,
   bookingId: number,
   category: AutoReplyCategory,
+  subKey?: string,
 ): Promise<void> {
-  await redis.set(categoryLockKey(bookingId, category), Date.now(), {
+  await redis.set(categoryLockKey(bookingId, category, subKey), Date.now(), {
     ex: CATEGORY_LOCK_TTL_SECONDS,
   });
 }
