@@ -30,18 +30,17 @@ export type AutoReplyCategory =
 /**
  * Sub-classification of a `parking` message so the template path can pick
  * the right reply. Only meaningful when category === 'parking'.
- *   general  — where/how to park, where their assigned space is
- *   ev       — EV charging question
- *   early    — wants to park before check-in
- *   late     — wants to keep the car past checkout
- *   taken    — someone else is in their assigned space
- *   multiple — wants more than one space
+ *   general       — where/how to park, where their assigned space is
+ *   ev            — EV charging question
+ *   outside-hours — wants the car parked outside the stay window: before
+ *                   check-in, after checkout, or both (all declined)
+ *   taken         — someone else is in their assigned space
+ *   multiple      — wants more than one space / a second car
  */
 export type ParkingIntent =
   | 'general'
   | 'ev'
-  | 'early'
-  | 'late'
+  | 'outside-hours'
   | 'taken'
   | 'multiple';
 
@@ -63,20 +62,19 @@ Pick ONE category that best matches the guest's INTENT:
 - parking — the guest is asking about the car or the garage. When you choose this category you MUST also set "parkingIntent" to the closest match:
     - "general": where/how to park, getting into the garage, where their assigned space is, basic parking instructions.
     - "ev": charging an electric vehicle.
-    - "early": wants to park the car BEFORE their check-in time (e.g. "we arrive at 11:00, can we leave the car already?").
-    - "late": wants to keep the car in the garage AFTER checkout (e.g. "can the car stay until the afternoon?").
+    - "outside-hours": wants the car in the garage OUTSIDE their stay window — dropping off or leaving the car BEFORE check-in, AND/OR keeping or collecting it AFTER checkout (e.g. "can we drop the car off before check-in around 9am and collect it after checkout on Sunday afternoon?"). This is about the TIMING of a single car, not the number of cars. A request mentioning BOTH an early drop-off and a late pick-up is still "outside-hours".
     - "taken": reports that someone else is parked in their assigned space.
-    - "multiple": asks for more than one space or to park a second car.
+    - "multiple": ONLY when the guest wants to park MORE THAN ONE car or needs a SECOND space. A single car dropped off early and/or collected late is "outside-hours", NOT "multiple".
   Vehicle HEIGHT or size-limit questions do NOT go here — classify those as "other" for the operator.
 - wifi — asking for wifi password, network name, or how to connect.
 - minibar — asking about the minibar (what's inside, prices, can they take items, restock).
-- early-checkin — asking to access the APARTMENT earlier than the standard 15:00 ("we'll arrive at noon, can we go up?"). If the guest only asks about parking the CAR early, that is parking with parkingIntent "early", not early-checkin.
-- late-checkout — asking to stay in the APARTMENT later than the standard 10:30 ("can we keep the room until X"). If the guest only asks about keeping the CAR in the garage later, that is parking with parkingIntent "late", not late-checkout.
+- early-checkin — asking to access the APARTMENT earlier than the standard 15:00 ("we'll arrive at noon, can we go up?"). If the guest only asks about parking the CAR before check-in, that is parking with parkingIntent "outside-hours", not early-checkin.
+- late-checkout — asking to stay in the APARTMENT later than the standard 10:30 ("can we keep the room until X"). If the guest only asks about keeping the CAR in the garage after checkout, that is parking with parkingIntent "outside-hours", not late-checkout.
 - invoice-request — asking for an invoice / fakturu / fakturovat / VAT receipt. Includes Booking.com's "I need an invoice" auto-template AND ad-hoc requests like "could you send me an invoice for company X, IČO Y". Also: messages that ONLY contain billing details ("our IČO is 12345678" or "Company name: ABC s.r.o.") — those are follow-ups to a prior invoice request and should be routed here too.
 - other — anything else (greetings, complaints, restaurant tips, lost items, etc.). When the message asks about TWO categories at once (e.g. parking AND wifi), return "other" — the operator handles compound queries.
 
 Output ONLY a single JSON object on one line, no preamble:
-{"category": "<one of the above>", "parkingIntent": "<general|ev|early|late|taken|multiple>", "confidence": <0.0-1.0>, "language": "<ISO 639-1>"}
+{"category": "<one of the above>", "parkingIntent": "<general|ev|outside-hours|taken|multiple>", "confidence": <0.0-1.0>, "language": "<ISO 639-1>"}
 
 Only include "parkingIntent" when category is "parking"; omit it for every other category.
 
@@ -191,10 +189,19 @@ function normaliseParkingIntent(v: unknown): ParkingIntent {
   switch (v.trim().toLowerCase()) {
     case 'ev':
       return 'ev';
+    // Off-hours parking always declines the same way, so fold the model's
+    // natural single-direction words and any compound phrasing into one
+    // intent. Guards against the model emitting 'early'/'late'/'both' and
+    // against a compound early+late request being mis-bucketed.
+    case 'outside-hours':
+    case 'outside_hours':
+    case 'off-hours':
+    case 'offhours':
     case 'early':
-      return 'early';
     case 'late':
-      return 'late';
+    case 'early-late':
+    case 'both':
+      return 'outside-hours';
     case 'taken':
       return 'taken';
     case 'multiple':

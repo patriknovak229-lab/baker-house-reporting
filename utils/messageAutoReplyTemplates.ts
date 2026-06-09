@@ -61,7 +61,7 @@ function buildParkingTemplate(
   parking: ParkingResult,
   intent: ParkingIntent = 'general',
 ): BuiltTemplate | null {
-  // Specific parking sub-cases (EV, early/late parking, taken spot, extra
+  // Specific parking sub-cases (EV, off-hours parking, taken spot, extra
   // space) get their own fixed denial/holding replies and don't depend on
   // the assigned space. Only 'general' falls through to the space-assignment
   // logic below.
@@ -127,16 +127,10 @@ function buildParkingSubIntentTemplate(
         template: "{NAME}! Unfortunately EV charging isn't available in our garage.",
         substitutions: { NAME },
       };
-    case 'early':
+    case 'outside-hours':
       return {
         template:
-          "{NAME}! I'm sorry, but earlier parking isn't possible. You're welcome to park your car once your check-in begins.",
-        substitutions: { NAME },
-      };
-    case 'late':
-      return {
-        template:
-          "{NAME}! I'm sorry, but we're not able to keep cars in the garage after checkout. We'd kindly ask you to manage around the checkout time - 10:30.",
+          "{NAME}! I'm sorry, but parking is only available during your stay — we're not able to keep the car in the garage before check-in or after the 10:30 checkout. You're very welcome to park anytime in between. Thank you so much for understanding!",
         substitutions: { NAME },
       };
     case 'taken':
