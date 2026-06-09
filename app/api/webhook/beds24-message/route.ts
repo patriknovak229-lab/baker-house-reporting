@@ -152,6 +152,18 @@ const NATURAL_FEEL_DELAY_MS = 10_000;
  */
 const REVIEW_ONLY_CATEGORIES = new Set<AutoReplyCategory>(['parking']);
 
+/**
+ * How recent an unread guest message must be for the pipeline to process it.
+ * Kept in sync with ACTIVE_WINDOW_MS (120 min) in /api/messages/unread: that
+ * route both SHOWS unread messages for 120 min and nudges this webhook every
+ * ~30s while the dashboard is open. A tighter window here created a dead zone
+ * (15–120 min) where a message stayed visible and kept nudging the pipeline
+ * but was never actually picked up. Messages older than this are left for the
+ * operator; the 24h Beds24 maxAge + per-message dedupe stop us re-replying to
+ * anything already handled.
+ */
+const UNREAD_FRESHNESS_MS = 120 * 60 * 1000; // 120 min — matches the operator panel
+
 // Beds24 roomId → physical Room name. Keep in sync with UNIT_MAP in
 // app/api/bookings/route.ts. Intentionally duplicated rather than imported
 // from a Next.js route file (Next discourages cross-route imports).
@@ -428,7 +440,7 @@ async function fetchUnreadGuestMessages(): Promise<UnreadGuestMessage[]> {
   const raw: Array<Record<string, unknown>> =
     Array.isArray(json) ? json : (Array.isArray((json as { data?: unknown[] })?.data) ? (json as { data: Record<string, unknown>[] }).data : []);
 
-  const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
+  const freshnessCutoff = Date.now() - UNREAD_FRESHNESS_MS;
   const out: UnreadGuestMessage[] = [];
   for (const m of raw) {
     const id = Number(m.id);
@@ -437,11 +449,13 @@ async function fetchUnreadGuestMessages(): Promise<UnreadGuestMessage[]> {
     const time = typeof m.time === 'string' ? m.time : '';
     if (!Number.isFinite(id) || !Number.isFinite(bookingId)) continue;
     if (!message.trim()) continue;
-    // Drop messages older than 15 min so a re-fire on a long-stale
-    // unread doesn't mass-reply hours after the fact.
+    // Drop messages older than the freshness window so a re-fire on a
+    // long-stale unread doesn't reply hours after the fact. Window matches
+    // the operator panel's 120-min visibility so nothing shown as actionable
+    // unread is silently skipped here.
     if (time) {
       const t = new Date(time).getTime();
-      if (Number.isFinite(t) && t < fifteenMinAgo) continue;
+      if (Number.isFinite(t) && t < freshnessCutoff) continue;
     }
     out.push({ id, bookingId, message, time });
   }
