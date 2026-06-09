@@ -1,15 +1,19 @@
 /**
  * Categorise a guest message into one of the recognised auto-reply
- * buckets via Claude Haiku. Returns the category, a confidence score,
+ * buckets via Claude Sonnet. Returns the category, a confidence score,
  * and the detected language code so the downstream template path can
  * translate the reply.
  *
- * Why Haiku not regex: guest messages arrive in EN/CS/DE/FR/IT/PL/ES/RU
+ * Why an LLM not regex: guest messages arrive in EN/CS/DE/FR/IT/PL/ES/RU
  * with infinitely-varied phrasing. A keyword approach either misses
  * legitimate intents ("Got parking?", "Můžu si vzít autíčko nahoru?")
  * or fires on coincidences ("the parking lot was full, we walked over").
- * Haiku handles multi-language without bloating regex tables and costs
- * ~$0.0001 per message — negligible.
+ *
+ * Why Sonnet not Haiku: classification is the linchpin of the whole
+ * pipeline, and some intents need multi-step reasoning over times — e.g.
+ * "drop the car off at 9am, collect Sunday 4pm" is early+late parking,
+ * which Haiku mis-classified. Sonnet handles it; at our volume the cost
+ * is a few dollars a month — negligible.
  *
  * Conservative threshold: callers should only act when
  * `confidence >= 0.8`. Anything lower → fall through to "other" → no
@@ -112,7 +116,7 @@ export async function detectAutoReplyCategory(
   try {
     const client = getClient();
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 100,
       system: SYSTEM_PROMPT,
       messages: [

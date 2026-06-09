@@ -62,7 +62,10 @@ export interface DraftResult {
   model: string;
 }
 
-const MODEL = 'claude-haiku-4-5';
+// Sonnet (not Haiku): these are the genuinely AI-authored guest-facing
+// drafts, so reply quality and grounding matter. Cost is negligible at our
+// volume. Categoriser runs the same model — see messageAutoReplyDetector.
+const MODEL = 'claude-sonnet-4-6';
 
 let cachedClient: Anthropic | null = null;
 function getClient(): Anthropic {
