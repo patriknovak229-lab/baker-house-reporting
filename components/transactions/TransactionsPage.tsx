@@ -1505,7 +1505,7 @@ export default function TransactionsPage() {
                             <button
                               onClick={() => dismissDraft(d.beds24MessageId)}
                               disabled={Boolean(busy) || !role || !canMutate(role, "transactions")}
-                              className="text-xs px-3 py-1.5 rounded border border-violet-300 text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                              className="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 font-medium hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               {busy === 'dismissing' ? 'Dismissing…' : 'Dismiss'}
                             </button>
@@ -1607,7 +1607,7 @@ export default function TransactionsPage() {
                             <button
                               onClick={() => dismissDraft(o.beds24MessageId)}
                               disabled={Boolean(busy) || !role || !canMutate(role, "transactions")}
-                              className="text-xs px-3 py-1.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                              className="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 font-medium hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               {busy === 'dismissing' ? 'Dismissing…' : 'Dismiss'}
                             </button>
