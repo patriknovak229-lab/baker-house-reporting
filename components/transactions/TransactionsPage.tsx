@@ -112,6 +112,47 @@ export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
 
+/** Czech translation state for one entry in the approval panel. */
+type PanelTxState = 'loading' | 'error' | { text: string; lang: string };
+
+/** Read-only Czech rendering of a panel translation (guest message or draft).
+ *  Renders nothing when absent, when the source is already Czech, or empty. */
+function PanelCzech({
+  entry,
+  tone,
+  onRefresh,
+}: {
+  entry: PanelTxState | undefined;
+  tone: 'violet' | 'indigo';
+  onRefresh?: () => void;
+}) {
+  const muted = tone === 'violet' ? 'text-violet-400' : 'text-indigo-400';
+  if (!entry) return null;
+  if (entry === 'loading') return <div className={`text-[11px] italic mt-0.5 ${muted}`}>Překládám…</div>;
+  if (entry === 'error') return <div className={`text-[11px] italic mt-0.5 ${muted}`}>Překlad nedostupný</div>;
+  if (!entry.text || entry.lang === 'cs') return null;
+  const box =
+    tone === 'violet'
+      ? 'bg-violet-100/50 text-violet-800 ring-violet-200'
+      : 'bg-indigo-100/50 text-indigo-800 ring-indigo-200';
+  return (
+    <div className={`text-[12px] mt-1 mb-1 rounded px-2 py-1 ring-1 ${box} flex items-start gap-1.5`}>
+      <span className="shrink-0" aria-hidden>🇨🇿</span>
+      <span className="flex-1 whitespace-pre-wrap">{entry.text}</span>
+      {onRefresh && (
+        <button
+          type="button"
+          onClick={onRefresh}
+          title="Re-translate the current text"
+          className="shrink-0 opacity-60 hover:opacity-100"
+        >
+          ↻
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function TransactionsPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: Role } | undefined)?.role;
@@ -133,6 +174,11 @@ export default function TransactionsPage() {
   const [pendingOthers, setPendingOthers] = useState<PendingOther[]>([]);
   const [draftEdits, setDraftEdits] = useState<Record<number, string>>({});
   const [draftBusy, setDraftBusy] = useState<Record<number, 'sending' | 'dismissing' | undefined>>({});
+  // Czech translations for the approval panel, keyed `${messageId}:guest` /
+  // `${messageId}:draft`. Auto-filled so the operator can read foreign-language
+  // guest messages and AI drafts; the editable draft itself stays in the
+  // guest's language (that's what actually gets sent).
+  const [panelTx, setPanelTx] = useState<Record<string, PanelTxState>>({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlackoutModal, setShowBlackoutModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -356,6 +402,40 @@ export default function TransactionsPage() {
       });
     }
   }, []);
+
+  // Translate a panel entry (guest message or draft) to Czech via /api/translate.
+  const translatePanel = useCallback(async (key: string, text: string) => {
+    if (!text?.trim()) return;
+    setPanelTx((prev) => ({ ...prev, [key]: 'loading' }));
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'translate failed');
+      setPanelTx((prev) => ({ ...prev, [key]: { text: data.translatedText, lang: data.detectedLanguage } }));
+    } catch {
+      setPanelTx((prev) => ({ ...prev, [key]: 'error' }));
+    }
+  }, []);
+
+  // Auto-translate each pending guest message + its draft to Czech, once.
+  // Guarded by `panelTx[key]` so the 30s poll never re-fires a done / loading /
+  // errored entry; converges as each key goes undefined → loading → result.
+  useEffect(() => {
+    const rows = [
+      ...pendingDrafts.map((d) => ({ id: d.beds24MessageId, guest: d.guestMessageText, draft: d.draftText })),
+      ...pendingOthers.map((o) => ({ id: o.beds24MessageId, guest: o.guestMessageText, draft: o.draftText })),
+    ];
+    for (const r of rows) {
+      const gk = `${r.id}:guest`;
+      const dk = `${r.id}:draft`;
+      if (r.guest?.trim() && !panelTx[gk]) translatePanel(gk, r.guest);
+      if (r.draft?.trim() && !panelTx[dk]) translatePanel(dk, r.draft);
+    }
+  }, [pendingDrafts, pendingOthers, panelTx, translatePanel]);
 
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -1488,10 +1568,11 @@ export default function TransactionsPage() {
                               </button>
                             )}
                           </div>
-                          <div className="text-[13px] text-violet-900 mb-2 italic">
+                          <div className="text-[13px] text-violet-900 mb-1 italic">
                             <span className="text-violet-600 not-italic font-medium mr-1">Guest:</span>
                             {d.guestMessageText}
                           </div>
+                          <PanelCzech entry={panelTx[`${d.beds24MessageId}:guest`]} tone="violet" />
                           <textarea
                             value={editedText}
                             onChange={(e) =>
@@ -1500,6 +1581,11 @@ export default function TransactionsPage() {
                             rows={Math.min(8, Math.max(3, editedText.split('\n').length + 1))}
                             className="w-full text-sm bg-white border border-violet-200 rounded p-2 text-violet-900 focus:outline-none focus:ring-2 focus:ring-violet-300"
                             disabled={Boolean(busy)}
+                          />
+                          <PanelCzech
+                            entry={panelTx[`${d.beds24MessageId}:draft`]}
+                            tone="violet"
+                            onRefresh={() => translatePanel(`${d.beds24MessageId}:draft`, editedText)}
                           />
                           <div className="mt-2 flex items-center gap-2 justify-end">
                             <button
@@ -1572,10 +1658,11 @@ export default function TransactionsPage() {
                               </button>
                             )}
                           </div>
-                          <div className="text-[13px] text-indigo-900 mb-2 italic">
+                          <div className="text-[13px] text-indigo-900 mb-1 italic">
                             <span className="text-indigo-600 not-italic font-medium mr-1">Guest:</span>
                             {o.guestMessageText}
                           </div>
+                          <PanelCzech entry={panelTx[`${o.beds24MessageId}:guest`]} tone="indigo" />
                           {hasDraft ? (
                             <>
                               <div className="text-[10px] text-indigo-600 uppercase tracking-wide mb-1">
@@ -1589,6 +1676,11 @@ export default function TransactionsPage() {
                                 rows={Math.min(8, Math.max(3, editedText.split('\n').length + 1))}
                                 className="w-full text-sm bg-white border border-indigo-200 rounded p-2 text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
                                 disabled={Boolean(busy)}
+                              />
+                              <PanelCzech
+                                entry={panelTx[`${o.beds24MessageId}:draft`]}
+                                tone="indigo"
+                                onRefresh={() => translatePanel(`${o.beds24MessageId}:draft`, editedText)}
                               />
                             </>
                           ) : (
