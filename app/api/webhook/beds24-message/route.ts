@@ -62,6 +62,8 @@ import {
   type InvoiceMandatory,
 } from '@/utils/invoiceReplyTemplates';
 import { computeParking } from '@/utils/parkingUtils';
+import { composeAiReply } from '@/utils/aiReplyComposer';
+import { fetchRecentConversation } from '@/utils/beds24Conversation';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const POLL_DEBOUNCE_MS = 15_000; // 15s — collapses bursts of SYNC_ROOM events
@@ -151,6 +153,15 @@ const NATURAL_FEEL_DELAY_MS = 10_000;
  * from this set once the 1–2 week review trial is done to resume auto-send.
  */
 const REVIEW_ONLY_CATEGORIES = new Set<AutoReplyCategory>(['parking']);
+
+/**
+ * AI-first REVIEW mode (test phase). When true, every incoming guest message
+ * is answered by the KB-grounded AI composer and the draft is queued for
+ * operator approval (pending-drafts) — nothing auto-sends, and the
+ * deterministic category templates + invoice auto-flow are bypassed. Flip to
+ * false to return to the deterministic pipeline.
+ */
+const AI_REVIEW_ALL = true;
 
 /**
  * How recent an unread guest message must be for the pipeline to process it.
@@ -356,7 +367,8 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
   // Pass 1 — chase any 24-hour invoice reminders. Independent of any
   // incoming message; runs on every webhook fire so reminders are sent
   // promptly without needing a separate cron slot.
-  if (redis) {
+  // Skipped in AI review mode — nothing should auto-send during the test.
+  if (redis && !AI_REVIEW_ALL) {
     try {
       await sendDueInvoiceReminders(redis);
     } catch (err) {
@@ -381,6 +393,18 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
     }
 
     try {
+      // AI review mode: every message → KB-grounded draft → operator queue.
+      // Bypasses the invoice auto-flow and the deterministic templates.
+      if (AI_REVIEW_ALL) {
+        await aiReviewDraft({
+          redis,
+          bookingId: m.bookingId,
+          messageId: m.id,
+          messageText: m.message,
+        });
+        continue;
+      }
+
       const handled = await tryInvoiceFlow({
         redis,
         bookingId: m.bookingId,
@@ -551,6 +575,91 @@ interface ProcessArgs {
    *  the polling loop where dedupe happens at the top so it's shared with
    *  the invoice flow. */
   skipDedupe?: boolean;
+}
+
+/**
+ * AI review-mode handler: compose a KB-grounded reply for ONE guest message
+ * and queue it for operator approval (pending-drafts). Never auto-sends. Used
+ * while AI_REVIEW_ALL is on. Always persists a pending draft (even an empty
+ * one) so the message still surfaces for the operator if composing fails.
+ */
+interface AiReviewArgs {
+  redis: Redis | null;
+  bookingId: number;
+  messageId: number;
+  messageText: string;
+}
+
+async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
+  const { redis, bookingId, messageId, messageText } = args;
+  const reservationNumber = `BH-${bookingId}`;
+
+  const reservation = await buildReservationContext(redis, bookingId);
+
+  // Assigned parking space (best-effort) for the booking-facts block.
+  let parkingSpace: string | null = null;
+  if (reservation && redis) {
+    try {
+      const all = await loadAllReservations(redis);
+      const parking = computeParking(all.length > 0 ? all : [reservation]);
+      parkingSpace = parking.byReservation.get(reservationNumber)?.space ?? null;
+    } catch (err) {
+      console.warn(`[ai-review] parking compute failed for ${bookingId}:`, err);
+    }
+  }
+
+  const history = await fetchRecentConversation(bookingId, 12);
+
+  let draftText = '';
+  let model = 'claude-sonnet-4-6';
+  try {
+    const result = await composeAiReply({
+      guestMessage: messageText,
+      reservation,
+      parkingSpace,
+      history,
+    });
+    draftText = result.draftText;
+    model = result.model;
+  } catch (err) {
+    console.error(`[ai-review] compose failed for ${bookingId}:`, err);
+  }
+
+  if (redis) {
+    await persistPendingDraft(redis, {
+      beds24MessageId: messageId,
+      bookingId,
+      reservationNumber,
+      guestMessageText: messageText,
+      guestMessageTime: new Date().toISOString(),
+      category: 'other',
+      confidence: 1,
+      language: '',
+      draftText,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  await appendLog(redis, {
+    id: makeLogId(),
+    beds24MessageId: messageId,
+    beds24SentMessageId: null,
+    bookingId,
+    reservationNumber,
+    category: 'other',
+    confidence: 1,
+    language: '',
+    action: 'queued-draft',
+    sentText: null,
+    detail: draftText
+      ? `AI review-mode draft (${model})`
+      : `AI review-mode: no draft produced (${model}) — operator to handle`,
+    decidedAt: new Date().toISOString(),
+  });
+
+  console.log(
+    `[ai-review] booking ${bookingId} msg ${messageId} → ${draftText ? 'draft queued' : 'queued (no draft)'}`,
+  );
 }
 
 async function processGuestMessage(args: ProcessArgs): Promise<void> {
