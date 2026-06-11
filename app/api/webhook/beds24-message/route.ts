@@ -1639,7 +1639,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   // Persist invoiceData + create the red Send-invoice Issue via local-state.
   // Both end up in the same Redis blob so we do one read-modify-write.
   const overrides =
-    (await redis.get<Record<string, { invoiceData?: InvoiceData; issues?: Issue[] }>>(LOCAL_STATE_KEY)) ?? {};
+    (await redis.get<Record<string, { invoiceData?: InvoiceData; issues?: Issue[]; additionalEmail?: string }>>(LOCAL_STATE_KEY)) ?? {};
   const current = overrides[request.reservationNumber] ?? {};
 
   // Don't clobber any pre-existing invoiceData the operator may have set
@@ -1663,6 +1663,18 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     billingEmail: existing.billingEmail || request.email || fallbackEmail || '',
   };
 
+  // Also backfill the guest's "Guest Email" (additionalEmail) when it's
+  // empty. The invoice extraction is often the only time we capture a
+  // real (non-OTA-conduit) guest email, so reuse it for the reservation's
+  // contact email too — but never clobber an address the operator/guest
+  // already provided.
+  const existingGuestEmail = (current.additionalEmail ?? reservation?.additionalEmail ?? '').trim();
+  const guestEmailBackfill = sanitizeInvoiceEmail(newInvoiceData.billingEmail);
+  const additionalEmailPatch =
+    !existingGuestEmail && guestEmailBackfill
+      ? { additionalEmail: guestEmailBackfill }
+      : {};
+
   // Issue (red task per operator) actionable on checkout day
   const issues: Issue[] = Array.isArray(current.issues) ? current.issues : [];
   const newIssue: Issue = {
@@ -1678,6 +1690,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
 
   overrides[request.reservationNumber] = {
     ...current,
+    ...additionalEmailPatch,
     invoiceData: newInvoiceData,
     issues: [...issues, newIssue],
   };
