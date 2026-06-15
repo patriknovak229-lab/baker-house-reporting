@@ -594,6 +594,11 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
   const { redis, bookingId, messageId, messageText } = args;
   const reservationNumber = `BH-${bookingId}`;
 
+  // Detect the guest's language (+ category for a nicer panel label). The
+  // language is stored so the approve step can translate the Czech draft into
+  // it on send.
+  const detection = await detectAutoReplyCategory(messageText);
+
   const reservation = await buildReservationContext(redis, bookingId);
 
   // Assigned parking space (best-effort) for the booking-facts block.
@@ -632,10 +637,14 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
       reservationNumber,
       guestMessageText: messageText,
       guestMessageTime: new Date().toISOString(),
-      category: 'other',
-      confidence: 1,
-      language: '',
+      category: detection.category,
+      confidence: detection.confidence,
+      language: detection.language,
       draftText,
+      // Czech-first: the draft is in Czech; the approve step translates it to
+      // the guest's language before sending.
+      draftLanguage: 'cs',
+      targetLanguage: detection.language,
       createdAt: new Date().toISOString(),
     });
   }
@@ -646,13 +655,13 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     beds24SentMessageId: null,
     bookingId,
     reservationNumber,
-    category: 'other',
-    confidence: 1,
-    language: '',
+    category: detection.category,
+    confidence: detection.confidence,
+    language: detection.language,
     action: 'queued-draft',
     sentText: null,
     detail: draftText
-      ? `AI review-mode draft (${model})`
+      ? `AI review-mode draft in Czech (${model}); sends in ${detection.language || 'guest language'}`
       : `AI review-mode: no draft produced (${model}) — operator to handle`,
     decidedAt: new Date().toISOString(),
   });
@@ -1223,6 +1232,11 @@ export interface PendingDraft {
   confidence: number;
   language: string;
   draftText: string;
+  /** Czech-first AI drafts: the language `draftText` is written in ('cs'), and
+   *  the guest's language to translate it into on send. Absent on legacy
+   *  (already guest-language) drafts, which send as-is. */
+  draftLanguage?: string;
+  targetLanguage?: string;
   /** ISO timestamp when the draft was created (used for stale cleanup). */
   createdAt: string;
 }

@@ -153,6 +153,15 @@ function PanelCzech({
   );
 }
 
+const LANG_LABELS: Record<string, string> = {
+  en: 'English', de: 'German', fr: 'French', it: 'Italian', es: 'Spanish',
+  pl: 'Polish', ru: 'Russian', sk: 'Slovak', uk: 'Ukrainian', nl: 'Dutch',
+  pt: 'Portuguese', hu: 'Hungarian', cs: 'Czech',
+};
+function langLabel(code: string): string {
+  return LANG_LABELS[code.toLowerCase()] ?? code.toUpperCase();
+}
+
 export default function TransactionsPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: Role } | undefined)?.role;
@@ -421,12 +430,17 @@ export default function TransactionsPage() {
     }
   }, []);
 
-  // Auto-translate each pending guest message + its draft to Czech, once.
-  // Guarded by `panelTx[key]` so the 30s poll never re-fires a done / loading /
-  // errored entry; converges as each key goes undefined → loading → result.
+  // Auto-translate each pending guest message to Czech, once (plus any legacy
+  // guest-language draft). Czech AI drafts skip translation — the operator
+  // edits them directly. Guarded by `panelTx[key]` so the 30s poll never
+  // re-fires a done / loading / errored entry; converges per key.
   useEffect(() => {
     const rows = [
-      ...pendingDrafts.map((d) => ({ id: d.beds24MessageId, guest: d.guestMessageText, draft: d.draftText })),
+      ...pendingDrafts.map((d) => ({
+        id: d.beds24MessageId,
+        guest: d.guestMessageText,
+        draft: d.draftLanguage === 'cs' ? '' : d.draftText,
+      })),
       ...pendingOthers.map((o) => ({ id: o.beds24MessageId, guest: o.guestMessageText, draft: o.draftText })),
     ];
     for (const r of rows) {
@@ -1587,6 +1601,11 @@ export default function TransactionsPage() {
                             tone="violet"
                             onRefresh={() => translatePanel(`${d.beds24MessageId}:draft`, editedText)}
                           />
+                          {d.draftLanguage === 'cs' && d.targetLanguage && d.targetLanguage.toLowerCase() !== 'cs' && (
+                            <div className="text-[11px] text-violet-500 mt-1">
+                              ↪ You&apos;re editing in Czech — sent in the guest&apos;s language ({langLabel(d.targetLanguage)}), auto-translated on approve.
+                            </div>
+                          )}
                           <div className="mt-2 flex items-center gap-2 justify-end">
                             <button
                               onClick={() => dismissDraft(d.beds24MessageId)}

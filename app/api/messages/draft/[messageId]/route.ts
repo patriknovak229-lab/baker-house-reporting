@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { sendBeds24Message } from '@/utils/beds24Messages';
+import { translateReplyToGuest } from '@/utils/translateReply';
 
 const PENDING_DRAFTS_KEY = 'baker:auto-reply:pending-drafts';
 const PENDING_OTHERS_KEY = 'baker:auto-reply:pending-others';
@@ -34,6 +35,10 @@ interface PendingDraft {
   confidence: number;
   language: string;
   draftText: string;
+  /** Czech-first AI drafts: language of `draftText` ('cs') + the guest's
+   *  language to translate into on send. Absent on legacy drafts (send as-is). */
+  draftLanguage?: string;
+  targetLanguage?: string;
   createdAt: string;
 }
 
@@ -152,9 +157,39 @@ export async function POST(
     body.text !== undefined &&
     body.text.trim() !== (pending.entry.draftText ?? '').trim();
 
+  // Czech-first: translate the (edited) Czech draft into the guest's language
+  // before sending. Legacy guest-language drafts (no draftLanguage) send as-is.
+  let textToSend = proposedText;
+  const draftLanguage = pending.type === 'draft' ? pending.entry.draftLanguage : undefined;
+  const targetLanguage = pending.type === 'draft' ? pending.entry.targetLanguage : undefined;
+  const willTranslate =
+    draftLanguage === 'cs' && !!targetLanguage && targetLanguage.toLowerCase() !== 'cs';
+  if (willTranslate) {
+    try {
+      textToSend = await translateReplyToGuest(proposedText, targetLanguage as string);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await appendLog(redis, {
+        id: makeLogId(),
+        beds24MessageId: pending.entry.beds24MessageId,
+        beds24SentMessageId: null,
+        bookingId: pending.entry.bookingId,
+        reservationNumber: pending.entry.reservationNumber,
+        category: pending.type === 'draft' ? pending.entry.category : 'other',
+        confidence: pending.entry.confidence,
+        language: pending.entry.language,
+        action: 'errored',
+        sentText: proposedText,
+        detail: `translate-on-send to ${targetLanguage} failed: ${msg}`,
+        decidedAt: new Date().toISOString(),
+      });
+      return NextResponse.json({ error: `Translation failed: ${msg}` }, { status: 502 });
+    }
+  }
+
   let sentMessageId: number | null = null;
   try {
-    const result = await sendBeds24Message(pending.entry.bookingId, proposedText);
+    const result = await sendBeds24Message(pending.entry.bookingId, textToSend);
     sentMessageId = result.messageId;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -168,7 +203,7 @@ export async function POST(
       confidence: pending.entry.confidence,
       language: pending.entry.language,
       action: 'errored',
-      sentText: proposedText,
+      sentText: textToSend,
       detail: `operator approval send failed: ${msg}`,
       decidedAt: new Date().toISOString(),
     });
@@ -186,8 +221,12 @@ export async function POST(
     confidence: pending.entry.confidence,
     language: pending.entry.language,
     action: wasEdited ? 'edited-approved' : 'approved',
-    sentText: proposedText,
-    detail: wasEdited ? 'operator edited draft before sending' : 'operator approved draft as-is',
+    sentText: textToSend,
+    detail: willTranslate
+      ? `${wasEdited ? 'operator edited' : 'approved'} the Czech draft; sent translated to ${targetLanguage}`
+      : wasEdited
+        ? 'operator edited draft before sending'
+        : 'operator approved draft as-is',
     decidedAt: new Date().toISOString(),
   });
 
