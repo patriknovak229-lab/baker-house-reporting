@@ -289,7 +289,9 @@ The printed guide placed in each apartment. The assistant should use the one mat
 _(Relaxation zone, sauna, massages, yoga, meeting room & café — same as the Deluxe 1KK guide above.)_
 
 ### O.308 (2KK, Ottův dům)
-Same standard as K.201, with two known differences: a **walk-in corner shower** (not a bathtub), and the **minibar items are kept in the kitchen fridge** (no separate minibar).
+One **king-size bed** plus a **sleeping sofa**; bookable for **up to 4 guests**. Same standard as K.201, with two known differences: a **walk-in corner shower** (not a bathtub), and the **minibar items are kept in the kitchen fridge** (no separate minibar).
+
+**Bedding:** for **1–2 guests** only the main bed is made up; for **3–4 guests** the **sofa is also prepared, with two bedding sets**.
 > **Fill in —** paste the O.308 home guide here if it differs further.
 
 ### Urban 1KK — K.102 / K.103 / K.106
