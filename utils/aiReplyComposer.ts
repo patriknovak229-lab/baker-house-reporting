@@ -102,7 +102,7 @@ export async function composeAiReply(input: ComposeInput): Promise<ComposeResult
   const userContent = [
     buildBookingBlock(input),
     buildHistoryBlock(input.history),
-    `# LATEST GUEST MESSAGE\n${input.guestMessage.slice(0, 2000)}\n\nWrite your reply to this message now (or reply SKIP if none is needed).`,
+    `# LATEST GUEST MESSAGE\n${input.guestMessage.slice(0, 2000)}\n\nWrite your reply to this message now, IN CZECH (regardless of the guest's language — it is translated before sending). Or reply SKIP if none is needed.`,
   ]
     .filter(Boolean)
     .join('\n\n');

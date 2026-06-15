@@ -188,6 +188,13 @@ export default function TransactionsPage() {
   // guest messages and AI drafts; the editable draft itself stays in the
   // guest's language (that's what actually gets sent).
   const [panelTx, setPanelTx] = useState<Record<string, PanelTxState>>({});
+  // "Show translation" previews of the outgoing (guest-language) message,
+  // keyed by messageId. `czech` records the source the preview was made from,
+  // so we can tell when the operator has edited since previewing — and send
+  // that exact checked translation on approve.
+  const [previewTx, setPreviewTx] = useState<
+    Record<number, { czech: string; translated: string } | 'loading' | 'error'>
+  >({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlackoutModal, setShowBlackoutModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -353,14 +360,14 @@ export default function TransactionsPage() {
   // /api/messages/draft/[messageId] endpoint, then locally drop the
   // entry so the panel updates immediately (next poll reconciles).
   const approveDraft = useCallback(
-    async (messageId: number, text: string) => {
+    async (messageId: number, text: string, preTranslated = false) => {
       if (!text.trim()) return;
       setDraftBusy((prev) => ({ ...prev, [messageId]: 'sending' }));
       try {
         const res = await fetch(`/api/messages/draft/${messageId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, preTranslated }),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -427,6 +434,26 @@ export default function TransactionsPage() {
       setPanelTx((prev) => ({ ...prev, [key]: { text: data.translatedText, lang: data.detectedLanguage } }));
     } catch {
       setPanelTx((prev) => ({ ...prev, [key]: 'error' }));
+    }
+  }, []);
+
+  // "Show translation": preview the outgoing message in the guest's language
+  // using the SAME Sonnet translator the send step uses, so what the operator
+  // checks is what gets sent.
+  const previewTranslation = useCallback(async (messageId: number, czech: string, targetLang: string) => {
+    if (!czech.trim() || !targetLang) return;
+    setPreviewTx((prev) => ({ ...prev, [messageId]: 'loading' }));
+    try {
+      const res = await fetch('/api/translate-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: czech, targetLang }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'translate failed');
+      setPreviewTx((prev) => ({ ...prev, [messageId]: { czech, translated: data.translated } }));
+    } catch {
+      setPreviewTx((prev) => ({ ...prev, [messageId]: 'error' }));
     }
   }, []);
 
@@ -1602,8 +1629,36 @@ export default function TransactionsPage() {
                             onRefresh={() => translatePanel(`${d.beds24MessageId}:draft`, editedText)}
                           />
                           {d.draftLanguage === 'cs' && d.targetLanguage && d.targetLanguage.toLowerCase() !== 'cs' && (
-                            <div className="text-[11px] text-violet-500 mt-1">
-                              ↪ You&apos;re editing in Czech — sent in the guest&apos;s language ({langLabel(d.targetLanguage)}), auto-translated on approve.
+                            <div className="mt-1">
+                              <span className="text-[11px] text-violet-500">You edit in Czech; sent in {langLabel(d.targetLanguage)}. </span>
+                              <button
+                                type="button"
+                                onClick={() => previewTranslation(d.beds24MessageId, editedText, d.targetLanguage as string)}
+                                disabled={!editedText.trim() || previewTx[d.beds24MessageId] === 'loading'}
+                                className="text-[11px] text-violet-600 hover:text-violet-800 underline disabled:opacity-50 disabled:no-underline"
+                              >
+                                👁 Show translation
+                              </button>
+                              {previewTx[d.beds24MessageId] === 'loading' && (
+                                <span className="text-[11px] italic text-violet-400 ml-2">Překládám…</span>
+                              )}
+                              {previewTx[d.beds24MessageId] === 'error' && (
+                                <span className="text-[11px] italic text-violet-400 ml-2">Překlad se nepodařil</span>
+                              )}
+                              {(() => {
+                                const p = previewTx[d.beds24MessageId];
+                                if (!p || typeof p !== 'object') return null;
+                                const stale = p.czech !== editedText;
+                                return (
+                                  <div className="text-[12px] mt-1 rounded px-2 py-1 ring-1 bg-violet-100/50 text-violet-800 ring-violet-200">
+                                    <div className="text-[10px] uppercase tracking-wide text-violet-500 mb-0.5">
+                                      Will be sent — {langLabel(d.targetLanguage as string)}
+                                      {stale ? ' · edited since; click Show translation again' : ''}
+                                    </div>
+                                    <div className="whitespace-pre-wrap">{p.translated}</div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
                           <div className="mt-2 flex items-center gap-2 justify-end">
@@ -1615,7 +1670,21 @@ export default function TransactionsPage() {
                               {busy === 'dismissing' ? 'Dismissing…' : 'Dismiss'}
                             </button>
                             <button
-                              onClick={() => approveDraft(d.beds24MessageId, editedText)}
+                              onClick={() => {
+                                const p = previewTx[d.beds24MessageId];
+                                const sendChecked =
+                                  d.draftLanguage === 'cs' &&
+                                  !!d.targetLanguage &&
+                                  d.targetLanguage.toLowerCase() !== 'cs' &&
+                                  !!p &&
+                                  typeof p === 'object' &&
+                                  p.czech === editedText;
+                                if (sendChecked) {
+                                  approveDraft(d.beds24MessageId, (p as { translated: string }).translated, true);
+                                } else {
+                                  approveDraft(d.beds24MessageId, editedText);
+                                }
+                              }}
                               disabled={Boolean(busy) || !editedText.trim() || !role || !canMutate(role, "transactions")}
                               className="text-xs px-3 py-1.5 rounded bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
                             >

@@ -127,7 +127,7 @@ export async function POST(
     return NextResponse.json({ error: 'messageId required' }, { status: 400 });
   }
 
-  let body: { text?: string } = {};
+  let body: { text?: string; preTranslated?: boolean } = {};
   try {
     body = await req.json();
   } catch {
@@ -162,7 +162,10 @@ export async function POST(
   let textToSend = proposedText;
   const draftLanguage = pending.type === 'draft' ? pending.entry.draftLanguage : undefined;
   const targetLanguage = pending.type === 'draft' ? pending.entry.targetLanguage : undefined;
+  // `preTranslated` = the operator previewed via "Show translation" and is
+  // sending that exact guest-language text → send as-is, don't re-translate.
   const willTranslate =
+    !body.preTranslated &&
     draftLanguage === 'cs' && !!targetLanguage && targetLanguage.toLowerCase() !== 'cs';
   if (willTranslate) {
     try {
