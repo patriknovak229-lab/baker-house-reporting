@@ -19,7 +19,7 @@ Return ONLY valid JSON, no other text:
   "suggestedCategory": one of "cleaning"|"laundry"|"consumables"|"utilities"|"software"|"maintenance"|"other" or null,
   "lineItems": [{"description": string, "amount": number}] or null
 }
-totalAmount: the total amount payable (including VAT if present). Extract the number as shown on the invoice regardless of currency.
+totalAmount: the total amount payable including VAT. READ the printed grand total exactly as shown (e.g. "Celková částka", "CELKEM", "K zaplacení celkem", "Total amount") — do NOT recompute it by summing line items or adding base + VAT yourself; the printed total is authoritative and line-item rounding will differ. Exception: multi-row fee statements with no single applicable total (e.g. Airbnb) — sum the rows per the lineItems rule below. Extract the number as shown, regardless of currency.
 invoiceCurrency: the currency of the invoice (CZK, USD, EUR, GBP, etc.).
 lineItems: If the document is a fee statement or service summary with a table of multiple reservations or transactions each with an individual fee amount (e.g. an Airbnb monthly service fee statement), extract each row as a lineItem with description (reservation reference or guest name) and amount (the fee for that row). Set totalAmount to the SUM of all row fees — do NOT use any pre-printed grand total which may include VAT or other charges. If there is only one total with no per-row breakdown, set lineItems to null.
 If a field cannot be determined, use null.`;

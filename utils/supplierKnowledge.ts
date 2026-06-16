@@ -39,8 +39,18 @@ export const SUPPLIER_KNOWLEDGE = `
 - invoiceNumber: the document number ("Faktura č." / "Daňový doklad č.").
 - category: consumables
 
-## ACTION   (IČO 03439747)
-- Household / consumables discount store. supplierICO must be digits only, no spaces (e.g. 03439747).
+## ACTION / Action Retail Czech s.r.o.   (IČO 03439747 — verified in ARES)
+- Household / consumables discount store. Total and VAT extract correctly.
+- supplierICO: ALWAYS 03439747 (digits only, no spaces). Purchases up to 10 000 CZK are issued as a simplified tax document (zjednodušený daňový doklad) that legally need not print the IČO — set 03439747 even when it is not shown on the receipt.
+- category: consumables
+
+## MAKRO Cash & Carry CR s.r.o.   (IČ 26450691, DIČ CZ26450691)
+- Multi-page wholesale invoice ("FAKTURA - DAŇOVÝ DOKLAD"). Always use the FINAL grand total, never a per-page or pre-VAT subtotal.
+- totalAmount: "Celková částka" (= "Platba kartou" = the card amount), VAT-inclusive, e.g. 11 061,73.
+- CRITICAL: ignore the "... celkem bez DPH" lines (e.g. "Poslední strana celkem bez DPH 10 020,20") — those are VAT-EXCLUSIVE page subtotals, NOT the total. Do not add VAT to them yourself.
+- Goods prices already include spotřební daň (excise); do not add excise on top.
+- vatAmount: total "částka daně" (e.g. 1 909,93). invoiceNumber: "Faktura č. / VS". invoiceDate: "Datum vystavení".
+- supplierICO: MAKRO's IČ 26450691 — NOT the Odběratel (buyer) IČ 19876106 (that is us).
 - category: consumables
 
 ## JYSK s.r.o.   (IČO 26760746)
@@ -55,7 +65,13 @@ export const SUPPLIER_KNOWLEDGE = `
 - supplierICO: the Dodavatel (Seller) IČ 27081052 — NOT the Odběratel (Buyer) IČ 19876106 (that is us).
 - category: other
 
-## RYWA s.r.o.   (IČO 07092644)
+## RYWA s.r.o.   (IČ 07092644, DIČ CZ07092644)
+- Monthly internet + TV invoice ("FAKTURA - daňový doklad", Money S4 system). Recurring, same shape every month.
+- READ the printed totals; do NOT sum the line items — their 4-decimal unit prices (e.g. 109,0900) don't re-sum cleanly and yield e.g. 3134.17 instead of the real 3 135,00.
+- totalAmount: "Celková částka" (e.g. 3 135,00) = the VAT-recap "CELKEM".
+- vatAmount: the VAT-recap "Výše DPH" (e.g. 544,11).
+- invoiceNumber: the "FAKTURA - daňový doklad č." (e.g. FV2610292).
+- supplierICO: RYWA's IČ 07092644 (not the buyer's).
 - category: services
 
 ## Věra Volecová   (IČO 21214620)
