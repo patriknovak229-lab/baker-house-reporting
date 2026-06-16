@@ -115,6 +115,27 @@ function AutoSavedBanner({ entries, onDismiss }: { entries: AutoSavedEntry[]; on
   );
 }
 
+function DriveFailureBanner({ count, onDismiss }: { count: number; onDismiss: () => void }) {
+  if (count === 0) return null;
+  return (
+    <div className="flex items-start justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 gap-3">
+      <div className="flex items-start gap-2.5">
+        <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0 mt-1.5" />
+        <div>
+          <p className="text-sm font-medium text-amber-800">
+            {count} invoice{count !== 1 ? 's' : ''} saved without a Google Drive copy
+          </p>
+          <p className="text-xs text-amber-700 mt-0.5">
+            The Drive upload failed — your Google sign-in has likely expired. Sign out and back in,
+            then use the “↑ Upload” button in the Drive column to add the missing PDF{count !== 1 ? 's' : ''}.
+          </p>
+        </div>
+      </div>
+      <button onClick={onDismiss} className="text-amber-400 hover:text-amber-600 flex-shrink-0">×</button>
+    </div>
+  );
+}
+
 /**
  * Enrich extracted data with ICO / category pulled from the most recent
  * invoice for the same supplier (case-insensitive name match).
@@ -168,6 +189,9 @@ export default function AccountingPage() {
   const [showWhitelistManager, setShowWhitelistManager] = useState(false);
   const [whitelist, setWhitelist] = useState<WhitelistedSupplier[]>([]);
   const [autoSavedEntries, setAutoSavedEntries] = useState<AutoSavedEntry[]>([]);
+  const [driveFailures, setDriveFailures] = useState(0);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const [queueRunning, setQueueRunning] = useState(false);
   const abortQueueRef = useRef(false);
   const { categories } = useCategories();
@@ -195,6 +219,12 @@ export default function AccountingPage() {
     }
     return true;
   }), [invoices, filters]);
+
+  // Invoices that can be recovered to Drive: missing a Drive copy but linked to a Gmail message
+  const missingDriveCount = useMemo(
+    () => invoices.filter((inv) => !inv.driveUrl && inv.gmailMessageId).length,
+    [invoices],
+  );
 
   // Use a ref so processNextInQueue always sees the latest whitelist
   const whitelistRef = useRef<WhitelistedSupplier[]>([]);
@@ -330,6 +360,8 @@ export default function AccountingPage() {
         invoiceNumber: saved.invoiceNumber,
         amountCZK: saved.amountCZK,
       }]);
+      // The file is always present on this path, so a missing driveUrl means the Drive upload failed
+      if (!saved.driveUrl) setDriveFailures((n) => n + 1);
     }
   }
 
@@ -376,6 +408,7 @@ export default function AccountingPage() {
   function handleProcessBatch(items: QueueItem[]) {
     setShowImportModal(false);
     setAutoSavedEntries([]);
+    setDriveFailures(0);
     abortQueueRef.current = false;
     setQueueRunning(true);
     processNextInQueue(items);
@@ -425,12 +458,16 @@ export default function AccountingPage() {
   }
 
   async function handleSave(inv: SupplierInvoice, force = false) {
+    const hadFile = !!drawerState?.file;
     const result = await persistInvoice(inv, force);
     if (!result.ok && result.dupOf) {
       // Keep drawer open, show duplicate warning
       setDrawerState((prev) => prev ? { ...prev, duplicateOf: result.dupOf } : prev);
       return;
     }
+    // The drawer uploads the file to Drive before saving; a file present but no
+    // driveUrl means that upload failed (silently) — surface it via the banner.
+    if (result.ok && hadFile && !inv.driveUrl) setDriveFailures((n) => n + 1);
     setDrawerState(null);
     if (queue.length > 0) processNextInQueue(queue);
   }
@@ -489,6 +526,28 @@ export default function AccountingPage() {
     if (res.ok) {
       const saved = await res.json() as SupplierInvoice;
       setInvoices((prev) => prev.map((e) => (e.id === saved.id ? saved : e)));
+    }
+  }
+
+  async function handleBackfillDrive() {
+    setBackfilling(true);
+    setBackfillMsg(null);
+    try {
+      const res = await fetch('/api/supplier-invoices/backfill-drive', { method: 'POST' });
+      const data = await res.json() as {
+        scanned: number; updated: number; failed?: Array<{ reason: string }>; error?: string;
+      };
+      if (!res.ok) { setBackfillMsg(data.error ?? 'Back-fill failed.'); return; }
+      await loadInvoices();
+      const failedCount = data.failed?.length ?? 0;
+      setBackfillMsg(
+        `Backed up ${data.updated} of ${data.scanned} invoice${data.scanned !== 1 ? 's' : ''} to Drive` +
+        (failedCount > 0 ? ` · ${failedCount} couldn’t be recovered — re-upload those manually.` : '.'),
+      );
+    } catch {
+      setBackfillMsg('Back-fill failed — please try again.');
+    } finally {
+      setBackfilling(false);
     }
   }
 
@@ -601,6 +660,13 @@ export default function AccountingPage() {
           <p className="text-sm text-gray-500 mt-0.5">Track and manage costs — cleaning, utilities, services</p>
         </div>
         <div className="flex items-center gap-2">
+          {missingDriveCount > 0 && (
+            <button onClick={handleBackfillDrive} disabled={backfilling}
+              title="Re-fetch missing PDFs from Gmail and upload them to Drive"
+              className="px-3 py-2 text-sm font-medium text-amber-700 border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 disabled:opacity-50">
+              {backfilling ? 'Backing up…' : `↑ Back-fill Drive (${missingDriveCount})`}
+            </button>
+          )}
           <button onClick={() => setShowWhitelistManager(true)} className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
             Whitelist
           </button>
@@ -623,6 +689,17 @@ export default function AccountingPage() {
 
       {/* Auto-saved notification */}
       <AutoSavedBanner entries={autoSavedEntries} onDismiss={() => setAutoSavedEntries([])} />
+
+      {/* Drive upload failures (e.g. expired Google sign-in) */}
+      <DriveFailureBanner count={driveFailures} onDismiss={() => setDriveFailures(0)} />
+
+      {/* Bulk Drive back-fill result */}
+      {backfillMsg && (
+        <div className="flex items-start justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 gap-3">
+          <p className="text-sm text-indigo-800">{backfillMsg}</p>
+          <button onClick={() => setBackfillMsg(null)} className="text-indigo-400 hover:text-indigo-600 flex-shrink-0">×</button>
+        </div>
+      )}
 
       {/* Summary cards */}
       {isFiltered && (

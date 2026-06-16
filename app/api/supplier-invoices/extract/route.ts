@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import { requireRole } from '@/utils/authGuard';
+import { SUPPLIER_KNOWLEDGE } from '@/utils/supplierKnowledge';
 import type { ExtractedInvoiceData } from '@/types/supplierInvoice';
 
 const EXTRACTION_PROMPT = `Extract structured data from this supplier invoice or fee statement (Czech or English).
@@ -22,6 +23,13 @@ totalAmount: the total amount payable (including VAT if present). Extract the nu
 invoiceCurrency: the currency of the invoice (CZK, USD, EUR, GBP, etc.).
 lineItems: If the document is a fee statement or service summary with a table of multiple reservations or transactions each with an individual fee amount (e.g. an Airbnb monthly service fee statement), extract each row as a lineItem with description (reservation reference or guest name) and amount (the fee for that row). Set totalAmount to the SUM of all row fees — do NOT use any pre-printed grand total which may include VAT or other charges. If there is only one total with no per-row breakdown, set lineItems to null.
 If a field cannot be determined, use null.`;
+
+/** Generic prompt + per-supplier guidance from the knowledge base (utils/supplierKnowledge.ts) */
+const FULL_PROMPT = `${EXTRACTION_PROMPT}
+
+SUPPLIER-SPECIFIC GUIDANCE
+If this invoice is from one of the suppliers below (match by supplier name or IČO), apply its notes in addition to the rules above. If the supplier is not listed, ignore this section.
+${SUPPLIER_KNOWLEDGE}`;
 
 const CLAUDE_MAX_BYTES = 4.5 * 1024 * 1024; // 4.5 MB — leave headroom under the 5 MB API limit
 
@@ -98,7 +106,7 @@ export async function POST(request: Request) {
   if (mediaType === 'application/pdf') {
     content = [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-      { type: 'text', text: EXTRACTION_PROMPT },
+      { type: 'text', text: FULL_PROMPT },
     ];
   } else if (mediaType.startsWith('image/')) {
     const SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
@@ -107,7 +115,7 @@ export async function POST(request: Request) {
       : 'image/jpeg';
     content = [
       { type: 'image', source: { type: 'base64', media_type: imgType, data: base64 } },
-      { type: 'text', text: EXTRACTION_PROMPT },
+      { type: 'text', text: FULL_PROMPT },
     ];
   } else {
     return NextResponse.json({ error: 'Unsupported file type. Upload a PDF or image.' }, { status: 400 });
