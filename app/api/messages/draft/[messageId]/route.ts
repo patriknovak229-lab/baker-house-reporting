@@ -110,6 +110,34 @@ async function appendLog(redis: Redis, entry: AutoReplyLogEntry): Promise<void> 
   await redis.set(LOG_KEY, next);
 }
 
+// Light edit-capture: records when the operator changed the AI's draft, so we
+// can later look for patterns (what gets corrected, and how) and fold them
+// into the knowledge base. Storage only for now — no analysis pipeline yet.
+const EDIT_LOG_KEY = 'baker:auto-reply:edit-log';
+const EDIT_LOG_MAX = 500;
+
+interface EditLogEntry {
+  beds24MessageId: number;
+  bookingId: number;
+  reservationNumber: string;
+  category: string;
+  language: string;
+  guestMessage: string;
+  aiDraft: string;
+  operatorText: string;
+  editedAt: string;
+}
+
+async function appendEditLog(redis: Redis, entry: EditLogEntry): Promise<void> {
+  try {
+    const log = (await redis.get<EditLogEntry[]>(EDIT_LOG_KEY)) ?? [];
+    const next = [entry, ...log].slice(0, EDIT_LOG_MAX);
+    await redis.set(EDIT_LOG_KEY, next);
+  } catch (err) {
+    console.warn('[messages/draft] edit-log append failed:', err);
+  }
+}
+
 function makeLogId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -127,7 +155,7 @@ export async function POST(
     return NextResponse.json({ error: 'messageId required' }, { status: 400 });
   }
 
-  let body: { text?: string; preTranslated?: boolean } = {};
+  let body: { text?: string; preTranslated?: boolean; sourceText?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -232,6 +260,24 @@ export async function POST(
         : 'operator approved draft as-is',
     decidedAt: new Date().toISOString(),
   });
+
+  // Light edit-capture: when the operator changed the AI's draft, store the
+  // before/after (in the operator's working language) for later analysis.
+  const aiDraft = (pending.entry.draftText ?? '').trim();
+  const operatorSource = (body.sourceText ?? body.text ?? '').trim();
+  if (aiDraft && operatorSource && operatorSource !== aiDraft) {
+    await appendEditLog(redis, {
+      beds24MessageId: pending.entry.beds24MessageId,
+      bookingId: pending.entry.bookingId,
+      reservationNumber: pending.entry.reservationNumber,
+      category: pending.type === 'draft' ? pending.entry.category : 'other',
+      language: pending.entry.language,
+      guestMessage: pending.entry.guestMessageText,
+      aiDraft,
+      operatorText: operatorSource,
+      editedAt: new Date().toISOString(),
+    });
+  }
 
   return NextResponse.json({ ok: true, messageId: sentMessageId });
 }

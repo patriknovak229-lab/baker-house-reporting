@@ -360,14 +360,14 @@ export default function TransactionsPage() {
   // /api/messages/draft/[messageId] endpoint, then locally drop the
   // entry so the panel updates immediately (next poll reconciles).
   const approveDraft = useCallback(
-    async (messageId: number, text: string, preTranslated = false) => {
+    async (messageId: number, text: string, preTranslated = false, sourceText?: string) => {
       if (!text.trim()) return;
       setDraftBusy((prev) => ({ ...prev, [messageId]: 'sending' }));
       try {
         const res = await fetch(`/api/messages/draft/${messageId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, preTranslated }),
+          body: JSON.stringify({ text, preTranslated, sourceText: sourceText ?? text }),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -1680,9 +1680,9 @@ export default function TransactionsPage() {
                                   typeof p === 'object' &&
                                   p.czech === editedText;
                                 if (sendChecked) {
-                                  approveDraft(d.beds24MessageId, (p as { translated: string }).translated, true);
+                                  approveDraft(d.beds24MessageId, (p as { translated: string }).translated, true, editedText);
                                 } else {
-                                  approveDraft(d.beds24MessageId, editedText);
+                                  approveDraft(d.beds24MessageId, editedText, false, editedText);
                                 }
                               }}
                               disabled={Boolean(busy) || !editedText.trim() || !role || !canMutate(role, "transactions")}
