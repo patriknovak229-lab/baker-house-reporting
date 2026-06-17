@@ -31,5 +31,6 @@ export default auth((req) => {
 
 export const config = {
   // Skip Next.js internals, static files, auth routes, Stripe webhook, public voucher endpoints, and public pages
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success).*)'],
+  // (`share` = public occupancy snapshot pages, `api/public` = their read API).
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public).*)'],
 };
