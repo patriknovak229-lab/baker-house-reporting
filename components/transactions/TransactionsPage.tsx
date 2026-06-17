@@ -206,12 +206,18 @@ export default function TransactionsPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const saveStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchReservations = useCallback(async () => {
+  const fetchReservations = useCallback(async (opts?: { fullSync?: boolean }) => {
+    // A forced sync (manual "Sync", error/conflict "Retry/Refresh", phone-booking
+    // creation) appends ?fullSync=true to bypass the server's 90s min-sync guard.
+    // Automatic refetches (mount / tab-switch remount) omit it so they coalesce.
+    // `=== true` keeps event/object args from the other call sites (onClick,
+    // onPaymentCreated, …) safely resolving to a guarded refresh.
+    const fullSync = opts?.fullSync === true;
     setIsLoading(true);
     setError(null);
     try {
       const [bookingsRes, localStateRes, additionalPaymentsRes, vouchersRes, splitPaymentsRes, invoiceRequestsRes, emailLogRes] = await Promise.all([
-        fetch("/api/bookings"),
+        fetch(`/api/bookings${fullSync ? "?fullSync=true" : ""}`),
         fetch("/api/local-state"),
         fetch("/api/stripe/additional-payments"),
         fetch("/api/vouchers"),
@@ -871,7 +877,7 @@ export default function TransactionsPage() {
             </>
           )}
           <button
-            onClick={fetchReservations}
+            onClick={() => fetchReservations({ fullSync: true })}
             disabled={isLoading}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-gray-200 bg-white text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -900,7 +906,7 @@ export default function TransactionsPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <span>Failed to load reservations: {error}</span>
-          <button onClick={fetchReservations} className="ml-auto font-medium underline underline-offset-2 hover:text-red-900">
+          <button onClick={() => fetchReservations({ fullSync: true })} className="ml-auto font-medium underline underline-offset-2 hover:text-red-900">
             Retry
           </button>
         </div>
@@ -948,7 +954,7 @@ export default function TransactionsPage() {
                 </ul>
               </div>
               <button
-                onClick={fetchReservations}
+                onClick={() => fetchReservations({ fullSync: true })}
                 className="font-medium underline underline-offset-2 hover:text-red-900"
               >
                 Refresh
@@ -1996,7 +2002,7 @@ export default function TransactionsPage() {
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);
-            fetchReservations();
+            fetchReservations({ fullSync: true });
           }}
         />
       )}

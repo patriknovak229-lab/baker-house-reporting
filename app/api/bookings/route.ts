@@ -647,6 +647,7 @@ const BOOKINGS_CACHE_KEY  = "baker:beds24-bookings-cache";
 const BOOKINGS_LAST_SYNC_KEY = "baker:beds24-last-sync";
 const DELTA_OVERLAP_MS    = 5 * 60 * 1000;        // 5 minutes
 const MAX_DELTA_AGE_MS    = 24 * 60 * 60 * 1000;  // 24 hours
+const MIN_SYNC_INTERVAL_MS = 90 * 1000;            // 90s — coalesce rapid auto-refetches (tab switches)
 const PRUNE_DEPARTURE_MONTHS = 14;                 // keep ~1 year + 2-month buffer
 const LIVE_REFRESH_LOOKBACK_DAYS = 60;             // covers monthly stays currently checked-in
 
@@ -727,6 +728,20 @@ async function fetchAllBookings(
   const cacheAgeMs = lastSync ? Date.now() - new Date(lastSync).getTime() : Infinity;
   const cacheEmpty = Object.keys(cached).length === 0;
   const useFullSync = options.fullSync || cacheEmpty || cacheAgeMs > MAX_DELTA_AGE_MS;
+
+  // ── Min-sync-interval short-circuit ──
+  // The dashboard unmounts/remounts each tab on switch, so every switch re-hits
+  // this endpoint. Without a guard each one fired a delta + live-window round
+  // trip against Beds24 — amplified across operators sharing this cache key, and
+  // adding up fast against the credit-bucket rate limit. When the shared cache
+  // was refreshed within the last MIN_SYNC_INTERVAL_MS and the caller didn't
+  // force a full sync, serve the cached set and skip Beds24 entirely. Deliberate
+  // refreshes (manual Sync / Retry buttons, phone-booking creation) pass
+  // fullSync=true to bypass; cache-miss and >24h-stale paths already bypass via
+  // useFullSync above.
+  if (!useFullSync && cacheAgeMs < MIN_SYNC_INTERVAL_MS) {
+    return Object.values(cached);
+  }
 
   // ── Pass 1: full-window OR delta ──
   // (Same logic as before. Both passes write into `cached` by id.)
