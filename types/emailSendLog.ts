@@ -15,12 +15,13 @@ export interface EmailSendLogEntry {
    * with log entries written before the WhatsApp channel existed —
    * undefined is treated as 'email'.
    */
-  channel?: 'email' | 'whatsapp';
+  channel?: 'email' | 'whatsapp' | 'sms';
   /** Address/phone the message was delivered to.
    *  - email channel: email address
-   *  - whatsapp channel: E.164-ish phone digits (no leading +) */
+   *  - whatsapp channel: E.164-ish phone digits (no leading +)
+   *  - sms channel: E.164 phone number (with leading +) */
   to: string;
-  /** Email subject — empty string for WhatsApp (channel has no subject line). */
+  /** Email subject — empty string for WhatsApp/SMS (no subject line). */
   subject: string;
   /** ISO timestamp of the successful send. */
   sentAt: string;

@@ -1467,6 +1467,7 @@ export default function ReservationDrawer({
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [showEmailGuestModal, setShowEmailGuestModal] = useState(false);
   const [showWhatsAppGuestModal, setShowWhatsAppGuestModal] = useState(false);
+  const [showSmsGuestModal, setShowSmsGuestModal] = useState(false);
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
@@ -2374,6 +2375,21 @@ export default function ReservationDrawer({
                     WhatsApp Guest
                   </button>
                 )}
+                {/* SMS Guest pill — sends a real one-way SMS via Twilio
+                    ("BakerHouse" sender), delivered from the app (no handoff).
+                    Only requires a phone. */}
+                {reservation.phone && (
+                  <button
+                    onClick={() => setShowSmsGuestModal(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold transition-colors"
+                    title={`Send a templated SMS to ${reservation.firstName}`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 3v-3z" />
+                    </svg>
+                    SMS Guest
+                  </button>
+                )}
                 {/* WhatsApp Chat — bypasses the template modal entirely.
                     Opens wa.me with the guest's phone number and NO
                     pre-filled text, so the operator can type a freeform
@@ -2407,9 +2423,10 @@ export default function ReservationDrawer({
               <div className="mb-3 -mt-1 space-y-0.5">
                 {(reservation.emailSendLog ?? []).map((entry) => {
                   // Old log entries pre-date the channel field — treat as email.
-                  const isWhatsApp = entry.channel === 'whatsapp';
-                  const channelIcon = isWhatsApp ? '💬' : '✉️';
-                  const channelLabel = isWhatsApp ? 'WhatsApp' : 'Email';
+                  const channelIcon =
+                    entry.channel === 'whatsapp' ? '💬' : entry.channel === 'sms' ? '📱' : '✉️';
+                  const channelLabel =
+                    entry.channel === 'whatsapp' ? 'WhatsApp' : entry.channel === 'sms' ? 'SMS' : 'Email';
                   return (
                     <div
                       key={entry.id}
@@ -2765,6 +2782,19 @@ export default function ReservationDrawer({
               onClose={() => setShowWhatsAppGuestModal(false)}
               onSent={() => {
                 setShowWhatsAppGuestModal(false);
+                onPaymentCreated?.();
+              }}
+            />
+          )}
+
+          {showSmsGuestModal && reservation.phone && (
+            <EmailGuestModal
+              reservation={reservation}
+              channel="sms"
+              phone={reservation.phone}
+              onClose={() => setShowSmsGuestModal(false)}
+              onSent={() => {
+                setShowSmsGuestModal(false);
                 onPaymentCreated?.();
               }}
             />

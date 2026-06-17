@@ -150,6 +150,19 @@ export function buildWhatsAppDeeplink(rawPhone: string, text: string): string {
   return `https://${host}/send?phone=${cleaned}&text=${encodedText}`;
 }
 
+/**
+ * Strip WhatsApp markup so the same rendered message reads cleanly as plain
+ * SMS. WhatsApp uses *bold*, _italic_, and ```monospace``` — those control
+ * characters would show literally in an SMS, so we unwrap them to their inner
+ * text. (This renderer only ever emits those three tokens.)
+ */
+export function whatsAppToPlain(text: string): string {
+  return text
+    .replace(/```([\s\S]*?)```/g, '$1') // ```code``` → code
+    .replace(/\*(.+?)\*/g, '$1')        // *bold* → bold
+    .replace(/_([^_]+)_/g, '$1');       // _italic_ → italic
+}
+
 function formatExpiry(iso?: string, lang: WhatsAppLang = 'en'): string {
   const date = iso
     ? new Date(iso)
