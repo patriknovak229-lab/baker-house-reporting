@@ -53,15 +53,21 @@ export type ParkingResult = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Generate all dates in [checkIn, checkOut) as YYYY-MM-DD strings */
+/** Generate all dates in [checkIn, checkOut) as YYYY-MM-DD strings.
+ *
+ * All arithmetic stays in UTC. The previous version parsed local midnight
+ * (`+ "T00:00:00"`) but emitted dates via `toISOString()` (UTC) — on any
+ * UTC+ operator (Czech summer = UTC+2) that shifted every key back a day,
+ * so the parking grid landed one day earlier than the room grid and a
+ * space showed FREE on the last night of a stay. Parse + step + emit all
+ * in UTC so they agree. (Same trap periodUtils.ts documents in its header.) */
 function dateRange(checkIn: string, checkOut: string): string[] {
   const dates: string[] = [];
-  const start = new Date(checkIn + "T00:00:00");
-  const end = new Date(checkOut + "T00:00:00");
-  const cur = new Date(start);
+  const cur = new Date(checkIn + "T00:00:00Z");
+  const end = new Date(checkOut + "T00:00:00Z");
   while (cur < end) {
     dates.push(cur.toISOString().slice(0, 10));
-    cur.setDate(cur.getDate() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return dates;
 }
