@@ -84,22 +84,26 @@ export function effectiveRateType(r: {
 }
 
 /**
- * Best-effort rate-type detection from Beds24 booking signals.
+ * Rate-type detection from Beds24 `rateDescription` (+ apiReference / infoItems).
+ * Calibrated against live Baker House bookings on 2026-06-20 (n=85 current/future
+ * OTA stays; 84 auto-classified, 1 genuinely unnamed → manual).
  *
- * ⚠️ CALIBRATION NEEDED — the exact field Booking.com/Airbnb populate with the
- * rate-plan name is not yet confirmed against live data (Beds24's public wiki is
- * auth-walled). This scans every plausible text signal we fetch. Use
- * `GET /api/bookings?debugRates=true` to dump those fields for real bookings,
- * then tighten the literals below. The manual override + "rate type missing"
- * alert are the safety net so the operator is never blocked or silently
- * misinformed while detection is being calibrated.
+ * Real signal formats found:
+ *   Booking.com — per-night lines, plan name in parens, e.g.
+ *     "2026-09-04 (65571638 Flexible 1 day Urban …) CZK 2727.63 genius".
+ *     Vocabulary seen: "Standard Rate", "Non-Refundable …"/"Non Refundable …",
+ *     "Weekly rate …", "Flexible …"/"Flexibl …". A bare "<date> Rate (<id>)"
+ *     with no plan name → null → alert + manual.
+ *   Airbnb — plan is in the cancel policy: "Cancel policy
+ *     tiered_pricing_non_refundable" → Non-Refundable; "moderate"/other →
+ *     Standard. NOTE the underscore in "non_refundable".
  *
- * Returns null when no plan can be inferred → triggers the alert / prompts a
- * manual set. Long Booking.com stays are the expected miss (Beds24 truncates the
- * source text past a char limit), exactly as the operator predicted.
+ * Returns null only when no plan can be inferred (unnamed Booking.com rate, or
+ * truncation) → "rate type missing" alert + manual override. Matching is
+ * case-insensitive substring ("flexi" catches "Flexible").
  *
- * Matching is literal-first against the property's actual plan names
- * ("Flexi", "Weekly", …) to avoid false positives from generic words.
+ * Re-calibrate via GET /api/bookings?debugRates=true if the channels change
+ * wording or the property adds rate plans.
  */
 export function detectRateType(input: {
   channel: Channel;
@@ -116,20 +120,20 @@ export function detectRateType(input: {
 
   const has = (re: RegExp) => re.test(hay);
 
-  // Non-refundable applies to both channels — check first (most specific).
-  if (has(/non[\s-]?refundable|non[\s-]?ref\b|\bnonref/)) return "Non-Refundable";
+  // Non-refundable — both channels. Allow space/underscore/hyphen so Airbnb's
+  // cancel-policy code "non_refundable" matches alongside "Non-Refundable".
+  if (has(/non[\s_-]?refundable|nonref/)) return "Non-Refundable";
 
-  if (input.channel === "Airbnb") {
-    // Airbnb has only two plans; non-refundable handled above, so the rest is
-    // the (default) Standard rate. LoS discounts ride on Standard — same type.
-    return "Standard";
-  }
+  // Airbnb has only two plans; anything not non-refundable is Standard (its
+  // length-of-stay discounts ride on Standard — same rate type).
+  if (input.channel === "Airbnb") return "Standard";
 
-  // Booking.com — match the property's literal plan names.
-  if (has(/\bflexi\b/)) return "Flexi";
-  if (has(/\bweekly\b|\bweek\s*rate\b/)) return "Weekly";
-  if (has(/\bone[\s-]?night\b|\b1[\s-]?night\b|single[\s-]?night/)) return "One-Night";
-  if (has(/\bstandard\b/)) return "Standard";
+  // Booking.com plan names — substring match ("flexi" catches "Flexible").
+  // "1 day"/"genius" in the text are cancellation-window / loyalty noise.
+  if (has(/weekly|week rate|7 nights?/)) return "Weekly";
+  if (has(/flexi/)) return "Flexi";
+  if (has(/one[\s-]?night|1[\s-]?night|single[\s-]?night/)) return "One-Night";
+  if (has(/standard/)) return "Standard";
 
-  return null; // unknown / truncated → alert + manual override
+  return null; // unnamed / truncated → alert + manual override
 }
