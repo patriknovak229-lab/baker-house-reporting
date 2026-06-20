@@ -1105,6 +1105,18 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Sensible default actionable date per category — saves the operator
+ *  scrolling the date picker from today. Late-checkout + invoice (send
+ *  invoice) key off CHECK-OUT; everything else (problem, mid-stay cleaning,
+ *  special treatment, early check-in) keys off CHECK-IN. Always overridable
+ *  via the date field. Falls back to today when no reservation is in scope. */
+function defaultIssueDate(category: IssueCategory, res: Reservation | null): string {
+  if (!res) return new Date().toLocaleDateString("sv-SE");
+  return category === "lateCheckout" || category === "invoice"
+    ? res.checkOutDate
+    : res.checkInDate;
+}
+
 // ── Issue category config ─────────────────────────────────────────────────────
 const CATEGORY_CONFIG: Record<IssueCategory, {
   label: string;
@@ -1522,7 +1534,7 @@ export default function ReservationDrawer({
 }: ReservationDrawerProps) {
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
-  const [newIssueDate, setNewIssueDate] = useState(() => new Date().toLocaleDateString("sv-SE"));
+  const [newIssueDate, setNewIssueDate] = useState(() => defaultIssueDate("problem", reservation));
   const [newIssueCategory, setNewIssueCategory] = useState<IssueCategory>("problem");
   const [includePaymentQR, setIncludePaymentQR] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceData>({
@@ -1596,7 +1608,7 @@ export default function ReservationDrawer({
       setInvoiceExpanded(false);
       setNotes(reservation.notes);
       setNewIssueText("");
-      setNewIssueDate(new Date().toLocaleDateString("sv-SE"));
+      setNewIssueDate(defaultIssueDate("problem", reservation));
       setNewIssueCategory("problem");
       setDriveSaveResult(null);
       setDriveSaveError(null);
@@ -1677,7 +1689,7 @@ export default function ReservationDrawer({
     };
     onUpdate({ ...reservation!, issues: [...(reservation!.issues ?? []), issue] });
     setNewIssueText("");
-    setNewIssueDate(new Date().toISOString().slice(0, 10));
+    setNewIssueDate(defaultIssueDate("problem", reservation));
     setIssueSaved(true);
     setTimeout(() => setIssueSaved(false), 2500);
     setNewIssueCategory("problem");
@@ -3237,7 +3249,10 @@ export default function ReservationDrawer({
                     <button
                       key={cat}
                       type="button"
-                      onClick={() => setNewIssueCategory(cat)}
+                      onClick={() => {
+                        setNewIssueCategory(cat);
+                        setNewIssueDate(defaultIssueDate(cat, reservation));
+                      }}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
                         active
                           ? `${cfg.badgeBg} text-white border-transparent`
