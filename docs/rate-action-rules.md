@@ -21,12 +21,14 @@ _Last updated: 2026-06-20_
 - Use **Status / notes** for rollout scope, conditions, or "for now" limitations.
 - Update the _Last updated_ date when you change anything.
 
-## Note on automation (not built)
+## Note on automation (intentionally not built)
 
-The booked rate plan is **not a clean field** in the Beds24 v2 API. The rate name
-(e.g. non-refundable / standard / weekly / flexi) and its policy arrive as
-channel-specific free text inside `apiMessage`, `rateDescription`, and/or `infoItems`,
-which would need per-channel parsing before any rule above could be auto-applied.
-There is an early `RateType` scaffold in the codebase (`types/reservation.ts` +
-`isRateTypeInScope` in the reservation drawer), but per the current decision this
-table stays **operator-maintained reference only** — it does not drive app behaviour.
+The app **already detects** a per-reservation rate plan — `rateType` on `Reservation`
+(`types/reservation.ts`), parsed in `utils/rateType.ts` and calibrated against live
+OTA stays, shown as a Rate column + drawer control. So auto-creating these perks off
+the effective rate type would be feasible.
+
+It's deliberately left as **operator-maintained reference** for now — the perk actions
+(bottle of wine, early check-in / late checkout) are handled manually rather than
+auto-generated as tasks. Revisit this file if/when you want them wired to fire
+automatically from the detected rate.
