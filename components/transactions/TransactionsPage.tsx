@@ -20,6 +20,7 @@ import CreateVoucherModal from "./CreateVoucherModal";
 import PriceCheckModal from "./PriceCheckModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch } from "@/utils/stringUtils";
+import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
 import type { Role } from "@/utils/roles";
@@ -35,6 +36,7 @@ type LocalFields = {
   notes?: string;
   manualFlagOverrides?: Partial<Record<CustomerFlag, boolean>>;
   ratingStatus?: RatingStatus;
+  rateTypeOverride?: import('@/types/reservation').RateType | null;
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
   issues?: Issue[];
@@ -52,6 +54,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.notes) local.notes = r.notes;
   if (Object.keys(r.manualFlagOverrides).length > 0) local.manualFlagOverrides = r.manualFlagOverrides;
   if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
+  if (r.rateTypeOverride != null) local.rateTypeOverride = r.rateTypeOverride;
   if (r.invoiceData) local.invoiceData = r.invoiceData;
   if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
   if (r.issues && r.issues.length > 0) local.issues = r.issues;
@@ -696,6 +699,7 @@ export default function TransactionsPage() {
   }, [reservations]);
 
   const dataIssues = useMemo<DataIssue[]>(() => {
+    const today = new Date().toLocaleDateString("sv-SE"); // local YYYY-MM-DD
     return reservations
       .filter((r) => r.paymentStatus !== "Refunded")
       .flatMap((r) => {
@@ -705,6 +709,11 @@ export default function TransactionsPage() {
         }
         if (r.channel === "Airbnb") {
           if (r.commissionAmount === 0) problems.push("Host fee missing");
+        }
+        // Rate type — only for current+future OTA stays (no backfill). Missing
+        // when neither detected from Beds24 nor set manually by the operator.
+        if (isRateTypeInScope(r, today) && !effectiveRateType(r)) {
+          problems.push("Rate type missing");
         }
         return problems.length > 0 ? [{ reservation: r, problems }] : [];
       });
@@ -734,13 +743,6 @@ export default function TransactionsPage() {
         !filters.rooms.includes(res.room) &&
         !res.linkedRooms?.some((r) => filters.rooms.includes(r))
       ) return false;
-
-      // Cleaning status
-      if (
-        filters.cleaningStatuses.length > 0 &&
-        !filters.cleaningStatuses.includes(res.cleaningStatus)
-      )
-        return false;
 
       // Payment status
       if (
@@ -978,7 +980,13 @@ export default function TransactionsPage() {
               {dataIssues.length} data {dataIssues.length === 1 ? "issue" : "issues"} detected
             </span>
             <span className="text-amber-500 text-xs ml-1">
-              Missing commission data from Beds24
+              {(() => {
+                const kinds = new Set(dataIssues.flatMap((d) => d.problems));
+                const bits: string[] = [];
+                if (kinds.has("Commission missing") || kinds.has("Host fee missing")) bits.push("commission");
+                if (kinds.has("Rate type missing")) bits.push("rate plan");
+                return bits.length > 0 ? `Missing ${bits.join(" + ")} data from Beds24` : "Needs attention";
+              })()}
             </span>
             <svg
               className={`w-4 h-4 ml-auto text-amber-400 transition-transform ${issuesOpen ? "rotate-180" : ""}`}

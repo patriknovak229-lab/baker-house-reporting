@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import PaymentLinkModal from "./PaymentLinkModal";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory, InvoiceModification } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory, InvoiceModification, RateType } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
@@ -14,6 +14,14 @@ import { formatDate, formatCurrency } from "@/utils/formatters";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
 import { computeParking, getFreeSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
+import {
+  rateChipClasses,
+  RATE_TYPES,
+  RATE_TYPE_LABELS,
+  RATE_TYPE_SHORT,
+  effectiveRateType,
+  isRateTypeInScope,
+} from "@/utils/rateType";
 import {
   printInvoice,
   generateInvoiceNumber,
@@ -903,6 +911,73 @@ function PaymentStatusControl({
                 className="text-[10px] text-red-400 hover:text-red-600 ml-1"
               >
                 clear
+              </button>
+            )}
+            <button onClick={() => setOpen(false)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Rate plan display + manual override. Mirrors PaymentStatusControl: shows the
+ *  effective rate chip (override wins over Beds24 detection), with an inline
+ *  picker. When nothing is set on an in-scope OTA stay it prompts for a manual
+ *  choice — the same data gap the "Rate type missing" alert surfaces. */
+function RateTypeControl({
+  detected,
+  override,
+  onOverride,
+}: {
+  detected: Reservation["rateType"];
+  override: Reservation["rateTypeOverride"];
+  onOverride: (v: RateType | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const effective = override ?? detected ?? null;
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 mb-1">Rate plan</p>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {effective ? (
+          <span className={rateChipClasses(effective)}>{RATE_TYPE_LABELS[effective]}</span>
+        ) : (
+          <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+            Not set
+          </span>
+        )}
+        {override ? (
+          <span className="text-[10px] text-amber-500 font-medium">manual</span>
+        ) : effective ? (
+          <span className="text-[10px] text-gray-400">from Beds24</span>
+        ) : null}
+        {!open && (
+          <button
+            onClick={() => setOpen(true)}
+            className="text-[10px] text-gray-400 hover:text-indigo-500 underline underline-offset-2"
+          >
+            {effective ? "change" : "set"}
+          </button>
+        )}
+        {open && (
+          <div className="flex items-center gap-1 flex-wrap">
+            {RATE_TYPES.map((s) => (
+              <button
+                key={s}
+                onClick={() => { onOverride(s); setOpen(false); }}
+                className={`text-[10px] px-1.5 py-0.5 rounded border ${s === effective ? "bg-indigo-100 border-indigo-300 text-indigo-700" : "border-gray-200 text-gray-600 hover:border-indigo-300"}`}
+              >
+                {RATE_TYPE_SHORT[s]}
+              </button>
+            ))}
+            {override && (
+              <button
+                onClick={() => { onOverride(null); setOpen(false); }}
+                className="text-[10px] text-red-400 hover:text-red-600 ml-1"
+                title="Clear manual override — revert to Beds24 detection"
+              >
+                auto
               </button>
             )}
             <button onClick={() => setOpen(false)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
@@ -2010,6 +2085,12 @@ export default function ReservationDrawer({
 
   const isOTAChannel = reservation.channel === "Booking.com" || reservation.channel === "Airbnb";
   const isDirectPhone = reservation.channel === "Direct-Phone";
+  // Rate plan applies to OTA stays. Show the control for current+future stays
+  // (no backfill) or whenever a rate is already known (detected or manual).
+  const showRatePlan =
+    isOTAChannel &&
+    (isRateTypeInScope(reservation, new Date().toLocaleDateString("sv-SE")) ||
+      !!effectiveRateType(reservation));
   const nationalityFlag = countryCodeToFlag(reservation.nationality);
   const nationalityName = countryCodeToName(reservation.nationality);
 
@@ -2487,6 +2568,13 @@ export default function ReservationDrawer({
                     <p className="text-[11px] text-gray-400 mb-1">Total</p>
                     <PaymentBreakdown reservation={reservation} />
                   </div>
+                  {showRatePlan && (
+                    <RateTypeControl
+                      detected={reservation.rateType}
+                      override={reservation.rateTypeOverride ?? null}
+                      onOverride={(v) => onUpdate({ ...reservation, rateTypeOverride: v })}
+                    />
+                  )}
                 </div>
                 <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2.5 py-1.5">
                   Paid through {reservation.channel} — collected by channel.

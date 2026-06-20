@@ -17,6 +17,19 @@ export type CustomerFlag =
 export type RatingStatus = "none" | "good" | "bad";
 export type InvoiceStatus = "Not Issued" | "Issued" | "Sent";
 
+/**
+ * Rate plan a booking was made under. Booking.com offers all five; Airbnb only
+ * has Non-Refundable / Standard (its length-of-stay discounts are applied to
+ * the Standard rate, not separate plans). Direct bookings carry no channel rate
+ * plan. Detection is best-effort from Beds24 signals — see utils/rateType.ts.
+ */
+export type RateType =
+  | "Non-Refundable"
+  | "Standard"
+  | "Flexi"
+  | "One-Night"
+  | "Weekly";
+
 export type IssueCategory =
   | "problem"        // General problem/issue — red !
   | "invoice"        // Send invoice task — amber envelope
@@ -156,6 +169,14 @@ export interface Reservation {
   commissionAmount: number;    // OTA/channel commission in CZK (Booking.com, Airbnb)
   paymentChargeAmount: number; // Payment processing fee in CZK
 
+  /**
+   * Rate plan detected from Beds24 (read-only, best-effort). null/undefined =
+   * could not be detected. Only populated for current+future OTA stays (no
+   * backfill — see utils/rateType.ts isRateTypeInScope). Long Booking.com stays
+   * are the expected miss: Beds24 truncates the source field past a char limit.
+   */
+  rateType?: RateType | null;
+
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)
   paymentStatusOverride: PaymentStatus | null; // manual override; null = use derived value
@@ -163,6 +184,8 @@ export interface Reservation {
   // Flag overrides: true = force on, false = force off, missing key = follow auto rule
   manualFlagOverrides: Partial<Record<CustomerFlag, boolean>>;
   ratingStatus: RatingStatus;
+  /** Manual rate-plan override; null/undefined = use the detected `rateType`. */
+  rateTypeOverride?: RateType | null;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this

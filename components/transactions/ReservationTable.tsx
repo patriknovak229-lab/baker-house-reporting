@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo } from "react";
-import type { Reservation, Channel, CleaningStatus, PaymentStatus, IssueCategory } from "@/types/reservation";
+import type { Reservation, Channel, PaymentStatus, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
@@ -8,6 +8,7 @@ import { getEffectiveFlags } from "@/utils/flagUtils";
 import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 import { roomChipClasses } from "@/utils/roomVisuals";
+import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
 
 type SortField =
   | keyof Pick<
@@ -21,8 +22,8 @@ type SortField =
       | "reservationDate"
       | "numberOfNights"
       | "price"
-      | "cleaningStatus"
       | "paymentStatus"
+      | "rateType"
     >
   | "stayStatus";
 
@@ -56,12 +57,6 @@ function channelBadgeVariant(channel: Channel) {
   if (channel === "Direct-Phone") return "green";         // green
   if (channel === "Direct-Web")   return "green-light";   // mint/light green
   return "gray";                                          // legacy "Direct" — neutral
-}
-
-function cleaningBadgeVariant(status: CleaningStatus) {
-  if (status === "Pending") return "amber";
-  if (status === "In Progress") return "blue";
-  return "green";
 }
 
 function paymentBadgeVariant(status: PaymentStatus) {
@@ -386,7 +381,7 @@ function ReservationCard({
         <span className="text-gray-500">{res.numberOfNights}n</span>
       </div>
 
-      {/* Row 4: Price · payment · cleaning */}
+      {/* Row 4: Price · payment · rate */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="font-medium text-gray-900 text-sm">{formatCurrency(res.price)}</span>
         <div className="flex items-center gap-1">
@@ -395,7 +390,10 @@ function ReservationCard({
             <span className="text-[10px] text-amber-500">M</span>
           )}
         </div>
-        <Badge variant={cleaningBadgeVariant(res.cleaningStatus)} size="xs">{res.cleaningStatus}</Badge>
+        {(() => {
+          const rt = effectiveRateType(res);
+          return rt ? <span className={rateChipClasses(rt)}>{RATE_TYPE_SHORT[rt]}</span> : null;
+        })()}
       </div>
 
       {/* Row 5: Stay status + flags (only if present) */}
@@ -475,6 +473,9 @@ export default function ReservationTable({
       let cmp: number;
       if (sortField === "stayStatus") {
         cmp = stayStatusPriority(a, allReservations) - stayStatusPriority(b, allReservations);
+      } else if (sortField === "rateType") {
+        // Sort by the effective rate (manual override wins); missing rates last.
+        cmp = (effectiveRateType(a) ?? "~").localeCompare(effectiveRateType(b) ?? "~");
       } else {
         const av = a[sortField];
         const bv = b[sortField];
@@ -497,8 +498,8 @@ export default function ReservationTable({
     { key: "checkOutDate", label: "Check-out" },
     { key: "numberOfNights", label: "Nights", align: "right" },
     { key: "price", label: "Price", align: "right" },
-    { key: "cleaningStatus", label: "Cleaning" },
     { key: "paymentStatus", label: "Payment" },
+    { key: "rateType", label: "Rate" },
   ];
 
   return (
@@ -707,11 +708,6 @@ export default function ReservationTable({
                       {formatCurrency(res.price)}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      <Badge variant={cleaningBadgeVariant(res.cleaningStatus)} size="xs">
-                        {res.cleaningStatus}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-1">
                         <Badge variant={paymentBadgeVariant(res.paymentStatusOverride ?? res.paymentStatus)} size="xs">
                           {res.paymentStatusOverride ?? res.paymentStatus}
@@ -720,6 +716,22 @@ export default function ReservationTable({
                           <span className="text-[10px] text-amber-500" title="Manually overridden">M</span>
                         )}
                       </div>
+                    </td>
+                    {/* Rate plan */}
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {(() => {
+                        const rt = effectiveRateType(res);
+                        return rt ? (
+                          <span
+                            className={rateChipClasses(rt)}
+                            title={res.rateTypeOverride ? "Rate plan set manually" : "Rate plan from Beds24"}
+                          >
+                            {RATE_TYPE_SHORT[rt]}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        );
+                      })()}
                     </td>
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">

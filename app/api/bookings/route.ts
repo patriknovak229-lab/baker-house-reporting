@@ -4,6 +4,7 @@ import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
+import { detectRateType, isRateTypeInScope, channelHasRatePlan } from "@/utils/rateType";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 const ADDITIONAL_PAYMENTS_KEY = "baker:additional-payments";
@@ -175,6 +176,8 @@ interface Beds24Booking {
   deposit: number;        // amount received/recorded in Beds24 (bank transfer, etc.)
   commission: number;     // total channel fees in CZK (OTA commission + payment charge combined)
   rateDescription: string; // human-readable rate breakdown; contains fee split for Booking.com/Airbnb
+  apiReference?: string;   // channel's own reference; may carry the rate-plan name (rate detection signal)
+  infoItems?: Array<Record<string, unknown>>; // channel key/value extras (rate plan, meal plan, …) — requires includeInfoItems=true
   firstName: string;
   lastName: string;
   email: string;
@@ -474,6 +477,37 @@ function parseBlackoutMeta(comments: string): { createdBy?: string; reason?: str
   };
 }
 
+// ─── Rate-plan detection signal ──────────────────────────────────────────────
+/** Flatten Beds24 infoItems (shape varies) into searchable text for rate detection. */
+function infoItemsText(items: unknown): string {
+  if (!Array.isArray(items)) return "";
+  const parts: string[] = [];
+  for (const it of items) {
+    if (it && typeof it === "object") {
+      for (const v of Object.values(it as Record<string, unknown>)) {
+        if (typeof v === "string") parts.push(v);
+      }
+    } else if (typeof it === "string") {
+      parts.push(it);
+    }
+  }
+  return parts.join(" ");
+}
+
+/** Run best-effort rate-type detection, gated by the no-backfill scope rule. */
+function deriveRateType(b: Beds24Booking, channel: Channel): Reservation["rateType"] {
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  if (!isRateTypeInScope({ channel, checkOutDate: b.departure ?? "" }, todayYmd)) {
+    return undefined;
+  }
+  return (
+    detectRateType({
+      channel,
+      signals: [b.rateDescription, b.apiReference, infoItemsText(b.infoItems)],
+    }) ?? undefined
+  );
+}
+
 // ─── Map Beds24 booking → our Reservation type ────────────────────────────────
 function mapToReservation(b: Beds24Booking): Reservation {
   const nights =
@@ -510,6 +544,10 @@ function mapToReservation(b: Beds24Booking): Reservation {
 
   const blackoutMeta = isBlackout ? parseBlackoutMeta(b.comments ?? '') : {};
 
+  const channel = mapChannel(b.apiSource, b.referer, b.comments ?? "");
+  // Rate plan — only for current+future OTA stays (no backfill). Blackouts skip.
+  const rateType = isBlackout ? undefined : deriveRateType(b, channel);
+
   return {
     reservationNumber: `BH-${b.id}`,
     ...(isBlackout ? { isBlackout: true } : {}),
@@ -519,7 +557,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     ...(b.modifiedTime ? { modifiedAt: b.modifiedTime } : {}),
     firstName: b.firstName ?? "",
     lastName: b.lastName ?? "",
-    channel: mapChannel(b.apiSource, b.referer, b.comments ?? ""),
+    channel,
     room,
     ...(linkedRooms && linkedRooms.length > 1 ? { linkedRooms } : {}),
     checkInDate: b.arrival ?? "",
@@ -540,6 +578,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     amountPaid,
     commissionAmount,
     paymentChargeAmount,
+    ...(rateType ? { rateType } : {}),
     // Locally managed — Redis will layer these in Phase 3
     additionalEmail: "",
     paymentStatusOverride: null,
@@ -680,6 +719,10 @@ async function paginateBookings(
   params: URLSearchParams,
 ): Promise<Beds24Booking[]> {
   const fetched: Beds24Booking[] = [];
+  // Ask Beds24 to include channel info-items (rate plan, meal plan, …) so the
+  // rate-type detector has a signal beyond rateDescription. Harmless if Beds24
+  // ignores the param — the array simply stays absent.
+  params.set("includeInfoItems", "true");
   const MAX_PAGES = 200; // defensive — Beds24's largest plausible page count for our scale
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     if (page > 1) params.set("page", String(page));
@@ -985,6 +1028,34 @@ export async function GET(req: NextRequest) {
     if (debugId) {
       const booking = raw.find((b) => b.id === Number(debugId));
       return NextResponse.json(booking ?? { error: `Booking ${debugId} not found in fetched set` });
+    }
+
+    // ?debugRates=true → dump the rate-plan signal fields + detected type for
+    // current+future OTA bookings, so the detector patterns can be calibrated
+    // against real data. See utils/rateType.ts (CALIBRATION NEEDED).
+    if (req.nextUrl.searchParams.get("debugRates") === "true") {
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = mergeGroupedBookings(
+        raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled"),
+      )
+        .map((b) => ({ b, channel: mapChannel(b.apiSource, b.referer, b.comments ?? "") }))
+        .filter(({ b, channel }) => channelHasRatePlan(channel) && (b.departure ?? "") >= today)
+        .map(({ b, channel }) => ({
+          reservationNumber: `BH-${b.id}`,
+          channel,
+          checkIn: b.arrival,
+          checkOut: b.departure,
+          detected: detectRateType({
+            channel,
+            signals: [b.rateDescription, b.apiReference, infoItemsText(b.infoItems)],
+          }),
+          rateDescription: b.rateDescription ?? null,
+          apiReference: b.apiReference ?? null,
+          apiSource: b.apiSource ?? null,
+          referer: b.referer ?? null,
+          infoItems: b.infoItems ?? null,
+        }));
+      return NextResponse.json({ count: rows.length, today, rows });
     }
 
     const reservations = mergeGroupedBookings(

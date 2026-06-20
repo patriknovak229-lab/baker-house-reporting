@@ -3,7 +3,6 @@ import { useState } from "react";
 import type {
   Channel,
   Room,
-  CleaningStatus,
   PaymentStatus,
   CustomerFlag,
 } from "@/types/reservation";
@@ -14,7 +13,6 @@ export interface Filters {
   rooms: Room[];
   checkInFrom: string;
   checkInTo: string;
-  cleaningStatuses: CleaningStatus[];
   paymentStatuses: PaymentStatus[];
   customerFlags: CustomerFlag[];
 }
@@ -24,7 +22,6 @@ export const defaultFilters: Filters = {
   rooms: [],
   checkInFrom: "",
   checkInTo: "",
-  cleaningStatuses: [],
   paymentStatuses: [],
   customerFlags: [],
 };
@@ -131,11 +128,6 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
   const [open, setOpen] = useState(false);
 
   const channels: Channel[] = ["Booking.com", "Airbnb", "Direct", "Direct-Phone", "Direct-Web"];
-  const cleaningStatuses: CleaningStatus[] = [
-    "Pending",
-    "In Progress",
-    "Completed",
-  ];
   const paymentStatuses: PaymentStatus[] = [
     "Unpaid",
     "Partially Paid",
@@ -153,7 +145,6 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
     filters.rooms.length > 0 ||
     filters.checkInFrom ||
     filters.checkInTo ||
-    filters.cleaningStatuses.length > 0 ||
     filters.paymentStatuses.length > 0 ||
     filters.customerFlags.length > 0;
 
@@ -212,12 +203,6 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
             <RoomFilterGrouped
               selected={filters.rooms}
               onChange={(v) => onChange({ ...filters, rooms: v })}
-            />
-            <MultiCheckbox
-              label="Cleaning Status"
-              options={cleaningStatuses}
-              selected={filters.cleaningStatuses}
-              onChange={(v) => onChange({ ...filters, cleaningStatuses: v })}
             />
             <MultiCheckbox
               label="Payment Status"
