@@ -362,6 +362,8 @@ export default function AccountingPage() {
       }]);
       // The file is always present on this path, so a missing driveUrl means the Drive upload failed
       if (!saved.driveUrl) setDriveFailures((n) => n + 1);
+      // Tidy the scan folder: move the imported receipt into _processed/<year>
+      archiveIcloudFile(saved.icloudFileName, saved.invoiceDate);
     }
   }
 
@@ -468,6 +470,8 @@ export default function AccountingPage() {
     // The drawer uploads the file to Drive before saving; a file present but no
     // driveUrl means that upload failed (silently) — surface it via the banner.
     if (result.ok && hadFile && !inv.driveUrl) setDriveFailures((n) => n + 1);
+    // Tidy the scan folder: move the imported receipt into _processed/<year>
+    if (result.ok) archiveIcloudFile(inv.icloudFileName, inv.invoiceDate);
     setDrawerState(null);
     if (queue.length > 0) processNextInQueue(queue);
   }
@@ -527,6 +531,22 @@ export default function AccountingPage() {
       const saved = await res.json() as SupplierInvoice;
       setInvoices((prev) => prev.map((e) => (e.id === saved.id ? saved : e)));
     }
+  }
+
+  /**
+   * Move a successfully-imported iCloud receipt out of the scan folder into
+   * _processed/<year>. Best-effort and fire-and-forget: failures are ignored
+   * (the file just stays in place; dedup keeps it from re-importing). Only does
+   * anything when running locally, where the iCloud folder exists.
+   */
+  function archiveIcloudFile(fileName?: string, invoiceDate?: string) {
+    if (!fileName) return;
+    const year = /^\d{4}/.test(invoiceDate ?? '') ? invoiceDate!.slice(0, 4) : undefined;
+    fetch('/api/supplier-invoices/icloud-archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName, year }),
+    }).catch(() => { /* non-fatal */ });
   }
 
   async function handleBackfillDrive() {
