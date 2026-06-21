@@ -31,12 +31,28 @@ interface Props {
 
 type ActiveTab = 'upload' | 'gmail' | 'icloud';
 
-function base64UrlToFile(data: string, name: string): File {
+/** Best-effort MIME type from a filename extension (used when none is supplied) */
+function mimeFromName(name: string): string {
+  switch (name.split('.').pop()?.toLowerCase()) {
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg';
+    case 'png':  return 'image/png';
+    case 'heic': return 'image/heic';
+    case 'heif': return 'image/heif';
+    case 'webp': return 'image/webp';
+    case 'pdf':  return 'application/pdf';
+    default:     return 'application/pdf';
+  }
+}
+
+function base64UrlToFile(data: string, name: string, mimeType?: string): File {
   const b64 = data.replace(/-/g, '+').replace(/_/g, '/');
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new File([bytes], name, { type: 'application/pdf' });
+  // Use the real MIME (Gmail attachments are PDFs; iCloud files carry their own type).
+  // A wrong type here breaks downstream: extract would send an image to Claude as a PDF.
+  return new File([bytes], name, { type: mimeType || mimeFromName(name) });
 }
 
 export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onManual, onClose }: Props) {
@@ -181,7 +197,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
     const items = icloudFiles
       .filter((f) => icloudSelected.has(f.fileName))
       .map((f) => {
-        const file = base64UrlToFile(f.data, f.fileName);
+        const file = base64UrlToFile(f.data, f.fileName, f.mimeType);
         return { file, sourceType: 'upload' as SupplierInvoiceSource, icloudFileName: f.fileName };
       });
     onProcessBatch(items);
