@@ -13,6 +13,7 @@ import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
 import { computeParking, getFreeSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
+import { PHYSICAL_ROOMS } from "@/utils/roomAllocation";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
 import {
   rateChipClasses,
@@ -1555,6 +1556,57 @@ export default function ReservationDrawer({
   const [showEmailGuestModal, setShowEmailGuestModal] = useState(false);
   const [showWhatsAppGuestModal, setShowWhatsAppGuestModal] = useState(false);
   const [showSmsGuestModal, setShowSmsGuestModal] = useState(false);
+
+  // ── Manual "move to another room" (maintenance / ad-hoc) ──
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [moveTargetRoom, setMoveTargetRoom] = useState("");
+  const [moveSubmitting, setMoveSubmitting] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveDone, setMoveDone] = useState(false);
+
+  /** Rooms occupied by some OTHER booking (incl. blackouts/packages) during
+   *  this reservation's nights — those can't be picked as a move target. */
+  const occupiedDuringStay = useMemo(() => {
+    const occ = new Set<string>();
+    if (!reservation) return occ;
+    for (const r of allReservations) {
+      if (r.reservationNumber === reservation.reservationNumber) continue;
+      const overlap =
+        r.checkInDate < reservation.checkOutDate && reservation.checkInDate < r.checkOutDate;
+      if (!overlap) continue;
+      const rooms = r.linkedRooms && r.linkedRooms.length > 0 ? r.linkedRooms : [r.room];
+      for (const rm of rooms) occ.add(rm);
+    }
+    return occ;
+  }, [reservation, allReservations]);
+
+  async function handleMoveRoom() {
+    if (!reservation || !moveTargetRoom) return;
+    setMoveSubmitting(true);
+    setMoveError(null);
+    try {
+      const res = await fetch("/api/bookings/relocate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reservationNumber: reservation.reservationNumber,
+          toRoom: moveTargetRoom,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setMoveDone(true);
+      onPaymentCreated?.(); // re-sync bookings from Beds24 so the new room shows
+      setTimeout(() => {
+        setShowMoveModal(false);
+        setMoveDone(false);
+      }, 1400);
+    } catch (e) {
+      setMoveError(e instanceof Error ? e.message : "Move failed");
+    } finally {
+      setMoveSubmitting(false);
+    }
+  }
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
@@ -2312,6 +2364,26 @@ export default function ReservationDrawer({
               <ReadOnlyField label="Reservation Date" value={formatDate(reservation.reservationDate)} />
             </div>
 
+            {/* Manual room move — maintenance / ad-hoc. Hidden for multi-room
+                packages (those must be handled in Beds24). */}
+            {(reservation.linkedRooms?.length ?? 0) <= 1 && (
+              <button
+                onClick={() => {
+                  setMoveTargetRoom("");
+                  setMoveError(null);
+                  setMoveDone(false);
+                  setShowMoveModal(true);
+                }}
+                className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+                title="Reassign this reservation to a different room"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+                Move to another room
+              </button>
+            )}
+
             {/* Send Reservation Confirmation — emails a styled summary from
                 reservations@bakerhouseapartments.cz to the best email on file. */}
             <div className="mt-3 flex items-center gap-2 flex-wrap">
@@ -2899,6 +2971,86 @@ export default function ReservationDrawer({
               }}
             />
           )}
+
+          {/* Move-to-another-room confirmation modal — maintenance / ad-hoc.
+              Allows any room incl. cross-type and in-house guests, but only
+              into a unit free for the stay (occupied targets disabled). */}
+          {showMoveModal && reservation && (() => {
+            const todayStr = new Date().toLocaleDateString("sv-SE");
+            const inHouse =
+              reservation.checkInDate <= todayStr && reservation.checkOutDate > todayStr;
+            return (
+              <div
+                className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+                onClick={() => !moveSubmitting && setShowMoveModal(false)}
+              >
+                <div
+                  className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="text-base font-semibold text-gray-900">Move to another room</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {reservation.firstName} {reservation.lastName} ·{" "}
+                    {formatDate(reservation.checkInDate)} → {formatDate(reservation.checkOutDate)}
+                  </p>
+                  <p className="mt-3 text-sm text-gray-700">
+                    From <span className="font-medium">{reservation.room}</span>
+                  </p>
+
+                  <label className="block text-xs font-medium text-gray-600 mt-3 mb-1">Move to</label>
+                  <select
+                    value={moveTargetRoom}
+                    onChange={(e) => setMoveTargetRoom(e.target.value)}
+                    disabled={moveSubmitting || moveDone}
+                    className="w-full border border-gray-200 rounded-md px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
+                  >
+                    <option value="">Select a room…</option>
+                    {PHYSICAL_ROOMS.filter((u) => u.room !== reservation.room).map((u) => {
+                      const occ = occupiedDuringStay.has(u.room);
+                      return (
+                        <option key={u.room} value={u.room} disabled={occ}>
+                          {u.room}{occ ? " — occupied" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {inHouse && (
+                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      This guest is currently <strong>in-house</strong> — make sure they&apos;re physically moved.
+                    </p>
+                  )}
+                  {moveError && (
+                    <p className="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
+                      {moveError}
+                    </p>
+                  )}
+                  {moveDone && (
+                    <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                      ✓ Moved to {moveTargetRoom}. Syncing…
+                    </p>
+                  )}
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      onClick={() => !moveSubmitting && setShowMoveModal(false)}
+                      disabled={moveSubmitting}
+                      className="px-3 py-2 text-sm text-gray-700 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleMoveRoom}
+                      disabled={moveSubmitting || moveDone || !moveTargetRoom}
+                      className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {moveSubmitting ? "Moving…" : `Move to ${moveTargetRoom || "…"}`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Confirmation email preview modal — operator reviews rendered
               email in an iframe, can Cancel or Send. */}

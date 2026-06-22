@@ -66,6 +66,30 @@ export function roomIdForName(room: string): number | null {
   return ROOM_TO_ROOMID.get(room) ?? null;
 }
 
+/**
+ * Every bookable physical unit (the 5 shuffle-group units + the two
+ * standalone single-unit types K.201 and O.308). Used by the manual
+ * "move to another room" action, which — unlike the within-type resolver —
+ * can target any room. Keep the two standalone ids in sync with `UNIT_MAP`
+ * in `app/api/bookings/route.ts`.
+ */
+export const PHYSICAL_ROOMS: AllocationUnit[] = [
+  ...ALLOCATION_GROUPS.flatMap((g) => g.units),
+  { room: "K.201", roomId: 656437 },
+  { room: "O.308", roomId: 674672 },
+];
+
+const PHYS_NAME_TO_ID = new Map(PHYSICAL_ROOMS.map((u) => [u.room, u.roomId]));
+const PHYS_ID_TO_NAME = new Map(PHYSICAL_ROOMS.map((u) => [u.roomId, u.room]));
+
+export function physicalRoomIdForName(room: string): number | null {
+  return PHYS_NAME_TO_ID.get(room) ?? null;
+}
+
+export function physicalRoomName(roomId: number): string | null {
+  return PHYS_ID_TO_NAME.get(roomId) ?? null;
+}
+
 /** Group an allocated unit belongs to (by physical room name), or null. */
 export function groupForRoom(room: string): AllocationGroup | null {
   return ROOM_TO_GROUP.get(room) ?? null;
