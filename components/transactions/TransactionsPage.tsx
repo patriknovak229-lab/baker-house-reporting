@@ -21,6 +21,7 @@ import PriceCheckModal from "./PriceCheckModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
+import { planForUnallocated } from "@/utils/roomAllocation";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
 import type { Role } from "@/utils/roles";
@@ -576,6 +577,60 @@ export default function TransactionsPage() {
   const unallocatedReservations = useMemo(
     () => reservations.filter((r) => r.isUnallocatedVR),
     [reservations],
+  );
+
+  /**
+   * Per-unallocated-booking resolution plan: the fewest within-type moves to
+   * give it a physical unit, computed from the live reservations in memory.
+   * Recomputed whenever bookings change so a just-executed move clears it.
+   */
+  const unallocatedPlans = useMemo(() => {
+    const today = new Date().toLocaleDateString("sv-SE");
+    const map: Record<string, ReturnType<typeof planForUnallocated>> = {};
+    for (const r of unallocatedReservations) {
+      map[r.reservationNumber] = planForUnallocated(reservations, r.reservationNumber, today);
+    }
+    return map;
+  }, [unallocatedReservations, reservations]);
+
+  /** Booking# currently being applied to Beds24, + per-booking error text. */
+  const [resolveBusy, setResolveBusy] = useState<string | null>(null);
+  const [resolveError, setResolveError] = useState<Record<string, string>>({});
+
+  const executeReallocation = useCallback(
+    async (targetResNum: string) => {
+      const result = unallocatedPlans[targetResNum];
+      if (!result || "error" in result || !result.plan.feasible) return;
+      const { plan } = result;
+      const moves = [
+        ...plan.moves.map((m) => ({ reservationNumber: m.reservationNumber, toRoom: m.to })),
+        ...plan.placements.map((p) => ({ reservationNumber: p.reservationNumber, toRoom: p.room })),
+      ];
+      setResolveBusy(targetResNum);
+      setResolveError((prev) => {
+        const next = { ...prev };
+        delete next[targetResNum];
+        return next;
+      });
+      try {
+        const res = await fetch("/api/bookings/move", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ moves, reason: "Resolve unallocated reservation" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+        await fetchReservations();
+      } catch (e) {
+        setResolveError((prev) => ({
+          ...prev,
+          [targetResNum]: e instanceof Error ? e.message : "Move failed",
+        }));
+      } finally {
+        setResolveBusy(null);
+      }
+    },
+    [unallocatedPlans, fetchReservations],
   );
 
   /**
@@ -1438,9 +1493,9 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {/* Unallocated VR panel — expanded below the pill row. Click a row
-              to open the regular drawer; operator then jumps to Beds24's
-              calendar to manually assign a physical room. */}
+          {/* Unallocated VR panel — each booking shows the fewest-move plan to
+              give it a physical unit within its room type. Operator approves +
+              executes in-app, or opens the drawer to handle manually. */}
           {unallocatedReservations.length > 0 && unallocatedPanelOpen && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 overflow-hidden">
               <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-300 flex items-center gap-2">
@@ -1448,39 +1503,84 @@ export default function TransactionsPage() {
                   Room assignment needed
                 </span>
                 <span className="text-[11px] text-amber-700">
-                  Beds24 couldn&apos;t auto-allocate · manually assign in the Beds24 calendar
+                  Beds24 couldn&apos;t auto-allocate · review the suggested move, then approve — or open to handle manually
                 </span>
               </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-amber-200">
-                    {["Guest", "Room type", "Dates", "Channel", "Booking #"].map((h) => (
-                      <th key={h} className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-amber-200">
-                  {unallocatedReservations.map((r) => (
-                    <tr
-                      key={r.reservationNumber}
-                      className="cursor-pointer hover:bg-amber-100/70"
-                      onClick={() => { setSelectedReservation(r); setUnallocatedPanelOpen(false); }}
-                    >
-                      <td className="px-4 py-2 font-medium text-amber-900 whitespace-nowrap">
-                        {r.firstName} {r.lastName}
-                      </td>
-                      <td className="px-4 py-2 text-amber-800 whitespace-nowrap">{r.room}</td>
-                      <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">
-                        {r.checkInDate} → {r.checkOutDate} · {r.numberOfNights}n
-                      </td>
-                      <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.channel}</td>
-                      <td className="px-4 py-2 font-mono text-amber-600 text-xs whitespace-nowrap">{r.reservationNumber}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="divide-y divide-amber-200">
+                {unallocatedReservations.map((r) => {
+                  const result = unallocatedPlans[r.reservationNumber];
+                  const busy = resolveBusy === r.reservationNumber;
+                  const err = resolveError[r.reservationNumber];
+                  const canDo = Boolean(role && canMutate(role, "transactions"));
+                  return (
+                    <div key={r.reservationNumber} className="px-4 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-amber-900">
+                            {r.firstName} {r.lastName}
+                            <span className="ml-2 text-[11px] font-normal text-amber-700">{r.room}</span>
+                          </p>
+                          <p className="text-xs text-amber-700 mt-0.5">
+                            {r.checkInDate} → {r.checkOutDate} · {r.numberOfNights}n · {r.channel} ·{" "}
+                            <span className="font-mono">{r.reservationNumber}</span>
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => { setSelectedReservation(r); setUnallocatedPanelOpen(false); }}
+                          className="text-[11px] text-amber-700 hover:text-amber-900 underline shrink-0"
+                        >
+                          Open
+                        </button>
+                      </div>
+
+                      <div className="mt-2">
+                        {!result || "error" in result ? (
+                          <p className="text-xs text-amber-700 italic">
+                            {result && "error" in result ? result.error : "—"}
+                          </p>
+                        ) : !result.plan.feasible ? (
+                          <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2.5 py-1.5">
+                            {result.plan.reason ?? "Can't resolve within this room type — handle manually."}
+                          </div>
+                        ) : (
+                          <div className="rounded-md bg-white border border-amber-200 px-3 py-2">
+                            <p className="text-xs font-medium text-emerald-800">
+                              {result.plan.placements.map((p) => `Assign to ${p.room}`).join(", ")}
+                              {result.plan.moves.length === 0 && " — no other moves needed"}
+                            </p>
+                            {result.plan.moves.length > 0 && (
+                              <ul className="mt-1 space-y-0.5">
+                                {result.plan.moves.map((m) => (
+                                  <li key={m.reservationNumber} className="text-[11px] text-amber-800">
+                                    ↪ Move <span className="font-medium">{m.label ?? m.reservationNumber}</span>{" "}
+                                    {m.from} → {m.to}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => executeReallocation(r.reservationNumber)}
+                                disabled={busy || !canDo}
+                                className="text-xs px-3 py-1.5 rounded bg-amber-600 text-white font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={canDo ? "Apply this allocation in Beds24" : "Insufficient permissions"}
+                              >
+                                {busy
+                                  ? "Applying…"
+                                  : result.plan.moves.length === 0
+                                    ? `Assign ${result.plan.placements[0]?.room ?? ""}`
+                                    : `Approve & execute · ${result.plan.moves.length} move${result.plan.moves.length > 1 ? "s" : ""}`}
+                              </button>
+                              <span className="text-[10.5px] text-amber-600">within {result.group.typeLabel}</span>
+                            </div>
+                          </div>
+                        )}
+                        {err && <p className="mt-1 text-xs text-rose-700">{err}</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
