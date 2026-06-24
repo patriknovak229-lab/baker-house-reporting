@@ -59,20 +59,29 @@ export function channelHasRatePlan(channel: Channel): boolean {
 }
 
 /**
- * Rate-type tracking is intentionally NOT backfilled — it applies only to stays
- * that are current or upcoming. A reservation is in scope when it is on an OTA
- * channel AND has not yet checked out. `todayYmd` is local YYYY-MM-DD, passed in
- * so server and client agree on "today".
+ * The date the business introduced the new rate plans + their perks (early
+ * check-in / late check-out). Only bookings CREATED on/after this date carry the
+ * new rates, so rate tracking is scoped to them — no backfill of older bookings,
+ * which were made under the previous structure without perks.
+ */
+export const RATE_TYPE_LAUNCH_DATE = "2026-06-20";
+
+/**
+ * In scope (show + detect a rate) when an OTA booking is EITHER a current/future
+ * stay (check-out >= today) OR was created on/after the launch date. The union
+ * keeps rates on every active/upcoming booking AND retains them for post-launch
+ * bookings even after they check out — so short/just-ended stays don't lose
+ * their chip. `todayYmd` is YYYY-MM-DD (caller passes it so server and client
+ * agree on "today").
  */
 export function isRateTypeInScope(
-  args: { channel: Channel; checkOutDate: string },
+  args: { channel: Channel; reservationDate: string; checkOutDate: string },
   todayYmd: string,
 ): boolean {
-  return (
-    channelHasRatePlan(args.channel) &&
-    !!args.checkOutDate &&
-    args.checkOutDate >= todayYmd
-  );
+  if (!channelHasRatePlan(args.channel)) return false;
+  const bookedSinceLaunch = !!args.reservationDate && args.reservationDate >= RATE_TYPE_LAUNCH_DATE;
+  const currentOrFuture = !!args.checkOutDate && args.checkOutDate >= todayYmd;
+  return bookedSinceLaunch || currentOrFuture;
 }
 
 /** The rate to display/act on: manual override wins over auto-detection. */

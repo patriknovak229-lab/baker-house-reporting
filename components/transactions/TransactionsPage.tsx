@@ -765,8 +765,8 @@ export default function TransactionsPage() {
         if (r.channel === "Airbnb") {
           if (r.commissionAmount === 0) problems.push("Host fee missing");
         }
-        // Rate type — only for current+future OTA stays (no backfill). Missing
-        // when neither detected from Beds24 nor set manually by the operator.
+        // Rate type — current/future OTA stays or any booked since launch.
+        // Missing when neither detected nor set manually.
         if (isRateTypeInScope(r, today) && !effectiveRateType(r)) {
           problems.push("Rate type missing");
         }

@@ -2149,8 +2149,8 @@ export default function ReservationDrawer({
 
   const isOTAChannel = reservation.channel === "Booking.com" || reservation.channel === "Airbnb";
   const isDirectPhone = reservation.channel === "Direct-Phone";
-  // Rate plan applies to OTA stays. Show the control for current+future stays
-  // (no backfill) or whenever a rate is already known (detected or manual).
+  // Rate plan applies to OTA stays that are current/future or booked since
+  // launch, or whenever a rate is already known (detected or manually set).
   const showRatePlan =
     isOTAChannel &&
     (isRateTypeInScope(reservation, new Date().toLocaleDateString("sv-SE")) ||

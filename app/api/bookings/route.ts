@@ -4,7 +4,7 @@ import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
-import { detectRateType, isRateTypeInScope, channelHasRatePlan } from "@/utils/rateType";
+import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 const ADDITIONAL_PAYMENTS_KEY = "baker:additional-payments";
@@ -494,10 +494,14 @@ function infoItemsText(items: unknown): string {
   return parts.join(" ");
 }
 
-/** Run best-effort rate-type detection, gated by the no-backfill scope rule. */
+/** Run best-effort rate-type detection, gated by the rate-type scope rule. */
 function deriveRateType(b: Beds24Booking, channel: Channel): Reservation["rateType"] {
   const todayYmd = new Date().toISOString().slice(0, 10);
-  if (!isRateTypeInScope({ channel, checkOutDate: b.departure ?? "" }, todayYmd)) {
+  const inScope = isRateTypeInScope(
+    { channel, reservationDate: (b.bookingTime ?? "").slice(0, 10), checkOutDate: b.departure ?? "" },
+    todayYmd,
+  );
+  if (!inScope) {
     return undefined;
   }
   return (
@@ -1039,10 +1043,16 @@ export async function GET(req: NextRequest) {
         raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled"),
       )
         .map((b) => ({ b, channel: mapChannel(b.apiSource, b.referer, b.comments ?? "") }))
-        .filter(({ b, channel }) => channelHasRatePlan(channel) && (b.departure ?? "") >= today)
+        .filter(({ b, channel }) =>
+          isRateTypeInScope(
+            { channel, reservationDate: (b.bookingTime ?? "").slice(0, 10), checkOutDate: b.departure ?? "" },
+            today,
+          ),
+        )
         .map(({ b, channel }) => ({
           reservationNumber: `BH-${b.id}`,
           channel,
+          booked: (b.bookingTime ?? "").slice(0, 10),
           checkIn: b.arrival,
           checkOut: b.departure,
           detected: detectRateType({
