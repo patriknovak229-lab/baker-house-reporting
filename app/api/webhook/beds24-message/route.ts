@@ -367,8 +367,8 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
   // Pass 1 — chase any 24-hour invoice reminders. Independent of any
   // incoming message; runs on every webhook fire so reminders are sent
   // promptly without needing a separate cron slot.
-  // Skipped in AI review mode — nothing should auto-send during the test.
-  if (redis && !AI_REVIEW_ALL) {
+  // Invoice reminders run even in review mode — they're part of detail recovery.
+  if (redis) {
     try {
       await sendDueInvoiceReminders(redis);
     } catch (err) {
@@ -393,8 +393,20 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
     }
 
     try {
-      // AI review mode: every message → KB-grounded draft → operator queue.
-      // Bypasses the invoice auto-flow and the deterministic templates.
+      // The invoice flow ALWAYS runs (even in review mode): it collects the
+      // invoice details and creates the checkout-dated "Send invoice" task.
+      // It never issues the actual invoice — that stays manual. Only its
+      // deterministic ask/confirmation messages auto-send.
+      const handled = await tryInvoiceFlow({
+        redis,
+        bookingId: m.bookingId,
+        messageId: m.id,
+        messageText: m.message,
+      });
+      if (handled) continue;
+
+      // AI review mode: every OTHER (non-invoice) message → KB-grounded draft
+      // → operator approval queue. Nothing here auto-sends.
       if (AI_REVIEW_ALL) {
         await aiReviewDraft({
           redis,
@@ -404,14 +416,6 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
         });
         continue;
       }
-
-      const handled = await tryInvoiceFlow({
-        redis,
-        bookingId: m.bookingId,
-        messageId: m.id,
-        messageText: m.message,
-      });
-      if (handled) continue;
 
       await processGuestMessage({
         bookingId: m.bookingId,
