@@ -27,15 +27,49 @@ function calcNameScore(txCounterparty: string, invSupplier: string): number {
   return overlap > 0 ? 1 : 0;
 }
 
+/** Common legal-form / generic tokens that must NOT count as a name match on their own */
+const GENERIC_NAME_TOKENS = new Set([
+  's.r.o.', 'sro', 'a.s.', 'as', 'spol.', 'k.s.', 'v.o.s.', 'o.s.', 'z.s.',
+  'gmbh', 'inc', 'inc.', 'ltd', 'ltd.', 'llc', 'co', 'co.', 'corp', 'corp.',
+  'b.v.', 'bv', 'pbc', 'limited', 'company', 'group',
+]);
+
+/** True if the two names share a meaningful word (>= 4 chars, not a generic/legal token). */
+function meaningfulNameOverlap(txName: string, invName: string): boolean {
+  const sig = (s: string) =>
+    s.toLowerCase().split(/[\s,]+/).filter((w) => w.length >= 4 && !GENERIC_NAME_TOKENS.has(w));
+  const a = sig(txName);
+  const b = sig(invName);
+  return a.some((w) => b.some((bw) => bw.includes(w) || w.includes(bw)));
+}
+
 function isConfidentMatch(tx: BankTransaction, inv: SupplierInvoice): boolean {
   const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
   const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
+  const diff = Math.abs(compareTo - inv.amountCZK);
   const tolerance = Math.max(2, inv.amountCZK * 0.01);
-  if (Math.abs(compareTo - inv.amountCZK) > tolerance) return false;
+  if (diff > tolerance) return false;
+
   const ns = calcNameScore(tx.counterpartyName ?? '', inv.supplierName);
-  const vsMatch = tx.variableSymbol &&
+  const vsMatch = !!tx.variableSymbol &&
     tx.variableSymbol.toLowerCase().trim() === inv.invoiceNumber.toLowerCase().trim();
-  return ns >= 2 || !!vsMatch;
+
+  // Strong signal: exact variable symbol, or one name clearly contains the other.
+  if (vsMatch || ns >= 2) return true;
+
+  // Weak name only (e.g. bank trading name "IKEA BRNO OD" vs legal "IKEA Česká
+  // republika s.r.o." share just "ikea"). Safe to auto-match when there's a
+  // MEANINGFUL shared word, a near-exact amount AND a close date — and the caller
+  // enforces this is the ONLY candidate (hits.length === 1), so there's no ambiguity.
+  const nearExact = diff <= Math.max(1, inv.amountCZK * 0.005);
+  const daysDiff = Math.abs(
+    (new Date(tx.date).getTime() - new Date(inv.invoiceDate).getTime()) / 86_400_000,
+  );
+  if (nearExact && daysDiff <= 45 && meaningfulNameOverlap(tx.counterpartyName ?? '', inv.supplierName)) {
+    return true;
+  }
+
+  return false;
 }
 
 export async function POST(request: Request) {
