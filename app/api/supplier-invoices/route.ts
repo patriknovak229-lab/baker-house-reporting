@@ -45,11 +45,17 @@ export async function POST(request: Request) {
 
   // Duplicate check (skipped when force === true or when updating an existing invoice by same id)
   if (!body.force) {
-    const norm = (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ');
+    const norm = (s?: string) => (s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
+    const normIco = (s?: string) => (s ?? '').toLowerCase().replace(/\s+/g, '');
+    const invNo = norm(body.invoiceNumber);
+    const bodyIco = normIco(body.supplierICO);
+    // Same invoice number AND same supplier (by name OR IČO — robust against OCR
+    // variance in the name when the same receipt is re-photographed/re-imported).
     const dup = invoices.find(
       (i) => i.id !== body.id &&
-             norm(i.invoiceNumber) === norm(body.invoiceNumber) &&
-             norm(i.supplierName)  === norm(body.supplierName),
+             norm(i.invoiceNumber) === invNo &&
+             (norm(i.supplierName) === norm(body.supplierName) ||
+              (!!bodyIco && normIco(i.supplierICO) === bodyIco)),
     );
     if (dup) return NextResponse.json({ code: 'duplicate', existing: dup }, { status: 409 });
   }

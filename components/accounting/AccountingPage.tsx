@@ -115,6 +115,28 @@ function AutoSavedBanner({ entries, onDismiss }: { entries: AutoSavedEntry[]; on
   );
 }
 
+function SkippedDuplicatesBanner({ entries, onDismiss }: { entries: Array<{ supplierName: string; invoiceNumber: string }>; onDismiss: () => void }) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="flex items-start justify-between bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 gap-3">
+      <div className="flex items-start gap-2.5">
+        <span className="w-2 h-2 rounded-full bg-gray-400 flex-shrink-0 mt-1.5" />
+        <div>
+          <p className="text-sm font-medium text-gray-700">
+            {entries.length} already-imported invoice{entries.length !== 1 ? 's' : ''} skipped
+          </p>
+          <div className="text-xs text-gray-500 mt-0.5 space-y-0.5 max-h-32 overflow-y-auto">
+            {entries.map((e, i) => (
+              <p key={i}>{e.supplierName} · {e.invoiceNumber}</p>
+            ))}
+          </div>
+        </div>
+      </div>
+      <button onClick={onDismiss} className="text-gray-400 hover:text-gray-600 flex-shrink-0">×</button>
+    </div>
+  );
+}
+
 function DriveFailureBanner({ count, onDismiss }: { count: number; onDismiss: () => void }) {
   if (count === 0) return null;
   return (
@@ -164,6 +186,24 @@ function matchWhitelist(supplierName: string | null, whitelist: WhitelistedSuppl
   return whitelist.find((w) => w.supplierName.trim().toLowerCase() === norm) ?? null;
 }
 
+/**
+ * Find an already-saved invoice matching the extracted one — same invoice number
+ * AND same supplier (by name OR IČO). Used to auto-skip re-uploads of invoices
+ * already in the system (e.g. re-scanning a folder that still holds old receipts).
+ */
+function findDuplicate(extracted: ExtractedInvoiceData, invoices: SupplierInvoice[]): SupplierInvoice | null {
+  if (!extracted.invoiceNumber || !extracted.supplierName) return null;
+  const norm = (s: string | null | undefined) => (s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
+  const normIco = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/\s+/g, '');
+  const invNo = norm(extracted.invoiceNumber);
+  const name = norm(extracted.supplierName);
+  const ico = normIco(extracted.supplierICO);
+  return invoices.find((i) =>
+    norm(i.invoiceNumber) === invNo &&
+    (norm(i.supplierName) === name || (!!ico && normIco(i.supplierICO) === ico)),
+  ) ?? null;
+}
+
 /** Check all required fields are present for auto-save */
 function canAutoSave(extracted: ExtractedInvoiceData): boolean {
   return !!(
@@ -193,6 +233,7 @@ export default function AccountingPage() {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const [queueRunning, setQueueRunning] = useState(false);
+  const [skippedDupes, setSkippedDupes] = useState<Array<{ supplierName: string; invoiceNumber: string }>>([]);
   const abortQueueRef = useRef(false);
   const { categories } = useCategories();
   const [filters, setFilters] = useState({
@@ -226,9 +267,11 @@ export default function AccountingPage() {
     [invoices],
   );
 
-  // Use a ref so processNextInQueue always sees the latest whitelist
+  // Use refs so processNextInQueue always sees the latest whitelist + invoices
   const whitelistRef = useRef<WhitelistedSupplier[]>([]);
   whitelistRef.current = whitelist;
+  const invoicesRef = useRef<SupplierInvoice[]>([]);
+  invoicesRef.current = invoices;
 
   const loadInvoices = useCallback(async () => {
     try {
@@ -386,7 +429,18 @@ export default function AccountingPage() {
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
-        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices);
+        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoicesRef.current);
+        // Skip invoices already in the system (e.g. re-scanning a folder of old, reconciled receipts)
+        const dup = findDuplicate(extracted, invoicesRef.current);
+        if (dup) {
+          setSkippedDupes((prev) => [...prev, {
+            supplierName: extracted.supplierName ?? dup.supplierName,
+            invoiceNumber: extracted.invoiceNumber ?? dup.invoiceNumber,
+          }]);
+          setExtracting(false);
+          processNextInQueue(rest);
+          return;
+        }
         // Check whitelist
         const matched = matchWhitelist(extracted.supplierName, whitelistRef.current);
         if (matched && canAutoSave(extracted)) {
@@ -411,6 +465,7 @@ export default function AccountingPage() {
     setShowImportModal(false);
     setAutoSavedEntries([]);
     setDriveFailures(0);
+    setSkippedDupes([]);
     abortQueueRef.current = false;
     setQueueRunning(true);
     processNextInQueue(items);
@@ -712,6 +767,9 @@ export default function AccountingPage() {
 
       {/* Drive upload failures (e.g. expired Google sign-in) */}
       <DriveFailureBanner count={driveFailures} onDismiss={() => setDriveFailures(0)} />
+
+      {/* Already-imported invoices auto-skipped during a batch */}
+      <SkippedDuplicatesBanner entries={skippedDupes} onDismiss={() => setSkippedDupes([])} />
 
       {/* Bulk Drive back-fill result */}
       {backfillMsg && (
