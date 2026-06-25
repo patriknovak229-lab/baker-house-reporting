@@ -12,11 +12,12 @@ export interface InvoiceCategory {
 export interface WhitelistedSupplier {
   id: string;
   supplierName: string;  // matched case-insensitively against extracted supplierName
+  supplierICO?: string;  // matched against extracted IČO — robust to name OCR variance
   category: string;      // applied automatically on save
   addedAt: string;       // ISO timestamp
 }
 
-export type SupplierInvoiceStatus = 'pending' | 'reconciled';
+export type SupplierInvoiceStatus = 'pending' | 'reconciled' | 'review_needed';
 
 export type SupplierInvoiceSource = 'email' | 'upload' | 'portal' | 'manual';
 

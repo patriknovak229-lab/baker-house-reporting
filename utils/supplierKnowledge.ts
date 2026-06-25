@@ -39,8 +39,8 @@ export const SUPPLIER_KNOWLEDGE = `
 - invoiceNumber: the document number ("Faktura č." / "Daňový doklad č.").
 - category: consumables
 
-## ACTION / Action Retail Czech s.r.o.   (IČO 03439747 — verified in ARES)
-- Household / consumables discount store. Total and VAT extract correctly.
+## Action Retail Czech s.r.o.   (IČO 03439747, verified in ARES)
+- Household / consumables discount store; receipts/branding may show just "Action". Total and VAT extract correctly.
 - supplierICO: ALWAYS 03439747 (digits only, no spaces). Purchases up to 10 000 CZK are issued as a simplified tax document (zjednodušený daňový doklad) that legally need not print the IČO — set 03439747 even when it is not shown on the receipt.
 - category: consumables
 
@@ -77,7 +77,7 @@ export const SUPPLIER_KNOWLEDGE = `
 ## Věra Volecová   (IČO 21214620)
 - Individual (OSVČ); the person's name is the supplierName. category: cleaning
 
-## PriceLabs   (US entity — invoiced as "PriceLabs Revenue Inc." or "PriceLabs Inc")
+## PriceLabs Revenue Inc.   (US SaaS; some invoices say "PriceLabs Inc")
 - SaaS billed in US DOLLARS. invoiceCurrency: USD (never default to CZK). The amount field holds the original-currency number exactly as shown.
 - totalAmount: the "Total amount" / "Total Paid" (e.g. 64.97). The amount varies month to month with the listing count — do NOT emit lineItems, just take the total.
 - invoiceNumber: "Invoice number" (e.g. 2026-INV308238-2518231). invoiceDate: "Invoice date" (e.g. 21 May 2026).

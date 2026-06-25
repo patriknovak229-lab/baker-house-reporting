@@ -126,6 +126,7 @@ export default function InvoiceReviewDrawer({
   const [saving, setSaving] = useState(false);
   const [driveUploading, setDriveUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [flagReview, setFlagReview] = useState(existing?.status === 'review_needed');
   const [lineItemsExpanded, setLineItemsExpanded] = useState(false);
 
   // For manual entry: allow attaching a file directly in the drawer
@@ -245,7 +246,7 @@ export default function InvoiceReviewDrawer({
       category,
       rooms: rooms.length > 0 ? rooms : undefined,
       description: description.trim() || undefined,
-      status: existing?.status ?? 'pending',
+      status: flagReview ? 'review_needed' : (existing?.status === 'reconciled' ? 'reconciled' : 'pending'),
       sourceType,
       driveFileId: driveFileId ?? existing?.driveFileId,
       driveFileName: driveFileName ?? existing?.driveFileName,
@@ -437,7 +438,17 @@ export default function InvoiceReviewDrawer({
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-100 sticky bottom-0 bg-white">
-          <div className="flex justify-end gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <label className="flex items-center gap-1.5 text-sm text-red-600 cursor-pointer select-none" title="Save with a red 'Review needed' flag so you can filter it later">
+              <input
+                type="checkbox"
+                checked={flagReview}
+                onChange={(e) => setFlagReview(e.target.checked)}
+                className="rounded border-gray-300 text-red-600 focus:ring-red-400"
+              />
+              ⚑ Review needed
+            </label>
+            <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
             {!isEdit && onSaveAndWhitelist && (
               <button
@@ -453,6 +464,7 @@ export default function InvoiceReviewDrawer({
               className="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
               {driveUploading ? 'Uploading to Drive…' : saving ? 'Saving…' : activeFile ? `Save & Push to Drive${queueRemaining > 0 ? ` (${queueRemaining} next)` : ''}` : 'Save'}
             </button>
+            </div>
           </div>
         </div>
       </div>

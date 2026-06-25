@@ -51,6 +51,14 @@ function SourceIcon({ source }: { source: SupplierInvoice['sourceType'] }) {
 }
 
 function StatusBadge({ status, settlementGroupId }: { status: SupplierInvoiceStatus; settlementGroupId?: string }) {
+  if (status === 'review_needed') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+        ⚑ Review needed
+      </span>
+    );
+  }
   if (status === 'reconciled' && settlementGroupId) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-700">

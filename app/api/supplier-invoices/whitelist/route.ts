@@ -26,8 +26,9 @@ export async function POST(request: Request) {
   const guard = await requireRole(['admin']);
   if ('error' in guard) return guard.error;
 
-  const { supplierName, category } = await request.json() as {
+  const { supplierName, supplierICO, category } = await request.json() as {
     supplierName?: string;
+    supplierICO?: string;
     category?: string;
   };
 
@@ -37,14 +38,20 @@ export async function POST(request: Request) {
 
   const whitelist = await getWhitelist();
   const nameNorm = supplierName.trim().toLowerCase();
+  const icoNorm = (supplierICO ?? '').toLowerCase().replace(/\s+/g, '');
 
-  if (whitelist.some((s) => s.supplierName.toLowerCase() === nameNorm)) {
+  // Already whitelisted if the name OR the IČO already matches an entry
+  if (whitelist.some((s) =>
+    s.supplierName.trim().toLowerCase() === nameNorm ||
+    (!!icoNorm && (s.supplierICO ?? '').toLowerCase().replace(/\s+/g, '') === icoNorm)
+  )) {
     return NextResponse.json({ error: 'Supplier already whitelisted' }, { status: 409 });
   }
 
   const entry: WhitelistedSupplier = {
     id: crypto.randomUUID(),
     supplierName: supplierName.trim(),
+    supplierICO: supplierICO?.trim() || undefined,
     category: category ?? 'other',
     addedAt: new Date().toISOString(),
   };

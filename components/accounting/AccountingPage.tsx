@@ -180,10 +180,19 @@ function enrichFromHistory(
 }
 
 /** Match extracted supplier name against whitelist (case-insensitive, trimmed) */
-function matchWhitelist(supplierName: string | null, whitelist: WhitelistedSupplier[]): WhitelistedSupplier | null {
-  if (!supplierName) return null;
-  const norm = supplierName.trim().toLowerCase();
-  return whitelist.find((w) => w.supplierName.trim().toLowerCase() === norm) ?? null;
+function matchWhitelist(
+  supplierName: string | null,
+  supplierICO: string | null | undefined,
+  whitelist: WhitelistedSupplier[],
+): WhitelistedSupplier | null {
+  const name = supplierName?.trim().toLowerCase();
+  const ico = (supplierICO ?? '').toLowerCase().replace(/\s+/g, '');
+  // Match by name OR IČO — IČO is stable across a supplier's invoices, so it
+  // catches them even when the extracted name varies ("ACTION" vs "Action Retail Czech s.r.o.").
+  return whitelist.find((w) =>
+    (!!name && w.supplierName.trim().toLowerCase() === name) ||
+    (!!ico && !!w.supplierICO && w.supplierICO.toLowerCase().replace(/\s+/g, '') === ico),
+  ) ?? null;
 }
 
 /**
@@ -442,7 +451,7 @@ export default function AccountingPage() {
           return;
         }
         // Check whitelist
-        const matched = matchWhitelist(extracted.supplierName, whitelistRef.current);
+        const matched = matchWhitelist(extracted.supplierName, extracted.supplierICO, whitelistRef.current);
         if (matched && canAutoSave(extracted)) {
           setExtracting(false);
           await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId, next.sourceType ?? 'email', next.icloudFileName);
@@ -538,7 +547,7 @@ export default function AccountingPage() {
       const res = await fetch('/api/supplier-invoices/whitelist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supplierName: inv.supplierName, category: inv.category }),
+        body: JSON.stringify({ supplierName: inv.supplierName, supplierICO: inv.supplierICO, category: inv.category }),
       });
       if (res.ok) {
         const entry = await res.json() as WhitelistedSupplier;
@@ -904,6 +913,7 @@ export default function AccountingPage() {
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
           >
             <option value="all">All statuses</option>
+            <option value="review_needed">⚑ Review needed</option>
             <option value="pending">Pending</option>
             <option value="reconciled">Reconciled</option>
           </select>
