@@ -864,12 +864,21 @@ export default function TransactionsPage() {
             // sync — status="cancelled" rows are filtered out server-side.)
             const realCount = reservations.filter((r) => !r.isBlackout).length;
             const blackoutCount = reservations.length - realCount;
+            // "Served" = stays we've actually delivered: checked out (departure
+            // in the past) OR currently in-house — i.e. the stay has started
+            // (check-in today or earlier). Excludes future + blackouts.
+            const today = new Date().toLocaleDateString("sv-SE");
+            const servedCount = reservations.filter(
+              (r) => !r.isBlackout && r.checkInDate <= today,
+            ).length;
             return (
               <p
                 className="text-sm text-gray-400 mt-0.5"
-                title="Cancellations are already excluded from the sync. Blackouts (status=black) are counted separately."
+                title="Cancellations are already excluded from the sync. Blackouts (status=black) are counted separately. “Served” = stays already checked out or currently in-house."
               >
                 {realCount} reservation{realCount === 1 ? '' : 's'}
+                {' '}
+                <span className="text-gray-500">({servedCount} served)</span>
                 {blackoutCount > 0 && <> · {blackoutCount} blackout{blackoutCount === 1 ? '' : 's'}</>}
                 {' · '}{filtered.length} shown
               </p>
