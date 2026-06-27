@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, RateType } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
@@ -49,6 +49,31 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
     if (!fee) return r;
     return { ...r, paymentChargeAmount: r.paymentChargeAmount + fee };
   });
+}
+
+const RESERVATION_OVERRIDES_KEY = "baker:reservation-overrides";
+const RATE_TYPES_KEY = "baker:reservation-rate-types";
+
+/**
+ * Publish each reservation's EFFECTIVE rate (manual override ?? detected) to a
+ * shared Redis map keyed by reservationNumber. The cleaning app reads this to
+ * auto-apply rate-based perks (Flexi → early check-in + late checkout) without
+ * duplicating the calibrated detection logic. Read-only side effect — never
+ * affects the API response.
+ */
+async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+  const overrides =
+    (await redis.get<Record<string, { rateTypeOverride?: RateType | null }>>(
+      RESERVATION_OVERRIDES_KEY,
+    )) ?? {};
+  const map: Record<string, RateType> = {};
+  for (const r of reservations) {
+    const eff = overrides[r.reservationNumber]?.rateTypeOverride ?? r.rateType ?? null;
+    if (eff) map[r.reservationNumber] = eff;
+  }
+  await redis.set(RATE_TYPES_KEY, map);
 }
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
@@ -1074,6 +1099,11 @@ export async function GET(req: NextRequest) {
 
     const withStripeFees = await aggregateStripeFees(reservations);
     const withOverlapFlags = tagOverlappingReservations(withStripeFees);
+
+    // Publish effective rate types for the cleaning app (rate-based perks).
+    await persistRateTypeMap(withOverlapFlags).catch((err) =>
+      console.error("[bookings] rate-type map persist failed:", err),
+    );
 
     // ── Inventory-calendar blackout overrides ──
     // Blackouts created in Beds24's UI live on a separate endpoint
