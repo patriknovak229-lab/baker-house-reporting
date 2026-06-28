@@ -2,7 +2,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import PaymentLinkModal from "./PaymentLinkModal";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, Issue, IssueCategory, InvoiceModification, RateType } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, RateType } from "@/types/reservation";
+import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
@@ -855,6 +856,110 @@ function SectionTitle({
     <div className="flex items-center gap-1 mb-3">
       <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{children}</h3>
       {source && <SourceLabel source={source} />}
+    </div>
+  );
+}
+
+// Channels an operator can attribute a manual rating to. Booking.com is out of
+// 10; everything else (Airbnb, Google, Direct) is out of 5.
+const MANUAL_RATING_CHANNELS: NonNullable<GuestRating["channel"]>[] = [
+  "Booking.com",
+  "Airbnb",
+  "Google",
+  "Direct",
+];
+
+function manualScaleFor(channel: string): 5 | 10 {
+  return channel === "Booking.com" ? 10 : 5;
+}
+
+/**
+ * Ad-hoc manual rating editor — a channel selector + numeric score. Used for the
+ * cases Beds24 can't sync (Google, Direct) or before a synced review lands. Local
+ * state initialises from the saved rating; the parent passes a per-reservation
+ * `key` so it re-mounts (and re-seeds) when a different reservation opens.
+ */
+function ManualRatingEditor({
+  rating,
+  overridden,
+  onChange,
+}: {
+  rating: GuestRating | null | undefined;
+  overridden: boolean;
+  onChange: (r: GuestRating | null) => void;
+}) {
+  const [channel, setChannel] = useState<NonNullable<GuestRating["channel"]>>(
+    rating?.channel ?? "Google",
+  );
+  const [scoreInput, setScoreInput] = useState<string>(rating ? String(rating.score) : "");
+  const scale = manualScaleFor(channel);
+
+  function emit(nextChannel: NonNullable<GuestRating["channel"]>, nextScore: string) {
+    const s = manualScaleFor(nextChannel);
+    const n = Number(nextScore);
+    if (nextScore.trim() === "" || !Number.isFinite(n)) {
+      onChange(null);
+      return;
+    }
+    onChange({
+      score: Math.min(Math.max(n, 0), s),
+      scale: s,
+      source: "manual",
+      channel: nextChannel,
+    });
+  }
+
+  return (
+    <div className={overridden ? "opacity-50" : ""}>
+      <div className="flex items-end gap-2">
+        <label className="flex flex-col gap-1 text-[11px] font-medium text-gray-500">
+          Channel
+          <select
+            value={channel}
+            onChange={(e) => {
+              const c = e.target.value as NonNullable<GuestRating["channel"]>;
+              setChannel(c);
+              emit(c, scoreInput);
+            }}
+            className="rounded-md border border-gray-200 px-2 py-1.5 text-sm text-gray-700 focus:border-gray-400 focus:outline-none"
+          >
+            {MANUAL_RATING_CHANNELS.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] font-medium text-gray-500">
+          Score
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              min={0}
+              max={scale}
+              step={scale === 10 ? 0.1 : 1}
+              value={scoreInput}
+              placeholder="—"
+              onChange={(e) => {
+                setScoreInput(e.target.value);
+                emit(channel, e.target.value);
+              }}
+              className="w-20 rounded-md border border-gray-200 px-2 py-1.5 text-sm text-gray-700 focus:border-gray-400 focus:outline-none"
+            />
+            <span className="text-sm text-gray-400">/ {scale}</span>
+          </div>
+        </label>
+        {scoreInput.trim() !== "" && (
+          <button
+            type="button"
+            onClick={() => {
+              setScoreInput("");
+              onChange(null);
+            }}
+            className="py-1.5 px-2 text-[11px] font-medium text-gray-400 hover:text-gray-600"
+          >
+            Clear
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1718,6 +1823,12 @@ export default function ReservationDrawer({
     onUpdate({ ...reservation!, ratingStatus: status });
   }
 
+  // Manual ad-hoc rating — the fallback for channels Beds24 can't sync (Google,
+  // Direct) or before a synced review lands. Passing null clears it.
+  function handleManualRating(rating: GuestRating | null) {
+    onUpdate({ ...reservation!, manualRating: rating });
+  }
+
   function saveNote() {
     onUpdate({ ...reservation!, notes });
     setNoteSaved(true);
@@ -2228,11 +2339,8 @@ export default function ReservationDrawer({
                 </span>
               )}
               {reservation.firstName} {reservation.lastName}
-              {reservation.ratingStatus === "good" && (
-                <span className="ml-1.5">😊</span>
-              )}
-              {reservation.ratingStatus === "bad" && (
-                <span className="ml-1.5">😡</span>
+              {ratingSmiley(reservation) && (
+                <span className="ml-1.5">{ratingSmiley(reservation)}</span>
               )}
             </p>
             <p className="text-xs text-gray-400 font-mono mt-0.5">
@@ -3239,7 +3347,46 @@ export default function ReservationDrawer({
 
           {/* 6. Rating */}
           <section>
-            <SectionTitle>Guest Rating</SectionTitle>
+            <SectionTitle source={reservation.syncedRating ? "Beds24" : undefined}>Guest Rating</SectionTitle>
+
+            {/* Synced review (Booking.com / Airbnb) — read-only, takes precedence */}
+            {reservation.syncedRating && (
+              <div className={`mb-3 rounded-md border p-3 ${
+                isTopRating(reservation.syncedRating)
+                  ? "bg-green-50 border-green-200"
+                  : "bg-red-50 border-red-200"
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl leading-none">
+                    {isTopRating(reservation.syncedRating) ? "😊" : "😡"}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-semibold text-gray-800 tabular-nums">
+                        {formatRating(reservation.syncedRating)}
+                      </span>
+                      <Badge variant="gray" size="xs">
+                        {reservation.syncedRating.channel ?? reservation.syncedRating.source}
+                      </Badge>
+                    </div>
+                    {reservation.syncedRating.reviewDate && (
+                      <div className="text-[11px] text-gray-400 mt-0.5">
+                        {formatDate(reservation.syncedRating.reviewDate)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {reservation.syncedRating.reviewText && (
+                  <p className="mt-2 text-xs text-gray-600 whitespace-pre-wrap">
+                    “{reservation.syncedRating.reviewText}”
+                  </p>
+                )}
+                <p className="mt-2 text-[10px] text-gray-400">
+                  Synced from Beds24 — overrides the manual rating below.
+                </p>
+              </div>
+            )}
+
             <div className="flex gap-2">
               {(
                 [
@@ -3265,6 +3412,21 @@ export default function ReservationDrawer({
                   <span className="text-[10px] mt-0.5 block">{label}</span>
                 </button>
               ))}
+            </div>
+
+            {/* Manual numeric rating — ad-hoc fallback for Google / Direct / pre-review */}
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] font-medium text-gray-400">
+                  Manual score {reservation.syncedRating ? "(overridden by synced)" : "(optional)"}
+                </span>
+              </div>
+              <ManualRatingEditor
+                key={reservation.reservationNumber}
+                rating={reservation.manualRating}
+                overridden={!!reservation.syncedRating}
+                onChange={handleManualRating}
+              />
             </div>
           </section>
 

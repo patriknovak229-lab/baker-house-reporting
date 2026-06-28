@@ -9,6 +9,7 @@ import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 import { roomChipClasses } from "@/utils/roomVisuals";
 import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
+import { ratingSmiley, effectiveRating, formatRating } from "@/utils/rating";
 
 type SortField =
   | keyof Pick<
@@ -64,12 +65,6 @@ function paymentBadgeVariant(status: PaymentStatus) {
   if (status === "Partially Paid") return "amber";
   if (status === "Paid") return "green";
   return "gray";
-}
-
-function ratingEmoji(status: Reservation["ratingStatus"]): string {
-  if (status === "good") return "😊";
-  if (status === "bad") return "😡";
-  return "";
 }
 
 type SortDir = "asc" | "desc";
@@ -295,7 +290,8 @@ function ReservationCard({
   const effectiveFlags = getEffectiveFlags(res, allReservations);
   const stayStatuses = computeStayStatus(res, allReservations);
   const nationalityFlag = countryCodeToFlag(res.nationality);
-  const emoji = ratingEmoji(res.ratingStatus);
+  const emoji = ratingSmiley(res);
+  const rating = effectiveRating(res);
   const beds24Id = parseInt(res.reservationNumber.slice(3));
   const hasUnread = unreadBookingIds.has(beds24Id);
   const isNew =
@@ -316,7 +312,19 @@ function ReservationCard({
           <span className="font-semibold text-gray-900 truncate">
             {res.firstName} {res.lastName}
           </span>
-          {emoji && <span className="text-base leading-none">{emoji}</span>}
+          {emoji && (
+            <span
+              className="flex items-center gap-0.5 shrink-0"
+              title={rating ? `${rating.channel ?? rating.source} review` : res.ratingStatus}
+            >
+              <span className="text-base leading-none">{emoji}</span>
+              {rating && (
+                <span className="text-xs font-medium text-gray-500 tabular-nums">
+                  {formatRating(rating)}
+                </span>
+              )}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {isNew && (
@@ -588,7 +596,8 @@ export default function ReservationTable({
                 const effectiveFlags = getEffectiveFlags(res, allReservations);
                 const stayStatuses = computeStayStatus(res, allReservations);
                 const flag = countryCodeToFlag(res.nationality);
-                const emoji = ratingEmoji(res.ratingStatus);
+                const emoji = ratingSmiley(res);
+                const rating = effectiveRating(res);
 
                 const beds24Id = parseInt(res.reservationNumber.slice(3));
                 const hasUnread = unreadBookingIds.has(beds24Id);
@@ -679,8 +688,16 @@ export default function ReservationTable({
                       </span>
                       {res.firstName} {res.lastName}
                       {emoji && (
-                        <span className="ml-1.5 text-base leading-none" title={res.ratingStatus}>
-                          {emoji}
+                        <span
+                          className="ml-1.5 inline-flex items-center gap-0.5 align-middle"
+                          title={rating ? `${rating.channel ?? rating.source} review` : res.ratingStatus}
+                        >
+                          <span className="text-base leading-none">{emoji}</span>
+                          {rating && (
+                            <span className="text-xs font-medium text-gray-500 tabular-nums">
+                              {formatRating(rating)}
+                            </span>
+                          )}
                         </span>
                       )}
                     </td>

@@ -17,6 +17,25 @@ export type CustomerFlag =
 export type RatingStatus = "none" | "good" | "bad";
 export type InvoiceStatus = "Not Issued" | "Issued" | "Sent";
 
+/** Where a guest rating came from. "booking"/"airbnb" are synced from Beds24's
+ *  review endpoints; "manual" is operator-entered (the ad-hoc fallback for
+ *  channels Beds24 can't supply — Google, Direct — or before a review lands). */
+export type RatingSource = "booking" | "airbnb" | "manual";
+
+/**
+ * A numeric guest rating with its native scale preserved. Booking.com reviews
+ * are out of 10, Airbnb out of 5 — we keep the original scale rather than
+ * normalising, and display "9.2/10" / "5/5" with channel context.
+ */
+export interface GuestRating {
+  score: number;                 // native score, e.g. 9.2 or 5
+  scale: 5 | 10;                 // native max for the source channel
+  source: RatingSource;
+  channel?: Channel | "Google";  // which channel it reflects (esp. for manual entries)
+  reviewText?: string;           // optional, when the endpoint returns it
+  reviewDate?: string;           // ISO date, optional
+}
+
 /**
  * Rate plan a booking was made under. Booking.com offers all five; Airbnb only
  * has Non-Refundable / Standard (its length-of-stay discounts are applied to
@@ -184,6 +203,18 @@ export interface Reservation {
   // Flag overrides: true = force on, false = force off, missing key = follow auto rule
   manualFlagOverrides: Partial<Record<CustomerFlag, boolean>>;
   ratingStatus: RatingStatus;
+  /**
+   * Guest review score synced from Beds24 (Booking.com / Airbnb). Server-supplied
+   * on every bookings sync — NOT stored in the Redis overrides map. Takes
+   * precedence over `manualRating` when present. null/undefined = no synced review.
+   */
+  syncedRating?: GuestRating | null;
+  /**
+   * Operator-entered rating — the ad-hoc fallback for channels Beds24 can't supply
+   * (Google, Direct) or before a synced review arrives. Persisted in Redis
+   * overrides. Only drives the smiley/value when there is no `syncedRating`.
+   */
+  manualRating?: GuestRating | null;
   /** Manual rate-plan override; null/undefined = use the detected `rateType`. */
   rateTypeOverride?: RateType | null;
   invoiceData: InvoiceData | null;

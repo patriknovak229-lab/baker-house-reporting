@@ -5,9 +5,54 @@ import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
+import { fetchReviews, fetchRawReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
+import type { GuestRating } from "@/types/reservation";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 const ADDITIONAL_PAYMENTS_KEY = "baker:additional-payments";
+
+// Synced guest reviews (Booking.com / Airbnb) cache. Reviews are low-volume and
+// change slowly, so we re-fetch from Beds24 at most once per this window rather
+// than on every bookings sync. Keyed by booking channel reference (apiReference).
+const REVIEWS_CACHE_KEY = "baker:beds24-reviews-cache";
+const REVIEWS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 h
+const REVIEWS_PROPERTY_ID = 311322; // Baker House Apartments (single-property account)
+type ReviewsCache = { fetchedAt: number; byRef: Record<string, GuestRating> };
+
+/** Inputs the review endpoints require: propertyId + a `from` date (Booking.com)
+ *  and the room ids to sweep (Airbnb). `from` looks back 2 years for past stays. */
+function reviewFetchOptions(): ReviewFetchOptions {
+  const from = new Date();
+  from.setUTCFullYear(from.getUTCFullYear() - 2);
+  return {
+    propertyId: REVIEWS_PROPERTY_ID,
+    roomIds: PHYSICAL_ROOM_IDS,
+    from: from.toISOString().slice(0, 10),
+  };
+}
+
+/**
+ * Return synced reviews keyed by booking apiReference, refreshing from Beds24 only
+ * when the Redis cache is missing or older than REVIEWS_CACHE_MAX_AGE_MS. A fetch
+ * failure falls back to the stale cache (or empty) so reviews never break the sync.
+ */
+async function getReviews(token: string): Promise<Record<string, GuestRating>> {
+  const redis = getRedis();
+  let cached: ReviewsCache | null = null;
+  if (redis) cached = await redis.get<ReviewsCache>(REVIEWS_CACHE_KEY);
+
+  const fresh = cached && Date.now() - cached.fetchedAt < REVIEWS_CACHE_MAX_AGE_MS;
+  if (fresh) return cached!.byRef;
+
+  try {
+    const byRef = await fetchReviews(token, reviewFetchOptions());
+    if (redis) await redis.set(REVIEWS_CACHE_KEY, { fetchedAt: Date.now(), byRef });
+    return byRef;
+  } catch (err) {
+    console.error("[bookings] review fetch failed:", err);
+    return cached?.byRef ?? {};
+  }
+}
 
 function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -614,6 +659,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     notes: "",
     manualFlagOverrides: {},
     ratingStatus: "none",
+    syncedRating: null,
     invoiceData: null,
     invoiceStatus: "Not Issued",
   };
@@ -1052,6 +1098,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(raw);
     }
 
+    // ?rawReviews=true → dump the raw, unparsed review payloads from both
+    // Beds24 review endpoints. Use this to confirm the real field names before
+    // trusting the defensive parser in utils/beds24Reviews.ts.
+    if (req.nextUrl.searchParams.get("rawReviews") === "true") {
+      return NextResponse.json(await fetchRawReviews(token, reviewFetchOptions()));
+    }
+
     // ?debugId=<id> → return raw fields for a single booking (masterid diagnosis)
     const debugId = req.nextUrl.searchParams.get("debugId");
     if (debugId) {
@@ -1093,9 +1146,20 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: rows.length, today, rows });
     }
 
-    const reservations = mergeGroupedBookings(
+    const grouped = mergeGroupedBookings(
       raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled")
-    ).map(mapToReservation);
+    );
+    const mapped = grouped.map(mapToReservation);
+
+    // Attach synced guest reviews (Booking.com / Airbnb). Reviews key off the
+    // channel reference (Beds24 `apiReference`), not the booking id. `grouped`
+    // is parallel to `mapped`, so we read each booking's apiReference by index.
+    const reviews = await getReviews(token);
+    const reservations = mapped.map((r, i) => {
+      const ref = grouped[i].apiReference;
+      const rating = ref ? reviews[String(ref)] : undefined;
+      return rating ? { ...r, syncedRating: rating } : r;
+    });
 
     const withStripeFees = await aggregateStripeFees(reservations);
     const withOverlapFlags = tagOverlappingReservations(withStripeFees);

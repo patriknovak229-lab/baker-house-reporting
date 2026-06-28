@@ -37,6 +37,7 @@ type LocalFields = {
   notes?: string;
   manualFlagOverrides?: Partial<Record<CustomerFlag, boolean>>;
   ratingStatus?: RatingStatus;
+  manualRating?: import('@/types/reservation').GuestRating | null;
   rateTypeOverride?: import('@/types/reservation').RateType | null;
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
@@ -55,6 +56,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.notes) local.notes = r.notes;
   if (Object.keys(r.manualFlagOverrides).length > 0) local.manualFlagOverrides = r.manualFlagOverrides;
   if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
+  if (r.manualRating) local.manualRating = r.manualRating;
   if (r.rateTypeOverride != null) local.rateTypeOverride = r.rateTypeOverride;
   if (r.invoiceData) local.invoiceData = r.invoiceData;
   if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
