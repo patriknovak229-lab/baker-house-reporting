@@ -203,6 +203,12 @@ export interface VariableCostsResponse {
   /** Raw subscription items with effective dates. Callers compute
    *  months-active-in-range × monthlyAmount per scoped room. */
   subscriptionItems: SubscriptionItem[];
+  /** "date|roomId" of manually-added (off-checkout) cleanings — i.e. extra
+   *  cleanings (mid-stay / special) on top of the checkout cleaning. */
+  manualCleaningKeys: string[];
+  /** "date|roomId" of cleanings the operator marked "no laundry" (mid-stay /
+   *  special cleanings that don't change linen → no laundry event). */
+  noLaundryKeys: string[];
 }
 
 function getRedis(): Redis | null {
@@ -233,6 +239,7 @@ export async function GET() {
     subscriptionsRaw,
     wearTearRaw,
     damagesRaw,
+    noLaundryRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
     redis.get(KEY_CLEANING_ASSIGNMENTS),
@@ -245,6 +252,7 @@ export async function GET() {
     redis.get(KEY_FIXED_COSTS_CONFIG),
     redis.get(KEY_WEAR_TEAR_EVENTS),
     redis.get(KEY_DAMAGES_EVENTS),
+    redis.get('baker:no-laundry-cleanings'),
   ]);
 
   // Set of valid (date, roomId) cleanings — Beds24 tasks + manual laundry
@@ -411,11 +419,16 @@ export async function GET() {
     }
   }
 
+  const manualCleaningKeys = manualCleaningEvents.map((e) => `${e.date}|${e.roomId}`);
+  const noLaundryKeys = (Array.isArray(noLaundryRaw) ? noLaundryRaw : []) as string[];
+
   const body: VariableCostsResponse = {
     byDateRoom: lookup,
     byReservation,
     subscriptionsByRoom,
     subscriptionItems,
+    manualCleaningKeys,
+    noLaundryKeys,
   };
   return NextResponse.json(body);
 }

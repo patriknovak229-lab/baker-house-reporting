@@ -26,6 +26,8 @@ export default function PerformancePage() {
   const [subscriptionItems, setSubscriptionItems] = useState<
     VariableCostsResponse['subscriptionItems']
   >([]);
+  const [manualCleaningKeys, setManualCleaningKeys] = useState<string[]>([]);
+  const [noLaundryKeys, setNoLaundryKeys] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -53,10 +55,14 @@ export default function PerformancePage() {
           setVariableCosts((body as VariableCostsResponse).byDateRoom);
           setVariableCostsByReservation((body as VariableCostsResponse).byReservation ?? {});
           setSubscriptionItems((body as VariableCostsResponse).subscriptionItems ?? []);
+          setManualCleaningKeys((body as VariableCostsResponse).manualCleaningKeys ?? []);
+          setNoLaundryKeys((body as VariableCostsResponse).noLaundryKeys ?? []);
         } else {
           setVariableCosts(body as VariableCostsLookup);
           setVariableCostsByReservation({});
           setSubscriptionItems([]);
+          setManualCleaningKeys([]);
+          setNoLaundryKeys([]);
         }
       }
       setLastSynced(new Date());
@@ -240,6 +246,8 @@ export default function PerformancePage() {
             variableCosts={variableCosts}
             variableCostsByReservation={variableCostsByReservation}
             subscriptionItems={subscriptionItems}
+            manualCleaningKeys={manualCleaningKeys}
+            noLaundryKeys={noLaundryKeys}
             selectedRooms={selectedRooms}
           />
         </div>

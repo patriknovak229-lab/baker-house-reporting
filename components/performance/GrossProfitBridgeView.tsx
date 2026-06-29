@@ -1,4 +1,5 @@
 'use client';
+import type { ReactNode } from "react";
 import {
   BarChart,
   Bar,
@@ -23,6 +24,10 @@ interface Props {
   /** Raw subscription items with effective dates. Each (item × room)
    *  contributes monthlyAmount × months-active-in-range. */
   subscriptionItems?: SubscriptionItem[];
+  /** "date|roomId" of manual (extra) cleanings — mid-stay / special. */
+  manualCleaningKeys?: string[];
+  /** "date|roomId" of cleanings marked "no laundry". */
+  noLaundryKeys?: string[];
   /** Rooms in scope from the page-level filter; used to scope cost sums. */
   selectedRooms?: Room[];
 }
@@ -112,6 +117,10 @@ interface Totals {
   laundryCount: number;
   /** Period reservations whose checkout is after the period → cleaning lands next month. */
   cleaningNextMonthCount: number;
+  /** Manual (extra) cleanings in period — mid-stay / special, on top of checkouts. */
+  extraCleaningCount: number;
+  /** Cleanings in period marked "no laundry" → no laundry event. */
+  noLaundryCount: number;
 }
 
 function computeTotals(
@@ -120,6 +129,8 @@ function computeTotals(
   variableCosts: VariableCostsLookup,
   byReservation: Record<string, VariableCostEntry>,
   subscriptionItems: SubscriptionItem[],
+  manualCleaningKeys: string[],
+  noLaundryKeys: string[],
   selectedRooms?: Room[]
 ): Totals {
   // ── Operational costs: sum every cell in the period for the rooms in scope.
@@ -130,6 +141,16 @@ function computeTotals(
   function roomInScope(roomId: string): boolean {
     return allRoomsSelected || inScopeRoomIds.has(roomId);
   }
+  // Extra (manual) cleanings and no-laundry cleanings in the period & scope —
+  // these explain why cleaning/laundry counts diverge from reservation count.
+  function keyInPeriodScope(key: string): boolean {
+    const [date, roomId] = key.split("|");
+    if (!date || !roomId) return false;
+    if (date < dateRange.start || date > dateRange.end) return false;
+    return roomInScope(roomId);
+  }
+  const extraCleaningCount = manualCleaningKeys.filter(keyInPeriodScope).length;
+  const noLaundryCount = noLaundryKeys.filter(keyInPeriodScope).length;
 
   // ── Net sales: per-reservation, fraction-of-stay within the period ────
   let netSales = 0;
@@ -217,6 +238,8 @@ function computeTotals(
     cleaningCount,
     laundryCount,
     cleaningNextMonthCount,
+    extraCleaningCount,
+    noLaundryCount,
   };
 }
 
@@ -226,6 +249,8 @@ export default function GrossProfitBridgeView({
   variableCosts,
   variableCostsByReservation = {},
   subscriptionItems = [],
+  manualCleaningKeys = [],
+  noLaundryKeys = [],
   selectedRooms,
 }: Props) {
   if (reservations.length === 0) {
@@ -243,9 +268,11 @@ export default function GrossProfitBridgeView({
     variableCosts,
     variableCostsByReservation,
     subscriptionItems,
+    manualCleaningKeys,
+    noLaundryKeys,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
@@ -401,41 +428,81 @@ export default function GrossProfitBridgeView({
 
         {/* Activity reconciliation: reservations belong to a period if they
             have ≥1 night in it, but their cleaning/laundry only happens at
-            checkout — so end-of-month stays count here while their cleaning
-            lands next month. These counts explain the gap. */}
-        <div className="mt-5 rounded-lg border border-gray-100 bg-gray-50/60 p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-3">
-            Activity in period
-          </p>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            checkout. A reservation can also have extra (manual mid-stay)
+            cleanings, and a cleaning marked "no laundry" produces no laundry
+            event. These counts explain the gaps. */}
+        {(() => {
+          const expectedCleanings = reservationCount - cleaningNextMonthCount + extraCleaningCount;
+          const expectedLaundry = cleaningCount - noLaundryCount;
+          const cleaningReconciles = expectedCleanings === cleaningCount;
+          const laundryReconciles = expectedLaundry === laundryCount;
+          const cell = (
+            value: number,
+            label: ReactNode,
+            accent?: "amber" | "violet"
+          ) => (
             <div>
-              <p className="text-xl font-bold text-gray-800">{reservationCount}</p>
-              <p className="text-xs text-gray-500">Reservations <span className="text-gray-400">(≥1 night)</span></p>
-            </div>
-            <div>
-              <p className="text-xl font-bold text-gray-800">{cleaningCount}</p>
-              <p className="text-xs text-gray-500">Cleaning events</p>
-            </div>
-            <div>
-              <p className="text-xl font-bold text-gray-800">{laundryCount}</p>
-              <p className="text-xs text-gray-500">Laundry events</p>
-            </div>
-            <div>
-              <p className={`text-xl font-bold ${cleaningNextMonthCount > 0 ? "text-amber-600" : "text-gray-800"}`}>
-                {cleaningNextMonthCount}
+              <p
+                className={`text-xl font-bold ${
+                  value > 0 && accent === "amber"
+                    ? "text-amber-600"
+                    : value > 0 && accent === "violet"
+                    ? "text-violet-600"
+                    : "text-gray-800"
+                }`}
+              >
+                {value}
               </p>
-              <p className="text-xs text-gray-500">Checkout next month <span className="text-gray-400">(cleaning rolls over)</span></p>
+              <p className="text-xs text-gray-500">{label}</p>
             </div>
-          </div>
-          {cleaningNextMonthCount > 0 && (
-            <p className="mt-3 text-[11px] text-gray-500">
-              {cleaningNextMonthCount} reservation{cleaningNextMonthCount !== 1 ? "s" : ""} counted
-              in this period {cleaningNextMonthCount !== 1 ? "check" : "checks"} out after it ends —
-              their cleaning &amp; laundry are attributed to next month, so they aren&apos;t in the
-              cleaning/laundry counts above.
-            </p>
-          )}
-        </div>
+          );
+          return (
+            <div className="mt-5 rounded-lg border border-gray-100 bg-gray-50/60 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                Activity in period
+              </p>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+                {cell(reservationCount, <>Reservations <span className="text-gray-400">(≥1 night)</span></>)}
+                {cell(cleaningNextMonthCount, <>Roll over <span className="text-gray-400">(checkout next month)</span></>, "amber")}
+                {cell(extraCleaningCount, <>Extra cleanings <span className="text-gray-400">(manual / mid-stay)</span></>, "violet")}
+                {cell(cleaningCount, <>Cleaning events</>)}
+                {cell(noLaundryCount, <>No-laundry <span className="text-gray-400">(no linen change)</span></>, "amber")}
+                {cell(laundryCount, <>Laundry events</>)}
+              </div>
+
+              <div className="mt-4 space-y-1.5 border-t border-gray-100 pt-3 text-[11px] text-gray-600">
+                <p>
+                  <span className="font-semibold text-gray-700">Cleanings</span> = {reservationCount} reservations
+                  − {cleaningNextMonthCount} rolling over + {extraCleaningCount} extra ={" "}
+                  <span className="font-semibold">{expectedCleanings}</span>
+                  {cleaningReconciles ? (
+                    <span className="text-green-600"> ✓ matches {cleaningCount}</span>
+                  ) : (
+                    <span className="text-amber-600">
+                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)} = checkouts with no assigned cleaner, or month-boundary stays)
+                    </span>
+                  )}
+                </p>
+                <p>
+                  <span className="font-semibold text-gray-700">Laundry</span> = {cleaningCount} cleanings
+                  − {noLaundryCount} no-laundry ={" "}
+                  <span className="font-semibold">{expectedLaundry}</span>
+                  {laundryReconciles ? (
+                    <span className="text-green-600"> ✓ matches {laundryCount}</span>
+                  ) : (
+                    <span className="text-amber-600">
+                      {" "}vs {laundryCount} billed (Δ = cleanings with no saved laundry provider)
+                    </span>
+                  )}
+                </p>
+                <p className="text-gray-400">
+                  &ldquo;Events&rdquo; count cleanings/laundry that carry a cost (assigned cleaner /
+                  saved provider). Unassigned cleanings aren&apos;t billed, so they&apos;re excluded.
+                </p>
+              </div>
+            </div>
+          );
+        })()}
 
         <p className="text-xs text-gray-400 mt-3">
           * Cleaning, laundry, consumables, wear &amp; tear and damages sourced from the cleaning app
