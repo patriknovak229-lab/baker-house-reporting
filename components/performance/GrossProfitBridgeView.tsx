@@ -103,6 +103,15 @@ interface Totals {
   damages: number;
   totalVariableCosts: number;
   grossProfit: number;
+  // ── Reconciliation counts (cleaning-app activity vs reservations) ──────────
+  /** Reservations with ≥1 night in the period (matches net-sales attribution). */
+  reservationCount: number;
+  /** Cleaning events whose checkout date falls in the period. */
+  cleaningCount: number;
+  /** Laundry events whose checkout date falls in the period. */
+  laundryCount: number;
+  /** Period reservations whose checkout is after the period → cleaning lands next month. */
+  cleaningNextMonthCount: number;
 }
 
 function computeTotals(
@@ -113,15 +122,6 @@ function computeTotals(
   subscriptionItems: SubscriptionItem[],
   selectedRooms?: Room[]
 ): Totals {
-  // ── Net sales: per-reservation, fraction-of-stay within the period ────
-  let netSales = 0;
-  for (const r of reservations) {
-    if (r.paymentStatus === "Refunded") continue;
-    const nights = getNightsInPeriod(r, dateRange);
-    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
-    netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
-  }
-
   // ── Operational costs: sum every cell in the period for the rooms in scope.
   const inScopeRoomIds = new Set<string>(
     (selectedRooms ?? []).map((r) => ROOM_TO_BEDS24_ID[r]).filter(Boolean)
@@ -131,11 +131,31 @@ function computeTotals(
     return allRoomsSelected || inScopeRoomIds.has(roomId);
   }
 
+  // ── Net sales: per-reservation, fraction-of-stay within the period ────
+  let netSales = 0;
+  let reservationCount = 0;
+  let cleaningNextMonthCount = 0;
+  for (const r of reservations) {
+    if (r.paymentStatus === "Refunded") continue;
+    const nights = getNightsInPeriod(r, dateRange);
+    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
+    netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
+    // Reconciliation: a reservation "belongs" to the period if it has ≥1 night
+    // in it. Its cleaning, though, only happens at checkout — so a stay that
+    // runs past the period end is counted here but its cleaning lands next month.
+    if (nights > 0 && (allRoomsSelected || (selectedRooms?.includes(r.room) ?? true))) {
+      reservationCount += 1;
+      if (r.checkOutDate > dateRange.end) cleaningNextMonthCount += 1;
+    }
+  }
+
   let cleaning = 0;
   let laundry = 0;
   let consumables = 0;
   let wearTear = 0;
   let damages = 0;
+  let cleaningCount = 0;
+  let laundryCount = 0;
   for (const [key, v] of Object.entries(variableCosts)) {
     const [date, roomId] = key.split("|");
     if (!date || !roomId) continue;
@@ -146,6 +166,8 @@ function computeTotals(
     consumables += v.consumables ?? 0;
     wearTear += v.wearTear ?? 0;
     damages += v.damages ?? 0;
+    if ((v.cleaning ?? 0) > 0) cleaningCount += 1;
+    if ((v.laundry ?? 0) > 0) laundryCount += 1;
   }
   // Per-reservation entries — only count those tied to reservations whose
   // checkOut falls in the period AND whose room is in scope.
@@ -160,6 +182,8 @@ function computeTotals(
     consumables += res.consumables;
     wearTear += res.wearTear ?? 0;
     damages += res.damages ?? 0;
+    if (res.cleaning > 0) cleaningCount += 1;
+    if (res.laundry > 0) laundryCount += 1;
   }
 
   // ── Subscriptions: per-item per-room months-active-in-range ×
@@ -189,6 +213,10 @@ function computeTotals(
     damages,
     totalVariableCosts,
     grossProfit,
+    reservationCount,
+    cleaningCount,
+    laundryCount,
+    cleaningNextMonthCount,
   };
 }
 
@@ -217,7 +245,7 @@ export default function GrossProfitBridgeView({
     subscriptionItems,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
@@ -370,9 +398,49 @@ export default function GrossProfitBridgeView({
             </tr>
           </tfoot>
         </table>
+
+        {/* Activity reconciliation: reservations belong to a period if they
+            have ≥1 night in it, but their cleaning/laundry only happens at
+            checkout — so end-of-month stays count here while their cleaning
+            lands next month. These counts explain the gap. */}
+        <div className="mt-5 rounded-lg border border-gray-100 bg-gray-50/60 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-3">
+            Activity in period
+          </p>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            <div>
+              <p className="text-xl font-bold text-gray-800">{reservationCount}</p>
+              <p className="text-xs text-gray-500">Reservations <span className="text-gray-400">(≥1 night)</span></p>
+            </div>
+            <div>
+              <p className="text-xl font-bold text-gray-800">{cleaningCount}</p>
+              <p className="text-xs text-gray-500">Cleaning events</p>
+            </div>
+            <div>
+              <p className="text-xl font-bold text-gray-800">{laundryCount}</p>
+              <p className="text-xs text-gray-500">Laundry events</p>
+            </div>
+            <div>
+              <p className={`text-xl font-bold ${cleaningNextMonthCount > 0 ? "text-amber-600" : "text-gray-800"}`}>
+                {cleaningNextMonthCount}
+              </p>
+              <p className="text-xs text-gray-500">Checkout next month <span className="text-gray-400">(cleaning rolls over)</span></p>
+            </div>
+          </div>
+          {cleaningNextMonthCount > 0 && (
+            <p className="mt-3 text-[11px] text-gray-500">
+              {cleaningNextMonthCount} reservation{cleaningNextMonthCount !== 1 ? "s" : ""} counted
+              in this period {cleaningNextMonthCount !== 1 ? "check" : "checks"} out after it ends —
+              their cleaning &amp; laundry are attributed to next month, so they aren&apos;t in the
+              cleaning/laundry counts above.
+            </p>
+          )}
+        </div>
+
         <p className="text-xs text-gray-400 mt-3">
-          * Cleaning, laundry, consumables, wear & tear and damages sourced from the cleaning app
-          (checkout-date attribution). Subscriptions scaled by months in period.
+          * Cleaning, laundry, consumables, wear &amp; tear and damages sourced from the cleaning app
+          (checkout-date attribution). Subscriptions scaled by months in period. Reservations counted
+          when at least one night falls in the period.
         </p>
       </div>
     </div>
