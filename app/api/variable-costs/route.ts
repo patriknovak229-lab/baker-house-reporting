@@ -209,6 +209,9 @@ export interface VariableCostsResponse {
   /** "date|roomId" of cleanings the operator marked "no laundry" (mid-stay /
    *  special cleanings that don't change linen → no laundry event). */
   noLaundryKeys: string[];
+  /** "date|roomId" of cleanings the operator removed (e.g. stay prolonged) —
+   *  the reservation still counts but no cleaning happened. */
+  dismissedCleaningKeys: string[];
 }
 
 function getRedis(): Redis | null {
@@ -240,6 +243,7 @@ export async function GET() {
     wearTearRaw,
     damagesRaw,
     noLaundryRaw,
+    dismissedRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
     redis.get(KEY_CLEANING_ASSIGNMENTS),
@@ -253,6 +257,7 @@ export async function GET() {
     redis.get(KEY_WEAR_TEAR_EVENTS),
     redis.get(KEY_DAMAGES_EVENTS),
     redis.get('baker:no-laundry-cleanings'),
+    redis.get('baker:dismissed-cleanings'),
   ]);
 
   // Set of valid (date, roomId) cleanings — Beds24 tasks + manual laundry
@@ -421,6 +426,9 @@ export async function GET() {
 
   const manualCleaningKeys = manualCleaningEvents.map((e) => `${e.date}|${e.roomId}`);
   const noLaundryKeys = (Array.isArray(noLaundryRaw) ? noLaundryRaw : []) as string[];
+  const dismissedCleaningKeys = (Array.isArray(dismissedRaw) ? dismissedRaw : [])
+    .map((d: { date?: string; roomId?: string }) => (d?.date && d?.roomId ? `${d.date}|${d.roomId}` : ''))
+    .filter(Boolean);
 
   const body: VariableCostsResponse = {
     byDateRoom: lookup,
@@ -429,6 +437,7 @@ export async function GET() {
     subscriptionItems,
     manualCleaningKeys,
     noLaundryKeys,
+    dismissedCleaningKeys,
   };
   return NextResponse.json(body);
 }

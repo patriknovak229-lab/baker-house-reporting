@@ -28,6 +28,8 @@ interface Props {
   manualCleaningKeys?: string[];
   /** "date|roomId" of cleanings marked "no laundry". */
   noLaundryKeys?: string[];
+  /** "date|roomId" of cleanings the operator removed (stay prolonged etc.). */
+  dismissedCleaningKeys?: string[];
   /** Rooms in scope from the page-level filter; used to scope cost sums. */
   selectedRooms?: Room[];
 }
@@ -121,6 +123,9 @@ interface Totals {
   extraCleaningCount: number;
   /** Cleanings in period marked "no laundry" → no laundry event. */
   noLaundryCount: number;
+  /** Cleanings removed by the operator (stay prolonged) — reservation still
+   *  counts but no cleaning happened. */
+  removedCleaningCount: number;
 }
 
 function computeTotals(
@@ -131,6 +136,7 @@ function computeTotals(
   subscriptionItems: SubscriptionItem[],
   manualCleaningKeys: string[],
   noLaundryKeys: string[],
+  dismissedCleaningKeys: string[],
   selectedRooms?: Room[]
 ): Totals {
   // ── Operational costs: sum every cell in the period for the rooms in scope.
@@ -151,6 +157,7 @@ function computeTotals(
   }
   const extraCleaningCount = manualCleaningKeys.filter(keyInPeriodScope).length;
   const noLaundryCount = noLaundryKeys.filter(keyInPeriodScope).length;
+  const removedCleaningCount = dismissedCleaningKeys.filter(keyInPeriodScope).length;
 
   // ── Net sales: per-reservation, fraction-of-stay within the period ────
   let netSales = 0;
@@ -240,6 +247,7 @@ function computeTotals(
     cleaningNextMonthCount,
     extraCleaningCount,
     noLaundryCount,
+    removedCleaningCount,
   };
 }
 
@@ -251,6 +259,7 @@ export default function GrossProfitBridgeView({
   subscriptionItems = [],
   manualCleaningKeys = [],
   noLaundryKeys = [],
+  dismissedCleaningKeys = [],
   selectedRooms,
 }: Props) {
   if (reservations.length === 0) {
@@ -270,9 +279,10 @@ export default function GrossProfitBridgeView({
     subscriptionItems,
     manualCleaningKeys,
     noLaundryKeys,
+    dismissedCleaningKeys,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
@@ -432,7 +442,8 @@ export default function GrossProfitBridgeView({
             cleanings, and a cleaning marked "no laundry" produces no laundry
             event. These counts explain the gaps. */}
         {(() => {
-          const expectedCleanings = reservationCount - cleaningNextMonthCount + extraCleaningCount;
+          const expectedCleanings =
+            reservationCount - cleaningNextMonthCount - removedCleaningCount + extraCleaningCount;
           const expectedLaundry = cleaningCount - noLaundryCount;
           const cleaningReconciles = expectedCleanings === cleaningCount;
           const laundryReconciles = expectedLaundry === laundryCount;
@@ -461,9 +472,10 @@ export default function GrossProfitBridgeView({
               <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-3">
                 Activity in period
               </p>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 lg:grid-cols-7">
                 {cell(reservationCount, <>Reservations <span className="text-gray-400">(≥1 night)</span></>)}
                 {cell(cleaningNextMonthCount, <>Roll over <span className="text-gray-400">(checkout next month)</span></>, "amber")}
+                {cell(removedCleaningCount, <>Removed <span className="text-gray-400">(stay prolonged)</span></>, "amber")}
                 {cell(extraCleaningCount, <>Extra cleanings <span className="text-gray-400">(manual / mid-stay)</span></>, "violet")}
                 {cell(cleaningCount, <>Cleaning events</>)}
                 {cell(noLaundryCount, <>No-laundry <span className="text-gray-400">(no linen change)</span></>, "amber")}
@@ -473,13 +485,13 @@ export default function GrossProfitBridgeView({
               <div className="mt-4 space-y-1.5 border-t border-gray-100 pt-3 text-[11px] text-gray-600">
                 <p>
                   <span className="font-semibold text-gray-700">Cleanings</span> = {reservationCount} reservations
-                  − {cleaningNextMonthCount} rolling over + {extraCleaningCount} extra ={" "}
+                  − {cleaningNextMonthCount} rolling over − {removedCleaningCount} removed + {extraCleaningCount} extra ={" "}
                   <span className="font-semibold">{expectedCleanings}</span>
                   {cleaningReconciles ? (
                     <span className="text-green-600"> ✓ matches {cleaningCount}</span>
                   ) : (
                     <span className="text-amber-600">
-                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)}: combo/multi-room stays clean 2 rooms per reservation; month-boundary stays)
+                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)}: month-boundary checkouts from prior-month stays add a cleaning; combo/multi-room stays clean 2 rooms per reservation)
                     </span>
                   )}
                 </p>
