@@ -281,6 +281,13 @@ export async function GET() {
   for (const m of manualLaundryEvents) {
     validLaundryKeys.add(`${m.date}|${m.roomId}`);
   }
+  // Manual (off-checkout) cleanings are real cleanings too — their laundry
+  // must not be treated as an orphan just because there's no Beds24 checkout
+  // task on that date. Without this, a mid-stay/special cleaning's laundry was
+  // silently dropped from the reporting totals.
+  for (const m of (Array.isArray(manualCleaningRaw) ? manualCleaningRaw : []) as Array<{ date?: string; roomId?: string }>) {
+    if (m?.date && m?.roomId) validLaundryKeys.add(`${m.date}|${m.roomId}`);
+  }
 
   const cleanersConfig = (cleanersRaw ?? { cleaners: [], rates: {}, archived: [] }) as CleanersConfig;
   // Merge archived cleaner rates into the lookup so historical assignments
