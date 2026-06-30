@@ -126,6 +126,11 @@ interface Totals {
   /** Cleanings removed by the operator (stay prolonged) — reservation still
    *  counts but no cleaning happened. */
   removedCleaningCount: number;
+  /** Cleanings from a prior-month stay that checks out in this period (0
+   *  nights here) — adds a cleaning not tied to an in-period reservation. */
+  carryInCount: number;
+  /** Manual cleanings in period that coincide with a checkout (same event). */
+  manualOnCheckoutCount: number;
   // ── Per-unit overview ──────────────────────────────────────────────────
   laundrySetCount: number;
   consumableUnitCount: number;
@@ -161,25 +166,55 @@ function computeTotals(
     if (date < dateRange.start || date > dateRange.end) return false;
     return roomInScope(roomId);
   }
-  const extraCleaningCount = manualCleaningKeys.filter(keyInPeriodScope).length;
   const noLaundryCount = noLaundryKeys.filter(keyInPeriodScope).length;
   const removedCleaningCount = dismissedCleaningKeys.filter(keyInPeriodScope).length;
+
+  // Checkout keys (any date) — a manual cleaning landing on one of these is the
+  // SAME cleaning event as the checkout (assignments are keyed by date|roomId),
+  // so it's not a distinct "extra".
+  const checkoutKeys = new Set<string>();
+  for (const r of reservations) {
+    if (r.paymentStatus === "Refunded") continue;
+    const rid = ROOM_TO_BEDS24_ID[r.room];
+    if (rid) checkoutKeys.add(`${r.checkOutDate}|${rid}`);
+  }
+  // Extra = manual cleanings in period that DON'T coincide with a checkout.
+  const extraCleaningCount = manualCleaningKeys
+    .filter(keyInPeriodScope)
+    .filter((k) => !checkoutKeys.has(k)).length;
+  const manualOnCheckoutCount =
+    manualCleaningKeys.filter(keyInPeriodScope).length - extraCleaningCount;
 
   // ── Net sales: per-reservation, fraction-of-stay within the period ────
   let netSales = 0;
   let reservationCount = 0;
   let cleaningNextMonthCount = 0;
+  let carryInCount = 0;
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
+    const roomInScopeForRes = allRoomsSelected || (selectedRooms?.includes(r.room) ?? true);
     // Reconciliation: a reservation "belongs" to the period if it has ≥1 night
     // in it. Its cleaning, though, only happens at checkout — so a stay that
     // runs past the period end is counted here but its cleaning lands next month.
-    if (nights > 0 && (allRoomsSelected || (selectedRooms?.includes(r.room) ?? true))) {
+    if (nights > 0 && roomInScopeForRes) {
       reservationCount += 1;
       if (r.checkOutDate > dateRange.end) cleaningNextMonthCount += 1;
+    }
+    // Carry-in: checked in BEFORE the period (0 nights in it) but checks out
+    // inside it → its cleaning happens this month although the stay belongs to
+    // last month. Only count it if a cleaning was actually billed for that cell.
+    if (
+      nights === 0 &&
+      roomInScopeForRes &&
+      r.checkOutDate >= dateRange.start &&
+      r.checkOutDate <= dateRange.end
+    ) {
+      const rid = ROOM_TO_BEDS24_ID[r.room];
+      const cell = rid ? variableCosts[`${r.checkOutDate}|${rid}`] : undefined;
+      if (cell && (cell.cleaning ?? 0) > 0) carryInCount += 1;
     }
   }
 
@@ -269,6 +304,8 @@ function computeTotals(
     extraCleaningCount,
     noLaundryCount,
     removedCleaningCount,
+    carryInCount,
+    manualOnCheckoutCount,
     laundrySetCount,
     consumableUnitCount,
     subscriptionCount,
@@ -308,7 +345,7 @@ export default function GrossProfitBridgeView({
     dismissedCleaningKeys,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, damagesUnitCount } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount, carryInCount, manualOnCheckoutCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, damagesUnitCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
@@ -484,7 +521,7 @@ export default function GrossProfitBridgeView({
             event. These counts explain the gaps. */}
         {(() => {
           const expectedCleanings =
-            reservationCount - cleaningNextMonthCount - removedCleaningCount + extraCleaningCount;
+            reservationCount - cleaningNextMonthCount - removedCleaningCount + extraCleaningCount + carryInCount;
           const expectedLaundry = cleaningCount - noLaundryCount;
           const cleaningReconciles = expectedCleanings === cleaningCount;
           const laundryReconciles = expectedLaundry === laundryCount;
@@ -513,10 +550,11 @@ export default function GrossProfitBridgeView({
               <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-3">
                 Activity in period
               </p>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 lg:grid-cols-7">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
                 {cell(reservationCount, <>Reservations <span className="text-gray-400">(≥1 night)</span></>)}
                 {cell(cleaningNextMonthCount, <>Roll over <span className="text-gray-400">(checkout next month)</span></>, "amber")}
                 {cell(removedCleaningCount, <>Removed <span className="text-gray-400">(stay prolonged)</span></>, "amber")}
+                {cell(carryInCount, <>Carry-in <span className="text-gray-400">(prior-month stay)</span></>, "violet")}
                 {cell(extraCleaningCount, <>Extra cleanings <span className="text-gray-400">(manual / mid-stay)</span></>, "violet")}
                 {cell(cleaningCount, <>Cleaning events</>)}
                 {cell(noLaundryCount, <>No-laundry <span className="text-gray-400">(no linen change)</span></>, "amber")}
@@ -526,13 +564,19 @@ export default function GrossProfitBridgeView({
               <div className="mt-4 space-y-1.5 border-t border-gray-100 pt-3 text-[11px] text-gray-600">
                 <p>
                   <span className="font-semibold text-gray-700">Cleanings</span> = {reservationCount} reservations
-                  − {cleaningNextMonthCount} rolling over − {removedCleaningCount} removed + {extraCleaningCount} extra ={" "}
+                  − {cleaningNextMonthCount} rolling over − {removedCleaningCount} removed + {extraCleaningCount} extra
+                  + {carryInCount} carry-in ={" "}
                   <span className="font-semibold">{expectedCleanings}</span>
                   {cleaningReconciles ? (
                     <span className="text-green-600"> ✓ matches {cleaningCount}</span>
                   ) : (
                     <span className="text-amber-600">
-                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)}: month-boundary checkouts from prior-month stays add a cleaning; combo/multi-room stays clean 2 rooms per reservation)
+                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)})
+                    </span>
+                  )}
+                  {manualOnCheckoutCount > 0 && (
+                    <span className="text-gray-400">
+                      {" "}· {manualOnCheckoutCount} manual cleaning{manualOnCheckoutCount !== 1 ? "s" : ""} fell on a checkout day (same event, not double-counted)
                     </span>
                   )}
                 </p>
