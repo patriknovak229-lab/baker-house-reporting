@@ -479,7 +479,7 @@ export default function GrossProfitBridgeView({
                     <span className="text-green-600"> ✓ matches {cleaningCount}</span>
                   ) : (
                     <span className="text-amber-600">
-                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)} = checkouts with no assigned cleaner, or month-boundary stays)
+                      {" "}vs {cleaningCount} billed (Δ{Math.abs(cleaningCount - expectedCleanings)}: combo/multi-room stays clean 2 rooms per reservation; month-boundary stays)
                     </span>
                   )}
                 </p>
