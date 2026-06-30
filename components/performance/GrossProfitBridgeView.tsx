@@ -126,6 +126,12 @@ interface Totals {
   /** Cleanings removed by the operator (stay prolonged) — reservation still
    *  counts but no cleaning happened. */
   removedCleaningCount: number;
+  // ── Per-unit overview ──────────────────────────────────────────────────
+  laundrySetCount: number;
+  consumableUnitCount: number;
+  subscriptionCount: number;
+  wearTearUnitCount: number;
+  damagesUnitCount: number;
 }
 
 function computeTotals(
@@ -184,6 +190,11 @@ function computeTotals(
   let damages = 0;
   let cleaningCount = 0;
   let laundryCount = 0;
+  // Unit counts for the per-unit overview columns.
+  let laundrySetCount = 0;
+  let consumableUnitCount = 0;
+  let wearTearUnitCount = 0;
+  let damagesUnitCount = 0;
   for (const [key, v] of Object.entries(variableCosts)) {
     const [date, roomId] = key.split("|");
     if (!date || !roomId) continue;
@@ -196,6 +207,10 @@ function computeTotals(
     damages += v.damages ?? 0;
     if ((v.cleaning ?? 0) > 0) cleaningCount += 1;
     if ((v.laundry ?? 0) > 0) laundryCount += 1;
+    laundrySetCount += v.laundrySets ?? 0;
+    consumableUnitCount += v.consumableUnits ?? 0;
+    wearTearUnitCount += v.wearTearUnits ?? 0;
+    damagesUnitCount += v.damagesUnits ?? 0;
   }
   // Per-reservation entries — only count those tied to reservations whose
   // checkOut falls in the period AND whose room is in scope.
@@ -212,12 +227,16 @@ function computeTotals(
     damages += res.damages ?? 0;
     if (res.cleaning > 0) cleaningCount += 1;
     if (res.laundry > 0) laundryCount += 1;
+    consumableUnitCount += res.consumableUnits ?? 0;
+    wearTearUnitCount += res.wearTearUnits ?? 0;
+    damagesUnitCount += res.damagesUnits ?? 0;
   }
 
   // ── Subscriptions: per-item per-room months-active-in-range ×
   //    monthlyAmount, so removed-mid-period items only count for the
   //    months they were actually active.
   let subscriptions = 0;
+  const activeSubscriptionItems = new Set<string>();
   for (const item of subscriptionItems) {
     const monthsActive = subscriptionMonthsInRange(item, dateRange.start, dateRange.end);
     if (monthsActive <= 0) continue;
@@ -226,8 +245,10 @@ function computeTotals(
       if (!cfg.monthlyAmount || cfg.monthlyAmount <= 0) continue;
       if (!roomInScope(roomId)) continue;
       subscriptions += cfg.monthlyAmount * monthsActive;
+      activeSubscriptionItems.add(item.id);
     }
   }
+  const subscriptionCount = activeSubscriptionItems.size;
 
   const totalVariableCosts = cleaning + laundry + consumables + subscriptions + wearTear + damages;
   const grossProfit = netSales - totalVariableCosts;
@@ -248,6 +269,11 @@ function computeTotals(
     extraCleaningCount,
     noLaundryCount,
     removedCleaningCount,
+    laundrySetCount,
+    consumableUnitCount,
+    subscriptionCount,
+    wearTearUnitCount,
+    damagesUnitCount,
   };
 }
 
@@ -282,19 +308,20 @@ export default function GrossProfitBridgeView({
     dismissedCleaningKeys,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, damagesUnitCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
 
-  // Build deductions in order — Net Sales → … → Gross Profit
-  const deductions: { name: string; amount: number }[] = [
-    { name: "Cleaning", amount: cleaning },
-    { name: "Laundry", amount: laundry },
-    { name: "Consumables", amount: consumables },
-    { name: "Subscriptions", amount: subscriptions },
-    { name: "Wear & Tear", amount: wearTear },
-    { name: "Damages", amount: damages },
+  // Build deductions in order — Net Sales → … → Gross Profit. `units` /
+  // `unitLabel` drive the per-unit overview columns in the detail table.
+  const deductions: { name: string; amount: number; units: number; unitLabel: string }[] = [
+    { name: "Cleaning", amount: cleaning, units: cleaningCount, unitLabel: "cleanings" },
+    { name: "Laundry", amount: laundry, units: laundrySetCount, unitLabel: "sets" },
+    { name: "Consumables", amount: consumables, units: consumableUnitCount, unitLabel: "sets" },
+    { name: "Subscriptions", amount: subscriptions, units: subscriptionCount, unitLabel: "subscriptions" },
+    { name: "Wear & Tear", amount: wearTear, units: wearTearUnitCount, unitLabel: "items" },
+    { name: "Damages", amount: damages, units: damagesUnitCount, unitLabel: "incidents" },
   ];
 
   let runningBase = netSales;
@@ -400,7 +427,7 @@ export default function GrossProfitBridgeView({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100">
-              {["Cost", "Amount", "% of Net Sales"].map((h) => (
+              {["Cost", "Units", "Unit price", "Amount", "% of Net Sales"].map((h) => (
                 <th
                   key={h}
                   className={`py-2 text-xs font-medium text-gray-500 uppercase tracking-wide ${
@@ -413,11 +440,23 @@ export default function GrossProfitBridgeView({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {deductions.map(({ name, amount }) => (
+            {deductions.map(({ name, amount, units, unitLabel }) => (
               <tr key={name} className="hover:bg-gray-50">
                 <td className="py-3 text-gray-700">{name}</td>
-                <td className="py-3 text-right text-rose-600">−{fmt(amount)}</td>
-                <td className="py-3 text-right text-gray-500">
+                <td className="py-3 text-right tabular-nums text-gray-700">
+                  {units > 0 ? (
+                    <>
+                      {units} <span className="text-xs text-gray-400">{unitLabel}</span>
+                    </>
+                  ) : (
+                    <span className="text-gray-300">—</span>
+                  )}
+                </td>
+                <td className="py-3 text-right tabular-nums text-gray-500">
+                  {units > 0 ? `${fmt(Math.round(amount / units))} / ${unitLabel.replace(/s$/, "")}` : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="py-3 text-right tabular-nums text-rose-600">−{fmt(amount)}</td>
+                <td className="py-3 text-right tabular-nums text-gray-500">
                   {netSales > 0 ? Math.round((amount / netSales) * 100) : 0}%
                 </td>
               </tr>
@@ -426,10 +465,12 @@ export default function GrossProfitBridgeView({
           <tfoot className="border-t border-gray-200">
             <tr>
               <td className="py-2 text-xs font-medium text-gray-500">Total Operational</td>
-              <td className="py-2 text-right text-xs font-bold text-rose-600">
+              <td className="py-2" />
+              <td className="py-2" />
+              <td className="py-2 text-right text-xs font-bold tabular-nums text-rose-600">
                 −{fmt(totalVariableCosts)}
               </td>
-              <td className="py-2 text-right text-xs text-gray-500">
+              <td className="py-2 text-right text-xs tabular-nums text-gray-500">
                 {netSales > 0 ? Math.round((totalVariableCosts / netSales) * 100) : 0}%
               </td>
             </tr>

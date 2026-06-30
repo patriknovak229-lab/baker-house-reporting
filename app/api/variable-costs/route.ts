@@ -185,6 +185,15 @@ export interface VariableCostEntry {
   wearTear: number;
   /** Damages incident costs for this (date|roomId) or reservation. */
   damages: number;
+  // ── Unit counts (parallel to the cost fields) for the per-unit overview ──
+  /** Laundry sets consumed (Σ setsPerRoom over laundry events). */
+  laundrySets?: number;
+  /** Consumable sets logged (1 per entry). */
+  consumableUnits?: number;
+  /** Wear & Tear incidents (1 per event). */
+  wearTearUnits?: number;
+  /** Damages incidents (1 per event). */
+  damagesUnits?: number;
 }
 
 // ── Response type: a flat map by "date|roomId" (legacy) + a byReservation
@@ -317,14 +326,14 @@ export async function GET() {
   function ensureEntry(date: string, roomId: string): VariableCostEntry {
     const key = `${date}|${roomId}`;
     if (!lookup[key]) {
-      lookup[key] = { cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0 };
+      lookup[key] = { cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0, laundrySets: 0, consumableUnits: 0, wearTearUnits: 0, damagesUnits: 0 };
     }
     return lookup[key];
   }
   function ensureRes(reservationNumber: string): VariableCostEntry {
     if (!byReservation[reservationNumber]) {
       byReservation[reservationNumber] = {
-        cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0,
+        cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0, laundrySets: 0, consumableUnits: 0, wearTearUnits: 0, damagesUnits: 0,
       };
     }
     return byReservation[reservationNumber];
@@ -378,7 +387,9 @@ export async function GET() {
     if (!provider) continue;
     const cost = laundryCostForAssignment(provider, roomId, laundrySets.setsPerRoom, laundryConfig.rates);
     if (cost > 0) {
-      ensureEntry(date, roomId).laundry = cost;
+      const e = ensureEntry(date, roomId);
+      e.laundry = cost;
+      e.laundrySets = (e.laundrySets ?? 0) + (laundrySets.setsPerRoom[roomId] ?? 1);
     }
   }
 
@@ -387,9 +398,13 @@ export async function GET() {
   for (const entry of consumableEntries) {
     if (!entry.amount || entry.amount <= 0) continue;
     if (entry.reservationNumber) {
-      ensureRes(entry.reservationNumber).consumables += entry.amount;
+      const e = ensureRes(entry.reservationNumber);
+      e.consumables += entry.amount;
+      e.consumableUnits = (e.consumableUnits ?? 0) + 1;
     } else {
-      ensureEntry(entry.date, entry.roomId).consumables += entry.amount;
+      const e = ensureEntry(entry.date, entry.roomId);
+      e.consumables += entry.amount;
+      e.consumableUnits = (e.consumableUnits ?? 0) + 1;
     }
   }
 
@@ -400,7 +415,9 @@ export async function GET() {
   for (const ev of wearTearEvents) {
     if (!ev?.date || !ev?.roomId) continue;
     if (!ev.amount || ev.amount <= 0) continue;
-    ensureEntry(ev.date, ev.roomId).wearTear += ev.amount;
+    const e = ensureEntry(ev.date, ev.roomId);
+    e.wearTear += ev.amount;
+    e.wearTearUnits = (e.wearTearUnits ?? 0) + 1;
   }
 
   // ── Damages: same shape as wear & tear.
@@ -408,7 +425,9 @@ export async function GET() {
   for (const ev of damagesEvents) {
     if (!ev?.date || !ev?.roomId) continue;
     if (!ev.amount || ev.amount <= 0) continue;
-    ensureEntry(ev.date, ev.roomId).damages += ev.amount;
+    const e = ensureEntry(ev.date, ev.roomId);
+    e.damages += ev.amount;
+    e.damagesUnits = (e.damagesUnits ?? 0) + 1;
   }
 
   // ── Subscriptions: recurring monthly per-room costs (internet, TV, …).
