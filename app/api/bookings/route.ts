@@ -5,6 +5,7 @@ import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
+import { deriveNationality } from "@/utils/nationalityUtils";
 import { fetchReviews, fetchRawReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
 import type { GuestRating } from "@/types/reservation";
 
@@ -252,7 +253,10 @@ interface Beds24Booking {
   lastName: string;
   email: string;
   phone: string;
-  country2: string | null; // uppercase ISO 2-letter (e.g. "CZ", "UA")
+  mobile?: string;           // secondary phone (Beds24)
+  country: string | null;    // ISO 2-letter, often lowercase — the field Direct/API (rental-site) bookings populate
+  country2: string | null;   // ISO 2-letter — the field most OTA bookings populate
+  lang?: string;             // guest language e.g. "cs" — last-resort nationality signal
   apiSource: string;      // "Booking.com" | "Airbnb" | "API" (V2 POST) | "Direct" (Beds24 UI) | ""
   referer: string;        // e.g. "PhoneDirect" (our app), "DirectWeb" (rental site), or empty
   bookingTime: string;    // ISO timestamp — when the booking was created
@@ -643,7 +647,13 @@ function mapToReservation(b: Beds24Booking): Reservation {
     email: b.email ?? "",
     phone: b.phone ?? "",
     price: b.price ?? 0,
-    nationality: (b.country2 ?? "").toUpperCase(),
+    // Prefer an explicit country code (country2 = most OTAs, country = Direct/
+    // rental-site API bookings — often lowercase). Fall back to deriving from
+    // phone prefix / language ("cs" → CZ) so web bookings that only carry a
+    // language still get a flag.
+    nationality:
+      (b.country2 || b.country || "").toUpperCase() ||
+      deriveNationality(b.phone || b.mobile || "", b.lang),
     // Cleaning: date-derived until cleaning app is connected.
     // Blackouts have no guest, no stay → no cleaning event needed; we still
     // set a value to satisfy the type, but renderers skip the field for blackouts.
