@@ -107,7 +107,7 @@ interface Totals {
   consumables: number;
   subscriptions: number;
   wearTear: number;
-  damages: number;
+  misc: number;
   totalVariableCosts: number;
   grossProfit: number;
   // ── Reconciliation counts (cleaning-app activity vs reservations) ──────────
@@ -136,7 +136,7 @@ interface Totals {
   consumableUnitCount: number;
   subscriptionCount: number;
   wearTearUnitCount: number;
-  damagesUnitCount: number;
+  miscUnitCount: number;
 }
 
 function computeTotals(
@@ -222,14 +222,14 @@ function computeTotals(
   let laundry = 0;
   let consumables = 0;
   let wearTear = 0;
-  let damages = 0;
+  let misc = 0;
   let cleaningCount = 0;
   let laundryCount = 0;
   // Unit counts for the per-unit overview columns.
   let laundrySetCount = 0;
   let consumableUnitCount = 0;
   let wearTearUnitCount = 0;
-  let damagesUnitCount = 0;
+  let miscUnitCount = 0;
   for (const [key, v] of Object.entries(variableCosts)) {
     const [date, roomId] = key.split("|");
     if (!date || !roomId) continue;
@@ -239,13 +239,13 @@ function computeTotals(
     laundry += v.laundry ?? 0;
     consumables += v.consumables ?? 0;
     wearTear += v.wearTear ?? 0;
-    damages += v.damages ?? 0;
+    misc += v.misc ?? 0;
     if ((v.cleaning ?? 0) > 0) cleaningCount += 1;
     if ((v.laundry ?? 0) > 0) laundryCount += 1;
     laundrySetCount += v.laundrySets ?? 0;
     consumableUnitCount += v.consumableUnits ?? 0;
     wearTearUnitCount += v.wearTearUnits ?? 0;
-    damagesUnitCount += v.damagesUnits ?? 0;
+    miscUnitCount += v.miscUnits ?? 0;
   }
   // Per-reservation entries — only count those tied to reservations whose
   // checkOut falls in the period AND whose room is in scope.
@@ -259,12 +259,12 @@ function computeTotals(
     laundry += res.laundry;
     consumables += res.consumables;
     wearTear += res.wearTear ?? 0;
-    damages += res.damages ?? 0;
+    misc += res.misc ?? 0;
     if (res.cleaning > 0) cleaningCount += 1;
     if (res.laundry > 0) laundryCount += 1;
     consumableUnitCount += res.consumableUnits ?? 0;
     wearTearUnitCount += res.wearTearUnits ?? 0;
-    damagesUnitCount += res.damagesUnits ?? 0;
+    miscUnitCount += res.miscUnits ?? 0;
   }
 
   // ── Subscriptions: per-item per-room months-active-in-range ×
@@ -285,7 +285,7 @@ function computeTotals(
   }
   const subscriptionCount = activeSubscriptionItems.size;
 
-  const totalVariableCosts = cleaning + laundry + consumables + subscriptions + wearTear + damages;
+  const totalVariableCosts = cleaning + laundry + consumables + subscriptions + wearTear + misc;
   const grossProfit = netSales - totalVariableCosts;
   return {
     netSales,
@@ -294,7 +294,7 @@ function computeTotals(
     consumables,
     subscriptions,
     wearTear,
-    damages,
+    misc,
     totalVariableCosts,
     grossProfit,
     reservationCount,
@@ -310,7 +310,7 @@ function computeTotals(
     consumableUnitCount,
     subscriptionCount,
     wearTearUnitCount,
-    damagesUnitCount,
+    miscUnitCount,
   };
 }
 
@@ -345,7 +345,7 @@ export default function GrossProfitBridgeView({
     dismissedCleaningKeys,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, damages, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount, carryInCount, manualOnCheckoutCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, damagesUnitCount } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, misc, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount, carryInCount, manualOnCheckoutCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, miscUnitCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
@@ -358,7 +358,7 @@ export default function GrossProfitBridgeView({
     { name: "Consumables", amount: consumables, units: consumableUnitCount, unitLabel: "sets" },
     { name: "Subscriptions", amount: subscriptions, units: subscriptionCount, unitLabel: "subscriptions" },
     { name: "Wear & Tear", amount: wearTear, units: wearTearUnitCount, unitLabel: "items" },
-    { name: "Damages", amount: damages, units: damagesUnitCount, unitLabel: "incidents" },
+    { name: "Misc", amount: misc, units: miscUnitCount, unitLabel: "incidents" },
   ];
 
   let runningBase = netSales;
@@ -407,7 +407,7 @@ export default function GrossProfitBridgeView({
             Operational Costs
           </p>
           <p className="text-xl font-bold text-rose-600">−{fmt(totalVariableCosts)}</p>
-          <p className="text-xs text-rose-400 mt-0.5">Cleaning · Laundry · Consumables · Subs · W&amp;T · Damages</p>
+          <p className="text-xs text-rose-400 mt-0.5">Cleaning · Laundry · Consumables · Subs · W&amp;T · Misc</p>
         </div>
         <div className={`rounded-xl p-4 ${isLoss ? "bg-amber-50" : "bg-emerald-50"}`}>
           <p className={`text-xs font-medium uppercase tracking-wide mb-1 ${isLoss ? "text-amber-600" : "text-emerald-600"}`}>
@@ -602,7 +602,7 @@ export default function GrossProfitBridgeView({
         })()}
 
         <p className="text-xs text-gray-400 mt-3">
-          * Cleaning, laundry, consumables, wear &amp; tear and damages sourced from the cleaning app
+          * Cleaning, laundry, consumables, wear &amp; tear and misc sourced from the cleaning app
           (checkout-date attribution). Subscriptions scaled by months in period. Reservations counted
           when at least one night falls in the period.
         </p>

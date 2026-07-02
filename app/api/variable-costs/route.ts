@@ -16,7 +16,10 @@ const KEY_LAUNDRY_ASSIGNMENTS = 'baker:laundry-assignments';
 const KEY_CONSUMABLE_ENTRIES = 'baker:consumable-entries';
 const KEY_FIXED_COSTS_CONFIG = 'baker:fixed-costs-config';
 const KEY_WEAR_TEAR_EVENTS = 'baker:wear-tear-events';
-const KEY_DAMAGES_EVENTS = 'baker:damages-events';
+// "Misc" is the renamed ad-hoc bucket (was "Other"), stored under the legacy
+// other-cost-events key. The old standalone "Damages" category was retired —
+// breakage now goes under Wear & Tear.
+const KEY_MISC_EVENTS = 'baker:other-cost-events';
 
 // ── Room mapping: Beds24 roomId → reporting display name ─────────────────────
 // Matches cleaning app src/lib/room-mapping.ts + reporting types/reservation.ts
@@ -183,8 +186,8 @@ export interface VariableCostEntry {
   consumables: number;
   /** Wear & Tear incident costs for this (date|roomId) or reservation. */
   wearTear: number;
-  /** Damages incident costs for this (date|roomId) or reservation. */
-  damages: number;
+  /** Misc (ad-hoc) incident costs for this (date|roomId). */
+  misc: number;
   // ── Unit counts (parallel to the cost fields) for the per-unit overview ──
   /** Laundry sets consumed (Σ setsPerRoom over laundry events). */
   laundrySets?: number;
@@ -192,8 +195,8 @@ export interface VariableCostEntry {
   consumableUnits?: number;
   /** Wear & Tear incidents (1 per event). */
   wearTearUnits?: number;
-  /** Damages incidents (1 per event). */
-  damagesUnits?: number;
+  /** Misc entries (1 per event). */
+  miscUnits?: number;
 }
 
 // ── Response type: a flat map by "date|roomId" (legacy) + a byReservation
@@ -250,7 +253,7 @@ export async function GET() {
     entriesRaw,
     subscriptionsRaw,
     wearTearRaw,
-    damagesRaw,
+    miscRaw,
     noLaundryRaw,
     dismissedRaw,
   ] = await Promise.all([
@@ -264,7 +267,7 @@ export async function GET() {
     redis.get(KEY_CONSUMABLE_ENTRIES),
     redis.get(KEY_FIXED_COSTS_CONFIG),
     redis.get(KEY_WEAR_TEAR_EVENTS),
-    redis.get(KEY_DAMAGES_EVENTS),
+    redis.get(KEY_MISC_EVENTS),
     redis.get('baker:no-laundry-cleanings'),
     redis.get('baker:dismissed-cleanings'),
   ]);
@@ -326,14 +329,14 @@ export async function GET() {
   function ensureEntry(date: string, roomId: string): VariableCostEntry {
     const key = `${date}|${roomId}`;
     if (!lookup[key]) {
-      lookup[key] = { cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0, laundrySets: 0, consumableUnits: 0, wearTearUnits: 0, damagesUnits: 0 };
+      lookup[key] = { cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, misc: 0, laundrySets: 0, consumableUnits: 0, wearTearUnits: 0, miscUnits: 0 };
     }
     return lookup[key];
   }
   function ensureRes(reservationNumber: string): VariableCostEntry {
     if (!byReservation[reservationNumber]) {
       byReservation[reservationNumber] = {
-        cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, damages: 0, laundrySets: 0, consumableUnits: 0, wearTearUnits: 0, damagesUnits: 0,
+        cleaning: 0, laundry: 0, consumables: 0, wearTear: 0, misc: 0, laundrySets: 0, consumableUnits: 0, wearTearUnits: 0, miscUnits: 0,
       };
     }
     return byReservation[reservationNumber];
@@ -422,14 +425,15 @@ export async function GET() {
     e.wearTearUnits = (e.wearTearUnits ?? 0) + 1;
   }
 
-  // ── Damages: same shape as wear & tear.
-  const damagesEvents = (Array.isArray(damagesRaw) ? damagesRaw : []) as IncidentEvent[];
-  for (const ev of damagesEvents) {
+  // ── Misc (ad-hoc, renamed from Other): same shape as wear & tear,
+  //    bucketed by (date, roomId).
+  const miscEvents = (Array.isArray(miscRaw) ? miscRaw : []) as IncidentEvent[];
+  for (const ev of miscEvents) {
     if (!ev?.date || !ev?.roomId) continue;
     if (!ev.amount || ev.amount <= 0) continue;
     const e = ensureEntry(ev.date, ev.roomId);
-    e.damages += ev.amount;
-    e.damagesUnits = (e.damagesUnits ?? 0) + 1;
+    e.misc += ev.amount;
+    e.miscUnits = (e.miscUnits ?? 0) + 1;
   }
 
   // ── Subscriptions: recurring monthly per-room costs (internet, TV, …).
