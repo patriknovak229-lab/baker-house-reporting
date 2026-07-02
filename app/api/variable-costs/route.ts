@@ -393,19 +393,21 @@ export async function GET() {
     }
   }
 
-  // ── Consumables: sum entries — by reservation when linked, else by
-  //     date+roomId so legacy entries still surface somewhere.
+  // ── Consumables: one set per checkout, bucketed by (date, roomId) exactly
+  //     like cleaning & laundry. Attributing by reservationNumber instead
+  //     silently dropped multi-room bookings: Beds24 splits a multi-room stay
+  //     into a master + sub-bookings, and the reporting side collapses them
+  //     into ONE reservation — so a set logged against a sub-booking's bookId
+  //     matched no reservation and vanished from the P&L. Date+room keys the
+  //     physical checkout, so every room's set counts, and consumables now
+  //     behave identically to cleaning/laundry (incl. how refunded stays are
+  //     handled). entry.reservationNumber is kept on the record for
+  //     traceability but is intentionally NOT used for cost bucketing.
   for (const entry of consumableEntries) {
     if (!entry.amount || entry.amount <= 0) continue;
-    if (entry.reservationNumber) {
-      const e = ensureRes(entry.reservationNumber);
-      e.consumables += entry.amount;
-      e.consumableUnits = (e.consumableUnits ?? 0) + 1;
-    } else {
-      const e = ensureEntry(entry.date, entry.roomId);
-      e.consumables += entry.amount;
-      e.consumableUnits = (e.consumableUnits ?? 0) + 1;
-    }
+    const e = ensureEntry(entry.date, entry.roomId);
+    e.consumables += entry.amount;
+    e.consumableUnits = (e.consumableUnits ?? 0) + 1;
   }
 
   // ── Wear & Tear: incident events (no reservation link). Aggregated by
