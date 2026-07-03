@@ -207,10 +207,19 @@ export default function BankTransactionList({
                 <td className={`px-4 py-3 text-gray-600 whitespace-nowrap ${inGroup ? 'pl-10' : ''}`}>
                   {formatDate(tx.date)}
                 </td>
-                <td className="px-4 py-3 max-w-[200px]">
-                  <p className="text-gray-800 truncate">{tx.counterpartyName ?? '—'}</p>
+                <td className="px-4 py-3 max-w-[220px]">
+                  {/* When the bank gives no counterparty name (standing orders, transfers),
+                      fall back to the payment purpose so the row isn't just "—". */}
+                  <p className="text-gray-800 truncate">{tx.counterpartyName || tx.description || tx.myDescription || '—'}</p>
                   {tx.counterpartyAccount && (
                     <p className="text-xs text-gray-400 truncate">{tx.counterpartyAccount}</p>
+                  )}
+                  {/* Payment purpose from CSV cols O ("Popis pro mě") / P ("Zpráva pro příjemce") —
+                      shown as a hint here so you can look the invoice up without opening the row. */}
+                  {tx.counterpartyName && (tx.description || tx.myDescription) && (
+                    <p className="text-xs text-gray-500 truncate" title={tx.description || tx.myDescription || ''}>
+                      {tx.description || tx.myDescription}
+                    </p>
                   )}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap font-medium">
