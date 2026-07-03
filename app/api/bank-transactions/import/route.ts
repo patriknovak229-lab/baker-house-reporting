@@ -71,6 +71,7 @@ interface ColMap {
   vs?: number;
   ks?: number;
   ss?: number;
+  bankId?: number;
   description?: number;
   myDescription?: number;
   type?: number;
@@ -104,6 +105,8 @@ function buildColMap(headers: string[]): ColMap {
     if (map.vs === undefined && (n.includes('variabilni') || n.includes('variable') || n === 'vs')) { map.vs = i; return; }
     if (map.ks === undefined && (n.includes('konstantni') || n.includes('constant') || n === 'ks')) { map.ks = i; return; }
     if (map.ss === undefined && (n.includes('specificky') || n.includes('specific') || n === 'ss')) { map.ss = i; return; }
+    // Bank's own globally-unique transaction identifier — "Identifikace transakce"
+    if (map.bankId === undefined && n.includes('identifikace')) { map.bankId = i; return; }
     // Description
     if (map.description === undefined && (n.includes('zprava') || n.includes('message') || n.includes('remittance') || n.includes('poznamka'))) { map.description = i; return; }
     if (map.myDescription === undefined && (n.includes('popis pro me') || n.includes('popis pro') || n.includes('my description'))) { map.myDescription = i; return; }
@@ -205,7 +208,10 @@ function parseKbCsv(csvText: string): BankTransaction[] {
     const originalAmountRaw = rawOriginalAmount ? parseCzechNumber(rawOriginalAmount) : 0;
     const originalCurrencyRaw = cell(cols, colMap.originalCurrency);
 
-    const id = makeTxId(date, amount, direction, counterpartyAccount, vs);
+    // Prefer the bank's own unique transaction ID ("Identifikace transakce");
+    // fall back to the deterministic hash only if the column is absent.
+    const bankId = cell(cols, colMap.bankId).trim();
+    const id = bankId || makeTxId(date, amount, direction, counterpartyAccount, vs);
     const state: BankTransactionState = direction === 'credit' ? 'revenue' : 'unmatched';
 
     results.push({
@@ -307,7 +313,18 @@ export async function POST(request: Request) {
   const existing = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
   const existingIds = new Set(existing.map((t) => t.id));
 
-  const newTxs = parsed.filter((t) => !existingIds.has(t.id));
+  // A parsed row is already stored if it matches an existing row by the bank ID
+  // (t.id) OR by the legacy hash (date|amount|dir|account|vs). The legacy check
+  // covers rows imported before we switched to the bank's Identifikace transakce,
+  // so re-importing an old statement during the transition won't create duplicates.
+  // Also dedup within the batch itself (a CSV that lists the same row twice).
+  const seenInBatch = new Set<string>();
+  const newTxs = parsed.filter((t) => {
+    if (seenInBatch.has(t.id)) return false;
+    seenInBatch.add(t.id);
+    const legacyId = makeTxId(t.date, t.amount, t.direction, t.counterpartyAccount ?? '', t.variableSymbol ?? '');
+    return !existingIds.has(t.id) && !existingIds.has(legacyId);
+  });
   let duplicates = parsed.length - newTxs.length;
 
   if (newTxs.length === 0) {
