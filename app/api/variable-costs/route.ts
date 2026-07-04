@@ -256,6 +256,7 @@ export async function GET() {
     miscRaw,
     noLaundryRaw,
     dismissedRaw,
+    cleaningAdjustmentsRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
     redis.get(KEY_CLEANING_ASSIGNMENTS),
@@ -270,6 +271,7 @@ export async function GET() {
     redis.get(KEY_MISC_EVENTS),
     redis.get('baker:no-laundry-cleanings'),
     redis.get('baker:dismissed-cleanings'),
+    redis.get('baker:cleaning-adjustments'),
   ]);
 
   // Set of valid (date, roomId) cleanings — Beds24 tasks + manual laundry
@@ -373,6 +375,20 @@ export async function GET() {
       // when neither a price nor an assignment-rate is present yet).
       ensureEntry(event.date, event.roomId);
     }
+  }
+
+  // ── Cleaning adjustments: operator surcharge / reduction on top of the base
+  //    fee, keyed date|roomId. Applied only where a billed cleaning exists so a
+  //    stale adjustment can't conjure a phantom cost.
+  const cleaningAdjustments =
+    cleaningAdjustmentsRaw && typeof cleaningAdjustmentsRaw === 'object' && !Array.isArray(cleaningAdjustmentsRaw)
+      ? (cleaningAdjustmentsRaw as Record<string, { amount?: number }>)
+      : {};
+  for (const [key, adj] of Object.entries(cleaningAdjustments)) {
+    const amount = adj?.amount;
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount === 0) continue;
+    const cell = lookup[key];
+    if (cell && cell.cleaning > 0) cell.cleaning += amount;
   }
 
   // ── Laundry: flat assignments["date|roomId"] → providerId → cost ─────────
