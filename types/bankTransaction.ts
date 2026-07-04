@@ -58,6 +58,8 @@ export interface BankTransaction {
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
   ignoreCategory?: IgnoreCategoryId;
   ignoreNote?: string;
+  /** true when the user dismissed the auto-suggested invoice match ("not a match") — hides the list hint */
+  suggestionDismissed?: boolean;
   reconciledAt?: string;  // ISO timestamp
   ignoredAt?: string;     // ISO timestamp
   importedAt: string;     // ISO timestamp

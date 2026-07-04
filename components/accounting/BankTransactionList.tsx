@@ -5,6 +5,7 @@ import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatCurrency, formatDate } from '@/utils/formatters';
+import { findSuggestion } from '@/utils/reconcileSuggest';
 
 type SortCol = 'date' | 'counterparty' | 'amount';
 type SortDir = 'asc' | 'desc';
@@ -18,6 +19,7 @@ interface Props {
   onSelect: (tx: BankTransaction) => void;
   onToggleGroup: (id: string) => void;
   onOpenGroup: (group: SettlementGroup) => void;
+  onDismissSuggestion?: (tx: BankTransaction) => void;
 }
 
 const STATE_BADGE: Record<BankTransactionState, { label: string; className: string }> = {
@@ -48,10 +50,22 @@ type DisplayRow =
   | { type: 'transaction'; tx: BankTransaction; inGroup: boolean };
 
 export default function BankTransactionList({
-  transactions, allTransactions, invoices, groups, expandedGroups, onSelect, onToggleGroup, onOpenGroup,
+  transactions, allTransactions, invoices, groups, expandedGroups, onSelect, onToggleGroup, onOpenGroup, onDismissSuggestion,
 }: Props) {
   const [sortCol, setSortCol] = useState<SortCol>('date');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  // Per-row suggested invoice match (unmatched debits only, unless already dismissed)
+  const suggestions = useMemo(() => {
+    const m = new Map<string, SupplierInvoice>();
+    for (const tx of transactions) {
+      if (tx.direction === 'debit' && tx.state === 'unmatched' && !tx.suggestionDismissed) {
+        const s = findSuggestion(tx, invoices);
+        if (s) m.set(tx.id, s);
+      }
+    }
+    return m;
+  }, [transactions, invoices]);
 
   function toggleSort(col: SortCol) {
     if (sortCol === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -210,7 +224,26 @@ export default function BankTransactionList({
                 <td className="px-4 py-3 max-w-[220px]">
                   {/* When the bank gives no counterparty name (standing orders, transfers),
                       fall back to the payment purpose so the row isn't just "—". */}
-                  <p className="text-gray-800 truncate">{tx.counterpartyName || tx.description || tx.myDescription || '—'}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-gray-800 truncate">{tx.counterpartyName || tx.description || tx.myDescription || '—'}</p>
+                    {(() => {
+                      const sug = suggestions.get(tx.id);
+                      if (!sug) return null;
+                      return (
+                        <span className="inline-flex items-center gap-0.5 flex-shrink-0"
+                          title={`Suggested match: ${sug.supplierName} · ${sug.invoiceNumber}`}>
+                          <span className="text-indigo-500 text-xs" aria-label="Match suggested">✦</span>
+                          {onDismissSuggestion && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onDismissSuggestion(tx); }}
+                              className="text-gray-300 hover:text-red-500 text-xs leading-none"
+                              title="Not a match — hide"
+                            >×</button>
+                          )}
+                        </span>
+                      );
+                    })()}
+                  </div>
                   {tx.counterpartyAccount && (
                     <p className="text-xs text-gray-400 truncate">{tx.counterpartyAccount}</p>
                   )}

@@ -5,6 +5,7 @@ import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatAmount, formatDate, formatCurrency } from '@/utils/formatters';
+import { findSuggestion } from '@/utils/reconcileSuggest';
 
 interface Props {
   transaction: BankTransaction;
@@ -16,54 +17,7 @@ interface Props {
   onClose: () => void;
 }
 
-// ── Scored suggestion ──────────────────────────────────────────────────────────
-function findSuggestion(tx: BankTransaction, invoices: SupplierInvoice[]): SupplierInvoice | null {
-  const pending = invoices.filter((inv) => inv.status === 'pending' && !inv.bankTransactionId);
-  const norm = (s: string) => s.toLowerCase().trim();
-
-  const isForeign = tx.originalCurrency && tx.originalAmount != null;
-  const txAmount  = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
-
-  interface Scored { inv: SupplierInvoice; score: number }
-  const scored: Scored[] = [];
-
-  for (const inv of pending) {
-    const invAmount = inv.amountCZK;
-    // Amount: required within 1% or 2 units (handles rounding)
-    const tolerance = Math.max(2, invAmount * 0.01);
-    if (Math.abs(txAmount - invAmount) > tolerance) continue;
-
-    // Name score (priority 1)
-    const txName  = tx.counterpartyName ? norm(tx.counterpartyName) : '';
-    const invName = norm(inv.supplierName);
-    let nameScore = 0;
-    if (txName && invName) {
-      if (txName === invName) nameScore = 4;
-      else if (txName.includes(invName) && invName.includes(txName)) nameScore = 3;
-      else if (txName.includes(invName) || invName.includes(txName)) nameScore = 2;
-      else {
-        // Word-level overlap
-        const txWords  = txName.split(/\s+/);
-        const invWords = invName.split(/\s+/);
-        const overlap  = txWords.filter((w) => invWords.some((iw) => iw.includes(w) || w.includes(iw))).length;
-        if (overlap > 0) nameScore = 1;
-      }
-    }
-
-    // Date score (priority 2): closer = higher, within 90 days
-    const daysDiff = Math.abs(
-      (new Date(tx.date).getTime() - new Date(inv.invoiceDate).getTime()) / 86_400_000,
-    );
-    const dateScore = daysDiff <= 90 ? (90 - daysDiff) / 90 : 0;
-
-    scored.push({ inv, score: nameScore * 100 + dateScore });
-  }
-
-  if (scored.length === 0) return null;
-  scored.sort((a, b) => b.score - a.score);
-  // Only surface if there's a name signal or just one candidate
-  return scored[0].score > 0 || scored.length === 1 ? scored[0].inv : null;
-}
+// findSuggestion moved to utils/reconcileSuggest.ts (shared with BankTransactionList)
 
 /** Render a small label+value detail row */
 function Detail({ label, value }: { label: string; value?: string | null }) {

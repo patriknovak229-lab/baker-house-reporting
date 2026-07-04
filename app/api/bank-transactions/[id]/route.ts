@@ -21,7 +21,8 @@ type NoteBody           = { action: 'note'; note: string };
 type RefundBody         = { action: 'refund'; linkedTransactionId?: string; partial: boolean };
 type NonDeductibleBody  = { action: 'non_deductible'; ignoreNote?: string };
 type NetSettlementBody  = { action: 'net_settlement'; deductedInvoiceIds: string[]; grossAmount?: number };
-type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody;
+type DismissSuggestBody = { action: 'dismiss_suggestion' };
+type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody | DismissSuggestBody;
 
 export async function PUT(
   request: Request,
@@ -217,6 +218,10 @@ export async function PUT(
 
   } else if (body.action === 'note') {
     tx.ignoreNote = body.note || undefined;
+
+  } else if (body.action === 'dismiss_suggestion') {
+    // "Not a match" — hide the suggested-match hint in the list without changing state
+    tx.suggestionDismissed = true;
 
   } else if (body.action === 'unmatch') {
     // Un-reconcile single linked invoice (reconcile path)

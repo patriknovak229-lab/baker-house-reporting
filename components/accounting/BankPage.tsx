@@ -251,6 +251,21 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
     setTransactions((prev) => prev.map((t) => (t.id === tx.id ? tx : t)));
   }
 
+  // "Not a match" — persist that the suggested match was dismissed so the list hint stops showing
+  async function handleDismissSuggestion(tx: BankTransaction) {
+    try {
+      const res = await fetch(`/api/bank-transactions/${tx.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dismiss_suggestion' }),
+      });
+      if (res.ok) {
+        const updated = await res.json() as BankTransaction;
+        setTransactions((prev) => prev.map((t) => (t.id === tx.id ? updated : t)));
+      }
+    } catch { /* non-fatal — the hint reappears on next load if this failed */ }
+  }
+
   function handleInvoiceUpdateFromGroup(inv: SupplierInvoice) {
     onInvoiceUpdate(inv);
   }
@@ -471,6 +486,7 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
             onSelect={setDrawerTx}
             onToggleGroup={handleToggleGroup}
             onOpenGroup={setDrawerGroup}
+            onDismissSuggestion={handleDismissSuggestion}
           />
         )}
       </div>
