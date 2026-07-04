@@ -39,6 +39,17 @@ export const SUPPLIER_KNOWLEDGE = `
 - invoiceNumber: the document number ("Faktura č." / "Daňový doklad č.").
 - category: consumables
 
+## Temu   (online marketplace; no supplier IČO on the document)
+- The PDF is an ORDER SUMMARY ("Shrnutí objednávky" — Temu states it attaches no paper receipt), NOT a formal tax invoice. supplierName: "Temu". supplierICO: null — Temu prints no supplier IČO/DIČ, do not invent one.
+- Usually 2 pages: page 1 has the totals + VAT; page 2 just continues the item list. Amounts are in CZK ("Kč").
+- totalAmount: "Objednávka celkem" (order total, VAT incl.), e.g. 2 930. Use THIS, not "Položky celkem" (items subtotal — it differs once there is shipping or a discount).
+- vatAmount: the number on the "Včetně DPH … Kč" line shown directly under "Objednávka celkem", e.g. 508,52. This VAT is ALREADY inside the total — do NOT add it to or subtract it from totalAmount.
+- invoiceNumber: "ID objednávky" (e.g. PO-053-17846428519032587).
+- invoiceDate: "Čas objednávky", written with a Czech abbreviated month (e.g. "24. dub 2026" = 2026-04-24; dub=April).
+- Do NOT emit lineItems — take the single order total only.
+- IGNORE the per-item "Prodává obchodník" / "Obchodní název" lines (e.g. Guangzhouruiyukeji Co., Ltd.) — those are individual third-party sellers and vary per item; never use them as supplierName/ICO. IGNORE "Fakturační adresa" (Truthseeker s.r.o. — that is us, the buyer).
+- category: consumables
+
 ## Action Retail Czech s.r.o.   (IČO 03439747, verified in ARES)
 - Household / consumables discount store; receipts/branding may show just "Action". Total and VAT extract correctly.
 - supplierICO: ALWAYS 03439747 (digits only, no spaces). Purchases up to 10 000 CZK are issued as a simplified tax document (zjednodušený daňový doklad) that legally need not print the IČO — set 03439747 even when it is not shown on the receipt.
