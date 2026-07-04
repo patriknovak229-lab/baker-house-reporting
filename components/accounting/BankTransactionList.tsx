@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import type { BankTransaction, BankTransactionState } from '@/types/bankTransaction';
-import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
+import { IGNORE_CATEGORIES, RECURRING_COST_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatCurrency, formatDate } from '@/utils/formatters';
@@ -25,6 +25,7 @@ interface Props {
 const STATE_BADGE: Record<BankTransactionState, { label: string; className: string }> = {
   unmatched:      { label: 'Unmatched',      className: 'bg-amber-100 text-amber-700'    },
   reconciled:     { label: 'Reconciled',     className: 'bg-green-100 text-green-700'    },
+  recurring_cost: { label: 'Recurring cost', className: 'bg-blue-100 text-blue-700'      },
   ignored:        { label: 'Ignored',        className: 'bg-gray-100 text-gray-500'      },
   non_deductible: { label: 'Non-deductible', className: 'bg-rose-100 text-rose-600'      },
   revenue:        { label: 'Revenue',        className: 'bg-indigo-100 text-indigo-600'  },
@@ -209,6 +210,9 @@ export default function BankTransactionList({
             const ignoreCat     = tx.ignoreCategory
               ? IGNORE_CATEGORIES.find((c) => c.id === tx.ignoreCategory)?.label
               : undefined;
+            const costCat       = tx.costCategory
+              ? RECURRING_COST_CATEGORIES.find((c) => c.id === tx.costCategory)?.label
+              : undefined;
 
             const revenueBadgeOverride = getRevenueBadgeInfo(tx);
 
@@ -290,6 +294,8 @@ export default function BankTransactionList({
                     <span className="text-xs text-teal-700">
                       {linkedTx.counterpartyName ?? '—'} · {formatCurrency(linkedTx.amount)}
                     </span>
+                  ) : tx.state === 'recurring_cost' ? (
+                    <span className="text-xs text-blue-600">{costCat ?? 'Recurring'}{tx.costNote ? ` · ${tx.costNote}` : ''}</span>
                   ) : ignoreCat ? (
                     <span className="text-xs text-gray-400">{ignoreCat}{tx.ignoreNote ? ` · ${tx.ignoreNote}` : ''}</span>
                   ) : tx.ignoreNote ? (

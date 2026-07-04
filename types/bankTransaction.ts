@@ -3,7 +3,8 @@ export type BankTransactionDirection = 'debit' | 'credit';
 export type BankTransactionState =
   | 'unmatched'      // outgoing, not yet linked to a supplier invoice
   | 'reconciled'     // linked to a SupplierInvoice
-  | 'ignored'        // tagged as non-invoice cost (salary, tax, etc.)
+  | 'recurring_cost' // contractual/standing-order cost with no invoice (rent, parking) — counts in P&L
+  | 'ignored'        // tagged as non-invoice, non-cost (transfer, etc.) — excluded from P&L
   | 'non_deductible' // cost that does not qualify for tax deduction / receipt lost
   | 'revenue'        // incoming payment — not yet categorised
   | 'refund'          // incoming payment that fully refunds a prior debit
@@ -20,6 +21,19 @@ export const IGNORE_CATEGORIES = [
 ] as const;
 
 export type IgnoreCategoryId = typeof IGNORE_CATEGORIES[number]['id'];
+
+/**
+ * Categories for `recurring_cost` — contractual payments that have no supplier
+ * invoice but are real, deductible costs (e.g. rent to owners, parking lease).
+ * All currently map to the P&L "Ostatní provozní náklady" (other operating) section.
+ */
+export const RECURRING_COST_CATEGORIES = [
+  { id: 'rent',    label: 'Rent / lease' },
+  { id: 'parking', label: 'Parking' },
+  { id: 'other',   label: 'Other' },
+] as const;
+
+export type RecurringCostCategoryId = typeof RECURRING_COST_CATEGORIES[number]['id'];
 
 export interface BankTransaction {
   /** Deterministic ID derived from date, amount, direction, counterparty account, and VS */
@@ -58,6 +72,10 @@ export interface BankTransaction {
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
   ignoreCategory?: IgnoreCategoryId;
   ignoreNote?: string;
+  /** RECURRING_COST_CATEGORIES id — set when state === 'recurring_cost' */
+  costCategory?: RecurringCostCategoryId;
+  /** Free note for a recurring cost — set when state === 'recurring_cost' */
+  costNote?: string;
   /** true when the user dismissed the auto-suggested invoice match ("not a match") — hides the list hint */
   suggestionDismissed?: boolean;
   reconciledAt?: string;  // ISO timestamp

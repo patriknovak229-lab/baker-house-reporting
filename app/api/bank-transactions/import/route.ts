@@ -3,9 +3,28 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { BankTransaction, BankTransactionDirection, BankTransactionState } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
+import type { BankCostRule } from '@/types/bankCostWhitelist';
+import { BANK_COST_WHITELIST_KEY, matchesCostRule } from '@/types/bankCostWhitelist';
 
 const TX_KEY = 'baker:bank-transactions';
 const INV_KEY = 'baker:supplier-invoices';
+
+/**
+ * Collapse duplicate-id rows that predate the switch to the bank's unique
+ * transaction id. When two copies share an id, keep the one carrying a
+ * meaningful (non-default) state so a reconciled/classified row isn't lost.
+ */
+function dedupeById(txs: BankTransaction[]): { deduped: BankTransaction[]; removed: number } {
+  const rank = (s: BankTransactionState) => (s === 'unmatched' || s === 'revenue' ? 0 : 1);
+  const byId = new Map<string, BankTransaction>();
+  for (const t of txs) {
+    const cur = byId.get(t.id);
+    if (!cur) { byId.set(t.id, t); continue; }
+    byId.set(t.id, rank(t.state) > rank(cur.state) ? t : cur);
+  }
+  const deduped = [...byId.values()];
+  return { deduped, removed: txs.length - deduped.length };
+}
 
 function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -308,9 +327,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // Load existing transactions to deduplicate
+  // Load existing transactions to deduplicate. Self-heal any legacy duplicate-id
+  // rows (see dedupeById) so re-keyed pairs collapse automatically on import.
   const rawTx = await redis.get(TX_KEY);
-  const existing = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
+  const rawExisting = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
+  const { deduped: existing, removed: selfHealed } = dedupeById(rawExisting);
   const existingIds = new Set(existing.map((t) => t.id));
 
   // A parsed row is already stored if it matches an existing row by the bank ID
@@ -325,10 +346,12 @@ export async function POST(request: Request) {
     const legacyId = makeTxId(t.date, t.amount, t.direction, t.counterpartyAccount ?? '', t.variableSymbol ?? '');
     return !existingIds.has(t.id) && !existingIds.has(legacyId);
   });
-  let duplicates = parsed.length - newTxs.length;
+  const duplicates = parsed.length - newTxs.length;
 
   if (newTxs.length === 0) {
-    return NextResponse.json({ imported: 0, duplicates, autoReconciled: 0, transactions: existing });
+    // Nothing new, but still persist a self-heal collapse if one happened.
+    if (selfHealed > 0) await redis.set(TX_KEY, existing);
+    return NextResponse.json({ imported: 0, duplicates, autoReconciled: 0, autoClassified: 0, transactions: existing });
   }
 
   // Load invoices for auto-reconciliation
@@ -339,12 +362,27 @@ export async function POST(request: Request) {
     (inv) => inv.status === 'pending' && !inv.bankTransactionId,
   );
 
+  // Recurring-cost whitelist — auto-classify contractual standing orders (rent, parking)
+  const rawRules = await redis.get(BANK_COST_WHITELIST_KEY);
+  const costRules = (Array.isArray(rawRules) ? rawRules : []) as BankCostRule[];
+
   const now = new Date().toISOString();
   let autoReconciled = 0;
+  let autoClassified = 0;
   const updatedInvoices = [...invoices];
 
   for (const tx of newTxs) {
     if (tx.direction !== 'debit') continue;
+
+    // Whitelist wins over invoice matching — these payments never have an invoice.
+    const rule = costRules.find((r) => matchesCostRule(tx, r));
+    if (rule) {
+      tx.state = 'recurring_cost';
+      tx.costCategory = rule.costCategory;
+      tx.ignoredAt = now;
+      autoClassified++;
+      continue;
+    }
 
     const matches = pendingInvoices.filter((inv) => isConfidentMatch(tx, inv));
     if (matches.length === 1) {
@@ -384,6 +422,7 @@ export async function POST(request: Request) {
     imported: newTxs.length,
     duplicates,
     autoReconciled,
+    autoClassified,
     transactions: allTransactions,
   });
 }

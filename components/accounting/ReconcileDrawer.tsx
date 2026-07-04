@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
-import type { BankTransaction, IgnoreCategoryId } from '@/types/bankTransaction';
-import { IGNORE_CATEGORIES } from '@/types/bankTransaction';
+import type { BankTransaction, IgnoreCategoryId, RecurringCostCategoryId } from '@/types/bankTransaction';
+import { IGNORE_CATEGORIES, RECURRING_COST_CATEGORIES } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatAmount, formatDate, formatCurrency } from '@/utils/formatters';
@@ -30,7 +30,7 @@ function Detail({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
-type DebitMode  = 'match' | 'ignore' | 'non_deductible';
+type DebitMode  = 'match' | 'recurring_cost' | 'ignore' | 'non_deductible';
 type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement' | 'settlement_group';
 
 export default function ReconcileDrawer({ transaction: tx, transactions, invoices, groups, onSave, onGroupSave, onClose }: Props) {
@@ -38,12 +38,23 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   const suggestion = useMemo(() => (!isCredit ? findSuggestion(tx, invoices) : null), [tx, invoices, isCredit]);
 
   // ── Debit state ───────────────────────────────────────────────────────────
-  const [debitMode, setDebitMode]              = useState<DebitMode>('match');
+  const initialDebitMode: DebitMode =
+    tx.state === 'recurring_cost' ? 'recurring_cost' :
+    tx.state === 'ignored'        ? 'ignore' :
+    tx.state === 'non_deductible' ? 'non_deductible' : 'match';
+  const [debitMode, setDebitMode]              = useState<DebitMode>(initialDebitMode);
   const [selectedInvoiceId, setSelected]       = useState(tx.invoiceId ?? suggestion?.id ?? '');
   const [invoiceSearch, setInvoiceSearch]      = useState('');
   const [ignoreCategory, setIgnoreCat]         = useState<IgnoreCategoryId>((tx.ignoreCategory as IgnoreCategoryId) ?? 'other');
   const [ignoreNote, setIgnoreNote]            = useState(tx.ignoreNote ?? '');
   const [nonDeductNote, setNonDeductNote]      = useState(tx.state === 'non_deductible' ? (tx.ignoreNote ?? '') : '');
+
+  // ── Recurring-cost state ────────────────────────────────────────────────────
+  const [costCategory, setCostCategory]        = useState<RecurringCostCategoryId>((tx.costCategory as RecurringCostCategoryId) ?? 'rent');
+  const [costNote, setCostNote]                = useState(tx.costNote ?? '');
+  const [addToWhitelist, setAddToWhitelist]    = useState(false);
+  const [whitelistLabel, setWhitelistLabel]    = useState(tx.counterpartyName || tx.description || tx.myDescription || '');
+  const [whitelistFixed, setWhitelistFixed]    = useState(true);
 
   // ── Credit state ──────────────────────────────────────────────────────────
   const initialCreditMode: CreditMode =
@@ -187,6 +198,13 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
       } else if (debitMode === 'match') {
         if (!selectedInvoiceId) return;
         body = { action: 'reconcile', invoiceId: selectedInvoiceId };
+      } else if (debitMode === 'recurring_cost') {
+        body = {
+          action: 'recurring_cost',
+          costCategory,
+          costNote: costNote || undefined,
+          whitelist: addToWhitelist ? { label: whitelistLabel || undefined, fixedAmount: whitelistFixed } : undefined,
+        };
       } else if (debitMode === 'ignore') {
         body = { action: 'ignore', ignoreCategory, ignoreNote: ignoreNote || undefined };
       } else {
@@ -229,6 +247,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
       ? groupMode === 'new' ? !!newGroupName.trim() : !!selectedGroupId
       : true
     : debitMode === 'match' ? !!selectedInvoiceId
+    : debitMode === 'recurring_cost' ? !!costCategory
     : debitMode === 'ignore' ? !!ignoreCategory
     : true;
 
@@ -285,7 +304,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             {tx.state === 'reconciled' && tx.reconciledAt && (
               <Detail label="Reconciled at" value={new Date(tx.reconciledAt).toLocaleString('cs-CZ')} />
             )}
-            {(tx.state === 'ignored' || tx.state === 'non_deductible') && tx.ignoredAt && (
+            {(tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'recurring_cost') && tx.ignoredAt && (
               <Detail label="Tagged at" value={new Date(tx.ignoredAt).toLocaleString('cs-CZ')} />
             )}
             {tx.state === 'grouped' && tx.settlementGroupId && (
@@ -532,6 +551,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             <>
               <div className="flex border-b border-gray-100 flex-shrink-0">
                 <button onClick={() => setDebitMode('match')}          className={tabClass(debitMode === 'match')}>Match invoice</button>
+                <button onClick={() => setDebitMode('recurring_cost')} className={tabClass(debitMode === 'recurring_cost')}>Recurring cost</button>
                 <button onClick={() => setDebitMode('ignore')}         className={tabClass(debitMode === 'ignore')}>Not an invoice</button>
                 <button onClick={() => setDebitMode('non_deductible')} className={tabClass(debitMode === 'non_deductible')}>Non-deductible</button>
               </div>
@@ -579,6 +599,62 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                   </div>
                 )}
 
+                {debitMode === 'recurring_cost' && (
+                  <div className="space-y-4">
+                    <p className="text-xs text-gray-500">
+                      For contractual standing orders that never have a supplier invoice
+                      (rent to owners, parking lease). Counts as a cost in the P&amp;L.
+                    </p>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">Cost category</label>
+                      <select value={costCategory} onChange={(e) => setCostCategory(e.target.value as RecurringCostCategoryId)}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400">
+                        {RECURRING_COST_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">Note (optional)</label>
+                      <input type="text" value={costNote} onChange={(e) => setCostNote(e.target.value)}
+                        placeholder="e.g. Rent K201–203 — monthly"
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                    </div>
+
+                    {/* Whitelist — auto-classify future matching payments on import */}
+                    <div className="rounded-lg border border-gray-200 p-3 space-y-3">
+                      <label className="flex items-start gap-2.5 cursor-pointer">
+                        <input type="checkbox" checked={addToWhitelist}
+                          onChange={(e) => setAddToWhitelist(e.target.checked)}
+                          className="mt-0.5 text-indigo-600" />
+                        <span className="text-xs text-gray-700">
+                          Auto-classify future payments like this on import
+                          <span className="block text-gray-400 mt-0.5">
+                            Matches on {tx.counterpartyAccount ? 'account' : tx.variableSymbol ? 'variable symbol' : 'counterparty name'}
+                            {tx.variableSymbol && tx.counterpartyAccount ? ' + variable symbol' : ''}.
+                          </span>
+                        </span>
+                      </label>
+                      {addToWhitelist && (
+                        <div className="space-y-3 pl-6">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">Rule label</label>
+                            <input type="text" value={whitelistLabel} onChange={(e) => setWhitelistLabel(e.target.value)}
+                              placeholder="e.g. Rent K201–203"
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                          </div>
+                          <label className="flex items-center gap-2.5 cursor-pointer">
+                            <input type="checkbox" checked={whitelistFixed}
+                              onChange={(e) => setWhitelistFixed(e.target.checked)}
+                              className="text-indigo-600" />
+                            <span className="text-xs text-gray-700">
+                              Only when the amount matches ({formatAmount(tx.amount)}) — leave off for dynamic rent
+                            </span>
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {debitMode === 'ignore' && (
                   <div className="space-y-4">
                     <div>
@@ -618,7 +694,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
         {/* Footer */}
         <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
           <div>
-            {(tx.state === 'reconciled' || tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'refund' || tx.state === 'partial_refund' || tx.state === 'net_settlement' || tx.state === 'grouped') && (
+            {(tx.state === 'reconciled' || tx.state === 'recurring_cost' || tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'refund' || tx.state === 'partial_refund' || tx.state === 'net_settlement' || tx.state === 'grouped') && (
               <button onClick={handleUnmatch} disabled={saving} className="text-xs text-gray-400 hover:text-red-500">
                 {tx.state === 'grouped' ? 'Remove from group' : `Reset to ${isCredit ? 'revenue' : 'unmatched'}`}
               </button>

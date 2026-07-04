@@ -6,6 +6,7 @@ interface ImportResult {
   imported: number;
   duplicates: number;
   autoReconciled: number;
+  autoClassified?: number;
   transactions: BankTransaction[];
 }
 

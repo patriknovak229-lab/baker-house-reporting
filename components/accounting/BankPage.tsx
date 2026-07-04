@@ -13,6 +13,7 @@ interface ImportResult {
   imported: number;
   duplicates: number;
   autoReconciled: number;
+  autoClassified?: number;
   transactions: BankTransaction[];
 }
 
@@ -32,6 +33,7 @@ const FILTERS: { value: FilterState; label: string }[] = [
   { value: 'unmatched',     label: 'Unmatched costs' },
   { value: 'revenue',       label: 'Unmatched revenue' },
   { value: 'reconciled',    label: 'Reconciled' },
+  { value: 'recurring_cost',label: 'Recurring costs' },
   { value: 'grouped',       label: 'Settlement groups' },
   { value: 'net_settlement',label: 'Net settlements' },
   { value: 'refund',        label: 'Refunds' },
@@ -89,6 +91,19 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
   const [importBanner, setImportBanner]   = useState<ImportResult | null>(null);
   const [matching, setMatching]           = useState(false);
   const [matchBanner, setMatchBanner]     = useState<number | null>(null);
+  const [cursorYear, setCursorYear]       = useState(() => new Date().getFullYear());
+  const [cursorMonth, setCursorMonth]     = useState(() => new Date().getMonth()); // 0-indexed
+
+  function shiftMonth(delta: number) {
+    const next = cursorMonth + delta;
+    setCursorYear((y) => y + Math.floor(next / 12));
+    setCursorMonth(((next % 12) + 12) % 12);
+  }
+  function resetMonth() {
+    const d = new Date();
+    setCursorYear(d.getFullYear());
+    setCursorMonth(d.getMonth());
+  }
 
   const loadData = useCallback(async () => {
     try {
@@ -205,7 +220,7 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
           }
         }
       }
-    } else if (updated.state === 'unmatched' || updated.state === 'ignored' || updated.state === 'non_deductible' || updated.state === 'revenue') {
+    } else if (updated.state === 'unmatched' || updated.state === 'recurring_cost' || updated.state === 'ignored' || updated.state === 'non_deductible' || updated.state === 'revenue') {
       const prev = transactions.find((t) => t.id === updated.id);
       if (prev?.invoiceId) {
         const inv = invoices.find((i) => i.id === prev.invoiceId);
@@ -301,18 +316,21 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
     return result;
   }, [transactions, filter, periodRange, search]);
 
-  // ── Summary stats ──────────────────────────────────────────────────────────
-  const now = new Date();
-  const thisMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const yearStart = `${now.getFullYear()}-01-01`;
+  // ── Summary stats — driven by the month cursor so the cards can browse history ─
+  const monthPrefix = `${cursorYear}-${String(cursorMonth + 1).padStart(2, '0')}`;
+  const yearStartC  = `${cursorYear}-01-01`;
+  const yearEndC    = `${cursorYear}-12-31`;
+  const monthLabel  = new Date(cursorYear, cursorMonth, 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  const nowRef       = new Date();
+  const isCurrentMonth = cursorYear === nowRef.getFullYear() && cursorMonth === nowRef.getMonth();
 
   const debits  = transactions.filter((t) => t.direction === 'debit');
   const credits = transactions.filter((t) => t.direction === 'credit');
 
-  const monthOut  = debits .filter((t) => t.date.startsWith(thisMonthPrefix)).reduce((s, t) => s + t.amount, 0);
-  const yearOut   = debits .filter((t) => t.date >= yearStart).reduce((s, t) => s + t.amount, 0);
-  const monthIn   = credits.filter((t) => t.date.startsWith(thisMonthPrefix)).reduce((s, t) => s + t.amount, 0);
-  const yearIn    = credits.filter((t) => t.date >= yearStart).reduce((s, t) => s + t.amount, 0);
+  const monthOut  = debits .filter((t) => t.date.startsWith(monthPrefix)).reduce((s, t) => s + t.amount, 0);
+  const yearOut   = debits .filter((t) => t.date >= yearStartC && t.date <= yearEndC).reduce((s, t) => s + t.amount, 0);
+  const monthIn   = credits.filter((t) => t.date.startsWith(monthPrefix)).reduce((s, t) => s + t.amount, 0);
+  const yearIn    = credits.filter((t) => t.date >= yearStartC && t.date <= yearEndC).reduce((s, t) => s + t.amount, 0);
 
   const unmatchedCosts   = debits .filter((t) => t.state === 'unmatched').length;
   const unmatchedRevenue = credits.filter((t) => t.state === 'revenue').length;
@@ -360,6 +378,7 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
               <p className="text-sm font-medium text-green-800">Import complete</p>
               <p className="text-xs text-green-600 mt-0.5">
                 {importBanner.imported} imported · {importBanner.duplicates} duplicates skipped · {importBanner.autoReconciled} auto-reconciled
+                {importBanner.autoClassified ? ` · ${importBanner.autoClassified} auto-classified` : ''}
               </p>
             </div>
           </div>
@@ -383,22 +402,42 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
         </div>
       )}
 
+      {/* Month navigator — drives the month/year summary cards */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => shiftMonth(-1)}
+          className="w-7 h-7 flex items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+          title="Previous month"
+        >‹</button>
+        <span className="text-sm font-medium text-gray-700 w-28 text-center">{monthLabel}</span>
+        <button
+          onClick={() => shiftMonth(1)}
+          className="w-7 h-7 flex items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+          title="Next month"
+        >›</button>
+        {!isCurrentMonth && (
+          <button onClick={resetMonth} className="text-xs text-indigo-600 hover:text-indigo-700 ml-1">
+            This month
+          </button>
+        )}
+      </div>
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Out · this month</p>
+          <p className="text-xs text-gray-500 mb-1">Out · {monthLabel}</p>
           <p className="text-lg font-semibold text-gray-800">{formatCurrency(monthOut)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Out · this year</p>
+          <p className="text-xs text-gray-500 mb-1">Out · {cursorYear}</p>
           <p className="text-lg font-semibold text-gray-800">{formatCurrency(yearOut)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">In · this month</p>
+          <p className="text-xs text-gray-500 mb-1">In · {monthLabel}</p>
           <p className="text-lg font-semibold text-green-700">{formatCurrency(monthIn)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">In · this year</p>
+          <p className="text-xs text-gray-500 mb-1">In · {cursorYear}</p>
           <p className="text-lg font-semibold text-green-700">{formatCurrency(yearIn)}</p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-4">

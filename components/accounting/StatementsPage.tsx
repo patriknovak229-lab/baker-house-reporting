@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/utils/formatters';
-import type { PLData, PLBankTx } from '@/app/api/statements/profit-loss/route';
+import type { PLData, PLBankTx, PLRecurringCost } from '@/app/api/statements/profit-loss/route';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 
@@ -154,6 +154,26 @@ function RevenueDetailRows({ rows }: { rows: RevenueRow[] }) {
   );
 }
 
+function RecurringCostDetailRows({ costs }: { costs: PLRecurringCost[] }) {
+  return (
+    <>
+      {costs.map((c) => (
+        <tr key={c.id} className="bg-indigo-50/30 text-xs border-b border-gray-50">
+          <td className="px-4 py-2 text-gray-400 pl-16">{c.date}</td>
+          <td className="px-4 py-2 text-gray-600">
+            {c.counterpartyName ?? c.note ?? '—'}
+            <span className="ml-1 text-gray-400 italic">
+              ({c.costCategory ?? 'recurring'} · no invoice)
+            </span>
+          </td>
+          <td className="px-4 py-2 text-right text-gray-700">{formatCurrency(c.amount)}</td>
+          <td />
+        </tr>
+      ))}
+    </>
+  );
+}
+
 function OtaDetailRows({ txs }: { txs: PLBankTx[] }) {
   return (
     <>
@@ -201,6 +221,9 @@ function exportCSV(data: PLData) {
   }
   for (const inv of data.costs.otherInvoices) {
     rows.push([inv.invoiceDate, 'Cost', 'E. Ostatní provozní náklady', inv.supplierName, inv.invoiceNumber, String(inv.amountCZK)]);
+  }
+  for (const c of data.costs.recurringCosts) {
+    rows.push([c.date, 'Cost', 'E. Ostatní provozní náklady', c.counterpartyName ?? c.note ?? '', c.costCategory ?? 'recurring', String(c.amount)]);
   }
 
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -429,12 +452,15 @@ export default function StatementsPage() {
               <SectionRow
                 code="E."
                 label="Ostatní provozní náklady"
+                sublabel={data.costs.recurringCosts.length > 0 ? 'incl. rent · parking' : undefined}
                 amount={data.costs.otherOperating}
-                itemCount={data.costs.otherInvoices.length}
+                itemCount={data.costs.otherInvoices.length + data.costs.recurringCosts.length}
+                countLabel="items"
                 expanded={expanded.has('other')}
                 onToggle={() => toggle('other')}
               >
                 <SupplierDetailRows rows={supplierRows(data.costs.otherInvoices)} />
+                <RecurringCostDetailRows costs={data.costs.recurringCosts} />
               </SectionRow>
 
               {/* spacer */}

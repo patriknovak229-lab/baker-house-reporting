@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { BankTransaction, IgnoreCategoryId } from '@/types/bankTransaction';
+import type { BankTransaction, IgnoreCategoryId, RecurringCostCategoryId } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
+import type { BankCostRule } from '@/types/bankCostWhitelist';
+import { BANK_COST_WHITELIST_KEY, buildRuleFromTx } from '@/types/bankCostWhitelist';
 
 const TX_KEY = 'baker:bank-transactions';
 const INV_KEY = 'baker:supplier-invoices';
@@ -16,13 +18,14 @@ function getRedis(): Redis | null {
 
 type ReconcileBody      = { action: 'reconcile'; invoiceId: string };
 type IgnoreBody         = { action: 'ignore'; ignoreCategory: IgnoreCategoryId; ignoreNote?: string };
+type RecurringCostBody  = { action: 'recurring_cost'; costCategory: RecurringCostCategoryId; costNote?: string; whitelist?: { label?: string; fixedAmount: boolean } };
 type UnmatchBody        = { action: 'unmatch' };
 type NoteBody           = { action: 'note'; note: string };
 type RefundBody         = { action: 'refund'; linkedTransactionId?: string; partial: boolean };
 type NonDeductibleBody  = { action: 'non_deductible'; ignoreNote?: string };
 type NetSettlementBody  = { action: 'net_settlement'; deductedInvoiceIds: string[]; grossAmount?: number };
 type DismissSuggestBody = { action: 'dismiss_suggestion' };
-type PutBody = ReconcileBody | IgnoreBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody | DismissSuggestBody;
+type PutBody = ReconcileBody | IgnoreBody | RecurringCostBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody | DismissSuggestBody;
 
 export async function PUT(
   request: Request,
@@ -73,6 +76,8 @@ export async function PUT(
     tx.linkedTransactionId = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = undefined;
+    tx.costCategory = undefined;
+    tx.costNote = undefined;
     tx.ignoredAt = undefined;
     tx.reconciledAt = now;
 
@@ -103,7 +108,48 @@ export async function PUT(
     tx.reconciledAt = undefined;
     tx.ignoreCategory = body.ignoreCategory;
     tx.ignoreNote = body.ignoreNote || undefined;
+    tx.costCategory = undefined;
+    tx.costNote = undefined;
     tx.ignoredAt = now;
+
+  } else if (body.action === 'recurring_cost') {
+    // Un-link any previously matched invoice
+    if (tx.invoiceId) {
+      const prevIdx = invoices.findIndex((i) => i.id === tx.invoiceId);
+      if (prevIdx !== -1) {
+        invoices[prevIdx] = {
+          ...invoices[prevIdx],
+          status: 'pending',
+          bankTransactionId: undefined,
+          reconciledAt: undefined,
+        };
+      }
+    }
+
+    tx.state = 'recurring_cost';
+    tx.invoiceId = undefined;
+    tx.linkedTransactionId = undefined;
+    tx.reconciledAt = undefined;
+    tx.ignoreCategory = undefined;
+    tx.ignoreNote = undefined;
+    tx.costCategory = body.costCategory;
+    tx.costNote = body.costNote || undefined;
+    tx.ignoredAt = now;
+
+    // Optionally remember this payment so future matching debits auto-classify on import.
+    if (body.whitelist) {
+      const rule = buildRuleFromTx(tx, {
+        label: body.whitelist.label,
+        costCategory: body.costCategory,
+        fixedAmount: body.whitelist.fixedAmount,
+      });
+      if (rule) {
+        const rawRules = await redis.get(BANK_COST_WHITELIST_KEY);
+        const rules = (Array.isArray(rawRules) ? rawRules : []) as BankCostRule[];
+        rules.push(rule);
+        await redis.set(BANK_COST_WHITELIST_KEY, rules);
+      }
+    }
 
   } else if (body.action === 'non_deductible') {
     // Un-link any previously matched invoice
@@ -125,6 +171,8 @@ export async function PUT(
     tx.reconciledAt = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = body.ignoreNote || undefined;
+    tx.costCategory = undefined;
+    tx.costNote = undefined;
     tx.ignoredAt = now;
 
   } else if (body.action === 'net_settlement') {
@@ -163,6 +211,8 @@ export async function PUT(
     tx.linkedTransactionId = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = undefined;
+    tx.costCategory = undefined;
+    tx.costNote = undefined;
     tx.ignoredAt = undefined;
     tx.reconciledAt = now;
 
@@ -200,6 +250,8 @@ export async function PUT(
     tx.linkedTransactionId = body.linkedTransactionId || undefined;
     tx.invoiceId = undefined;
     tx.ignoreCategory = undefined;
+    tx.costCategory = undefined;
+    tx.costNote = undefined;
     tx.ignoredAt = undefined;
     tx.reconciledAt = now;
 
@@ -269,6 +321,8 @@ export async function PUT(
     tx.reconciledAt = undefined;
     tx.ignoreCategory = undefined;
     tx.ignoreNote = undefined;
+    tx.costCategory = undefined;
+    tx.costNote = undefined;
     tx.ignoredAt = undefined;
   }
 

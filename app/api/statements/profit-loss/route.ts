@@ -25,6 +25,16 @@ export interface PLBankTx {
   state: string;            // 'net_settlement' | 'grouped'
 }
 
+/** A recurring/contractual cost paid via bank (rent, parking) with no invoice */
+export interface PLRecurringCost {
+  id: string;
+  date: string;
+  counterpartyName?: string;
+  amount: number;
+  costCategory?: string;
+  note?: string;
+}
+
 export interface PLData {
   from: string;
   to: string;
@@ -43,12 +53,15 @@ export interface PLData {
   costs: {
     materialsEnergy: number;
     personnelServices: number;
-    /** Operating costs — OTA fee invoices already covered by net payouts are excluded */
+    /** Operating costs — OTA fee invoices already covered by net payouts are excluded.
+     *  Includes recurring bank costs (rent, parking) that have no supplier invoice. */
     otherOperating: number;
     total: number;
     materialsInvoices: SupplierInvoice[];
     personnelInvoices: SupplierInvoice[];
     otherInvoices: SupplierInvoice[];
+    /** Recurring/contractual costs paid via bank (no invoice) — part of otherOperating */
+    recurringCosts: PLRecurringCost[];
   };
   operatingResult: number;
 }
@@ -123,9 +136,26 @@ export async function GET(req: NextRequest) {
     (inv) => !MATERIALS_CATS.includes(inv.category) && !PERSONNEL_CATS.includes(inv.category),
   );
 
+  // ── Recurring bank costs (rent, parking) — no invoice, but real costs ────
+  const recurringCostTxs = bankTxs.filter(
+    (tx) => tx.state === 'recurring_cost'
+      && tx.direction === 'debit'
+      && tx.date >= from
+      && tx.date <= to,
+  );
+  const recurringCosts: PLRecurringCost[] = recurringCostTxs.map((tx) => ({
+    id: tx.id,
+    date: tx.date,
+    counterpartyName: tx.counterpartyName,
+    amount: tx.amount,
+    costCategory: tx.costCategory,
+    note: tx.costNote,
+  }));
+  const recurringCostTotal = recurringCostTxs.reduce((s, tx) => s + tx.amount, 0);
+
   const materialsEnergy   = materialsInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
   const personnelServices = personnelInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const otherOperating    = otherInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
+  const otherOperating    = otherInvoices.reduce((s, inv) => s + inv.amountCZK, 0) + recurringCostTotal;
   const costsTotal        = materialsEnergy + personnelServices + otherOperating;
 
   const otaTransactions: PLBankTx[] = otaTxs.map((tx) => ({
@@ -157,6 +187,7 @@ export async function GET(req: NextRequest) {
       materialsInvoices,
       personnelInvoices,
       otherInvoices,
+      recurringCosts,
     },
     operatingResult: revenueTotal - costsTotal,
   };
