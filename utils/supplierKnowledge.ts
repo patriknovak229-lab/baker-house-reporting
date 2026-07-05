@@ -98,4 +98,13 @@ export const SUPPLIER_KNOWLEDGE = `
 
 ## Google Cloud EMEA Limited   (Irish entity, VAT prefixed IE — not a Czech IČO)
 - Cloud SaaS. category: software
+
+## Beds24 GmbH   (German channel-manager SaaS; VAT DE328454604 — not a Czech IČO)
+- Our channel manager. The invoice tops up prepaid "Beds24 credit" and is billed in EUR. invoiceCurrency: EUR — never default to CZK; the amount holds the EUR number exactly as shown.
+- totalAmount: the "Charge" value in the top "Invoice" table (gross, VAT incl.), e.g. 71.81 (or 43.62 on a smaller month). This is the amount actually paid and what hits the bank — it is THE field that matters.
+- CRITICAL: do NOT use the "NN.NN EUR Beds24 credit" figure in the Description (e.g. 59.35) — that is the NET credit topped up, not the charge. Likewise do NOT use "Net Payment" (e.g. 59.35). These are net-of-VAT and lower than the real charge.
+- vatAmount: the "Payment includes 21% VAT" line in the "Payment Completed" section, e.g. 12.46.
+- invoiceNumber: "Invoice Number" (e.g. B2810172). invoiceDate: "Invoice Date" (e.g. Jul 1, 2026 → 2026-07-01).
+- supplierICO: Beds24's German VAT DE328454604 (footer). CRITICAL: never use our buyer IČO 19876106 / the "To:" Truthseeker s.r.o. block.
+- category: software
 `;
