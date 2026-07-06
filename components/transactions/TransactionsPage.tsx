@@ -553,13 +553,17 @@ export default function TransactionsPage() {
     [allUpcomingUnresolved],
   );
 
+  // Early check-in / late checkout requests become moot once their date
+  // passes (the arrival/departure already happened), so — unlike the generic
+  // pending-tasks pill — these two banners drop overdue rows and show only
+  // upcoming (today … +7). Otherwise past requests linger indefinitely.
   const upcomingEarlyCheckins = useMemo(
-    () => allUpcomingUnresolved.filter((x) => x.issue.category === "earlyCheckin"),
+    () => allUpcomingUnresolved.filter((x) => x.issue.category === "earlyCheckin" && !x.overdue),
     [allUpcomingUnresolved],
   );
 
   const upcomingLateCheckouts = useMemo(
-    () => allUpcomingUnresolved.filter((x) => x.issue.category === "lateCheckout"),
+    () => allUpcomingUnresolved.filter((x) => x.issue.category === "lateCheckout" && !x.overdue),
     [allUpcomingUnresolved],
   );
 
