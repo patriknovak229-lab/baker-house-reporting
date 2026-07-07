@@ -78,6 +78,12 @@ function getPeriodRange(preset: PeriodPreset): { from: string; to: string } | nu
   return null;
 }
 
+/** All supplier invoices linked to a debit (single legacy id or split-delivery array). */
+function linkedInvoiceIds(tx: BankTransaction): string[] {
+  if (tx.invoiceIds && tx.invoiceIds.length > 0) return tx.invoiceIds;
+  return tx.invoiceId ? [tx.invoiceId] : [];
+}
+
 export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTransactionsChange }: Props) {
   const [groups, setGroups]               = useState<SettlementGroup[]>([]);
   const [loading, setLoading]             = useState(true);
@@ -132,8 +138,9 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
         setTransactions(data.transactions);
         setMatchBanner(data.matched);
         for (const tx of data.transactions) {
-          if (tx.state === 'reconciled' && tx.invoiceId) {
-            const inv = invoices.find((i) => i.id === tx.invoiceId);
+          if (tx.state !== 'reconciled') continue;
+          for (const invId of linkedInvoiceIds(tx)) {
+            const inv = invoices.find((i) => i.id === invId);
             if (inv && inv.status !== 'reconciled') {
               onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: tx.id, reconciledAt: tx.reconciledAt });
             }
@@ -150,8 +157,9 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
     setShowImport(false);
     setImportBanner(result);
     for (const tx of result.transactions) {
-      if (tx.state === 'reconciled' && tx.invoiceId) {
-        const inv = invoices.find((i) => i.id === tx.invoiceId);
+      if (tx.state !== 'reconciled') continue;
+      for (const invId of linkedInvoiceIds(tx)) {
+        const inv = invoices.find((i) => i.id === invId);
         if (inv && inv.status !== 'reconciled') {
           onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: tx.id, reconciledAt: tx.reconciledAt });
         }
@@ -190,9 +198,19 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
     const isStillSettledElsewhere = (invId: string, updatedId: string) =>
       transactions.some((t) => t.id !== updatedId && (t.deductedInvoiceIds ?? []).includes(invId));
 
-    if (updated.state === 'reconciled' && updated.invoiceId) {
-      const inv = invoices.find((i) => i.id === updated.invoiceId);
-      if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
+    if (updated.state === 'reconciled') {
+      const prev = transactions.find((t) => t.id === updated.id);
+      const prevIds = prev ? linkedInvoiceIds(prev) : [];
+      const newIds  = linkedInvoiceIds(updated);
+      for (const invId of newIds) {
+        const inv = invoices.find((i) => i.id === invId);
+        if (inv) onInvoiceUpdate({ ...inv, status: 'reconciled', bankTransactionId: updated.id, reconciledAt: updated.reconciledAt });
+      }
+      // Invoices dropped from the selection go back to pending
+      for (const invId of prevIds.filter((x) => !newIds.includes(x))) {
+        const inv = invoices.find((i) => i.id === invId);
+        if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
+      }
     } else if (updated.state === 'net_settlement') {
       for (const invId of updated.deductedInvoiceIds ?? []) {
         const inv = invoices.find((i) => i.id === invId);
@@ -222,8 +240,8 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
       }
     } else if (updated.state === 'unmatched' || updated.state === 'recurring_cost' || updated.state === 'ignored' || updated.state === 'non_deductible' || updated.state === 'revenue') {
       const prev = transactions.find((t) => t.id === updated.id);
-      if (prev?.invoiceId) {
-        const inv = invoices.find((i) => i.id === prev.invoiceId);
+      for (const invId of prev ? linkedInvoiceIds(prev) : []) {
+        const inv = invoices.find((i) => i.id === invId);
         if (inv) onInvoiceUpdate({ ...inv, status: 'pending', bankTransactionId: undefined, reconciledAt: undefined });
       }
       for (const prevId of prev?.deductedInvoiceIds ?? []) {

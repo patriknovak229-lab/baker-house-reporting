@@ -205,7 +205,11 @@ export default function BankTransactionList({
             // Normal transaction row
             const { tx, inGroup } = row;
             const badge = STATE_BADGE[tx.state];
-            const linkedInvoice = tx.invoiceId ? invoiceMap.get(tx.invoiceId) : undefined;
+            const linkedInvoiceIdList = tx.invoiceIds?.length ? tx.invoiceIds : (tx.invoiceId ? [tx.invoiceId] : []);
+            const linkedInvoices = linkedInvoiceIdList
+              .map((invId) => invoiceMap.get(invId))
+              .filter((inv): inv is SupplierInvoice => !!inv);
+            const linkedInvoice = linkedInvoices[0];
             const linkedTx      = tx.linkedTransactionId ? txMap.get(tx.linkedTransactionId) : undefined;
             const ignoreCat     = tx.ignoreCategory
               ? IGNORE_CATEGORIES.find((c) => c.id === tx.ignoreCategory)?.label
@@ -285,6 +289,11 @@ export default function BankTransactionList({
                   ) : tx.revenueInvoiceId ? (
                     <span className="text-xs text-indigo-600 font-medium">
                       Revenue invoice linked
+                    </span>
+                  ) : linkedInvoices.length > 1 ? (
+                    <span className="text-xs text-gray-700"
+                      title={linkedInvoices.map((inv) => `${inv.invoiceNumber} · ${inv.supplierName}`).join('\n')}>
+                      {linkedInvoices.length} invoices · {linkedInvoices[0].supplierName}
                     </span>
                   ) : linkedInvoice ? (
                     <span className="text-xs text-gray-700">

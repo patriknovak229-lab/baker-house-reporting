@@ -103,7 +103,7 @@ export async function POST(request: Request) {
     const invIdx = invoices.findIndex((i) => i.id === inv.id);
     if (txIdx === -1 || invIdx === -1) continue;
 
-    transactions[txIdx] = { ...transactions[txIdx], state: 'reconciled', invoiceId: inv.id, reconciledAt: now };
+    transactions[txIdx] = { ...transactions[txIdx], state: 'reconciled', invoiceId: inv.id, invoiceIds: [inv.id], reconciledAt: now };
     invoices[invIdx]    = { ...invoices[invIdx], status: 'reconciled', bankTransactionId: tx.id, reconciledAt: now };
 
     // Remove from pool so the same invoice can't match twice

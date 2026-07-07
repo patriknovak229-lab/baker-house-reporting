@@ -36,6 +36,11 @@ type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement' | 'set
 export default function ReconcileDrawer({ transaction: tx, transactions, invoices, groups, onSave, onGroupSave, onClose }: Props) {
   const isCredit  = tx.direction === 'credit';
   const suggestion = useMemo(() => (!isCredit ? findSuggestion(tx, invoices) : null), [tx, invoices, isCredit]);
+  // Invoices already linked to this debit (single legacy id or split-delivery array)
+  const linkedIds = useMemo(
+    () => (tx.invoiceIds?.length ? tx.invoiceIds : (tx.invoiceId ? [tx.invoiceId] : [])),
+    [tx.invoiceIds, tx.invoiceId],
+  );
 
   // ── Debit state ───────────────────────────────────────────────────────────
   const initialDebitMode: DebitMode =
@@ -43,7 +48,10 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
     tx.state === 'ignored'        ? 'ignore' :
     tx.state === 'non_deductible' ? 'non_deductible' : 'match';
   const [debitMode, setDebitMode]              = useState<DebitMode>(initialDebitMode);
-  const [selectedInvoiceId, setSelected]       = useState(tx.invoiceId ?? suggestion?.id ?? '');
+  const initialSelectedInvoiceIds = tx.invoiceIds?.length
+    ? tx.invoiceIds
+    : (tx.invoiceId ? [tx.invoiceId] : (suggestion ? [suggestion.id] : []));
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(new Set(initialSelectedInvoiceIds));
   const [invoiceSearch, setInvoiceSearch]      = useState('');
   const [ignoreCategory, setIgnoreCat]         = useState<IgnoreCategoryId>((tx.ignoreCategory as IgnoreCategoryId) ?? 'other');
   const [ignoreNote, setIgnoreNote]            = useState(tx.ignoreNote ?? '');
@@ -87,14 +95,14 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
 
   // ── Candidate invoices for debit matching ─────────────────────────────────
   const candidateInvoices = useMemo(() => invoices
-    .filter((inv) => inv.status === 'pending' || inv.id === tx.invoiceId)
+    .filter((inv) => inv.status === 'pending' || linkedIds.includes(inv.id))
     .filter((inv) => {
       if (!invoiceSearch) return true;
       const q = invoiceSearch.toLowerCase();
       return inv.supplierName.toLowerCase().includes(q) || inv.invoiceNumber.toLowerCase().includes(q);
     })
     .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate)),
-  [invoices, tx.invoiceId, invoiceSearch]);
+  [invoices, linkedIds, invoiceSearch]);
 
   // ── Candidate invoices for net settlement ────────────────────────────────
   const settlementCandidates = useMemo(() => invoices
@@ -133,6 +141,20 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
       .filter((g) => !q || g.name.toLowerCase().includes(q))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [groups, groupSearch]);
+
+  // Sum of the currently-selected invoices (for the split-delivery running total)
+  const selectedSum = useMemo(
+    () => invoices.filter((inv) => selectedInvoiceIds.has(inv.id)).reduce((s, inv) => s + inv.amountCZK, 0),
+    [invoices, selectedInvoiceIds],
+  );
+
+  function toggleInvoice(invId: string) {
+    setSelectedInvoiceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(invId)) next.delete(invId); else next.add(invId);
+      return next;
+    });
+  }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   async function put(body: object): Promise<BankTransaction | null> {
@@ -196,8 +218,8 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
           };
         }
       } else if (debitMode === 'match') {
-        if (!selectedInvoiceId) return;
-        body = { action: 'reconcile', invoiceId: selectedInvoiceId };
+        if (selectedInvoiceIds.size === 0) return;
+        body = { action: 'reconcile', invoiceIds: [...selectedInvoiceIds] };
       } else if (debitMode === 'recurring_cost') {
         body = {
           action: 'recurring_cost',
@@ -246,7 +268,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
     ? creditMode === 'settlement_group'
       ? groupMode === 'new' ? !!newGroupName.trim() : !!selectedGroupId
       : true
-    : debitMode === 'match' ? !!selectedInvoiceId
+    : debitMode === 'match' ? selectedInvoiceIds.size > 0
     : debitMode === 'recurring_cost' ? !!costCategory
     : debitMode === 'ignore' ? !!ignoreCategory
     : true;
@@ -559,13 +581,16 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
               <div className="px-5 py-4">
                 {debitMode === 'match' && (
                   <div className="space-y-3">
-                    {suggestion && !tx.invoiceId && (
+                    <p className="text-xs text-gray-500">
+                      Pick one invoice — or several when a single payment covers multiple invoices (e.g. an order split into separate deliveries).
+                    </p>
+                    {suggestion && linkedIds.length === 0 && (
                       <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
                         <p className="text-xs font-semibold text-indigo-700 mb-2">Suggested match</p>
                         <label className="flex items-start gap-3 cursor-pointer">
-                          <input type="radio" name="invoice" value={suggestion.id}
-                            checked={selectedInvoiceId === suggestion.id}
-                            onChange={() => setSelected(suggestion.id)}
+                          <input type="checkbox"
+                            checked={selectedInvoiceIds.has(suggestion.id)}
+                            onChange={() => toggleInvoice(suggestion.id)}
                             className="mt-0.5 text-indigo-600" />
                           <div>
                             <p className="text-sm font-medium text-gray-800">{suggestion.supplierName}</p>
@@ -581,21 +606,35 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                     <div className="space-y-1.5 max-h-80 overflow-y-auto">
                       {candidateInvoices.length === 0 ? (
                         <p className="text-xs text-gray-400 text-center py-4">No pending invoices found.</p>
-                      ) : candidateInvoices.map((inv) => (
-                        <label key={inv.id}
-                          className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${selectedInvoiceId === inv.id ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                          <input type="radio" name="invoice" value={inv.id}
-                            checked={selectedInvoiceId === inv.id}
-                            onChange={() => setSelected(inv.id)}
-                            className="mt-0.5 text-indigo-600 flex-shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-gray-800 truncate">{inv.supplierName}</p>
-                            <p className="text-xs text-gray-500">{inv.invoiceNumber} · {formatDate(inv.invoiceDate)}</p>
-                          </div>
-                          <p className="text-sm font-medium text-gray-800 whitespace-nowrap flex-shrink-0">{formatAmount(inv.amountCZK, inv.invoiceCurrency)}</p>
-                        </label>
-                      ))}
+                      ) : candidateInvoices.map((inv) => {
+                        const checked = selectedInvoiceIds.has(inv.id);
+                        return (
+                          <label key={inv.id}
+                            className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${checked ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                            <input type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleInvoice(inv.id)}
+                              className="mt-0.5 text-indigo-600 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-gray-800 truncate">{inv.supplierName}</p>
+                              <p className="text-xs text-gray-500">{inv.invoiceNumber} · {formatDate(inv.invoiceDate)}</p>
+                            </div>
+                            <p className="text-sm font-medium text-gray-800 whitespace-nowrap flex-shrink-0">{formatAmount(inv.amountCZK, inv.invoiceCurrency)}</p>
+                          </label>
+                        );
+                      })}
                     </div>
+                    {selectedInvoiceIds.size > 1 && (
+                      <div className="flex items-center justify-between text-xs bg-gray-50 rounded-lg px-3 py-2">
+                        <span className="text-gray-500">{selectedInvoiceIds.size} invoices selected</span>
+                        <span className="text-gray-700">
+                          Σ {formatAmount(selectedSum)} · payment {formatAmount(tx.amount)}
+                          {Math.abs(selectedSum - tx.amount) > 1 && (
+                            <span className="text-amber-600"> · Δ {formatAmount(selectedSum - tx.amount)}</span>
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 

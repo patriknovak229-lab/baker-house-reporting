@@ -389,6 +389,7 @@ export async function POST(request: Request) {
       const inv = matches[0];
       tx.state = 'reconciled';
       tx.invoiceId = inv.id;
+      tx.invoiceIds = [inv.id];
       tx.reconciledAt = now;
 
       // Update invoice in the working copy

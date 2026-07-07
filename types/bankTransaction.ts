@@ -57,8 +57,13 @@ export interface BankTransaction {
   /** Original currency code, e.g. 'USD', 'EUR' (set when different from account currency) */
   originalCurrency?: string;
   state: BankTransactionState;
-  /** SupplierInvoice.id — set when state === 'reconciled' */
+  /** SupplierInvoice.id — set when state === 'reconciled'. For a single-invoice
+   *  match this is the invoice; for a multi-invoice match it mirrors invoiceIds[0]
+   *  (kept for backward compatibility with readers that expect one id). */
   invoiceId?: string;
+  /** SupplierInvoice.ids — set when state === 'reconciled' and one payment covers
+   *  several invoices (e.g. an order split into multiple deliveries/invoices). */
+  invoiceIds?: string[];
   /** BankTransaction.id of the debit being refunded — set when state === 'refund' | 'partial_refund' */
   linkedTransactionId?: string;
   /** Total guest-facing amount before OTA deducted fees — set when state === 'net_settlement' */
