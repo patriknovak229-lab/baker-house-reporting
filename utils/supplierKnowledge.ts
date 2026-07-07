@@ -67,6 +67,15 @@ export const SUPPLIER_KNOWLEDGE = `
 ## JYSK s.r.o.   (IČO 26760746)
 - Home-furnishings retailer. category: equipment
 
+## Textilomanie s.r.o. – Vyprodejpovleceni.cz   (IČ 04788494, DIČ CZ04788494)
+- Home-textiles / furnishings e-shop (ABRA Flexi invoice, "Faktura - daňový doklad"). Always PREPAID by card and stamped "ZAPLACENO - NEPLAŤTE", so the amount-to-pay ("k úhradě") nets to 0. CRITICAL: do NOT extract 0 as the total.
+- The layout is messy: a line "Odpočet zálohy Z…" carries a NEGATIVE amount (e.g. -3 770,00) that cancels the goods — that is the prepayment already made, not a discount. The real cost is its magnitude.
+- totalAmount: the invoice value INCL. VAT = goods + shipping = the magnitude of the "Odpočet zálohy" line (e.g. 3 770,00). Cross-check: equals the "Rekapitulace DPH" 21% row Základ + DPH (3 115,70 + 654,30 = 3 770,00), and the sum of the positive item rows' "Celkem s DPH".
+- vatAmount: the DPH from the "Rekapitulace DPH" 21% row (e.g. 654,30). IGNORE the 0% row — that is the negative deposit offset (base -3 770,00, DPH 0).
+- invoiceNumber: the "Faktura - daňový doklad" number (e.g. FV21091630/26). invoiceDate: "Datum vystavení" (e.g. 07.05.2026).
+- supplierICO: Textilomanie's IČ 04788494 — NOT our buyer IČ 19876106.
+- category: consumables
+
 ## IKEA Česká republika, s.r.o.   (IČ 27081052, DIČ CZ27081052)
 - Document is a "Daňový doklad k přijaté platbě" (pre-payment tax invoice).
 - totalAmount: use "Cena celkem" (Total amount, VAT incl.), e.g. 8 429,00.
