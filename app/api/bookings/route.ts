@@ -5,7 +5,7 @@ import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
-import { deriveNationality } from "@/utils/nationalityUtils";
+import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { fetchReviews, fetchRawReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
 import type { GuestRating } from "@/types/reservation";
 
@@ -648,11 +648,13 @@ function mapToReservation(b: Beds24Booking): Reservation {
     phone: b.phone ?? "",
     price: b.price ?? 0,
     // Prefer an explicit country code (country2 = most OTAs, country = Direct/
-    // rental-site API bookings — often lowercase). Fall back to deriving from
-    // phone prefix / language ("cs" → CZ) so web bookings that only carry a
-    // language still get a flag.
+    // rental-site API bookings — often lowercase). countryFromCodeOrLang maps
+    // language codes that OTAs (esp. Airbnb) wrongly drop into the country
+    // field — e.g. "cs" → CZ — so they don't render as a broken flag. Final
+    // fall back derives from phone prefix / language.
     nationality:
-      (b.country2 || b.country || "").toUpperCase() ||
+      countryFromCodeOrLang(b.country2) ||
+      countryFromCodeOrLang(b.country) ||
       deriveNationality(b.phone || b.mobile || "", b.lang),
     // Cleaning: date-derived until cleaning app is connected.
     // Blackouts have no guest, no stay → no cleaning event needed; we still

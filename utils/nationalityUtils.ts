@@ -87,6 +87,21 @@ const COUNTRY_NAMES: Record<string, string> = {
   MX: "Mexican",
 };
 
+/**
+ * Normalise a Beds24 country-field value into an ISO country code.
+ *
+ * OTAs (notably Airbnb) sometimes drop a *language* code into the country
+ * field instead of the ISO country — e.g. "cs" (Czech language) where the
+ * country is "cz"/CZ. That produced a broken flag (🇨🇸 "CS" isn't a real
+ * country). Map known language codes to their country; pass real codes
+ * through uppercased. Empty in → empty out.
+ */
+export function countryFromCodeOrLang(raw?: string | null): string {
+  const lc = (raw ?? "").trim().toLowerCase();
+  if (!lc) return "";
+  return LANG_TO_COUNTRY[lc] ?? lc.toUpperCase();
+}
+
 export function deriveNationality(phone: string, lang?: string): string {
   const normalized = phone.replace(/\s/g, "");
   for (const [prefix, country] of PHONE_PREFIX_MAP) {
