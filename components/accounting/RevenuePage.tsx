@@ -48,9 +48,11 @@ interface Props {
   /** Pass-through from AccountingPage so the drawer can show credit tx candidates */
   bankTransactions: BankTransaction[];
   onBankTxUpdate: (tx: BankTransaction) => void;
+  /** Reload the Costs-tab supplier invoices (a settlement auto-creates a fee cost record there) */
+  onCostRecordsChanged?: () => void;
 }
 
-export default function RevenuePage({ bankTransactions, onBankTxUpdate }: Props) {
+export default function RevenuePage({ bankTransactions, onBankTxUpdate, onCostRecordsChanged }: Props) {
   const [invoices, setInvoices] = useState<RevenueInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterState>('all');
@@ -117,9 +119,10 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate }: Props)
   function handleSettlementDrawerClose() {
     setSettlementDrawer(null);
     // A settlement creates/updates/deletes its gross revenue record + fee cost record,
-    // so refresh both the settlements list and the revenue invoice list.
+    // so refresh the settlements list, the revenue invoice list, and the Costs tab.
     void loadSettlements();
     void loadInvoices();
+    onCostRecordsChanged?.();
     if (settlementQueue.length > 0) void processNextSettlement(settlementQueue);
   }
 

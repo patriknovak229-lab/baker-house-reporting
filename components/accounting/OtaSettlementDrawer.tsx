@@ -295,6 +295,10 @@ export default function OtaSettlementDrawer({
                   <div><p className="text-xs text-gray-400">Commission</p><p className="font-medium text-rose-600">−{formatCurrency(current.commissionAmount ?? 0)}</p></div>
                   <div><p className="text-xs text-gray-400">Net payout</p><p className="font-semibold text-green-700">{formatCurrency(net)}</p></div>
                 </div>
+                <p className="text-xs text-gray-400">
+                  Posted as a gross revenue record (Revenue tab) + a distribution-fees cost record (Costs tab).
+                  Link the bank payout(s) below to reconcile — sum should equal the net.
+                </p>
                 {current.reportUrl && (
                   <a href={current.reportUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline block">📄 {current.reportFileName ?? 'View report in Drive'}</a>
                 )}

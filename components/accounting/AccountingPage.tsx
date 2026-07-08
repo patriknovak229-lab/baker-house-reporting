@@ -721,7 +721,11 @@ export default function AccountingPage() {
 
       {/* Phase 3 — Revenue */}
       {activePhase === 3 && (
-        <RevenuePage bankTransactions={bankTransactions} onBankTxUpdate={handleBankTxUpdate} />
+        <RevenuePage
+          bankTransactions={bankTransactions}
+          onBankTxUpdate={handleBankTxUpdate}
+          onCostRecordsChanged={loadInvoices}
+        />
       )}
 
       {/* Phase 4 — Statements */}

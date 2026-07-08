@@ -521,6 +521,15 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
                 </div>
               </div>
 
+              {/* OTA settlement records are managed by their settlement — no per-record
+                  category change or direct bank link (that would break the settlement). */}
+              {invoice.settlementGroupId ? (
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs text-indigo-700 leading-relaxed">
+                  This is the <strong>gross booking volume</strong> from an OTA settlement. Reconcile the
+                  bank payout(s) in the <strong>OTA settlements</strong> panel at the top of the Revenue tab —
+                  that ties this revenue record and its channel-fee cost record to the bank.
+                </div>
+              ) : (<>
               {/* Category selector */}
               <div>
                 <p className="text-xs font-medium text-gray-600 mb-2">Category</p>
@@ -604,6 +613,7 @@ export default function RevenueInvoiceDrawer({ invoice, transactions, onClose, o
                   </>
                 )}
               </div>
+              </>)}
             </>
           )}
         </div>
