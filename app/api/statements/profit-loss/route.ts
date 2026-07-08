@@ -4,6 +4,7 @@ import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
+import { DISTRIBUTION_FEES_CATEGORY } from '@/utils/settlementRecords';
 
 const redis = new Redis({
   url:   process.env.UPSTASH_REDIS_REST_URL!,
@@ -11,19 +12,9 @@ const redis = new Redis({
 });
 
 // Supplier invoice categories → Czech P&L sections
-const MATERIALS_CATS   = ['utilities', 'consumables'];
-const PERSONNEL_CATS   = ['cleaning', 'laundry'];
-// Everything else → otherOperating
-
-/** Minimal bank transaction shape for the P&L response (avoids serialising all fields) */
-export interface PLBankTx {
-  id: string;
-  date: string;
-  counterpartyName?: string;
-  amount: number;           // net payout received
-  grossAmount?: number;     // gross before OTA fee deduction (if known)
-  state: string;            // 'net_settlement' | 'grouped'
-}
+const MATERIALS_CATS = ['utilities', 'consumables'];
+const PERSONNEL_CATS = ['cleaning', 'laundry'];
+// 'distribution-fees' → A. Výkonová spotřeba (OTA channel fees); everything else → otherOperating
 
 /** A recurring/contractual cost paid via bank (rent, parking) with no invoice */
 export interface PLRecurringCost {
@@ -43,24 +34,26 @@ export interface PLData {
     accommodation: number;
     /** Revenue invoices: other services */
     otherServices: number;
-    /** OTA net payouts: net_settlement + grouped bank credits */
-    otaSettlements: number;
+    /** Gross booking volume from OTA settlements (Airbnb + Booking) — the 'ota_gross' records */
+    otaGross: number;
     total: number;
     accommodationInvoices: RevenueInvoice[];
     otherServicesInvoices: RevenueInvoice[];
-    otaTransactions: PLBankTx[];
+    otaGrossInvoices: RevenueInvoice[];
   };
   costs: {
     materialsEnergy: number;
     personnelServices: number;
-    /** Operating costs — OTA fee invoices already covered by net payouts are excluded.
-     *  Includes recurring bank costs (rent, parking) that have no supplier invoice. */
+    /** OTA / channel distribution + payment fees (category 'distribution-fees').
+     *  Maps to A. Výkonová spotřeba in the statutory statement. */
+    distributionFees: number;
+    /** Other operating costs incl. recurring bank costs (rent, parking) */
     otherOperating: number;
     total: number;
     materialsInvoices: SupplierInvoice[];
     personnelInvoices: SupplierInvoice[];
+    distributionInvoices: SupplierInvoice[];
     otherInvoices: SupplierInvoice[];
-    /** Recurring/contractual costs paid via bank (no invoice) — part of otherOperating */
     recurringCosts: PLRecurringCost[];
   };
   operatingResult: number;
@@ -88,52 +81,34 @@ export async function GET(req: NextRequest) {
   const supplierInvoices: SupplierInvoice[] = rawSupplier ?? [];
   const bankTxs: BankTransaction[]          = rawTxs      ?? [];
 
-  // ── OTA net settlement bank credits in period ────────────────────────────
-  // Includes: net_settlement (Booking.com) + grouped (Airbnb weekly payouts)
-  const otaTxs = bankTxs.filter(
-    (tx) => (tx.state === 'net_settlement' || tx.state === 'grouped')
-      && tx.direction === 'credit'
-      && tx.date >= from
-      && tx.date <= to,
-  );
-  const otaSettlements = otaTxs.reduce((s, tx) => s + tx.amount, 0);
-
-  // Build set of supplier invoice IDs that are already "paid" via OTA net payouts
-  // → these should NOT appear as costs (they're the fee already deducted from the payout)
-  const otaCoveredInvIds = new Set<string>();
-
-  // 1. net_settlement: deductedInvoiceIds on the bank tx itself
-  for (const tx of bankTxs.filter((t) => t.state === 'net_settlement')) {
-    for (const id of (tx.deductedInvoiceIds ?? [])) {
-      otaCoveredInvIds.add(id);
-    }
-  }
-  // 2. settlement groups: invoices with settlementGroupId set
-  //    (their fees were deducted before the grouped payouts were received)
-  for (const inv of supplierInvoices) {
-    if (inv.settlementGroupId) otaCoveredInvIds.add(inv.id);
-  }
-
-  // ── Revenue invoices (direct, non-OTA) ──────────────────────────────────
+  // ── Revenue (from records, by invoice date) ──────────────────────────────
+  // OTA gross booking volume is an 'ota_gross' RevenueInvoice auto-created from a
+  // settlement; direct guest revenue is accommodation_direct / other_services.
   const filteredRevenue = revenueInvoices.filter(
     (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to && inv.category !== 'mistake',
   );
 
   const accommodationInvoices = filteredRevenue.filter((inv) => inv.category === 'accommodation_direct');
-  const otherServicesInvoices  = filteredRevenue.filter((inv) => inv.category === 'other_services');
-  const accommodation  = accommodationInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const otherServices  = otherServicesInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const revenueTotal   = accommodation + otherServices + otaSettlements;
+  const otherServicesInvoices = filteredRevenue.filter((inv) => inv.category === 'other_services');
+  const otaGrossInvoices      = filteredRevenue.filter((inv) => inv.category === 'ota_gross');
+  const accommodation = accommodationInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
+  const otherServices = otherServicesInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
+  const otaGross      = otaGrossInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
+  const revenueTotal  = accommodation + otherServices + otaGross;
 
-  // ── Supplier invoice costs — exclude OTA-covered fee invoices ───────────
+  // ── Costs (from records, by invoice date) ────────────────────────────────
+  // Channel fees are the 'distribution-fees' cost records auto-created from settlements.
   const filteredSupplier = supplierInvoices.filter(
-    (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to && !otaCoveredInvIds.has(inv.id),
+    (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to,
   );
 
-  const materialsInvoices = filteredSupplier.filter((inv) => MATERIALS_CATS.includes(inv.category));
-  const personnelInvoices = filteredSupplier.filter((inv) => PERSONNEL_CATS.includes(inv.category));
-  const otherInvoices     = filteredSupplier.filter(
-    (inv) => !MATERIALS_CATS.includes(inv.category) && !PERSONNEL_CATS.includes(inv.category),
+  const materialsInvoices    = filteredSupplier.filter((inv) => MATERIALS_CATS.includes(inv.category));
+  const personnelInvoices    = filteredSupplier.filter((inv) => PERSONNEL_CATS.includes(inv.category));
+  const distributionInvoices = filteredSupplier.filter((inv) => inv.category === DISTRIBUTION_FEES_CATEGORY);
+  const otherInvoices        = filteredSupplier.filter(
+    (inv) => !MATERIALS_CATS.includes(inv.category)
+      && !PERSONNEL_CATS.includes(inv.category)
+      && inv.category !== DISTRIBUTION_FEES_CATEGORY,
   );
 
   // ── Recurring bank costs (rent, parking) — no invoice, but real costs ────
@@ -155,17 +130,9 @@ export async function GET(req: NextRequest) {
 
   const materialsEnergy   = materialsInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
   const personnelServices = personnelInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
+  const distributionFees  = distributionInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
   const otherOperating    = otherInvoices.reduce((s, inv) => s + inv.amountCZK, 0) + recurringCostTotal;
-  const costsTotal        = materialsEnergy + personnelServices + otherOperating;
-
-  const otaTransactions: PLBankTx[] = otaTxs.map((tx) => ({
-    id: tx.id,
-    date: tx.date,
-    counterpartyName: tx.counterpartyName,
-    amount: tx.amount,
-    grossAmount: tx.grossAmount,
-    state: tx.state,
-  }));
+  const costsTotal        = materialsEnergy + personnelServices + distributionFees + otherOperating;
 
   const data: PLData = {
     from,
@@ -173,19 +140,21 @@ export async function GET(req: NextRequest) {
     revenue: {
       accommodation,
       otherServices,
-      otaSettlements,
+      otaGross,
       total: revenueTotal,
       accommodationInvoices,
       otherServicesInvoices,
-      otaTransactions,
+      otaGrossInvoices,
     },
     costs: {
       materialsEnergy,
       personnelServices,
+      distributionFees,
       otherOperating,
       total: costsTotal,
       materialsInvoices,
       personnelInvoices,
+      distributionInvoices,
       otherInvoices,
       recurringCosts,
     },

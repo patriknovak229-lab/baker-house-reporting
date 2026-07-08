@@ -23,6 +23,7 @@ const CATEGORY_OPTIONS: { value: RevenueInvoiceCategory; label: string; descript
 const CATEGORY_BADGE: Record<RevenueInvoiceCategory, { label: string; className: string }> = {
   accommodation_direct: { label: 'Accommodation',  className: 'bg-teal-100 text-teal-700'    },
   other_services:       { label: 'Other services', className: 'bg-purple-100 text-purple-700' },
+  ota_gross:            { label: 'OTA gross',       className: 'bg-indigo-100 text-indigo-700' },
   mistake:              { label: 'Mistake',         className: 'bg-rose-100 text-rose-600'    },
 };
 

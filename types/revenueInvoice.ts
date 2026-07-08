@@ -1,5 +1,6 @@
-export type RevenueInvoiceSource   = 'issued' | 'manual';
-export type RevenueInvoiceCategory = 'accommodation_direct' | 'other_services' | 'mistake';
+export type RevenueInvoiceSource   = 'issued' | 'manual' | 'ota';
+/** 'ota_gross' = gross booking volume auto-created from an OTA settlement (Airbnb/Booking) */
+export type RevenueInvoiceCategory = 'accommodation_direct' | 'other_services' | 'ota_gross' | 'mistake';
 export type RevenueInvoiceStatus   = 'pending' | 'reconciled';
 
 export interface RevenueInvoice {
@@ -23,6 +24,8 @@ export interface RevenueInvoice {
   // bank reconciliation
   bankTransactionId?: string;
   reconciledAt?: string;       // ISO timestamp
+  /** SettlementGroup.id — set for OTA gross records auto-created from a settlement report */
+  settlementGroupId?: string;
 
   // Google Drive (manual uploads)
   driveFileId?: string;

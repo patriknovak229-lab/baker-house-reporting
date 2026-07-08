@@ -5,6 +5,11 @@ import type { BankTransaction } from '@/types/bankTransaction';
 import { formatCurrency } from '@/utils/formatters';
 import RevenueInvoiceList from './RevenueInvoiceList';
 import RevenueInvoiceDrawer from './RevenueInvoiceDrawer';
+import OtaSettlementImportModal from './OtaSettlementImportModal';
+import OtaSettlementDrawer from './OtaSettlementDrawer';
+import type { SettlementGroup } from '@/types/settlementGroup';
+import { isReportSettlement } from '@/types/settlementGroup';
+import type { ExtractedSettlementData } from '@/app/api/revenue-invoices/extract-settlement/route';
 
 type FilterState = 'all' | 'pending' | 'reconciled' | 'issued' | 'manual';
 type PeriodPreset = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'this_year';
@@ -53,6 +58,17 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate }: Props)
   const [search, setSearch] = useState('');
   const [drawerInvoice, setDrawerInvoice] = useState<RevenueInvoice | 'add' | null>(null);
 
+  // OTA settlements (Airbnb earnings reports → SettlementGroup with report data)
+  const [settlements, setSettlements] = useState<SettlementGroup[]>([]);
+  const [showSettlementImport, setShowSettlementImport] = useState(false);
+  const [settlementQueue, setSettlementQueue] = useState<File[]>([]);
+  const [extractingSettlement, setExtractingSettlement] = useState(false);
+  const [settlementDrawer, setSettlementDrawer] = useState<
+    | { mode: 'view'; group: SettlementGroup }
+    | { mode: 'create'; extracted: ExtractedSettlementData | null; file: File | null }
+    | null
+  >(null);
+
   const loadInvoices = useCallback(async () => {
     try {
       const res = await fetch('/api/revenue-invoices');
@@ -62,7 +78,58 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate }: Props)
     }
   }, []);
 
-  useEffect(() => { loadInvoices(); }, [loadInvoices]);
+  const loadSettlements = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settlement-groups');
+      if (res.ok) {
+        const all = await res.json() as SettlementGroup[];
+        setSettlements(all.filter(isReportSettlement));
+      }
+    } catch { /* non-fatal */ }
+  }, []);
+
+  useEffect(() => { loadInvoices(); loadSettlements(); }, [loadInvoices, loadSettlements]);
+
+  // Process uploaded report files one at a time: extract → open review drawer.
+  const processNextSettlement = useCallback(async (files: File[]) => {
+    if (files.length === 0) { setExtractingSettlement(false); return; }
+    const [next, ...rest] = files;
+    setSettlementQueue(rest);
+    setExtractingSettlement(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', next);
+      const res = await fetch('/api/revenue-invoices/extract-settlement', { method: 'POST', body: fd });
+      const extracted = res.ok ? (await res.json() as ExtractedSettlementData) : null;
+      setSettlementDrawer({ mode: 'create', extracted, file: next });
+    } catch {
+      setSettlementDrawer({ mode: 'create', extracted: null, file: next });
+    } finally {
+      setExtractingSettlement(false);
+    }
+  }, []);
+
+  function handleSettlementBatch(files: File[]) {
+    setShowSettlementImport(false);
+    void processNextSettlement(files);
+  }
+
+  function handleSettlementDrawerClose() {
+    setSettlementDrawer(null);
+    // A settlement creates/updates/deletes its gross revenue record + fee cost record,
+    // so refresh both the settlements list and the revenue invoice list.
+    void loadSettlements();
+    void loadInvoices();
+    if (settlementQueue.length > 0) void processNextSettlement(settlementQueue);
+  }
+
+  function handleSettlementUpdate(group: SettlementGroup | null) {
+    if (!group) return; // deletion: lists refresh on drawer close
+    setSettlements((prev) => {
+      const idx = prev.findIndex((g) => g.id === group.id);
+      return idx >= 0 ? prev.map((g) => (g.id === group.id ? group : g)) : [group, ...prev];
+    });
+  }
 
   function handleUpdate(updated: RevenueInvoice) {
     setInvoices((prev) => {
@@ -188,6 +255,62 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate }: Props)
         </div>
       </div>
 
+      {/* OTA settlements (Airbnb earnings reports) */}
+      <div className="bg-white border border-gray-100 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm font-semibold text-gray-800">OTA settlements</p>
+            <p className="text-xs text-gray-400">Airbnb earnings reports · gross recognised by period, net linked to payouts</p>
+          </div>
+          <button
+            onClick={() => setShowSettlementImport(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Import report
+          </button>
+        </div>
+
+        {settlements.length === 0 ? (
+          <p className="text-xs text-gray-400 py-4 text-center">No OTA settlements yet. Import an earnings report to start.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {settlements.map((g) => {
+              const net = g.netAmount ?? ((g.grossAmount ?? 0) - (g.commissionAmount ?? 0));
+              const linkedSum = bankTransactions
+                .filter((t) => g.transactionIds.includes(t.id))
+                .reduce((s, t) => s + t.amount, 0);
+              const tolerance = Math.max(1, g.transactionIds.length);
+              const reconciled = g.transactionIds.length > 0 && Math.abs(linkedSum - net) <= tolerance;
+              return (
+                <button
+                  key={g.id}
+                  onClick={() => setSettlementDrawer({ mode: 'view', group: g })}
+                  className="w-full flex items-center gap-3 border border-gray-100 rounded-lg px-3 py-2.5 hover:border-indigo-300 hover:bg-indigo-50/40 text-left transition-colors"
+                >
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-700 capitalize flex-shrink-0">{g.source ?? 'ota'}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-gray-800 truncate">{g.name}</p>
+                    <p className="text-xs text-gray-400">
+                      Gross {formatCurrency(g.grossAmount ?? 0)} · fee {formatCurrency(g.commissionAmount ?? 0)} · net {formatCurrency(net)}
+                    </p>
+                  </div>
+                  <span className={`text-xs font-medium flex-shrink-0 px-2 py-0.5 rounded-full ${
+                    reconciled ? 'bg-green-100 text-green-700'
+                      : g.transactionIds.length > 0 ? 'bg-amber-100 text-amber-700'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {reconciled ? '✓ reconciled' : `${g.transactionIds.length} payout${g.transactionIds.length !== 1 ? 's' : ''}`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Invoice list */}
       <div className="bg-white border border-gray-100 rounded-xl overflow-hidden">
         {loading ? (
@@ -212,6 +335,39 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate }: Props)
           onClose={() => setDrawerInvoice(null)}
           onUpdate={handleUpdate}
           onBankTxUpdate={onBankTxUpdate}
+        />
+      )}
+
+      {/* OTA settlement import modal */}
+      {showSettlementImport && (
+        <OtaSettlementImportModal
+          onProcessBatch={handleSettlementBatch}
+          onClose={() => setShowSettlementImport(false)}
+        />
+      )}
+
+      {/* Extracting overlay */}
+      {extractingSettlement && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20">
+          <div className="bg-white rounded-xl shadow-lg px-8 py-6 flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm font-medium text-gray-700">Extracting report with Claude…</p>
+            {settlementQueue.length > 0 && <p className="text-xs text-gray-400">{settlementQueue.length} more queued</p>}
+          </div>
+        </div>
+      )}
+
+      {/* Settlement drawer (review/create or view/link) */}
+      {settlementDrawer && (
+        <OtaSettlementDrawer
+          extracted={settlementDrawer.mode === 'create' ? settlementDrawer.extracted : undefined}
+          file={settlementDrawer.mode === 'create' ? settlementDrawer.file : undefined}
+          group={settlementDrawer.mode === 'view' ? settlementDrawer.group : undefined}
+          transactions={bankTransactions}
+          queueRemaining={settlementQueue.length}
+          onClose={handleSettlementDrawerClose}
+          onGroupUpdate={handleSettlementUpdate}
+          onTxUpdate={onBankTxUpdate}
         />
       )}
     </div>

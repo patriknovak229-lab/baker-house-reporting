@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/utils/formatters';
-import type { PLData, PLBankTx, PLRecurringCost } from '@/app/api/statements/profit-loss/route';
+import type { PLData, PLRecurringCost } from '@/app/api/statements/profit-loss/route';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 
@@ -174,29 +174,6 @@ function RecurringCostDetailRows({ costs }: { costs: PLRecurringCost[] }) {
   );
 }
 
-function OtaDetailRows({ txs }: { txs: PLBankTx[] }) {
-  return (
-    <>
-      {txs.map((tx) => (
-        <tr key={tx.id} className="bg-indigo-50/30 text-xs border-b border-gray-50">
-          <td className="px-4 py-2 text-gray-400 pl-16">{tx.date}</td>
-          <td className="px-4 py-2 text-gray-600">
-            {tx.counterpartyName ?? '—'}
-            {tx.grossAmount != null && (
-              <span className="text-gray-400"> · gross {formatCurrency(tx.grossAmount)}</span>
-            )}
-            <span className="ml-1 text-gray-400 italic">
-              ({tx.state === 'net_settlement' ? 'net settlement' : 'settlement group'})
-            </span>
-          </td>
-          <td className="px-4 py-2 text-right text-gray-700">{formatCurrency(tx.amount)}</td>
-          <td />
-        </tr>
-      ))}
-    </>
-  );
-}
-
 // ─── CSV export ───────────────────────────────────────────────────────────────
 
 function exportCSV(data: PLData) {
@@ -210,8 +187,8 @@ function exportCSV(data: PLData) {
   for (const inv of data.revenue.otherServicesInvoices) {
     rows.push([inv.invoiceDate, 'Revenue', 'II. Tržby — Ostatní služby', inv.guestName ?? inv.clientName ?? '', inv.invoiceNumber, String(inv.amountCZK)]);
   }
-  for (const tx of data.revenue.otaTransactions) {
-    rows.push([tx.date, 'Revenue', 'II. Tržby — OTA čistá plnění', tx.counterpartyName ?? '', tx.id, String(tx.amount)]);
+  for (const inv of data.revenue.otaGrossInvoices) {
+    rows.push([inv.invoiceDate, 'Revenue', 'I. Tržby — OTA hrubé tržby', inv.clientName ?? '', inv.invoiceNumber, String(inv.amountCZK)]);
   }
   for (const inv of data.costs.materialsInvoices) {
     rows.push([inv.invoiceDate, 'Cost', 'B. Spotřeba materiálu a energie', inv.supplierName, inv.invoiceNumber, String(inv.amountCZK)]);
@@ -221,6 +198,9 @@ function exportCSV(data: PLData) {
   }
   for (const inv of data.costs.otherInvoices) {
     rows.push([inv.invoiceDate, 'Cost', 'E. Ostatní provozní náklady', inv.supplierName, inv.invoiceNumber, String(inv.amountCZK)]);
+  }
+  for (const inv of data.costs.distributionInvoices) {
+    rows.push([inv.invoiceDate, 'Cost', 'A. Výkonová spotřeba — distribuční poplatky', inv.supplierName, inv.invoiceNumber, String(inv.amountCZK)]);
   }
   for (const c of data.costs.recurringCosts) {
     rows.push([c.date, 'Cost', 'E. Ostatní provozní náklady', c.counterpartyName ?? c.note ?? '', c.costCategory ?? 'recurring', String(c.amount)]);
@@ -408,19 +388,18 @@ export default function StatementsPage() {
                 <RevenueDetailRows rows={revenueRows(data.revenue.otherServicesInvoices)} />
               </SectionRow>
 
-              {/* OTA net settlements sub-row */}
+              {/* OTA gross booking volume sub-row (Airbnb + Booking settlements) */}
               <SectionRow
                 code=""
-                label="OTA čistá plnění"
-                sublabel="Booking.com · Airbnb (net)"
-                amount={data.revenue.otaSettlements}
-                itemCount={data.revenue.otaTransactions.length}
-                countLabel="tx."
-                expanded={expanded.has('ota')}
-                onToggle={() => toggle('ota')}
+                label="OTA hrubé tržby"
+                sublabel="Airbnb · Booking.com (gross booking volume)"
+                amount={data.revenue.otaGross}
+                itemCount={data.revenue.otaGrossInvoices.length}
+                expanded={expanded.has('ota_gross')}
+                onToggle={() => toggle('ota_gross')}
                 indent
               >
-                <OtaDetailRows txs={data.revenue.otaTransactions} />
+                <RevenueDetailRows rows={revenueRows(data.revenue.otaGrossInvoices)} />
               </SectionRow>
 
               {/* spacer */}
@@ -461,6 +440,19 @@ export default function StatementsPage() {
               >
                 <SupplierDetailRows rows={supplierRows(data.costs.otherInvoices)} />
                 <RecurringCostDetailRows costs={data.costs.recurringCosts} />
+              </SectionRow>
+
+              {/* OTA / channel distribution + payment fees — maps to A. Výkonová spotřeba */}
+              <SectionRow
+                code="A."
+                label="Distribuční poplatky"
+                sublabel="Airbnb · Booking.com channel fees"
+                amount={data.costs.distributionFees}
+                itemCount={data.costs.distributionInvoices.length}
+                expanded={expanded.has('distribution')}
+                onToggle={() => toggle('distribution')}
+              >
+                <SupplierDetailRows rows={supplierRows(data.costs.distributionInvoices)} />
               </SectionRow>
 
               {/* spacer */}
