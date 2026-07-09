@@ -7,6 +7,7 @@ import RevenueInvoiceList from './RevenueInvoiceList';
 import RevenueInvoiceDrawer from './RevenueInvoiceDrawer';
 import OtaSettlementImportModal from './OtaSettlementImportModal';
 import OtaSettlementDrawer from './OtaSettlementDrawer';
+import DirectPaymentModal from './DirectPaymentModal';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { isReportSettlement } from '@/types/settlementGroup';
 import type { ExtractedSettlementData } from '@/app/api/revenue-invoices/extract-settlement/route';
@@ -70,6 +71,7 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate, onCostRe
     | { mode: 'create'; extracted: ExtractedSettlementData | null; file: File | null }
     | null
   >(null);
+  const [showDirectModal, setShowDirectModal] = useState(false);
 
   const loadInvoices = useCallback(async () => {
     try {
@@ -132,6 +134,39 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate, onCostRe
       const idx = prev.findIndex((g) => g.id === group.id);
       return idx >= 0 ? prev.map((g) => (g.id === group.id ? group : g)) : [group, ...prev];
     });
+  }
+
+  // Book an incoming credit as a direct accommodation revenue record (no invoice) + reconcile it
+  async function handleBookDirect(tx: BankTransaction) {
+    const invoiceNumber = `DIRECT-${tx.date}-${tx.id.slice(-6)}`;
+    const res = await fetch('/api/revenue-invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceType: 'direct',
+        category: 'accommodation_direct',
+        status: 'pending',
+        invoiceNumber,
+        invoiceDate: tx.date,
+        amountCZK: tx.amount,
+        clientName: tx.counterpartyName ?? 'Direct payment',
+        description: 'Direct accommodation payment',
+      }),
+    });
+    if (!res.ok) return;
+    const inv = await res.json() as RevenueInvoice;
+    const linkRes = await fetch(`/api/revenue-invoices/${inv.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'link_bank', bankTransactionId: tx.id }),
+    });
+    if (linkRes.ok) {
+      const data = await linkRes.json() as { invoice: RevenueInvoice; transaction: BankTransaction };
+      handleUpdate(data.invoice);
+      onBankTxUpdate(data.transaction);
+    } else {
+      handleUpdate(inv);
+    }
   }
 
   function handleUpdate(updated: RevenueInvoice) {
@@ -265,15 +300,23 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate, onCostRe
             <p className="text-sm font-semibold text-gray-800">OTA settlements</p>
             <p className="text-xs text-gray-400">Airbnb earnings reports · gross recognised by period, net linked to payouts</p>
           </div>
-          <button
-            onClick={() => setShowSettlementImport(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Import report
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowDirectModal(true)}
+              className="px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50"
+            >
+              Label direct payment
+            </button>
+            <button
+              onClick={() => setShowSettlementImport(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Import report
+            </button>
+          </div>
         </div>
 
         {settlements.length === 0 ? (
@@ -346,6 +389,15 @@ export default function RevenuePage({ bankTransactions, onBankTxUpdate, onCostRe
         <OtaSettlementImportModal
           onProcessBatch={handleSettlementBatch}
           onClose={() => setShowSettlementImport(false)}
+        />
+      )}
+
+      {/* Direct-payment quick-label modal */}
+      {showDirectModal && (
+        <DirectPaymentModal
+          transactions={bankTransactions}
+          onBook={handleBookDirect}
+          onClose={() => setShowDirectModal(false)}
         />
       )}
 

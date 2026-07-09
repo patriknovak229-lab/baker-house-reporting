@@ -1,4 +1,4 @@
-export type RevenueInvoiceSource   = 'issued' | 'manual' | 'ota';
+export type RevenueInvoiceSource   = 'issued' | 'manual' | 'ota' | 'direct';
 /** 'ota_gross' = gross booking volume auto-created from an OTA settlement (Airbnb/Booking) */
 export type RevenueInvoiceCategory = 'accommodation_direct' | 'other_services' | 'ota_gross' | 'mistake';
 export type RevenueInvoiceStatus   = 'pending' | 'reconciled';
