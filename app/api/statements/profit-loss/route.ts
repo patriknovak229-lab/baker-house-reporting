@@ -4,6 +4,7 @@ import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
+import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
 import { DISTRIBUTION_FEES_CATEGORY } from '@/utils/settlementRecords';
 
 const redis = new Redis({
@@ -15,6 +16,11 @@ const redis = new Redis({
 const MATERIALS_CATS = ['utilities', 'consumables'];
 const PERSONNEL_CATS = ['cleaning', 'laundry'];
 // 'distribution-fees' → A. Výkonová spotřeba (OTA channel fees); everything else → otherOperating
+
+// Legacy OTA commission invoices (old Booking FAKTURA imports) are superseded by the
+// settlement-created fee records. Match by supplier name to exclude the legacy ones from
+// the P&L — but keep any invoice OWNED by a report settlement (the new auto-created cost).
+const OTA_SUPPLIER_RE = /booking\.?com|airbnb/i;
 
 /** A recurring/contractual cost paid via bank (rent, parking) with no invoice */
 export interface PLRecurringCost {
@@ -71,15 +77,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'from and to query params are required (YYYY-MM-DD)' }, { status: 400 });
   }
 
-  const [rawRevenue, rawSupplier, rawTxs] = await Promise.all([
+  const [rawRevenue, rawSupplier, rawTxs, rawGroups] = await Promise.all([
     redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
     redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
     redis.get<BankTransaction[]>('baker:bank-transactions'),
+    redis.get<SettlementGroup[]>('baker:settlement-groups'),
   ]);
 
   const revenueInvoices: RevenueInvoice[]   = rawRevenue  ?? [];
   const supplierInvoices: SupplierInvoice[] = rawSupplier ?? [];
   const bankTxs: BankTransaction[]          = rawTxs      ?? [];
+  const settlementGroups: SettlementGroup[] = rawGroups   ?? [];
+
+  // Cost records owned by a report settlement (the new auto-created fee records)
+  const settlementOwnedCostIds = new Set(
+    settlementGroups.filter(isReportSettlement).flatMap((g) => g.invoiceIds),
+  );
+  // A legacy OTA commission invoice = OTA-named supplier cost NOT owned by a settlement.
+  const isLegacyOtaCost = (inv: SupplierInvoice) =>
+    OTA_SUPPLIER_RE.test(inv.supplierName) && !settlementOwnedCostIds.has(inv.id);
 
   // ── Revenue (from records, by invoice date) ──────────────────────────────
   // OTA gross booking volume is an 'ota_gross' RevenueInvoice auto-created from a
@@ -98,8 +114,10 @@ export async function GET(req: NextRequest) {
 
   // ── Costs (from records, by invoice date) ────────────────────────────────
   // Channel fees are the 'distribution-fees' cost records auto-created from settlements.
+  // Legacy Booking FAKTURA imports are excluded (superseded by settlement records) to
+  // avoid double-counting — they stay visible in the Costs tab but don't hit the P&L.
   const filteredSupplier = supplierInvoices.filter(
-    (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to,
+    (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to && !isLegacyOtaCost(inv),
   );
 
   const materialsInvoices    = filteredSupplier.filter((inv) => MATERIALS_CATS.includes(inv.category));
