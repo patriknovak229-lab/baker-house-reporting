@@ -39,7 +39,7 @@ export const REVENUE_KNOWLEDGE = `
     • Provize + Poplatek za platební služby (both totals, as positive magnitudes) → commissionAmount = their sum (e.g. 66 107,00 + 6 169,02 = 72 276,02)
     • Čistá tržba / "Celková částka k vyplacení" → netAmount (e.g. 340 345,61) — this equals the bank payout
 - Sanity: grossAmount − commissionAmount = netAmount.
-- periodStart / periodEnd: derive the reservation month from the "Odjezd" (departure) dates — use the month that most reservations depart in (Booking bills by departure). If unclear, use the month of "Datum vyplacení částky" minus context; the user will confirm in review.
+- periodStart / periodEnd: the accrual MONTH = the calendar month in which the MAJORITY of "Odjezd" (departure) dates fall. Set periodStart to the 1st and periodEnd to the last day of that month (e.g. most departures in June → periodStart 2026-06-01, periodEnd 2026-06-30). CRITICAL: use "Odjezd" (departure), NOT "Příjezd" (arrival) — never take the earliest arrival date. The user can correct the month in review.
 - Numbers use a space thousands separator and comma decimal ("412 621,63" = 412621.63). source: booking. currency: CZK.
 
 ## Booking.com — Commission invoice "FAKTURA"   (source: booking; AVOID — prefer the settlement report)

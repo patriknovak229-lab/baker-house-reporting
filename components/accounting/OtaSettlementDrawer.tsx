@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import type { SettlementGroup, SettlementSource } from '@/types/settlementGroup';
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { ExtractedSettlementData } from '@/app/api/revenue-invoices/extract-settlement/route';
@@ -61,6 +61,15 @@ export default function OtaSettlementDrawer({
   const [error, setError] = useState('');
   const [txSearch, setTxSearch] = useState('');
   const [busyTx, setBusyTx] = useState<string | null>(null);
+
+  // ── View-mode period edit (fix a mis-guessed accrual month) ───────────────
+  const [pStart, setPStart] = useState('');
+  const [pEnd, setPEnd] = useState('');
+  const [savingPeriod, setSavingPeriod] = useState(false);
+  useEffect(() => {
+    setPStart(current?.periodStart ?? '');
+    setPEnd(current?.periodEnd ?? '');
+  }, [current?.id, current?.periodStart, current?.periodEnd]);
 
   function setField(field: keyof typeof form, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -148,6 +157,15 @@ export default function OtaSettlementDrawer({
     });
     if (!res.ok) return null;
     return res.json() as Promise<{ group: SettlementGroup | null; deleted: boolean }>;
+  }
+
+  async function handleSavePeriod() {
+    if (!pStart) return;
+    setSavingPeriod(true);
+    try {
+      const data = await putGroup({ action: 'update_report', periodStart: pStart, periodEnd: pEnd || pStart });
+      if (data?.group) { setCurrent(data.group); onGroupUpdate(data.group); }
+    } finally { setSavingPeriod(false); }
   }
 
   async function handleAddTx(txId: string) {
@@ -302,6 +320,24 @@ export default function OtaSettlementDrawer({
                 {current.reportUrl && (
                   <a href={current.reportUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline block">📄 {current.reportFileName ?? 'View report in Drive'}</a>
                 )}
+              </div>
+
+              {/* Period (accrual month) — editable; syncs the revenue + cost record dates */}
+              <div>
+                <p className={sectionTitle}>Accrual month</p>
+                <div className="flex items-center gap-2">
+                  <input type="date" value={pStart} onChange={(e) => setPStart(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                  <span className="text-gray-400 text-sm">–</span>
+                  <input type="date" value={pEnd} onChange={(e) => setPEnd(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+                  <button
+                    onClick={() => { void handleSavePeriod(); }}
+                    disabled={savingPeriod || !pStart || (pStart === current.periodStart && pEnd === current.periodEnd)}
+                    className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40"
+                  >
+                    {savingPeriod ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">The month gross + fees are booked in — fix it if extraction guessed wrong.</p>
               </div>
 
               {/* Reconciliation status */}
