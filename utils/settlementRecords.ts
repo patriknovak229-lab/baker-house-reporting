@@ -23,6 +23,22 @@ export function sourceLabel(source?: string): string {
   return 'OTA channel';
 }
 
+/** Short channel label used in the settlement's display name */
+export function channelLabel(source?: string): string {
+  if (source === 'airbnb')  return 'Airbnb';
+  if (source === 'booking') return 'Booking.com';
+  return 'OTA';
+}
+
+/** Canonical settlement display name — always "<Channel> <Month Year>" from the accrual period */
+export function settlementDisplayName(source?: string, periodStart?: string): string {
+  const label = channelLabel(source);
+  if (!periodStart) return label;
+  const d = new Date(periodStart + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return `${label} ${periodStart}`;
+  return `${label} ${d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+}
+
 function periodTag(group: SettlementGroup): string {
   return group.periodStart ? group.periodStart.slice(0, 7) : '';
 }

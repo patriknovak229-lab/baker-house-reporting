@@ -5,7 +5,7 @@ import { type SettlementGroup, isReportSettlement } from '@/types/settlementGrou
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
-import { REVENUE_KEY } from '@/utils/settlementRecords';
+import { REVENUE_KEY, settlementDisplayName } from '@/utils/settlementRecords';
 
 const GROUPS_KEY   = 'baker:settlement-groups';
 const TX_KEY       = 'baker:bank-transactions';
@@ -81,6 +81,8 @@ export async function PUT(request: Request, { params }: Params) {
         (group[key] as unknown) = body[key as keyof typeof body];
       }
     }
+    // Name always follows the accrual month, e.g. "Booking.com June 2026"
+    group.name = settlementDisplayName(group.source, group.periodStart);
     // Keep the two backing records in sync with the edited report figures
     updatedInvoices = invoices.map((inv) =>
       group.invoiceIds.includes(inv.id)
