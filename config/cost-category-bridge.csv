@@ -1,0 +1,11 @@
+﻿category,record_count,total_czk,statutory_line_ADEF,account,account_name,q2_2026_count,q2_2026_czk,note
+equipment,33,296253.02,A,501,Spotřeba materiálu (drobný hm. majetek < 80k),19,123377.92,All items <80k → expensed. Capitalize to 022 + depreciate (line E) only if a single item ≥80 000 Kč — none present.
+consumables,79,275253.78,A,501,Spotřeba materiálu,47,176472.35,
+distribution-fees,9,167128.28,A,518,Ostatní služby,6,152525.48,"Airbnb/Booking commissions. Book off gross revenue (602), never netted."
+other,16,100498.49,A,501,Spotřeba materiálu,11,90560.49,"MIS-TAGGED: all 16 rows are furniture/electronics (IKEA, vidaXL, HP Tronic, Sconto…). Re-tag to equipment/consumables; maps to A either way."
+maintenance,8,92806.79,A,511,Opravy a udržování,5,62216.00,
+cleaning,7,63400.00,A,518,Ostatní služby,4,39500.00,
+laundry,2,23936.71,A,518,Ostatní služby,1,20461.10,
+services,7,16057.34,A,518,Ostatní služby,4,9486.34,All RYWA s.r.o.
+software,23,2000.99,A,518,Ostatní služby,11,403.83,"SaaS (Beds24, Google, PriceLabs, WEDOS, Anthropic). EUR invoices already stored in CZK."
+utilities,1,1718.00,A,502,Spotřeba energie,1,1718.00,

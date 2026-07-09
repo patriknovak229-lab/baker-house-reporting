@@ -5,22 +5,24 @@ import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
 import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
-import { DISTRIBUTION_FEES_CATEGORY } from '@/utils/settlementRecords';
+import { classifyCost, RECURRING_ENTRY, type StatutoryLine } from '@/utils/costBridge';
 
 const redis = new Redis({
   url:   process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
-// Supplier invoice categories → Czech P&L sections
-const MATERIALS_CATS = ['utilities', 'consumables'];
-const PERSONNEL_CATS = ['cleaning', 'laundry'];
-// 'distribution-fees' → A. Výkonová spotřeba (OTA channel fees); everything else → otherOperating
-
-// Legacy OTA commission invoices (old Booking FAKTURA imports) are superseded by the
-// settlement-created fee records. Match by supplier name to exclude the legacy ones from
-// the P&L — but keep any invoice OWNED by a report settlement (the new auto-created cost).
+/** OTA-named suppliers — used to flag legacy commission invoices not backed by a settlement */
 const OTA_SUPPLIER_RE = /booking\.?com|airbnb/i;
+
+/** Plausible invoice-date window; anything outside is flagged (not silently bucketed) */
+const MIN_DATE = '2023-01-01';
+const MAX_DATE = `${new Date().getFullYear() + 1}-12-31`;
+
+/** Accrual period key: prefer DUZP / taxable-supply date, fall back to invoice date */
+function costDate(inv: SupplierInvoice): string {
+  return inv.duzpDate || inv.invoiceDate;
+}
 
 /** A recurring/contractual cost paid via bank (rent, parking) with no invoice */
 export interface PLRecurringCost {
@@ -32,15 +34,30 @@ export interface PLRecurringCost {
   note?: string;
 }
 
+/** A single cost record placed on a statutory line (for drill-down) */
+export interface PLCostRow {
+  id: string;
+  date: string;           // accrual date (DUZP ?? invoiceDate; tx date for recurring)
+  supplier: string;
+  invoiceNumber: string;
+  amount: number;
+  category: string;
+  account: string;        // Czech ledger account
+  line: StatutoryLine;
+}
+
+export interface PLLine {
+  total: number;
+  rows: PLCostRow[];
+}
+
 export interface PLData {
   from: string;
   to: string;
   revenue: {
-    /** Revenue invoices: direct accommodation */
     accommodation: number;
-    /** Revenue invoices: other services */
     otherServices: number;
-    /** Gross booking volume from OTA settlements (Airbnb + Booking) — the 'ota_gross' records */
+    /** Gross booking volume from OTA settlements (Airbnb + Booking) — 'ota_gross' records */
     otaGross: number;
     total: number;
     accommodationInvoices: RevenueInvoice[];
@@ -48,22 +65,22 @@ export interface PLData {
     otaGrossInvoices: RevenueInvoice[];
   };
   costs: {
-    materialsEnergy: number;
-    personnelServices: number;
-    /** OTA / channel distribution + payment fees (category 'distribution-fees').
-     *  Maps to A. Výkonová spotřeba in the statutory statement. */
-    distributionFees: number;
-    /** Other operating costs incl. recurring bank costs (rent, parking) */
-    otherOperating: number;
+    /** Costs summed by VZZ statutory line: A / D / E / F */
+    byLine: Record<StatutoryLine, PLLine>;
     total: number;
-    materialsInvoices: SupplierInvoice[];
-    personnelInvoices: SupplierInvoice[];
-    distributionInvoices: SupplierInvoice[];
-    otherInvoices: SupplierInvoice[];
-    recurringCosts: PLRecurringCost[];
+    /** Items ≥ 80k in a capitalizable category → fixed asset (022), NOT expensed */
+    capitalizedAssets: PLCostRow[];
+    /** OTA fee records not backed by a settlement — likely legacy; delete + re-upload as settlements */
+    flaggedLegacyOta: PLCostRow[];
+    /** Records whose date is implausible (future/very old) — fix before period close */
+    flaggedOutOfRangeDate: PLCostRow[];
+    /** Records whose category wasn't in the bridge → fell back to 548/F */
+    flaggedUnknownCategory: PLCostRow[];
   };
   operatingResult: number;
 }
+
+const emptyLine = (): PLLine => ({ total: 0, rows: [] });
 
 export async function GET(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super', 'accountant']);
@@ -89,21 +106,10 @@ export async function GET(req: NextRequest) {
   const bankTxs: BankTransaction[]          = rawTxs      ?? [];
   const settlementGroups: SettlementGroup[] = rawGroups   ?? [];
 
-  // Cost records owned by a report settlement (the new auto-created fee records)
-  const settlementOwnedCostIds = new Set(
-    settlementGroups.filter(isReportSettlement).flatMap((g) => g.invoiceIds),
-  );
-  // A legacy OTA commission invoice = OTA-named supplier cost NOT owned by a settlement.
-  const isLegacyOtaCost = (inv: SupplierInvoice) =>
-    OTA_SUPPLIER_RE.test(inv.supplierName) && !settlementOwnedCostIds.has(inv.id);
-
   // ── Revenue (from records, by invoice date) ──────────────────────────────
-  // OTA gross booking volume is an 'ota_gross' RevenueInvoice auto-created from a
-  // settlement; direct guest revenue is accommodation_direct / other_services.
   const filteredRevenue = revenueInvoices.filter(
     (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to && inv.category !== 'mistake',
   );
-
   const accommodationInvoices = filteredRevenue.filter((inv) => inv.category === 'accommodation_direct');
   const otherServicesInvoices = filteredRevenue.filter((inv) => inv.category === 'other_services');
   const otaGrossInvoices      = filteredRevenue.filter((inv) => inv.category === 'ota_gross');
@@ -112,45 +118,76 @@ export async function GET(req: NextRequest) {
   const otaGross      = otaGrossInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
   const revenueTotal  = accommodation + otherServices + otaGross;
 
-  // ── Costs (from records, by invoice date) ────────────────────────────────
-  // Channel fees are the 'distribution-fees' cost records auto-created from settlements.
-  // Legacy Booking FAKTURA imports are excluded (superseded by settlement records) to
-  // avoid double-counting — they stay visible in the Costs tab but don't hit the P&L.
-  const filteredSupplier = supplierInvoices.filter(
-    (inv) => inv.invoiceDate >= from && inv.invoiceDate <= to && !isLegacyOtaCost(inv),
+  // ── Costs — accrual by DUZP/invoice date, mapped to statutory line via the bridge ──
+  const settlementOwnedCostIds = new Set(
+    settlementGroups.filter(isReportSettlement).flatMap((g) => g.invoiceIds),
   );
 
-  const materialsInvoices    = filteredSupplier.filter((inv) => MATERIALS_CATS.includes(inv.category));
-  const personnelInvoices    = filteredSupplier.filter((inv) => PERSONNEL_CATS.includes(inv.category));
-  const distributionInvoices = filteredSupplier.filter((inv) => inv.category === DISTRIBUTION_FEES_CATEGORY);
-  const otherInvoices        = filteredSupplier.filter(
-    (inv) => !MATERIALS_CATS.includes(inv.category)
-      && !PERSONNEL_CATS.includes(inv.category)
-      && inv.category !== DISTRIBUTION_FEES_CATEGORY,
-  );
+  const byLine: Record<StatutoryLine, PLLine> = { A: emptyLine(), D: emptyLine(), E: emptyLine(), F: emptyLine() };
+  const capitalizedAssets: PLCostRow[] = [];
+  const flaggedLegacyOta: PLCostRow[] = [];
+  const flaggedOutOfRangeDate: PLCostRow[] = [];
+  const flaggedUnknownCategory: PLCostRow[] = [];
 
-  // ── Recurring bank costs (rent, parking) — no invoice, but real costs ────
+  for (const inv of supplierInvoices) {
+    const date = costDate(inv);
+    const cls = classifyCost(inv.category, inv.amountCZK);
+    const row: PLCostRow = {
+      id: inv.id,
+      date,
+      supplier: inv.supplierName,
+      invoiceNumber: inv.invoiceNumber,
+      amount: inv.amountCZK,
+      category: inv.category,
+      account: cls.account,
+      line: cls.line,
+    };
+
+    // Flag implausible dates regardless of the query window (don't silently bucket)
+    if (date < MIN_DATE || date > MAX_DATE) {
+      flaggedOutOfRangeDate.push(row);
+      continue;
+    }
+
+    // Period filter (accrual)
+    if (date < from || date > to) continue;
+
+    // Legacy OTA commission (not backed by a settlement) — counted, but flagged for cleanup
+    if (OTA_SUPPLIER_RE.test(inv.supplierName) && !settlementOwnedCostIds.has(inv.id)) {
+      flaggedLegacyOta.push(row);
+    }
+    if (cls.unknownCategory) flaggedUnknownCategory.push(row);
+
+    // Capitalized fixed asset → balance sheet (022), not an operating expense
+    if (cls.capitalized) {
+      capitalizedAssets.push(row);
+      continue;
+    }
+
+    byLine[cls.line].total += inv.amountCZK;
+    byLine[cls.line].rows.push(row);
+  }
+
+  // Recurring bank costs (rent, parking) — no invoice, mapped to line A (services)
   const recurringCostTxs = bankTxs.filter(
-    (tx) => tx.state === 'recurring_cost'
-      && tx.direction === 'debit'
-      && tx.date >= from
-      && tx.date <= to,
+    (tx) => tx.state === 'recurring_cost' && tx.direction === 'debit' && tx.date >= from && tx.date <= to,
   );
-  const recurringCosts: PLRecurringCost[] = recurringCostTxs.map((tx) => ({
-    id: tx.id,
-    date: tx.date,
-    counterpartyName: tx.counterpartyName,
-    amount: tx.amount,
-    costCategory: tx.costCategory,
-    note: tx.costNote,
-  }));
-  const recurringCostTotal = recurringCostTxs.reduce((s, tx) => s + tx.amount, 0);
+  for (const tx of recurringCostTxs) {
+    const row: PLCostRow = {
+      id: tx.id,
+      date: tx.date,
+      supplier: tx.counterpartyName ?? tx.costNote ?? 'Recurring cost',
+      invoiceNumber: tx.costCategory ?? 'recurring',
+      amount: tx.amount,
+      category: tx.costCategory ?? 'recurring',
+      account: RECURRING_ENTRY.account,
+      line: RECURRING_ENTRY.line,
+    };
+    byLine[RECURRING_ENTRY.line].total += tx.amount;
+    byLine[RECURRING_ENTRY.line].rows.push(row);
+  }
 
-  const materialsEnergy   = materialsInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const personnelServices = personnelInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const distributionFees  = distributionInvoices.reduce((s, inv) => s + inv.amountCZK, 0);
-  const otherOperating    = otherInvoices.reduce((s, inv) => s + inv.amountCZK, 0) + recurringCostTotal;
-  const costsTotal        = materialsEnergy + personnelServices + distributionFees + otherOperating;
+  const costsTotal = (['A', 'D', 'E', 'F'] as StatutoryLine[]).reduce((s, l) => s + byLine[l].total, 0);
 
   const data: PLData = {
     from,
@@ -165,16 +202,12 @@ export async function GET(req: NextRequest) {
       otaGrossInvoices,
     },
     costs: {
-      materialsEnergy,
-      personnelServices,
-      distributionFees,
-      otherOperating,
+      byLine,
       total: costsTotal,
-      materialsInvoices,
-      personnelInvoices,
-      distributionInvoices,
-      otherInvoices,
-      recurringCosts,
+      capitalizedAssets,
+      flaggedLegacyOta,
+      flaggedOutOfRangeDate,
+      flaggedUnknownCategory,
     },
     operatingResult: revenueTotal - costsTotal,
   };

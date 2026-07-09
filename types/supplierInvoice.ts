@@ -27,6 +27,8 @@ export interface SupplierInvoice {
   supplierICO?: string;
   invoiceNumber: string;
   invoiceDate: string;       // YYYY-MM-DD
+  /** DUZP / taxable-supply date (YYYY-MM-DD). Preferred over invoiceDate for accrual periodization. */
+  duzpDate?: string;
   dueDate?: string;          // YYYY-MM-DD
   amountCZK: number;
   vatAmountCZK?: number;
