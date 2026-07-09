@@ -5,7 +5,7 @@ import type { SettlementGroup } from '@/types/settlementGroup';
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import { REVENUE_KEY, SUPPLIER_KEY, buildSettlementRevenue, buildSettlementCost } from '@/utils/settlementRecords';
+import { REVENUE_KEY, SUPPLIER_KEY, buildSettlementRevenue, buildSettlementCost, appendRecords } from '@/utils/settlementRecords';
 
 const GROUPS_KEY = 'baker:settlement-groups';
 const TX_KEY     = 'baker:bank-transactions';
@@ -110,21 +110,12 @@ export async function POST(request: Request) {
     : txs;
   const updatedTx = body.transactionId ? (updatedTxs.find((t) => t.id === body.transactionId) ?? null) : null;
 
-  // Persist group, records and updated transactions
-  const groups = (await redis.get<SettlementGroup[]>(GROUPS_KEY)) ?? [];
-  groups.push(group);
-
-  const writes: Promise<unknown>[] = [redis.set(GROUPS_KEY, groups)];
-  if (body.transactionId) writes.push(redis.set(TX_KEY, updatedTxs));
-  if (revenueInvoice) {
-    const rev = (await redis.get<RevenueInvoice[]>(REVENUE_KEY)) ?? [];
-    writes.push(redis.set(REVENUE_KEY, [revenueInvoice, ...rev]));
-  }
-  if (costInvoice) {
-    const sup = (await redis.get<SupplierInvoice[]>(SUPPLIER_KEY)) ?? [];
-    writes.push(redis.set(SUPPLIER_KEY, [costInvoice, ...sup]));
-  }
-  await Promise.all(writes);
+  // Persist group + records append-safe (verify-and-retry so a concurrent settlement
+  // save can't clobber a just-added revenue/cost record — see appendRecords).
+  await appendRecords(redis, GROUPS_KEY, [group]);
+  if (body.transactionId) await redis.set(TX_KEY, updatedTxs);
+  if (revenueInvoice) await appendRecords(redis, REVENUE_KEY, [revenueInvoice]);
+  if (costInvoice) await appendRecords(redis, SUPPLIER_KEY, [costInvoice]);
 
   return NextResponse.json({ group, transaction: updatedTx, revenueInvoice, costInvoice }, { status: 201 });
 }

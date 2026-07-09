@@ -14,6 +14,37 @@ import type { SupplierInvoice } from '@/types/supplierInvoice';
 export const REVENUE_KEY  = 'baker:revenue-invoices';
 export const SUPPLIER_KEY = 'baker:supplier-invoices';
 
+/** Minimal Redis surface used by appendRecords (Upstash client satisfies this) */
+interface RedisLike {
+  get<T>(key: string): Promise<T | null>;
+  set(key: string, value: unknown): Promise<unknown>;
+}
+
+/**
+ * Append records to a JSON-array Redis key WITHOUT clobbering concurrent writes.
+ *
+ * The store keeps each collection as one JSON array under a single key, so a naive
+ * read-modify-write can drop a record another request just added. This reads fresh,
+ * appends only missing ids (idempotent), writes, then reads back to verify the ids
+ * landed — retrying if a concurrent write raced us. Prevents the "settlement group
+ * references a cost record that doesn't exist" data loss.
+ */
+export async function appendRecords<T extends { id: string }>(
+  redis: RedisLike, key: string, items: T[],
+): Promise<void> {
+  if (items.length === 0) return;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const arr = (await redis.get<T[]>(key)) ?? [];
+    const have = new Set(arr.map((a) => a.id));
+    const toAdd = items.filter((i) => !have.has(i.id));
+    if (toAdd.length === 0) return; // all present already (idempotent)
+    await redis.set(key, [...toAdd, ...arr]);
+    const after = (await redis.get<T[]>(key)) ?? [];
+    const afterIds = new Set(after.map((a) => a.id));
+    if (items.every((i) => afterIds.has(i.id))) return; // verified
+  }
+}
+
 /** Category id used for channel/distribution fees on the cost side */
 export const DISTRIBUTION_FEES_CATEGORY = 'distribution-fees';
 
