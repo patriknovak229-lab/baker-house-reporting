@@ -1,4 +1,4 @@
-import type { Reservation, GuestRating } from "@/types/reservation";
+import type { Reservation, GuestRating, RatingStatus } from "@/types/reservation";
 
 // Guest-rating derivation. A reservation can carry two rating sources:
 //   • syncedRating  — pulled from Beds24's Booking.com / Airbnb review endpoints
@@ -27,6 +27,16 @@ export function ratingSmiley(r: Reservation): "😊" | "😡" | "" {
   if (r.ratingStatus === "good") return "😊";
   if (r.ratingStatus === "bad") return "😡";
   return "";
+}
+
+/**
+ * Coarse rating class for filtering — mirrors the smiley the operator sees:
+ * top-of-scale → "good", any other numeric score (or legacy bad flag) → "bad",
+ * nothing on file → "none".
+ */
+export function ratingClass(r: Reservation): RatingStatus {
+  const s = ratingSmiley(r);
+  return s === "😊" ? "good" : s === "😡" ? "bad" : "none";
 }
 
 /** Native-scale label, e.g. "9.2/10" or "5/5". Trims a trailing ".0". */

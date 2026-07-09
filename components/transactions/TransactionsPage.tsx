@@ -22,6 +22,7 @@ import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { planForUnallocated } from "@/utils/roomAllocation";
+import { ratingClass } from "@/utils/rating";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
 import type { Role } from "@/utils/roles";
@@ -818,6 +819,9 @@ export default function TransactionsPage() {
         const hasAll = filters.customerFlags.every((f) => effective.includes(f));
         if (!hasAll) return false;
       }
+
+      // Guest rating — good / bad / unrated (matches the smiley in the table)
+      if (filters.ratings.length > 0 && !filters.ratings.includes(ratingClass(res))) return false;
 
       // Date range
       if (filters.checkInFrom && res.checkInDate < filters.checkInFrom) return false;

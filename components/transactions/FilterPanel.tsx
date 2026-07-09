@@ -5,6 +5,7 @@ import type {
   Room,
   PaymentStatus,
   CustomerFlag,
+  RatingStatus,
 } from "@/types/reservation";
 import { groupRoomsByCategory } from "@/utils/roomCategory";
 
@@ -15,6 +16,8 @@ export interface Filters {
   checkInTo: string;
   paymentStatuses: PaymentStatus[];
   customerFlags: CustomerFlag[];
+  /** Guest-rating class: "good" 😊 / "bad" 😡 / "none" (unrated). */
+  ratings: RatingStatus[];
 }
 
 export const defaultFilters: Filters = {
@@ -24,6 +27,7 @@ export const defaultFilters: Filters = {
   checkInTo: "",
   paymentStatuses: [],
   customerFlags: [],
+  ratings: [],
 };
 
 interface FilterPanelProps {
@@ -40,11 +44,14 @@ function MultiCheckbox<T extends string>({
   options,
   selected,
   onChange,
+  labels,
 }: {
   label: string;
   options: T[];
   selected: T[];
   onChange: (v: T[]) => void;
+  /** Optional display text per option value (defaults to the value itself). */
+  labels?: Partial<Record<T, string>>;
 }) {
   return (
     <div>
@@ -64,7 +71,7 @@ function MultiCheckbox<T extends string>({
                   : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
               }`}
             >
-              {opt}
+              {labels?.[opt] ?? opt}
             </button>
           );
         })}
@@ -139,6 +146,12 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
     "High Value Customer",
     "Problematic Customer",
   ];
+  const ratingOptions: RatingStatus[] = ["good", "bad", "none"];
+  const ratingLabels: Record<RatingStatus, string> = {
+    good: "😊 Good",
+    bad: "😡 Bad",
+    none: "Unrated",
+  };
 
   const hasFilters =
     filters.channels.length > 0 ||
@@ -146,7 +159,8 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
     filters.checkInFrom ||
     filters.checkInTo ||
     filters.paymentStatuses.length > 0 ||
-    filters.customerFlags.length > 0;
+    filters.customerFlags.length > 0 ||
+    filters.ratings.length > 0;
 
   return (
     <div className="border border-gray-200 rounded-lg bg-white">
@@ -243,6 +257,16 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
                 selected={filters.customerFlags}
                 onChange={(v) => onChange({ ...filters, customerFlags: v })}
               />
+            </div>
+            <div>
+              <MultiCheckbox
+                label="Rating"
+                options={ratingOptions}
+                labels={ratingLabels}
+                selected={filters.ratings}
+                onChange={(v) => onChange({ ...filters, ratings: v })}
+              />
+              <p className="text-[10px] text-gray-400 mt-1">Good + Bad = all rated</p>
             </div>
           </div>
 
