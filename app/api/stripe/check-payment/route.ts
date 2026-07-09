@@ -284,7 +284,8 @@ export async function POST(req: NextRequest) {
           {
             id:                invoiceId,
             sourceType:        'issued' as const,
-            category:          'other_services' as const,
+            // Direct-channel guest payment (web/link via Stripe) → accommodation revenue
+            category:          'accommodation_direct' as const,
             status:            'pending' as const,
             invoiceNumber,
             invoiceDate,
@@ -428,7 +429,8 @@ export async function POST(req: NextRequest) {
             invoicesCopy.push({
               id: invoiceId,
               sourceType: 'issued',
-              category: 'other_services',
+              // Direct-channel guest payment (web/link via Stripe) → accommodation revenue
+              category: 'accommodation_direct',
               status: 'pending',
               invoiceNumber,
               invoiceDate: paidAt.slice(0, 10),

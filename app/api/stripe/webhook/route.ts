@@ -181,7 +181,8 @@ export async function POST(req: NextRequest) {
         const newInvoice: RevenueInvoice = {
           id:                invoiceId,
           sourceType:        'issued',
-          category:          'other_services',
+          // Direct-channel guest payment (web/link via Stripe) → accommodation revenue
+          category:          'accommodation_direct',
           status:            'pending',
           invoiceNumber:     invoiceNumber,
           invoiceDate:       invoiceDate,
