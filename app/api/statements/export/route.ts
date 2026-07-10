@@ -151,8 +151,8 @@ export async function POST(req: NextRequest) {
       supplierName: inv.supplierName,
       supplierICO: inv.supplierICO ?? '',
       invoiceNumber: inv.invoiceNumber,
-      amountCZK: inv.amountCZK,
-      vatAmountCZK: inv.vatAmountCZK ?? null,
+      amountCZK: -inv.amountCZK,                                        // costs negative
+      vatAmountCZK: inv.vatAmountCZK != null ? -inv.vatAmountCZK : null,
       category: inv.category,
       ledgerAccount: classifyCost(inv.category, inv.amountCZK).account,
       status: inv.status,
@@ -171,7 +171,7 @@ export async function POST(req: NextRequest) {
       supplierName: tx.counterpartyName || tx.costNote || 'Recurring cost',
       supplierICO: '',
       invoiceNumber: '',
-      amountCZK: tx.amount,
+      amountCZK: -tx.amount,                                            // costs negative
       vatAmountCZK: null,
       category: tx.costCategory ?? 'recurring',
       ledgerAccount: RECURRING_ENTRY.account,
@@ -224,7 +224,7 @@ export async function POST(req: NextRequest) {
       date: tx.date,
       direction: tx.direction === 'debit' ? 'out' : 'in',
       counterparty: tx.counterpartyName || tx.description || tx.myDescription || '',
-      amountCZK: tx.amount,
+      amountCZK: tx.direction === 'debit' ? -tx.amount : tx.amount,     // out negative, in positive
       variableSymbol: tx.variableSymbol ?? '',
       state: tx.state,
       category,
