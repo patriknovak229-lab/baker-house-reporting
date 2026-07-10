@@ -163,11 +163,12 @@ export default function StatementsPage() {
 
       const driveUrl = res.headers.get('X-Drive-Url') || '';
       const driveErr = res.headers.get('X-Drive-Error') || '';
-      const count    = res.headers.get('X-Invoice-Count') || '0';
+      const count    = res.headers.get('X-Row-Count') || '0';
+      const bankCnt  = res.headers.get('X-Bank-Count') || '0';
       if (driveErr) {
-        setExportMsg({ type: 'warn', text: `Downloaded ${count} invoices, but Drive upload failed: ${driveErr}` });
+        setExportMsg({ type: 'warn', text: `Downloaded ${count} records + ${bankCnt} bank lines, but Drive upload failed: ${driveErr}` });
       } else {
-        setExportMsg({ type: 'ok', text: `Exported ${count} invoices — downloaded and saved to Drive.`, url: driveUrl });
+        setExportMsg({ type: 'ok', text: `Exported ${count} records + ${bankCnt} bank lines (2 sheets) — downloaded and saved to Drive.`, url: driveUrl });
       }
     } catch (e) {
       setExportMsg({ type: 'error', text: (e as Error).message });
@@ -223,7 +224,7 @@ export default function StatementsPage() {
             onClick={() => { void exportXlsx(); }}
             disabled={exporting || !from || !to}
             className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-            title="Export supplier invoices for this period as XLSX and save to the accountant's Drive folder"
+            title="Export all records (revenue + costs, incl. no-invoice) for this period as XLSX and save to the accountant's Drive folder"
           >
             {exporting
               ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
