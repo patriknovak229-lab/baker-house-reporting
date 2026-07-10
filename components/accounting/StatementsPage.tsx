@@ -127,30 +127,6 @@ function CostDetailRows({ rows }: { rows: PLCostRow[] }) {
 
 // ─── CSV export ───────────────────────────────────────────────────────────────
 
-function exportCSV(data: PLData) {
-  const rows: string[][] = [['Date', 'Type', 'Line', 'Account', 'Counterparty', 'Invoice #', 'Category', 'Amount CZK']];
-  for (const inv of data.revenue.accommodationInvoices)
-    rows.push([inv.invoiceDate, 'Revenue', 'I. Tržby', '602', inv.guestName ?? inv.clientName ?? '', inv.invoiceNumber, 'accommodation_direct', String(inv.amountCZK)]);
-  for (const inv of data.revenue.otherServicesInvoices)
-    rows.push([inv.invoiceDate, 'Revenue', 'I. Tržby', '602', inv.guestName ?? inv.clientName ?? '', inv.invoiceNumber, 'other_services', String(inv.amountCZK)]);
-  for (const inv of data.revenue.otaGrossInvoices)
-    rows.push([inv.invoiceDate, 'Revenue', 'I. Tržby', '602', inv.clientName ?? '', inv.invoiceNumber, 'ota_gross', String(inv.amountCZK)]);
-  for (const line of ['A', 'D', 'E', 'F'] as StatutoryLine[])
-    for (const r of data.costs.byLine[line].rows)
-      rows.push([r.date, 'Cost', `${LINE_META[line].code} ${LINE_META[line].label}`, r.account, r.supplier, r.invoiceNumber, r.category, String(r.amount)]);
-  for (const r of data.costs.capitalizedAssets)
-    rows.push([r.date, 'Asset', 'Rozvaha (022)', r.account, r.supplier, r.invoiceNumber, r.category, String(r.amount)]);
-
-  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `pl_${data.from}_${data.to}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function StatementsPage() {
@@ -161,8 +137,44 @@ export default function StatementsPage() {
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
   const [expanded, setExpanded]     = useState<Set<string>>(new Set());
+  const [exporting, setExporting]   = useState(false);
+  const [exportMsg, setExportMsg]   = useState<{ type: 'ok' | 'warn' | 'error'; text: string; url?: string } | null>(null);
 
   const { from, to } = preset === 'custom' ? { from: customFrom, to: customTo } : getPresetRange(preset);
+
+  async function exportXlsx() {
+    if (!from || !to) return;
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      const res = await fetch(`/api/statements/export?from=${from}&to=${to}`, { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Export failed (${res.status})`);
+      }
+      // Download the returned workbook
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `Statements_${from}_${to}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      const driveUrl = res.headers.get('X-Drive-Url') || '';
+      const driveErr = res.headers.get('X-Drive-Error') || '';
+      const count    = res.headers.get('X-Invoice-Count') || '0';
+      if (driveErr) {
+        setExportMsg({ type: 'warn', text: `Downloaded ${count} invoices, but Drive upload failed: ${driveErr}` });
+      } else {
+        setExportMsg({ type: 'ok', text: `Exported ${count} invoices — downloaded and saved to Drive.`, url: driveUrl });
+      }
+    } catch (e) {
+      setExportMsg({ type: 'error', text: (e as Error).message });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const fetchData = useCallback(async () => {
     if (!from || !to) return;
@@ -207,14 +219,39 @@ export default function StatementsPage() {
           <p className="text-sm text-gray-500 mt-0.5">Profit &amp; Loss — Czech statutory format (accrual, non-VAT)</p>
         </div>
         {data && (
-          <button onClick={() => exportCSV(data)} className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Export CSV
+          <button
+            onClick={() => { void exportXlsx(); }}
+            disabled={exporting || !from || !to}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            title="Export supplier invoices for this period as XLSX and save to the accountant's Drive folder"
+          >
+            {exporting
+              ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+            }
+            Export XLSX → Drive
           </button>
         )}
       </div>
+
+      {/* Export result */}
+      {exportMsg && (
+        <div className={`flex items-start justify-between rounded-xl px-4 py-3 gap-3 text-sm border ${
+          exportMsg.type === 'ok'   ? 'bg-green-50 border-green-200 text-green-800'
+          : exportMsg.type === 'warn' ? 'bg-amber-50 border-amber-200 text-amber-800'
+          : 'bg-red-50 border-red-200 text-red-700'
+        }`}>
+          <span>
+            {exportMsg.text}
+            {exportMsg.url && (
+              <> · <a href={exportMsg.url} target="_blank" rel="noopener noreferrer" className="underline font-medium">Open in Drive</a></>
+            )}
+          </span>
+          <button onClick={() => setExportMsg(null)} className="text-current opacity-60 hover:opacity-100 flex-shrink-0">×</button>
+        </div>
+      )}
 
       {/* Period selector */}
       <div className="flex flex-wrap items-center gap-2">
