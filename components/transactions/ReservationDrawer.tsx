@@ -32,6 +32,7 @@ import {
   PAYMENT_ACCOUNT_DISPLAY,
 } from "@/utils/invoiceUtils";
 import type { PaymentQRInfo } from "@/utils/invoiceUtils";
+import { formatPhoneDisplay } from "@/utils/stringUtils";
 
 function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): PaymentQRInfo {
   const invoiceNum = generateInvoiceNumber(reservationNumber);
@@ -1144,6 +1145,7 @@ function PhoneEditField({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const [copied, setCopied] = useState(false);
 
   // Keep draft in sync if reservation changes
   useEffect(() => { setDraft(value); }, [value]);
@@ -1153,7 +1155,9 @@ function PhoneEditField({
       <div>
         <p className="text-[11px] text-gray-400 mb-0.5">Phone</p>
         <div className="flex items-center gap-1.5">
-          <p className="text-sm text-gray-800">{value || <span className="text-gray-400">—</span>}</p>
+          <p className="text-sm text-gray-800">
+            {value ? formatPhoneDisplay(value) : <span className="text-gray-400">—</span>}
+          </p>
           <button
             onClick={() => { setDraft(value); setEditing(true); }}
             title="Edit phone"
@@ -1164,6 +1168,28 @@ function PhoneEditField({
                 d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z" />
             </svg>
           </button>
+          {value && (
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(value);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+              title={copied ? "Copied" : "Copy phone"}
+              className={`shrink-0 ${copied ? "text-emerald-500" : "text-gray-400 hover:text-indigo-500"}`}
+            >
+              {copied ? (
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
       </div>
     );

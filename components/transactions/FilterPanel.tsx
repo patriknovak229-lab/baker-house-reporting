@@ -1,23 +1,30 @@
 'use client';
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   Channel,
   Room,
   PaymentStatus,
   CustomerFlag,
   RatingStatus,
+  RateType,
 } from "@/types/reservation";
 import { groupRoomsByCategory } from "@/utils/roomCategory";
+import { RATE_TYPES, RATE_TYPE_LABELS } from "@/utils/rateType";
 
 export interface Filters {
   channels: Channel[];
   rooms: Room[];
   checkInFrom: string;
   checkInTo: string;
+  checkOutFrom: string;
+  checkOutTo: string;
   paymentStatuses: PaymentStatus[];
+  rateTypes: RateType[];
   customerFlags: CustomerFlag[];
   /** Guest-rating class: "good" 😊 / "bad" 😡 / "none" (unrated). */
   ratings: RatingStatus[];
+  /** Only reservations checked out in the last 7 days, in-house, or upcoming. */
+  activeOnly: boolean;
 }
 
 export const defaultFilters: Filters = {
@@ -25,9 +32,13 @@ export const defaultFilters: Filters = {
   rooms: [],
   checkInFrom: "",
   checkInTo: "",
+  checkOutFrom: "",
+  checkOutTo: "",
   paymentStatuses: [],
+  rateTypes: [],
   customerFlags: [],
   ratings: [],
+  activeOnly: false,
 };
 
 interface FilterPanelProps {
@@ -37,6 +48,23 @@ interface FilterPanelProps {
 
 function toggle<T>(arr: T[], value: T): T[] {
   return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
+}
+
+// ─── Month shortcut helpers ───────────────────────────────────────────────────
+/** First / last calendar day of a "YYYY-MM" month, as YYYY-MM-DD strings. */
+function monthBounds(ym: string): { first: string; last: string } {
+  const [y, m] = ym.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate(); // day 0 of next month = last of this
+  return { first: `${ym}-01`, last: `${ym}-${String(lastDay).padStart(2, "0")}` };
+}
+
+/** The month value the check-in range currently represents (blank if it's not a
+ *  clean whole-month span — e.g. the operator hand-edited the dates). */
+function currentMonthValue(f: Filters): string {
+  if (!f.checkInFrom || !f.checkInTo || !f.checkInFrom.endsWith("-01")) return "";
+  const ym = f.checkInFrom.slice(0, 7);
+  const { first, last } = monthBounds(ym);
+  return f.checkInFrom === first && f.checkInTo === last ? ym : "";
 }
 
 function MultiCheckbox<T extends string>({
@@ -75,6 +103,41 @@ function MultiCheckbox<T extends string>({
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/** A labelled From/To date pair stacked vertically in a single column. */
+function DateRangeStacked({
+  label,
+  from,
+  to,
+  onFrom,
+  onTo,
+}: {
+  label: string;
+  from: string;
+  to: string;
+  onFrom: (v: string) => void;
+  onTo: (v: string) => void;
+}) {
+  const inputCls =
+    "w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500";
+  return (
+    <div>
+      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+        {label}
+      </p>
+      <div className="space-y-1.5">
+        <div>
+          <label className="block text-[10px] text-gray-400 mb-0.5">From</label>
+          <input type="date" value={from} onChange={(e) => onFrom(e.target.value)} className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-[10px] text-gray-400 mb-0.5">To</label>
+          <input type="date" value={to} onChange={(e) => onTo(e.target.value)} className={inputCls} />
+        </div>
       </div>
     </div>
   );
@@ -153,14 +216,31 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
     none: "Unrated",
   };
 
+  // Month shortcut: 12 months back → 6 months ahead of the current month.
+  const monthOptions = useMemo(() => {
+    const now = new Date();
+    const opts: { ym: string; label: string }[] = [];
+    for (let i = -12; i <= 6; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      opts.push({ ym, label: d.toLocaleString("en-US", { month: "long", year: "numeric" }) });
+    }
+    return opts;
+  }, []);
+  const selectedMonth = currentMonthValue(filters);
+
   const hasFilters =
     filters.channels.length > 0 ||
     filters.rooms.length > 0 ||
     filters.checkInFrom ||
     filters.checkInTo ||
+    filters.checkOutFrom ||
+    filters.checkOutTo ||
     filters.paymentStatuses.length > 0 ||
+    filters.rateTypes.length > 0 ||
     filters.customerFlags.length > 0 ||
-    filters.ratings.length > 0;
+    filters.ratings.length > 0 ||
+    filters.activeOnly;
 
   return (
     <div className="border border-gray-200 rounded-lg bg-white">
@@ -207,6 +287,34 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
 
       {open && (
         <div className="px-4 pb-4 border-t border-gray-100">
+          {/* Active-only toggle — prominent, since it's the everyday view */}
+          <div className="pt-4">
+            <button
+              role="switch"
+              aria-checked={filters.activeOnly}
+              onClick={() => onChange({ ...filters, activeOnly: !filters.activeOnly })}
+              className="flex items-center gap-2.5 group"
+            >
+              <span
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                  filters.activeOnly ? "bg-indigo-600" : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    filters.activeOnly ? "translate-x-4" : "translate-x-0.5"
+                  }`}
+                />
+              </span>
+              <span className="text-left">
+                <span className="block text-sm font-medium text-gray-700">Active reservations only</span>
+                <span className="block text-[10px] text-gray-400">
+                  Checked out in the last 7 days, in-house, and upcoming
+                </span>
+              </span>
+            </button>
+          </div>
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-4 pt-4">
             <MultiCheckbox
               label="Channel"
@@ -224,31 +332,52 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
               selected={filters.paymentStatuses}
               onChange={(v) => onChange({ ...filters, paymentStatuses: v })}
             />
+            <MultiCheckbox
+              label="Rate"
+              options={RATE_TYPES}
+              labels={RATE_TYPE_LABELS}
+              selected={filters.rateTypes}
+              onChange={(v) => onChange({ ...filters, rateTypes: v })}
+            />
+            <DateRangeStacked
+              label="Check-in"
+              from={filters.checkInFrom}
+              to={filters.checkInTo}
+              onFrom={(v) => onChange({ ...filters, checkInFrom: v })}
+              onTo={(v) => onChange({ ...filters, checkInTo: v })}
+            />
+            <DateRangeStacked
+              label="Check-out"
+              from={filters.checkOutFrom}
+              to={filters.checkOutTo}
+              onFrom={(v) => onChange({ ...filters, checkOutFrom: v })}
+              onTo={(v) => onChange({ ...filters, checkOutTo: v })}
+            />
             <div>
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
-                Check-in From
+                Month
               </p>
-              <input
-                type="date"
-                value={filters.checkInFrom}
-                onChange={(e) =>
-                  onChange({ ...filters, checkInFrom: e.target.value })
-                }
-                className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
-                Check-in To
-              </p>
-              <input
-                type="date"
-                value={filters.checkInTo}
-                onChange={(e) =>
-                  onChange({ ...filters, checkInTo: e.target.value })
-                }
-                className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+              <select
+                value={selectedMonth}
+                onChange={(e) => {
+                  const ym = e.target.value;
+                  if (!ym) {
+                    onChange({ ...filters, checkInFrom: "", checkInTo: "" });
+                  } else {
+                    const { first, last } = monthBounds(ym);
+                    onChange({ ...filters, checkInFrom: first, checkInTo: last });
+                  }
+                }}
+                className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">— Any month —</option>
+                {monthOptions.map((m) => (
+                  <option key={m.ym} value={m.ym}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-gray-400 mt-1">Sets the check-in range</p>
             </div>
             <div className="lg:col-span-2">
               <MultiCheckbox

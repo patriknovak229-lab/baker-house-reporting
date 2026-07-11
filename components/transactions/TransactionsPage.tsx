@@ -19,7 +19,7 @@ import PaymentLinkModal from "./PaymentLinkModal";
 import CreateVoucherModal from "./CreateVoucherModal";
 import PriceCheckModal from "./PriceCheckModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
-import { normalizeForSearch } from "@/utils/stringUtils";
+import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { planForUnallocated } from "@/utils/roomAllocation";
 import { ratingClass } from "@/utils/rating";
@@ -781,16 +781,27 @@ export default function TransactionsPage() {
       });
   }, [reservations]);
 
+  // "Active" cutoff: checked out within the last 7 days, in-house, or upcoming.
+  const activeCutoff = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toLocaleDateString("sv-SE"); // local YYYY-MM-DD
+  }, []);
+
   const filtered = useMemo(() => {
     return reservations.filter((res) => {
-      // Search (diacritic-insensitive)
+      // Search (diacritic-insensitive; also matches phone by digits so a number
+      // without its country code — e.g. "1577…" for "+49 1577 …" — still hits)
       if (search.trim()) {
         const q = normalizeForSearch(search);
         const fullName = normalizeForSearch(`${res.firstName} ${res.lastName}`);
+        const qDigits = phoneDigits(search);
+        const resPhoneDigits = phoneDigits(res.phone);
         if (
           !res.reservationNumber.toLowerCase().includes(q) &&
           !fullName.includes(q) &&
-          !normalizeForSearch(res.email).includes(q)
+          !normalizeForSearch(res.email).includes(q) &&
+          !(qDigits.length >= 3 && resPhoneDigits.includes(qDigits))
         ) {
           return false;
         }
@@ -820,16 +831,29 @@ export default function TransactionsPage() {
         if (!hasAll) return false;
       }
 
+      // Rate plan — matches the effective rate (manual override wins)
+      if (filters.rateTypes.length > 0) {
+        const rt = effectiveRateType(res);
+        if (!rt || !filters.rateTypes.includes(rt)) return false;
+      }
+
       // Guest rating — good / bad / unrated (matches the smiley in the table)
       if (filters.ratings.length > 0 && !filters.ratings.includes(ratingClass(res))) return false;
 
-      // Date range
+      // Active only — check-out within the last 7 days, in-house, or upcoming
+      if (filters.activeOnly && res.checkOutDate < activeCutoff) return false;
+
+      // Check-in range
       if (filters.checkInFrom && res.checkInDate < filters.checkInFrom) return false;
       if (filters.checkInTo && res.checkInDate > filters.checkInTo) return false;
 
+      // Check-out range
+      if (filters.checkOutFrom && res.checkOutDate < filters.checkOutFrom) return false;
+      if (filters.checkOutTo && res.checkOutDate > filters.checkOutTo) return false;
+
       return true;
     });
-  }, [reservations, search, filters]);
+  }, [reservations, search, filters, activeCutoff]);
 
   async function handleUpdate(updated: Reservation) {
     // Optimistic UI: reflect the change locally before the server confirms.
@@ -2090,7 +2114,7 @@ export default function TransactionsPage() {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by reservation #, guest name, or email..."
+          placeholder="Search by reservation #, guest name, email, or phone..."
           className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white shadow-sm"
         />
         <FilterPanel filters={filters} onChange={setFilters} />
