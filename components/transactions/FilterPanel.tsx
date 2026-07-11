@@ -67,6 +67,21 @@ function currentMonthValue(f: Filters): string {
   return f.checkInFrom === first && f.checkInTo === last ? ym : "";
 }
 
+/** Check-in range covering the current calendar month. */
+function currentMonthRange(): { checkInFrom: string; checkInTo: string } {
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const { first, last } = monthBounds(ym);
+  return { checkInFrom: first, checkInTo: last };
+}
+
+/** Initial filters on first load: no filters except the check-in range scoped
+ *  to the current month, so the table opens on this month (operator preference).
+ *  Note "Clear all filters" resets to the empty `defaultFilters`, not this. */
+export function makeInitialFilters(): Filters {
+  return { ...defaultFilters, ...currentMonthRange() };
+}
+
 function MultiCheckbox<T extends string>({
   label,
   options,

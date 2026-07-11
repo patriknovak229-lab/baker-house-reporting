@@ -8,7 +8,7 @@ import type { InvoiceRequest } from "@/types/invoiceRequest";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
 import type { PendingDraft, PendingOther } from "@/app/api/webhook/beds24-message/route";
-import FilterPanel, { defaultFilters } from "./FilterPanel";
+import FilterPanel, { makeInitialFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
@@ -492,7 +492,8 @@ export default function TransactionsPage() {
   }, [pendingDrafts, pendingOthers, panelTx, translatePanel]);
 
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<Filters>(defaultFilters);
+  // Lazy initializer → opens scoped to the current month (see makeInitialFilters).
+  const [filters, setFilters] = useState<Filters>(makeInitialFilters);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [taskAlertOpen, setTaskAlertOpen] = useState(false);
