@@ -21,6 +21,7 @@ import BankPage from './BankPage';
 import RevenuePage from './RevenuePage';
 import StatementsPage from './StatementsPage';
 import VouchersPage from './VouchersPage';
+import CommissionPage from './CommissionPage';
 import type { BankTransaction } from '@/types/bankTransaction';
 
 const PHASES = [
@@ -29,6 +30,7 @@ const PHASES = [
   { id: 3, label: 'Revenue', description: 'Guest invoices' },
   { id: 4, label: 'Statements', description: 'P&L · Balance Sheet' },
   { id: 5, label: 'Vouchers', description: 'Discount codes' },
+  { id: 6, label: 'Commission', description: 'Owner settlements' },
 ];
 
 interface DrawerState {
@@ -684,7 +686,7 @@ export default function AccountingPage() {
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
         {PHASES.map((phase) => {
-          const enabled = phase.id <= 5;
+          const enabled = phase.id <= 6;
           const active = activePhase === phase.id;
           return (
             <div key={phase.id}
@@ -736,6 +738,11 @@ export default function AccountingPage() {
       {/* Phase 5 — Vouchers */}
       {activePhase === 5 && (
         <VouchersPage />
+      )}
+
+      {/* Phase 6 — Commission */}
+      {activePhase === 6 && (
+        <CommissionPage />
       )}
 
       {/* Phase 1 — Costs */}

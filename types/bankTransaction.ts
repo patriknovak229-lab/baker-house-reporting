@@ -72,6 +72,10 @@ export interface BankTransaction {
   deductedInvoiceIds?: string[];
   /** RevenueInvoice.id — set when this credit is linked to a revenue invoice */
   revenueInvoiceId?: string;
+  /** CommissionSettlement.id — set when this debit is the owner payout matching
+   *  a commission settlement. Purely a record-keeping link; does NOT change the
+   *  transaction's `state` or its P&L treatment. */
+  commissionSettlementId?: string;
   /** SettlementGroup.id — set when state === 'grouped' */
   settlementGroupId?: string;
   /** IGNORE_CATEGORIES id — set when state === 'ignored' */
