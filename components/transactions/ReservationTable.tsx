@@ -9,6 +9,7 @@ import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 import { roomChipClasses } from "@/utils/roomVisuals";
 import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
+import { autoRatePerks, effectiveRatePerks, hasAnyPerk, EARLY_CHECKIN_TIME, LATE_CHECKOUT_TIME } from "@/utils/ratePerks";
 import { ratingSmiley, effectiveRating, formatRating } from "@/utils/rating";
 
 type SortField =
@@ -213,6 +214,30 @@ function IssueBadge({ category, texts }: { category: IssueCategory; texts: strin
   );
 }
 
+/**
+ * Compact rate-perk tags (early check-in / late checkout / special treatment)
+ * derived from the reservation's effective rate + operator overrides. Read-only
+ * here — the operator toggles them in the drawer's Perks section.
+ */
+function PerkBadges({ res }: { res: Reservation }) {
+  const perks = effectiveRatePerks(autoRatePerks(effectiveRateType(res)), res.perkOverrides);
+  if (!hasAnyPerk(perks)) return null;
+  const chip = "inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full text-white text-[10px] font-bold";
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      {perks.earlyCheckIn && (
+        <span className={`${chip} bg-teal-500`} title={`Early check-in — from ${EARLY_CHECKIN_TIME}`}>↑</span>
+      )}
+      {perks.lateCheckout && (
+        <span className={`${chip} bg-orange-500`} title={`Late checkout — until ${LATE_CHECKOUT_TIME}`}>↓</span>
+      )}
+      {perks.specialTreatment && (
+        <span className={`${chip} bg-purple-500`} title={`Special treatment — ${perks.specialTreatment}`}>🍷</span>
+      )}
+    </span>
+  );
+}
+
 // Renders a dollar-sign badge with hover tooltip for additional payments.
 // Blinks amber when any are unpaid, otherwise muted green when all paid.
 function AdditionalPaymentBadge({ payments }: { payments: AdditionalPayment[] }) {
@@ -402,6 +427,7 @@ function ReservationCard({
           const rt = effectiveRateType(res);
           return rt ? <span className={rateChipClasses(rt)}>{RATE_TYPE_SHORT[rt]}</span> : null;
         })()}
+        <PerkBadges res={res} />
       </div>
 
       {/* Row 5: Stay status + flags (only if present) */}
@@ -749,6 +775,7 @@ export default function ReservationTable({
                           <span className="text-gray-300">—</span>
                         );
                       })()}
+                      <div className="mt-1"><PerkBadges res={res} /></div>
                     </td>
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">

@@ -217,6 +217,13 @@ export interface Reservation {
   manualRating?: GuestRating | null;
   /** Manual rate-plan override; null/undefined = use the detected `rateType`. */
   rateTypeOverride?: RateType | null;
+  /**
+   * Operator overrides for the rate-driven perks (early check-in / late
+   * checkout / special treatment). Each absent field falls back to the value
+   * the effective rate grants; see utils/ratePerks.ts. Persisted in Redis
+   * overrides so the operator keeps full control (manual wins over auto).
+   */
+  perkOverrides?: import("@/utils/ratePerks").PerkOverrides;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this

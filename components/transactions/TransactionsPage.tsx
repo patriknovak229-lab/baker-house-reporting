@@ -40,6 +40,7 @@ type LocalFields = {
   ratingStatus?: RatingStatus;
   manualRating?: import('@/types/reservation').GuestRating | null;
   rateTypeOverride?: import('@/types/reservation').RateType | null;
+  perkOverrides?: import('@/utils/ratePerks').PerkOverrides;
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
   issues?: Issue[];
@@ -59,6 +60,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.ratingStatus !== "none") local.ratingStatus = r.ratingStatus;
   if (r.manualRating) local.manualRating = r.manualRating;
   if (r.rateTypeOverride != null) local.rateTypeOverride = r.rateTypeOverride;
+  if (r.perkOverrides && Object.keys(r.perkOverrides).length > 0) local.perkOverrides = r.perkOverrides;
   if (r.invoiceData) local.invoiceData = r.invoiceData;
   if (r.invoiceStatus !== "Not Issued") local.invoiceStatus = r.invoiceStatus;
   if (r.issues && r.issues.length > 0) local.issues = r.issues;

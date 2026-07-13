@@ -33,6 +33,14 @@ import {
 } from "@/utils/invoiceUtils";
 import type { PaymentQRInfo } from "@/utils/invoiceUtils";
 import { formatPhoneDisplay } from "@/utils/stringUtils";
+import {
+  autoRatePerks,
+  effectiveRatePerks,
+  WINE_TREATMENT_NOTE,
+  EARLY_CHECKIN_TIME,
+  LATE_CHECKOUT_TIME,
+} from "@/utils/ratePerks";
+import type { PerkOverrides } from "@/utils/ratePerks";
 
 function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): PaymentQRInfo {
   const invoiceNum = generateInvoiceNumber(reservationNumber);
@@ -1090,6 +1098,147 @@ function RateTypeControl({
             <button onClick={() => setOpen(false)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rate-driven perks with operator override. Shows the effective state of each
+ * event (early check-in / late checkout / special treatment); the operator can
+ * toggle any of them (manual wins over the rate default) or reset to auto. The
+ * special-treatment note (e.g. the wine) is editable so a substitute can be
+ * recorded, and it can be removed outright.
+ */
+function PerksControl({
+  rate,
+  override,
+  onOverride,
+}: {
+  rate: RateType | null;
+  override: PerkOverrides | null | undefined;
+  onOverride: (v: PerkOverrides) => void;
+}) {
+  const auto = autoRatePerks(rate);
+  const eff = effectiveRatePerks(auto, override);
+  const ov: PerkOverrides = override ?? {};
+  const [editingWine, setEditingWine] = useState(false);
+  const [wineDraft, setWineDraft] = useState(eff.specialTreatment ?? WINE_TREATMENT_NOTE);
+
+  function setBool(field: "earlyCheckIn" | "lateCheckout", next: boolean) {
+    const copy: PerkOverrides = { ...ov };
+    if (next === auto[field]) delete copy[field]; // back to auto → drop the override
+    else copy[field] = next;
+    onOverride(copy);
+  }
+  function setSpecial(next: string | null | undefined) {
+    const copy: PerkOverrides = { ...ov };
+    if (next === undefined || next === auto.specialTreatment) delete copy.specialTreatment;
+    else copy.specialTreatment = next;
+    onOverride(copy);
+  }
+
+  const boolRow = (
+    field: "earlyCheckIn" | "lateCheckout",
+    label: string,
+    color: string,
+  ) => {
+    const on = eff[field];
+    const overridden = ov[field] !== undefined && ov[field] !== auto[field];
+    return (
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setBool(field, !on)}
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border ${
+            on ? `${color} text-white border-transparent` : "bg-white text-gray-400 border-gray-200"
+          }`}
+        >
+          <span>{on ? "✓" : "—"}</span>
+          {label}
+        </button>
+        {overridden ? (
+          <button
+            onClick={() => { const c = { ...ov }; delete c[field]; onOverride(c); }}
+            className="text-[10px] text-amber-500 hover:text-indigo-500"
+            title="Manual override — reset to rate default"
+          >
+            manual · ↺ auto
+          </button>
+        ) : (
+          <span className="text-[10px] text-gray-300">from rate</span>
+        )}
+      </div>
+    );
+  };
+
+  const specialOverridden = ov.specialTreatment !== undefined && ov.specialTreatment !== auto.specialTreatment;
+
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 mb-1">Perks (rate-based · manual overrides)</p>
+      <div className="space-y-1.5">
+        {boolRow("earlyCheckIn", `Early check-in (from ${EARLY_CHECKIN_TIME})`, "bg-teal-500")}
+        {boolRow("lateCheckout", `Late checkout (until ${LATE_CHECKOUT_TIME})`, "bg-orange-500")}
+        {/* Special treatment */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {eff.specialTreatment && !editingWine ? (
+            <>
+              <span className="inline-flex items-center gap-1 rounded-full bg-purple-500 px-2 py-0.5 text-[11px] font-medium text-white">
+                🍷 {eff.specialTreatment}
+              </span>
+              <button
+                onClick={() => { setWineDraft(eff.specialTreatment ?? WINE_TREATMENT_NOTE); setEditingWine(true); }}
+                className="text-[10px] text-gray-400 hover:text-indigo-500 underline underline-offset-2"
+              >
+                edit
+              </button>
+              <button
+                onClick={() => setSpecial(null)}
+                className="text-[10px] text-red-400 hover:text-red-600"
+                title="Remove special treatment"
+              >
+                remove
+              </button>
+              {specialOverridden && (
+                <button
+                  onClick={() => setSpecial(undefined)}
+                  className="text-[10px] text-amber-500 hover:text-indigo-500"
+                  title="Reset to rate default"
+                >
+                  ↺ auto
+                </button>
+              )}
+            </>
+          ) : editingWine ? (
+            <div className="flex items-center gap-1.5 w-full">
+              <input
+                autoFocus
+                value={wineDraft}
+                onChange={(e) => setWineDraft(e.target.value)}
+                placeholder="Special-treatment note"
+                className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && wineDraft.trim()) { setSpecial(wineDraft.trim()); setEditingWine(false); }
+                  if (e.key === "Escape") setEditingWine(false);
+                }}
+              />
+              <button
+                onClick={() => { if (wineDraft.trim()) { setSpecial(wineDraft.trim()); setEditingWine(false); } }}
+                className="text-xs px-2 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600"
+              >
+                Save
+              </button>
+              <button onClick={() => setEditingWine(false)} className="text-gray-400 hover:text-gray-600 text-xs">✕</button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { setWineDraft(WINE_TREATMENT_NOTE); setEditingWine(true); }}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border border-gray-200 bg-white text-gray-400 hover:border-purple-300"
+            >
+              🍷 Add special treatment
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2794,6 +2943,13 @@ export default function ReservationDrawer({
                     />
                   )}
                 </div>
+                {showRatePlan && (
+                  <PerksControl
+                    rate={reservation.rateTypeOverride ?? reservation.rateType ?? null}
+                    override={reservation.perkOverrides}
+                    onOverride={(v) => onUpdate({ ...reservation, perkOverrides: v })}
+                  />
+                )}
                 <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2.5 py-1.5">
                   Paid through {reservation.channel} — collected by channel.
                 </p>

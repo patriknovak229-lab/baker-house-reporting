@@ -5,6 +5,8 @@ import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
+import { autoRatePerks, effectiveRatePerks } from "@/utils/ratePerks";
+import type { PerkOverrides, RatePerks } from "@/utils/ratePerks";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { fetchReviews, fetchRawReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
 import type { GuestRating } from "@/types/reservation";
@@ -99,27 +101,38 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
 
 const RESERVATION_OVERRIDES_KEY = "baker:reservation-overrides";
 const RATE_TYPES_KEY = "baker:reservation-rate-types";
+const RATE_PERKS_KEY = "baker:reservation-rate-perks";
 
 /**
- * Publish each reservation's EFFECTIVE rate (manual override ?? detected) to a
- * shared Redis map keyed by reservationNumber. The cleaning app reads this to
- * auto-apply rate-based perks (Flexi → early check-in + late checkout) without
- * duplicating the calibrated detection logic. Read-only side effect — never
- * affects the API response.
+ * Publish each reservation's EFFECTIVE rate + EFFECTIVE perks to shared Redis
+ * maps keyed by reservationNumber. The cleaning app consumes the perks map
+ * (`baker:reservation-rate-perks`) directly — reporting owns the rate → perk
+ * mapping and the operator overrides, so cleaning just reflects the result.
+ *
+ * Recomputed on every sync from the current booking set, so a cancelled /
+ * re-rated / modified reservation self-corrects (it drops out or updates here).
+ * Read-only side effect — never affects the API response.
  */
 async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
   const overrides =
-    (await redis.get<Record<string, { rateTypeOverride?: RateType | null }>>(
-      RESERVATION_OVERRIDES_KEY,
-    )) ?? {};
-  const map: Record<string, RateType> = {};
+    (await redis.get<
+      Record<string, { rateTypeOverride?: RateType | null; perkOverrides?: PerkOverrides }>
+    >(RESERVATION_OVERRIDES_KEY)) ?? {};
+  const rateMap: Record<string, RateType> = {};
+  const perkMap: Record<string, RatePerks> = {};
   for (const r of reservations) {
-    const eff = overrides[r.reservationNumber]?.rateTypeOverride ?? r.rateType ?? null;
-    if (eff) map[r.reservationNumber] = eff;
+    const ov = overrides[r.reservationNumber];
+    const eff = ov?.rateTypeOverride ?? r.rateType ?? null;
+    if (eff) rateMap[r.reservationNumber] = eff;
+    // Effective perks = rate-derived auto value, then operator override wins.
+    const perks = effectiveRatePerks(autoRatePerks(eff), ov?.perkOverrides);
+    if (perks.earlyCheckIn || perks.lateCheckout || perks.specialTreatment != null) {
+      perkMap[r.reservationNumber] = perks;
+    }
   }
-  await redis.set(RATE_TYPES_KEY, map);
+  await Promise.all([redis.set(RATE_TYPES_KEY, rateMap), redis.set(RATE_PERKS_KEY, perkMap)]);
 }
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
