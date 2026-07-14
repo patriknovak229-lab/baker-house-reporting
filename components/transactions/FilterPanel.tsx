@@ -67,19 +67,12 @@ function currentMonthValue(f: Filters): string {
   return f.checkInFrom === first && f.checkInTo === last ? ym : "";
 }
 
-/** Check-in range covering the current calendar month. */
-function currentMonthRange(): { checkInFrom: string; checkInTo: string } {
-  const now = new Date();
-  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const { first, last } = monthBounds(ym);
-  return { checkInFrom: first, checkInTo: last };
-}
-
-/** Initial filters on first load: no filters except the check-in range scoped
- *  to the current month, so the table opens on this month (operator preference).
- *  Note "Clear all filters" resets to the empty `defaultFilters`, not this. */
+/** Initial filters on first load / refresh: show ACTIVE reservations only
+ *  (checked out in the last 7 days, in-house, or upcoming) across ALL months —
+ *  so new bookings for future-month dates show without switching the month.
+ *  "Clear all filters" still resets to the empty `defaultFilters`. */
 export function makeInitialFilters(): Filters {
-  return { ...defaultFilters, ...currentMonthRange() };
+  return { ...defaultFilters, activeOnly: true };
 }
 
 function MultiCheckbox<T extends string>({
