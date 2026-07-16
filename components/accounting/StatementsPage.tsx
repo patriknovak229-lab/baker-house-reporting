@@ -138,7 +138,12 @@ export default function StatementsPage() {
   const [error, setError]           = useState<string | null>(null);
   const [expanded, setExpanded]     = useState<Set<string>>(new Set());
   const [exporting, setExporting]   = useState(false);
-  const [exportMsg, setExportMsg]   = useState<{ type: 'ok' | 'warn' | 'error'; text: string; url?: string } | null>(null);
+  const [exportMsg, setExportMsg]   = useState<{
+    type: 'ok' | 'warn' | 'error';
+    text: string;
+    url?: string;
+    folder?: { status: 'building' | 'ok' | 'warn'; text: string; url?: string };
+  } | null>(null);
 
   const { from, to } = preset === 'custom' ? { from: customFrom, to: customTo } : getPresetRange(preset);
 
@@ -166,14 +171,50 @@ export default function StatementsPage() {
       const count    = res.headers.get('X-Row-Count') || '0';
       const bankCnt  = res.headers.get('X-Bank-Count') || '0';
       if (driveErr) {
+        // Same Google auth backs the folder copy — don't attempt it if the XLSX upload just failed.
         setExportMsg({ type: 'warn', text: `Downloaded ${count} records + ${bankCnt} bank lines, but Drive upload failed: ${driveErr}` });
-      } else {
-        setExportMsg({ type: 'ok', text: `Exported ${count} records + ${bankCnt} bank lines (2 sheets) — downloaded and saved to Drive.`, url: driveUrl });
+        return;
       }
+
+      const base = {
+        type: 'ok' as const,
+        text: `Exported ${count} records + ${bankCnt} bank lines (2 sheets) — downloaded and saved to Drive.`,
+        url: driveUrl,
+      };
+      setExportMsg({ ...base, folder: { status: 'building', text: 'Building invoice folder for the accountant…' } });
+      await buildInvoiceFolder(base);
     } catch (e) {
       setExportMsg({ type: 'error', text: (e as Error).message });
     } finally {
       setExporting(false);
+    }
+  }
+
+  // Copy every in-period invoice PDF into a `Statements_<from>_<to>` subfolder of the
+  // shared invoices folder, so the accountant can download the whole period as one Drive zip.
+  async function buildInvoiceFolder(base: { type: 'ok'; text: string; url?: string }) {
+    try {
+      const res = await fetch(`/api/statements/invoice-folder?from=${from}&to=${to}`, { method: 'POST' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || `Folder build failed (${res.status})`);
+
+      const { folderUrl, copied, skipped, missingPdf, failed, total } = j as {
+        folderUrl: string; copied: number; skipped: number; missingPdf: number; failed: number; total: number;
+      };
+      const parts = [`${copied} copied`];
+      if (skipped)    parts.push(`${skipped} already there`);
+      if (missingPdf) parts.push(`${missingPdf} without a PDF`);
+      if (failed)     parts.push(`${failed} failed`);
+      setExportMsg({
+        ...base,
+        folder: {
+          status: missingPdf || failed ? 'warn' : 'ok',
+          text: `Invoice folder ready — ${parts.join(', ')} of ${total} invoices.`,
+          url: folderUrl,
+        },
+      });
+    } catch (e) {
+      setExportMsg({ ...base, folder: { status: 'warn', text: `Invoice folder step failed: ${(e as Error).message}` } });
     }
   }
 
@@ -224,7 +265,7 @@ export default function StatementsPage() {
             onClick={() => { void exportXlsx(); }}
             disabled={exporting || !from || !to}
             className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-            title="Export all records (revenue + costs, incl. no-invoice) for this period as XLSX and save to the accountant's Drive folder"
+            title="Export all records (revenue + costs, incl. no-invoice) for this period as XLSX, and copy every invoice PDF for the period into a Statements_<from>_<to> folder the accountant can download in one go"
           >
             {exporting
               ? <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
@@ -244,12 +285,25 @@ export default function StatementsPage() {
           : exportMsg.type === 'warn' ? 'bg-amber-50 border-amber-200 text-amber-800'
           : 'bg-red-50 border-red-200 text-red-700'
         }`}>
-          <span>
-            {exportMsg.text}
-            {exportMsg.url && (
-              <> · <a href={exportMsg.url} target="_blank" rel="noopener noreferrer" className="underline font-medium">Open in Drive</a></>
+          <div className="flex flex-col gap-1">
+            <span>
+              {exportMsg.text}
+              {exportMsg.url && (
+                <> · <a href={exportMsg.url} target="_blank" rel="noopener noreferrer" className="underline font-medium">Open in Drive</a></>
+              )}
+            </span>
+            {exportMsg.folder && (
+              <span className="flex items-center gap-1.5">
+                {exportMsg.folder.status === 'building' && (
+                  <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin opacity-70" />
+                )}
+                <span>{exportMsg.folder.text}</span>
+                {exportMsg.folder.url && (
+                  <>· <a href={exportMsg.folder.url} target="_blank" rel="noopener noreferrer" className="underline font-medium">📁 Open invoice folder</a></>
+                )}
+              </span>
             )}
-          </span>
+          </div>
           <button onClick={() => setExportMsg(null)} className="text-current opacity-60 hover:opacity-100 flex-shrink-0">×</button>
         </div>
       )}
