@@ -2435,10 +2435,11 @@ export default function ReservationDrawer({
 
   const isOTAChannel = reservation.channel === "Booking.com" || reservation.channel === "Airbnb";
   const isDirectPhone = reservation.channel === "Direct-Phone";
-  // Rate plan applies to OTA stays that are current/future or booked since
-  // launch, or whenever a rate is already known (detected or manually set).
+  const isDirectWeb = reservation.channel === "Direct-Web";
+  // Rate plan applies to OTA + Direct-Web stays that are current/future or booked
+  // since launch, or whenever a rate is already known (detected or manually set).
   const showRatePlan =
-    isOTAChannel &&
+    (isOTAChannel || isDirectWeb) &&
     (isRateTypeInScope(reservation, new Date().toLocaleDateString("sv-SE")) ||
       !!effectiveRateType(reservation));
   const nationalityFlag = countryCodeToFlag(reservation.nationality);
@@ -2968,6 +2969,13 @@ export default function ReservationDrawer({
                   </div>
                   <ReadOnlyField label="Amount Paid" value={formatCurrency(reservation.amountPaid)} />
                 </div>
+                {showRatePlan && (
+                  <RateTypeControl
+                    detected={reservation.rateType}
+                    override={reservation.rateTypeOverride ?? null}
+                    onOverride={(v) => onUpdate({ ...reservation, rateTypeOverride: v })}
+                  />
+                )}
                 {reservation.paymentStatus === "Partially Paid" && (
                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
                     Outstanding balance: {formatCurrency(reservation.price - reservation.amountPaid)}

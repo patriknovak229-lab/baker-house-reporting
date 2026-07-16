@@ -53,9 +53,17 @@ export function rateChipClasses(rt: RateType): string {
   return `inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ring-1 ring-inset ${p.bg} ${p.text} ${p.ring}`;
 }
 
-/** OTA channels that carry a rate plan. Direct bookings have no channel rate. */
+/**
+ * Channels whose bookings carry a rate plan we track. Booking.com/Airbnb via the
+ * channel; Direct-Web via our own booking site (currently a single "Standard"
+ * web rate). Direct-Phone and legacy Direct have no tracked rate.
+ */
 export function channelHasRatePlan(channel: Channel): boolean {
-  return channel === "Booking.com" || channel === "Airbnb";
+  return (
+    channel === "Booking.com" ||
+    channel === "Airbnb" ||
+    channel === "Direct-Web"
+  );
 }
 
 /**
@@ -120,6 +128,11 @@ export function detectRateType(input: {
   signals: Array<string | null | undefined>;
 }): RateType | null {
   if (!channelHasRatePlan(input.channel)) return null;
+
+  // Direct-Web (our booking site): only one rate is sold online → always
+  // Standard. There's no channel rate text to parse, so return before the
+  // signal check. (Standard grants no auto perks — same as any Standard rate.)
+  if (input.channel === "Direct-Web") return "Standard";
 
   const hay = input.signals
     .filter((s): s is string => typeof s === "string" && s.length > 0)
