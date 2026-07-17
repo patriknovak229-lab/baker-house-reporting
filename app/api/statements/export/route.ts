@@ -7,6 +7,7 @@ import { auth } from '@/auth';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
+import type { SettlementGroup } from '@/types/settlementGroup';
 import { classifyCost, RECURRING_ENTRY } from '@/utils/costBridge';
 
 /** Fixed Drive folder the accountant asked exports to be uploaded into. */
@@ -108,17 +109,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'from and to query params are required (YYYY-MM-DD)' }, { status: 400 });
   }
 
-  const [rawRevenue, rawSupplier, rawTxs] = await Promise.all([
+  const [rawRevenue, rawSupplier, rawTxs, rawGroups] = await Promise.all([
     redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
     redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
     redis.get<BankTransaction[]>('baker:bank-transactions'),
+    redis.get<SettlementGroup[]>('baker:settlement-groups'),
   ]);
   const revenueInvoices  = rawRevenue  ?? [];
   const supplierInvoices = rawSupplier ?? [];
   const bankTxs          = rawTxs      ?? [];
+  const settlementGroups = rawGroups   ?? [];
 
   const supplierById = new Map(supplierInvoices.map((i) => [i.id, i]));
   const revenueById  = new Map(revenueInvoices.map((i) => [i.id, i]));
+
+  // OTA settlement/earnings reports live on the SettlementGroup, not on the auto-created
+  // ota_gross revenue record or distribution-fees cost record. Map the report link back to
+  // both sides so every OTA revenue and cost row (and the settlement payout) shows a PDF.
+  const reportByRevId   = new Map<string, string>();
+  const reportByInvId   = new Map<string, string>();
+  const reportByGroupId = new Map<string, string>();
+  for (const g of settlementGroups) {
+    if (!g.reportUrl) continue;
+    reportByGroupId.set(g.id, g.reportUrl);
+    if (g.revenueInvoiceId) reportByRevId.set(g.revenueInvoiceId, g.reportUrl);
+    for (const invId of g.invoiceIds ?? []) reportByInvId.set(invId, g.reportUrl);
+  }
 
   // ── Records rows ──────────────────────────────────────────────────────────
   const records: RecordRow[] = [];
@@ -139,7 +155,7 @@ export async function POST(req: NextRequest) {
       sourceType: inv.sourceType ?? '',
       settlementGroupId: inv.settlementGroupId ?? '',
       description: inv.description || (inv.reservationNumber ? `Reservation ${inv.reservationNumber}` : ''),
-      pdfLink: inv.driveUrl ?? '',
+      pdfLink: inv.driveUrl || reportByRevId.get(inv.id) || '',
     });
   }
   for (const inv of supplierInvoices) {
@@ -159,7 +175,7 @@ export async function POST(req: NextRequest) {
       sourceType: inv.sourceType ?? '',
       settlementGroupId: inv.settlementGroupId ?? '',
       description: inv.description ?? '',
-      pdfLink: inv.driveUrl ?? '',
+      pdfLink: inv.driveUrl || reportByInvId.get(inv.id) || '',
     });
   }
   for (const tx of bankTxs) {
@@ -218,7 +234,13 @@ export async function POST(req: NextRequest) {
     const invoiceNumbers = linkedSup.length > 0
       ? linkedSup.map((i) => i.invoiceNumber).join('; ')
       : (revInv?.invoiceNumber ?? '');
-    const pdfLink = linkedSup[0]?.driveUrl ?? revInv?.driveUrl ?? '';
+    const settlementReport = tx.settlementGroupId ? reportByGroupId.get(tx.settlementGroupId) : undefined;
+    const pdfLink = linkedSup[0]?.driveUrl
+      || revInv?.driveUrl
+      || (linkedSup.length > 0 ? reportByInvId.get(linkedSup[0].id) : undefined)
+      || (revInv ? reportByRevId.get(revInv.id) : undefined)
+      || settlementReport
+      || '';
 
     bankRows.push({
       date: tx.date,

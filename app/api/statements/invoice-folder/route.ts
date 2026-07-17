@@ -5,6 +5,7 @@ import { requireRole } from '@/utils/authGuard';
 import { auth } from '@/auth';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
+import type { SettlementGroup } from '@/types/settlementGroup';
 import {
   getOrCreateInvoiceFolder,
   getOrCreateSubfolder,
@@ -62,30 +63,48 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'from and to query params are required (YYYY-MM-DD)' }, { status: 400 });
   }
 
-  const [rawSupplier, rawRevenue] = await Promise.all([
+  const [rawSupplier, rawRevenue, rawGroups] = await Promise.all([
     redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
     redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
+    redis.get<SettlementGroup[]>('baker:settlement-groups'),
   ]);
   const supplierInvoices = rawSupplier ?? [];
   const revenueInvoices  = rawRevenue  ?? [];
+  const settlementGroups = rawGroups   ?? [];
+
+  // OTA settlement/earnings report PDFs live on the SettlementGroup, not on the auto-created
+  // ota_gross revenue record or distribution-fees cost record. Map the report file back to both
+  // so the report lands in the folder (gross + fee resolve to the SAME file → deduped by name).
+  const reportByRevId = new Map<string, { fileId: string; name: string }>();
+  const reportByInvId = new Map<string, { fileId: string; name: string }>();
+  for (const g of settlementGroups) {
+    if (!g.reportFileId) continue;
+    const rep = { fileId: g.reportFileId, name: g.reportFileName || `${g.name || 'settlement'}.pdf` };
+    if (g.revenueInvoiceId) reportByRevId.set(g.revenueInvoiceId, rep);
+    for (const invId of g.invoiceIds ?? []) reportByInvId.set(invId, rep);
+  }
 
   // Which invoices belong to this export period? (mirror the XLSX export's Records logic)
   const items: Item[] = [];
   for (const inv of supplierInvoices) {
     const d = costDate(inv);
     if (d < from || d > to) continue;
+    const direct = inv.driveFileId || parseDriveFileId(inv.driveUrl);
+    const rep = direct ? null : reportByInvId.get(inv.id);
     items.push({
-      fileId: inv.driveFileId || parseDriveFileId(inv.driveUrl),
-      name: invoiceFileName(inv.invoiceDate, inv.supplierName, inv.invoiceNumber, inv.amountCZK),
+      fileId: direct || rep?.fileId || null,
+      name: rep ? rep.name : invoiceFileName(inv.invoiceDate, inv.supplierName, inv.invoiceNumber, inv.amountCZK),
       label: `${inv.supplierName} · ${inv.invoiceNumber}`,
     });
   }
   for (const inv of revenueInvoices) {
     if (inv.invoiceDate < from || inv.invoiceDate > to || inv.category === 'mistake') continue;
     const who = inv.guestName || inv.clientName || 'revenue';
+    const direct = inv.driveFileId || parseDriveFileId(inv.driveUrl);
+    const rep = direct ? null : reportByRevId.get(inv.id);
     items.push({
-      fileId: inv.driveFileId || parseDriveFileId(inv.driveUrl),
-      name: invoiceFileName(inv.invoiceDate, who, inv.invoiceNumber, inv.amountCZK),
+      fileId: direct || rep?.fileId || null,
+      name: rep ? rep.name : invoiceFileName(inv.invoiceDate, who, inv.invoiceNumber, inv.amountCZK),
       label: `${who} · ${inv.invoiceNumber}`,
     });
   }
