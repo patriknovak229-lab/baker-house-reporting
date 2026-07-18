@@ -134,6 +134,21 @@ export function renderWhatsAppMessage(vars: WhatsAppMessageVars): string {
  * Throws when the phone looks unusable so the UI surfaces an error instead
  * of opening a broken link.
  */
+/**
+ * Best-effort mobile detection (client-only). On a phone/tablet we want the
+ * `wa.me` universal link so the OS hands off to the INSTALLED WhatsApp app
+ * (incl. WhatsApp Business); on desktop we keep `web.whatsapp.com` so the
+ * message stays in the operator's WhatsApp Business Chrome profile rather than
+ * launching the personal desktop app. Returns false on the server.
+ */
+export function isMobileDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/android|iphone|ipad|ipod|iemobile|blackberry|opera mini|mobile/i.test(ua)) return true;
+  // iPadOS reports as "Macintosh" but is touch-first.
+  return /macintosh/i.test(ua) && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1;
+}
+
 export function buildWhatsAppDeeplink(rawPhone: string, text: string): string {
   const cleaned = (rawPhone || '').replace(/[^\d+]/g, '').replace(/^\+/, '');
   if (cleaned.length < 8) {
@@ -141,7 +156,10 @@ export function buildWhatsAppDeeplink(rawPhone: string, text: string): string {
       `Phone "${rawPhone}" doesn't look like a valid international number`,
     );
   }
-  const host = (process.env.NEXT_PUBLIC_WHATSAPP_URL_BASE || 'web.whatsapp.com').trim();
+  // Explicit env override wins; otherwise mobile → wa.me (native app),
+  // desktop → web.whatsapp.com (stays in the Business browser profile).
+  const explicit = (process.env.NEXT_PUBLIC_WHATSAPP_URL_BASE || '').trim();
+  const host = explicit || (isMobileDevice() ? 'wa.me' : 'web.whatsapp.com');
   const encodedText = encodeURIComponent(text);
   if (host === 'wa.me') {
     return `https://wa.me/${cleaned}?text=${encodedText}`;

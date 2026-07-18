@@ -13,6 +13,7 @@ import {
   buildWhatsAppDeeplink,
   defaultWhatsAppBodyForLang,
   whatsAppToPlain,
+  isMobileDevice,
 } from '@/utils/whatsAppMessage';
 import { toE164 } from '@/utils/phone';
 
@@ -368,6 +369,15 @@ export default function EmailGuestModal({
       setSendError('No phone number on file for this reservation');
       return;
     }
+    // Open handoff strategy — the voucher-persist await below leaves the user
+    // gesture, so a plain window.open() gets popup-blocked (esp. on mobile).
+    //  - Desktop: pre-open a tab NOW, inside the click gesture (not blocked),
+    //    and redirect it once we have the final code. Keeps the current
+    //    browser profile (WhatsApp Business Web).
+    //  - Mobile: navigate the current tab instead — a top-level navigation is
+    //    never popup-blocked and wa.me hands off to the installed app.
+    const mobile = isMobileDevice();
+    const preopened = mobile ? null : window.open('', '_blank');
     setSending(true);
     setSendError(null);
     try {
@@ -394,38 +404,45 @@ export default function EmailGuestModal({
           )
         : freshText;
 
-      // 3. open wa.me. window.open MUST happen synchronously after user
-      //    gesture, but since we awaited above some browsers may block the
-      //    popup. Use an <a>-style fallback if window.open is null.
+      // 3. build the deeplink (device-aware host — wa.me on mobile → native app).
       const url = buildWhatsAppDeeplink(phone, textToSend);
-      const opened = window.open(url, '_blank', 'noopener,noreferrer');
-      if (!opened) {
-        // Fallback — surface the link in the error pane so the operator can click
-        setSendError(`Couldn't open WhatsApp tab (popup blocked). Open this manually: ${url}`);
-        return;
-      }
 
-      // 4. log the dispatch. Best-effort — a failed log doesn't roll back
-      //    the user-visible action (WhatsApp tab is already open).
+      // 4. audit log (best-effort). A failed log never blocks the handoff.
       const selectedTemplate = TEMPLATES.find((t) => t.id === selectedTemplateId);
       const normalisedPhone = phone.replace(/[^\d+]/g, '').replace(/^\+/, '');
-      try {
-        await fetch('/api/log-guest-message', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            channel: 'whatsapp',
-            to: normalisedPhone,
-            reservationNumber: reservation.reservationNumber,
-            templateId: selectedTemplate?.id,
-            templateLabel: selectedTemplate?.label,
-          }),
-        });
-      } catch (logErr) {
-        console.warn('[EmailGuestModal] log-guest-message failed:', logErr);
+      const logDispatch = async () => {
+        try {
+          await fetch('/api/log-guest-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              channel: 'whatsapp',
+              to: normalisedPhone,
+              reservationNumber: reservation.reservationNumber,
+              templateId: selectedTemplate?.id,
+              templateLabel: selectedTemplate?.label,
+            }),
+          });
+        } catch (logErr) {
+          console.warn('[EmailGuestModal] log-guest-message failed:', logErr);
+        }
+      };
+
+      // 5. hand off to WhatsApp.
+      if (preopened && !preopened.closed) {
+        // Desktop: redirect the tab we opened inside the gesture, then log.
+        preopened.location.href = url;
+        await logDispatch();
+      } else {
+        // Mobile (or desktop popup blocked): log first so it survives the
+        // unload, then navigate this tab — a top-level navigation isn't
+        // popup-blocked and wa.me hands off to the installed WhatsApp app.
+        await logDispatch();
+        window.location.href = url;
       }
       onSent?.();
     } catch (e) {
+      if (preopened && !preopened.closed) preopened.close();
       setSendError((e as Error).message);
     } finally {
       setSending(false);
