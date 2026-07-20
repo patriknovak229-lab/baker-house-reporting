@@ -41,6 +41,7 @@ interface AutoReplyLogEntry {
   language: string;
   action: string;
   sentText: string | null;
+  guestMessage?: string;
   detail?: string;
   decidedAt: string;
 }

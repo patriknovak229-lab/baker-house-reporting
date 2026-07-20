@@ -268,6 +268,10 @@ interface AutoReplyLogEntry {
     | 'dismissed'            // operator dismissed a pending draft / other entry
     | 'errored';
   sentText: string | null;
+  /** The incoming guest message this entry is about — stored so /auto-reply-log
+   *  can show what was actually said (e.g. to spot "thanks"/no-reply messages).
+   *  Optional: absent on entries written before this field existed. */
+  guestMessage?: string;
   detail?: string;
   decidedAt: string;
 }
@@ -664,6 +668,7 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     language: detection.language,
     action: 'queued-draft',
     sentText: null,
+    guestMessage: messageText,
     detail: draftText
       ? `AI review-mode draft in Czech (${model}); sends in ${detection.language || 'guest language'}`
       : `AI review-mode: no draft produced (${model}) — operator to handle`,

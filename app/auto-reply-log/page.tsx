@@ -14,6 +14,7 @@ interface AutoReplyLogEntry {
   language: string;
   action: string;
   sentText: string | null;
+  guestMessage?: string;
   detail?: string;
   decidedAt: string;
 }
@@ -251,6 +252,7 @@ export default function AutoReplyLogPage() {
                   <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Category</th>
                   <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Conf</th>
                   <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Lang</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Guest message</th>
                   <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Action</th>
                   <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Reply / Detail</th>
                 </tr>
@@ -258,7 +260,7 @@ export default function AutoReplyLogPage() {
               <tbody className="divide-y divide-gray-100">
                 {!data || data.log.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-gray-400 text-sm italic">
+                    <td colSpan={8} className="px-3 py-8 text-center text-gray-400 text-sm italic">
                       {loading ? 'Loading…' : 'No entries yet — webhook hasn’t fired or hasn’t processed anything.'}
                     </td>
                   </tr>
@@ -276,6 +278,20 @@ export default function AutoReplyLogPage() {
                         {e.confidence != null ? e.confidence.toFixed(2) : '—'}
                       </td>
                       <td className="px-3 py-2 text-xs font-mono">{e.language || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-gray-700 max-w-xs">
+                        {e.guestMessage ? (
+                          <details>
+                            <summary className="cursor-pointer truncate hover:text-indigo-700">
+                              {e.guestMessage.split('\n')[0].slice(0, 80)}
+                            </summary>
+                            <pre className="mt-1 whitespace-pre-wrap font-sans text-xs text-gray-600 bg-gray-50 p-2 rounded">
+                              {e.guestMessage}
+                            </pre>
+                          </details>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2">
                         <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${actionClass(e.action)}`}>
                           {e.action}

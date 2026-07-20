@@ -56,6 +56,8 @@ interface AutoReplyLogEntry {
   language: string;
   action: string;
   sentText: string | null;
+  /** The incoming guest message this entry is about (for /auto-reply-log review). */
+  guestMessage?: string;
   detail?: string;
   decidedAt: string;
 }
@@ -253,6 +255,7 @@ export async function POST(
     language: pending.entry.language,
     action: wasEdited ? 'edited-approved' : 'approved',
     sentText: textToSend,
+    guestMessage: pending.entry.guestMessageText,
     detail: willTranslate
       ? `${wasEdited ? 'operator edited' : 'approved'} the Czech draft; sent translated to ${targetLanguage}`
       : wasEdited
@@ -316,6 +319,7 @@ export async function DELETE(
     language: pending.entry.language,
     action: 'dismissed',
     sentText: null,
+    guestMessage: pending.entry.guestMessageText,
     detail: 'operator dismissed from unread-messages panel',
     decidedAt: new Date().toISOString(),
   });
