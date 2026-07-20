@@ -38,6 +38,9 @@ export interface ComposeInput {
   reservation: Reservation | null;
   /** Assigned parking space number/label, when known. */
   parkingSpace: string | null;
+  /** Rate-driven perks for THIS booking (resolved from the rate + operator
+   *  overrides upstream). Absent → treat as no perks (standard 15:00 / 10:30). */
+  perks?: { earlyCheckIn: boolean; lateCheckout: boolean };
   /** Recent thread (oldest first), for follow-up context. */
   history: ConversationMessage[];
 }
@@ -80,6 +83,21 @@ function buildBookingBlock(input: ComposeInput): string {
     if (wifi) lines.push(`WiFi for this booking: ${wifi}`);
   } else {
     lines.push('(Booking details unavailable — keep the reply general and offer to confirm specifics.)');
+  }
+  // Rate perks — authoritative per-booking facts for early check-in / late
+  // checkout questions. Follow the KNOWLEDGE BASE for exactly how to phrase each
+  // case; never grant a perk that isn't marked INCLUDED here.
+  if (input.perks) {
+    lines.push(
+      input.perks.earlyCheckIn
+        ? 'Early check-in: INCLUDED in this booking’s rate — guest may arrive from 13:00.'
+        : 'Early check-in: NOT included in this booking’s rate — standard check-in is 15:00.',
+    );
+    lines.push(
+      input.perks.lateCheckout
+        ? 'Late checkout: INCLUDED in this booking’s rate — guest may stay until 12:00.'
+        : 'Late checkout: NOT included in this booking’s rate — standard checkout is 10:30.',
+    );
   }
   return lines.join('\n');
 }

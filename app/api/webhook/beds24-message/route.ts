@@ -111,6 +111,10 @@ const LOG_KEY = 'baker:auto-reply:log';             // AutoReplyLogEntry[]
 const RATE_LIMIT_PREFIX = 'baker:auto-reply:count'; // :{bookingId}:{yyyymmdd}
 const BOOKINGS_CACHE_KEY = 'baker:beds24-bookings-cache';
 const LOCAL_STATE_KEY = 'baker:reservation-overrides';
+// Effective rate-driven perks (early check-in / late checkout) per reservation,
+// published by the bookings sync (see app/api/bookings persistRateTypeMap).
+// Keyed by reservationNumber; ABSENCE = no perks. Read-only here.
+const RATE_PERKS_KEY = 'baker:reservation-rate-perks';
 
 /**
  * One-shot per-booking per-category lock. Set after a successful auto-send
@@ -621,6 +625,25 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     }
   }
 
+  // Rate-driven perks (early check-in / late checkout) for THIS booking, read
+  // from the map the bookings sync publishes. Absent → no perks. Lets the AI
+  // answer early-checkin / late-checkout correctly for the booked rate instead
+  // of guessing. (Map only refreshes on a bookings sync, so a brand-new booking
+  // may briefly read as no-perk — acceptable while review-gated.)
+  let perks: { earlyCheckIn: boolean; lateCheckout: boolean } | undefined;
+  if (redis) {
+    try {
+      const perkMap =
+        (await redis.get<Record<string, { earlyCheckIn?: boolean; lateCheckout?: boolean }>>(
+          RATE_PERKS_KEY,
+        )) ?? {};
+      const p = perkMap[reservationNumber];
+      perks = { earlyCheckIn: !!p?.earlyCheckIn, lateCheckout: !!p?.lateCheckout };
+    } catch (err) {
+      console.warn(`[ai-review] perk lookup failed for ${bookingId}:`, err);
+    }
+  }
+
   const history = await fetchRecentConversation(bookingId, 12);
 
   let draftText = '';
@@ -630,6 +653,7 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
       guestMessage: messageText,
       reservation,
       parkingSpace,
+      perks,
       history,
     });
     draftText = result.draftText;
