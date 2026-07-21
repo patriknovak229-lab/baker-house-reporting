@@ -26,7 +26,7 @@ import { useEffect, useState } from "react";
 //
 // Physical units (force room):
 //   • K.102, K.103, K.106 — Urban physical rooms (force-allocate one)
-//   • K.202, K.203        — Deluxe Twin physical rooms (force-allocate one)
+//   • K.202, K.203        — Deluxe Studios physical rooms (force-allocate one)
 //   (K.201 + O.308 are NOT duplicated here — their sellable row IS the
 //    physical room, same roomId.)
 interface SellingUnit {

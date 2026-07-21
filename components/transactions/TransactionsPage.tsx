@@ -589,7 +589,7 @@ export default function TransactionsPage() {
    * and clears itself the moment the operator transfers the booking.
    */
   const unallocatedReservations = useMemo(
-    () => reservations.filter((r) => r.isUnallocatedVR),
+    () => reservations.filter((r) => r.isUnallocatedVR && !r.isCancelled),
     [reservations],
   );
 
@@ -770,7 +770,7 @@ export default function TransactionsPage() {
   const dataIssues = useMemo<DataIssue[]>(() => {
     const today = new Date().toLocaleDateString("sv-SE"); // local YYYY-MM-DD
     return reservations
-      .filter((r) => r.paymentStatus !== "Refunded")
+      .filter((r) => r.paymentStatus !== "Refunded" && !r.isCancelled)
       .flatMap((r) => {
         const problems: string[] = [];
         if (r.channel === "Booking.com") {

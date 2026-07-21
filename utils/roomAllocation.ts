@@ -42,7 +42,7 @@ export const ALLOCATION_GROUPS: AllocationGroup[] = [
     ],
   },
   {
-    typeLabel: "1KK Deluxe Twin",
+    typeLabel: "1KK Deluxe Studios",
     vrRoomId: 648816,
     units: [
       { room: "K.202", roomId: 648596 },

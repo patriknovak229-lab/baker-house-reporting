@@ -139,7 +139,7 @@ export interface Reservation {
   blackoutReason?: string;
   /**
    * True when this reservation sits on a virtual room (e.g. 1KK Urban Studios
-   * VR 679714, 1KK Deluxe Twin VR 648816) WITHOUT a physical-room allocation.
+   * VR 679714, 1KK Deluxe Studios VR 648816) WITHOUT a physical-room allocation.
    * Happens when Beds24 cannot auto-allocate because no single physical
    * room is free for the full stay — operator must manually assign in
    * Beds24's calendar. Rendered with a "Room unassigned" badge in the

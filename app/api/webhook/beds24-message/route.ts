@@ -203,7 +203,7 @@ const ROOM_LABEL_MAP: Record<string, string> = {
   '648596': 'K.202',
   '648772': 'K.203',
   '674672': 'O.308',
-  '648816': '1KK Deluxe Twin', // Twin VR — physical sub allocated later
+  '648816': '1KK Deluxe Studios', // Deluxe VR — physical sub allocated later
   '679703': 'K.102',
   '679704': 'K.103',
   '679705': 'K.106',

@@ -9,7 +9,7 @@ import {
 
 const TODAY = "2026-06-22";
 
-const DELUXE = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Deluxe Twin")!; // K.202, K.203
+const DELUXE = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Deluxe Studios")!; // K.202, K.203
 const URBAN = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Urban Studios")!; // K.102/103/106
 
 let pass = 0;
@@ -100,7 +100,7 @@ function check(name: string, cond: boolean, extra?: unknown) {
 {
   const all: ResRef[] = [
     { reservationNumber: "BH-1", room: "K.202", checkInDate: "2026-06-24", checkOutDate: "2026-06-27", firstName: "A" },
-    { reservationNumber: "BH-2", room: "1KK Deluxe Twin", checkInDate: "2026-06-25", checkOutDate: "2026-06-27", isUnallocatedVR: true, firstName: "U" },
+    { reservationNumber: "BH-2", room: "1KK Deluxe Studios", checkInDate: "2026-06-25", checkOutDate: "2026-06-27", isUnallocatedVR: true, firstName: "U" },
   ];
   const r = planForUnallocated(all, "BH-2", TODAY);
   const ok = "plan" in r && r.plan.feasible && r.plan.moves.length === 0 && r.plan.placements[0]?.room === "K.203";
@@ -111,7 +111,7 @@ function check(name: string, cond: boolean, extra?: unknown) {
 {
   const all: ResRef[] = [
     { reservationNumber: "BH-1", room: "K.202", checkInDate: "2026-06-20", checkOutDate: "2026-06-26", firstName: "P" }, // in-house
-    { reservationNumber: "BH-2", room: "1KK Deluxe Twin", checkInDate: "2026-06-25", checkOutDate: "2026-06-28", isUnallocatedVR: true },
+    { reservationNumber: "BH-2", room: "1KK Deluxe Studios", checkInDate: "2026-06-25", checkOutDate: "2026-06-28", isUnallocatedVR: true },
   ];
   const r = planForUnallocated(all, "BH-2", TODAY);
   const ok = "plan" in r && r.plan.feasible && r.plan.moves.length === 0 && r.plan.placements[0]?.room === "K.203";
@@ -122,7 +122,7 @@ function check(name: string, cond: boolean, extra?: unknown) {
 {
   const all: ResRef[] = [
     { reservationNumber: "BH-9", room: "K.202 + K.203", linkedRooms: ["K.202", "K.203"], checkInDate: "2026-06-24", checkOutDate: "2026-06-28", firstName: "PKG" },
-    { reservationNumber: "BH-2", room: "1KK Deluxe Twin", checkInDate: "2026-06-25", checkOutDate: "2026-06-27", isUnallocatedVR: true },
+    { reservationNumber: "BH-2", room: "1KK Deluxe Studios", checkInDate: "2026-06-25", checkOutDate: "2026-06-27", isUnallocatedVR: true },
   ];
   const r = planForUnallocated(all, "BH-2", TODAY);
   const ok = "plan" in r && !r.plan.feasible && !!r.plan.reason;

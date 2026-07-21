@@ -334,7 +334,7 @@ function ReservationCard({
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-base leading-none">{nationalityFlag}</span>
-          <span className="font-semibold text-gray-900 truncate">
+          <span className={`font-semibold truncate ${res.isCancelled ? 'line-through text-gray-400' : 'text-gray-900'}`}>
             {res.firstName} {res.lastName}
           </span>
           {emoji && (
@@ -402,7 +402,7 @@ function ReservationCard({
           </span>
         )}
         <Badge variant={channelBadgeVariant(res.channel)} size="xs">{res.channel}</Badge>
-        <span className="ml-auto font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
+        <span className={`ml-auto font-mono text-[11px] text-gray-400 ${res.isCancelled ? 'line-through' : ''}`}>{res.reservationNumber}</span>
       </div>
 
       {/* Row 3: Dates */}
@@ -688,7 +688,7 @@ export default function ReservationTable({
                   >
                     <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-gray-500">{res.reservationNumber}</span>
+                        <span className={`text-gray-500 ${res.isCancelled ? 'line-through text-gray-400' : ''}`}>{res.reservationNumber}</span>
                         {res.bookingTimestamp &&
                           Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000 && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">
@@ -717,7 +717,7 @@ export default function ReservationTable({
                       <span className="mr-1" title={res.nationality}>
                         {flag}
                       </span>
-                      {res.firstName} {res.lastName}
+                      <span className={res.isCancelled ? 'line-through text-gray-400' : ''}>{res.firstName} {res.lastName}</span>
                       {emoji && (
                         <span
                           className="ml-1.5 inline-flex items-center gap-0.5 align-middle"

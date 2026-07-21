@@ -227,7 +227,7 @@ function mapChannel(apiSource = "", referer = "", comments = ""): Channel {
  */
 const VR_ROOM_LABELS: Record<number, string> = {
   679714: "1KK Urban Studios",
-  648816: "1KK Deluxe Twin",
+  648816: "1KK Deluxe Studios",
 };
 
 /**
@@ -637,6 +637,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
       : 0;
 
   const isBlackout = b.status === 'black';
+  const isCancelled = b.status === 'cancelled' || b.status === 'canceled';
 
   const { paymentStatus, amountPaid } = derivePayment(b);
   // Use pre-summed breakdown for Booking.com multi-unit groups; parse normally otherwise
@@ -658,6 +659,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
   // physical and this flag drops back to false automatically.
   const isUnallocatedVR =
     !isBlackout &&
+    !isCancelled &&
     isVirtualRoomId(b.roomId) &&
     !(linkedRooms && linkedRooms.length > 0);
 
@@ -707,7 +709,7 @@ function mapToReservation(b: Beds24Booking): Reservation {
     paymentChargeAmount,
     ...(rateType ? { rateType } : {}),
     ...(b.status ? { status: b.status } : {}),
-    ...((b.status === 'cancelled' || b.status === 'canceled') ? { isCancelled: true } : {}),
+    ...(isCancelled ? { isCancelled: true } : {}),
     // Locally managed — Redis will layer these in Phase 3
     additionalEmail: "",
     paymentStatusOverride: null,
