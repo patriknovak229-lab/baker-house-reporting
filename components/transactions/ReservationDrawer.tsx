@@ -1820,6 +1820,84 @@ export default function ReservationDrawer({
   const naUserEmail = (naSession?.user as { email?: string } | undefined)?.email ?? "";
   const naUserRole = (naSession?.user as { role?: Role } | undefined)?.role;
   const canEditNonArrival = naUserRole ? canMutate(naUserRole, "transactions") : false;
+  const [naBusy, setNaBusy] = useState(false);
+
+  // Mark a booking as non-arrival: cancel + channel-lock it in Beds24 (frees the
+  // room to resell; guest stays charged on the OTA), then persist our flag, seed
+  // the net-retained price, and drop a checkout-dated task to finalise the price.
+  async function markNonArrival() {
+    if (!reservation || naBusy) return;
+    const r = reservation;
+    if (
+      !window.confirm(
+        `Mark as non-arrival?\n\nThis cancels the booking in Beds24 and locks the channel so the room can be resold. ${r.firstName} ${r.lastName} stays booked and charged on ${r.channel} — nothing changes on the OTA side.`,
+      )
+    )
+      return;
+    setNaBusy(true);
+    try {
+      const res = await fetch("/api/bookings/non-arrival", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reservationNumber: r.reservationNumber }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      const taskId = `na-price-${r.reservationNumber}`;
+      const issues = r.issues ?? [];
+      const withTask = issues.some((i) => i.id === taskId)
+        ? issues
+        : [
+            ...issues,
+            {
+              id: taskId,
+              category: "problem" as const,
+              text: "Non-arrival: set the final price after the channel refund",
+              actionableDate: r.checkOutDate,
+              resolved: false,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+      onUpdate({
+        ...r,
+        isCancelled: true,
+        nonArrival: { flaggedAt: new Date().toISOString(), flaggedBy: naUserEmail, originalPriceCzk: r.price },
+        nonArrivalNetPriceCzk: r.price,
+        issues: withTask,
+      });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to cancel the booking in Beds24");
+    } finally {
+      setNaBusy(false);
+    }
+  }
+
+  // Remove the non-arrival flag (overlay only) + its task. Does NOT un-cancel in
+  // Beds24 — reinstate the booking manually there if this was a mistake.
+  function unmarkNonArrival() {
+    if (!reservation) return;
+    const r = reservation;
+    const taskId = `na-price-${r.reservationNumber}`;
+    onUpdate({
+      ...r,
+      nonArrival: null,
+      nonArrivalNetPriceCzk: null,
+      issues: (r.issues ?? []).filter((i) => i.id !== taskId),
+    });
+  }
+
+  // Set the final net retained; fulfilling this resolves the checkout task.
+  function setNonArrivalNet(value: number) {
+    if (!reservation) return;
+    const r = reservation;
+    const taskId = `na-price-${r.reservationNumber}`;
+    onUpdate({
+      ...r,
+      nonArrivalNetPriceCzk: Math.max(0, Math.round(value || 0)),
+      issues: (r.issues ?? []).map((i) => (i.id === taskId ? { ...i, resolved: true } : i)),
+    });
+  }
+
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
   const [newIssueDate, setNewIssueDate] = useState(() => defaultIssueDate("problem", reservation));
@@ -2991,9 +3069,10 @@ export default function ReservationDrawer({
               </div>
             )}
 
-            {/* Non-arrival — guest can't come and can't cancel on the OTA. We
-                cancel in Beds24 to resell the nights but keep charging; revenue
-                counts the net retained after any channel-side refund. */}
+            {/* Non-arrival — guest can't come and can't cancel on the OTA. Marking
+                it cancels + channel-locks the booking in Beds24 (frees the room to
+                resell) while the guest stays charged on the OTA; revenue counts the
+                net retained after any channel-side refund, set below. */}
             <div className="mt-3">
               {reservation.nonArrival ? (
                 <div className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2.5">
@@ -3003,15 +3082,15 @@ export default function ReservationDrawer({
                     </span>
                     {canEditNonArrival && (
                       <button
-                        onClick={() => onUpdate({ ...reservation, nonArrival: null, nonArrivalNetPriceCzk: null })}
+                        onClick={unmarkNonArrival}
                         className="text-[11px] text-purple-600 hover:underline"
                       >
-                        Remove
+                        Remove flag
                       </button>
                     )}
                   </div>
                   <p className="text-[11px] text-purple-600 mt-0.5">
-                    Cancelled in Beds24 to resell the nights; guest still charged via {reservation.channel}.
+                    Cancelled &amp; channel-locked in Beds24; guest still charged via {reservation.channel}.
                   </p>
                   <div className="mt-2 flex items-end gap-3 flex-wrap">
                     <label className="text-[11px] text-purple-700">
@@ -3021,7 +3100,7 @@ export default function ReservationDrawer({
                         min={0}
                         step={1}
                         defaultValue={reservation.nonArrivalNetPriceCzk ?? reservation.nonArrival.originalPriceCzk}
-                        onBlur={(e) => onUpdate({ ...reservation, nonArrivalNetPriceCzk: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+                        onBlur={(e) => setNonArrivalNet(Number(e.target.value))}
                         disabled={!canEditNonArrival}
                         className="block w-32 mt-0.5 border border-purple-200 rounded px-2 py-1 text-sm text-purple-900 bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-60"
                       />
@@ -3033,11 +3112,12 @@ export default function ReservationDrawer({
                 </div>
               ) : canEditNonArrival ? (
                 <button
-                  onClick={() => onUpdate({ ...reservation, nonArrival: { flaggedAt: new Date().toISOString(), flaggedBy: naUserEmail, originalPriceCzk: reservation.price }, nonArrivalNetPriceCzk: reservation.price })}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors"
-                  title="Guest can't come and can't cancel on the OTA — free the room to resell while still charging"
+                  onClick={markNonArrival}
+                  disabled={naBusy}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors disabled:opacity-50"
+                  title="Guest can't come and can't cancel on the OTA — cancel + lock in Beds24 to free the room for resale while still charging"
                 >
-                  🚨 Mark as non-arrival
+                  🚨 {naBusy ? "Marking…" : "Mark as non-arrival"}
                 </button>
               ) : null}
             </div>
