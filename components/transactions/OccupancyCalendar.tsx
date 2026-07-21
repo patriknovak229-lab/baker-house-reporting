@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, type ReactNode } from 'react';
+import { useState, useMemo, type ReactNode, type CSSProperties } from 'react';
 import type { Reservation, Room, CustomerFlag } from "@/types/reservation";
 import { computeParking, PARKING_SPACES } from "@/utils/parkingUtils";
 import {
@@ -13,9 +13,8 @@ import { getEffectiveFlags } from "@/utils/flagUtils";
 interface Props {
   reservations: Reservation[];
   /**
-   * Click handler for booked / blacked-out / non-arrival day cells. Receives the
-   * matching Reservation so the parent can open its drawer. Empty cells aren't
-   * clickable.
+   * Click handler for a reservation bar (booked / blacked-out / non-arrival).
+   * Empty days aren't clickable.
    */
   onReservationClick?: (reservation: Reservation) => void;
 }
@@ -31,36 +30,49 @@ const CATEGORY_STYLES: Record<RoomCategory, { headerBg: string; headerText: stri
 };
 
 // ─── Colour-by modes ───────────────────────────────────────────────────────────
-// The cell fill carries ONE dimension at a time (operator-selectable). Rate is
-// the default; occupancy reproduces the old green→red heat; channel uses OTA
-// brand colours. Non-arrival + blackout are status overlays shown in every mode.
+// The bar fill carries ONE dimension at a time (operator-selectable). Rate is
+// the default; channel uses OTA brand colours; occupancy tints the day columns
+// with the green→red heat and leaves the bars transparent so it reads through.
+// Non-arrival + blackout are status overlays shown in every mode.
 type ColorBy = 'rate' | 'channel' | 'occupancy';
 
-// Rate fills reuse today's rate palette. Booked-but-no-rate (e.g. Direct) → slate.
-const RATE_FILL: Record<string, string> = {
-  "Standard":       "bg-blue-500 text-white",
-  "Flexi":          "bg-emerald-500 text-white",
-  "Weekly":         "bg-amber-400 text-amber-950",
-  "Non-Refundable": "bg-red-500 text-white",
-  "One-Night":      "bg-violet-500 text-white",
-};
-const RATE_FILL_NONE = "bg-slate-400 text-white";
+// A booking bar's palette: soft fill (f), border (b), text (t), avatar chip (a).
+// Fills sit one step up from the lightest tint so the colour reads at a glance
+// without going back to saturated solid blocks.
+interface Palette { f: string; b: string; t: string; a: string }
 
-const CHANNEL_FILL: Record<string, string> = {
-  "Booking.com":  "bg-[#003B95] text-white",
-  "Airbnb":       "bg-[#FF5A5F] text-white",
-  "Direct":       "bg-indigo-500 text-white",
-  "Direct-Phone": "bg-indigo-400 text-white",
-  "Direct-Web":   "bg-emerald-500 text-white",
+const RATE_FILL: Record<string, Palette> = {
+  "Standard":       { f: '#B5D4F4', b: '#378ADD', t: '#042C53', a: '#185FA5' },
+  "Flexi":          { f: '#C0DD97', b: '#639922', t: '#173404', a: '#3B6D11' },
+  "Weekly":         { f: '#FAC775', b: '#BA7517', t: '#412402', a: '#854F0B' },
+  "Non-Refundable": { f: '#F7C1C1', b: '#E24B4A', t: '#501313', a: '#A32D2D' },
+  "One-Night":      { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#534AB7' },
 };
-const CHANNEL_FILL_NONE = "bg-slate-400 text-white";
+const RATE_NONE: Palette = { f: '#D3D1C7', b: '#888780', t: '#2C2C2A', a: '#5F5E5A' };
+
+const CHANNEL_FILL: Record<string, Palette> = {
+  "Booking.com":  { f: '#B5D4F4', b: '#378ADD', t: '#042C53', a: '#003B95' },
+  "Airbnb":       { f: '#F7C1C1', b: '#E24B4A', t: '#501313', a: '#FF5A5F' },
+  "Direct":       { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#534AB7' },
+  "Direct-Phone": { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#7F77DD' },
+  "Direct-Web":   { f: '#C0DD97', b: '#639922', t: '#173404', a: '#3B6D11' },
+};
+const CHANNEL_NONE: Palette = RATE_NONE;
 
 // Non-arrival: purple with a diagonal stripe so it never reads as a solid rate
-// fill (One-Night is solid violet). Blackout: slate stripe (unchanged).
-const NON_ARRIVAL_FILL =
-  "bg-purple-100 text-purple-900 bg-[repeating-linear-gradient(45deg,rgba(109,40,217,0.28)_0_3px,transparent_3px_6px)]";
-const BLACKOUT_FILL =
-  "bg-slate-700 text-white bg-[repeating-linear-gradient(45deg,rgba(255,255,255,0.12)_0_3px,transparent_3px_6px)]";
+// fill (One-Night is solid violet). Blackout: dark slate stripe.
+const NA_PAL: Palette = { f: '#CECBF6', b: '#534AB7', t: '#26215C', a: '#3C3489' };
+const BLACKOUT_PAL: Palette = { f: '#444441', b: '#2C2C2A', t: '#F1EFE8', a: '#2C2C2A' };
+const NA_STRIPE = 'repeating-linear-gradient(45deg,rgba(60,52,137,0.22) 0 5px,transparent 5px 10px)';
+const BLACKOUT_STRIPE = 'repeating-linear-gradient(45deg,rgba(255,255,255,0.14) 0 5px,transparent 5px 10px)';
+
+// Layout — a comfortable row height with breathing room, and a minimum column
+// width so the grid stays legible and scrolls horizontally on small screens.
+const LABEL_W = '3rem';
+const OCC_W = '4.5rem';
+const DAY_MIN_PX = 30;
+const ROW_H = '2.25rem';
+const BAR_H = '1.6rem';
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -149,12 +161,25 @@ function resolveCell(reservations: Reservation[], room: Room, date: string): Res
   return { kind: 'empty', res: null };
 }
 
+/** A contiguous run of days in the visible window that belongs to one booking. */
+interface Segment {
+  kind: Exclude<CellKind, 'empty'>;
+  res: Reservation;
+  startIdx: number;
+  endIdx: number;
+  resold: boolean;
+}
+
 function initialsOf(r: Reservation): string {
-  return [r.firstName?.[0], r.lastName?.[0]].filter(Boolean).join("").toUpperCase();
+  return [r.firstName?.[0], r.lastName?.[0]].filter(Boolean).join("").toUpperCase() || "?";
+}
+
+function guestName(r: Reservation): string {
+  return `${r.firstName ?? ''} ${r.lastName ?? ''}`.trim();
 }
 
 // Highest-priority flag for a reservation (problem > VIP > high-value > repeat).
-// Fixed colours (NOT inherited from the pill): star = gold, crown = red,
+// Fixed colours (NOT inherited from the bar): star = gold, crown = red,
 // problem = red, repeat = indigo — rendered in a white chip so they read on any fill.
 function flagInfo(flags: CustomerFlag[]): { glyph: string; color: string } | null {
   if (flags.includes("Problematic Customer")) return { glyph: "!", color: "#dc2626" };
@@ -176,6 +201,13 @@ function occFillClass(pct: number): string {
   if (pct <= 33) return "bg-amber-400";
   if (pct <= 66) return "bg-orange-500";
   return "bg-red-500";
+}
+// Light heat fill behind the day columns in the "occupancy" colour-by mode.
+function occCellBg(pct: number): string {
+  if (pct <= 0) return "#E1F5EE";
+  if (pct <= 33) return "#FAEEDA";
+  if (pct <= 66) return "#FAC775";
+  return "#F7C1C1";
 }
 
 function parkingRowLabel(space: string): string {
@@ -201,6 +233,11 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
   const days = useMemo(() => get30DaysFrom(todayStr, startOffset), [todayStr, startOffset]);
   const parkingResult = useMemo(() => computeParking(reservations), [reservations]);
   const categoryGroups = useMemo(() => groupRoomsByCategory(), []);
+
+  const N = days.length;
+  const trackCols = `repeat(${N}, minmax(0, 1fr))`;
+  const rowCols = `${LABEL_W} minmax(0, 1fr) ${OCC_W}`;
+  const minWidth = `${(N * DAY_MIN_PX) + 48 + 72}px`;
 
   // Booked-room count per day (whole property) — drives the day-header heat and
   // the occupancy colour-by mode. Computed once per render rather than per cell.
@@ -246,38 +283,148 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     return m;
   }, [reservations]);
 
-  function cellFill(res: Reservation, date: string): string {
-    if (colorBy === 'channel') return CHANNEL_FILL[res.channel] ?? CHANNEL_FILL_NONE;
-    if (colorBy === 'occupancy') {
-      const pct = Math.round(((bookedCountByDate[date] ?? 0) / ROOMS.length) * 100);
-      return `${occFillClass(pct)} text-white`;
+  // Coalesce a room's visible days into booking segments (one bar per booking).
+  const segmentsByRoom = useMemo(() => {
+    const m: Record<string, Segment[]> = {};
+    for (const room of ROOMS) {
+      const segs: Segment[] = [];
+      let cur: Segment | null = null;
+      days.forEach((date, idx) => {
+        const { kind, res } = resolveCell(reservations, room, date);
+        if (kind === 'empty' || !res) { cur = null; return; }
+        if (cur && cur.res.reservationNumber === res.reservationNumber && cur.kind === kind && cur.endIdx === idx - 1) {
+          cur.endIdx = idx;
+        } else {
+          cur = { kind, res, startIdx: idx, endIdx: idx, resold: false };
+          segs.push(cur);
+        }
+      });
+      // Mark active segments that resold a non-arrival's freed nights.
+      for (const s of segs) {
+        if (s.kind !== 'active') continue;
+        for (let i = s.startIdx; i <= s.endIdx; i++) {
+          if (findNonArrivalForCell(reservations, room, days[i])) { s.resold = true; break; }
+        }
+      }
+      m[room] = segs;
     }
-    const rt = effectiveRateType(res);
-    return (rt && RATE_FILL[rt]) || RATE_FILL_NONE;
+    return m;
+  }, [reservations, days]);
+
+  function segPalette(seg: Segment): { pal: Palette; transparent: boolean } {
+    if (seg.kind === 'blackout') return { pal: BLACKOUT_PAL, transparent: false };
+    if (seg.kind === 'nonarrival') return { pal: NA_PAL, transparent: false };
+    const ratePal =
+      colorBy === 'channel'
+        ? (CHANNEL_FILL[seg.res.channel] ?? CHANNEL_NONE)
+        : (RATE_FILL[effectiveRateType(seg.res) ?? ''] ?? RATE_NONE);
+    return { pal: ratePal, transparent: colorBy === 'occupancy' };
   }
 
-  const legendItems: { label: string; cls: string }[] =
+  const legendItems: { label: string; pal: Palette }[] =
     colorBy === 'rate'
       ? [
-          { label: "Standard", cls: RATE_FILL.Standard },
-          { label: "Flexi", cls: RATE_FILL.Flexi },
-          { label: "Weekly", cls: RATE_FILL.Weekly },
-          { label: "Non-ref.", cls: RATE_FILL["Non-Refundable"] },
-          { label: "1-night", cls: RATE_FILL["One-Night"] },
-          { label: "Other", cls: RATE_FILL_NONE },
+          { label: "Standard", pal: RATE_FILL.Standard },
+          { label: "Flexi", pal: RATE_FILL.Flexi },
+          { label: "Weekly", pal: RATE_FILL.Weekly },
+          { label: "Non-ref.", pal: RATE_FILL["Non-Refundable"] },
+          { label: "1-night", pal: RATE_FILL["One-Night"] },
+          { label: "Other", pal: RATE_NONE },
         ]
       : colorBy === 'channel'
       ? [
-          { label: "Booking", cls: CHANNEL_FILL["Booking.com"] },
-          { label: "Airbnb", cls: CHANNEL_FILL.Airbnb },
-          { label: "Direct", cls: CHANNEL_FILL.Direct },
+          { label: "Booking", pal: CHANNEL_FILL["Booking.com"] },
+          { label: "Airbnb", pal: CHANNEL_FILL.Airbnb },
+          { label: "Direct", pal: CHANNEL_FILL.Direct },
         ]
       : [
-          { label: "Free", cls: "bg-emerald-400" },
-          { label: "Low", cls: "bg-amber-400" },
-          { label: "High", cls: "bg-orange-500" },
-          { label: "Full", cls: "bg-red-500" },
+          { label: "Free", pal: { f: occCellBg(0), b: '#9FE1CB', t: '', a: '' } },
+          { label: "Low", pal: { f: occCellBg(30), b: '#FAC775', t: '', a: '' } },
+          { label: "High", pal: { f: occCellBg(60), b: '#EF9F27', t: '', a: '' } },
+          { label: "Full", pal: { f: occCellBg(100), b: '#E24B4A', t: '', a: '' } },
         ];
+
+  function renderBar(room: Room, seg: Segment): ReactNode {
+    const { pal, transparent } = segPalette(seg);
+    const res = seg.res;
+    const isTrueStart = res.checkInDate === days[seg.startIdx];
+    const isTrueEnd = nextDay(days[seg.endIdx]) === res.checkOutDate;
+    const flag = seg.kind === 'active' ? flagByRes[res.reservationNumber] : null;
+    const stripe = seg.kind === 'nonarrival' ? NA_STRIPE : seg.kind === 'blackout' ? BLACKOUT_STRIPE : undefined;
+    const textColor = transparent ? '#2C2C2A' : pal.t;
+
+    const label =
+      seg.kind === 'blackout' ? 'Blackout' : guestName(res) || (seg.kind === 'nonarrival' ? 'Non-arrival' : 'Booked');
+    const title =
+      seg.kind === 'blackout'
+        ? `${room} — blacked out`
+        : seg.kind === 'nonarrival'
+        ? `${room} — non-arrival (room freed for resale)`
+        : `${room} — ${label}${seg.resold ? ' (resold from a non-arrival)' : ''}`;
+
+    const barStyle: CSSProperties = {
+      gridColumn: `${seg.startIdx + 1} / ${seg.endIdx + 2}`,
+      gridRow: 1,
+      alignSelf: 'center',
+      zIndex: 1,
+      height: BAR_H,
+      margin: '0 2px',
+      background: transparent ? 'transparent' : pal.f,
+      backgroundImage: stripe,
+      border: transparent ? '1px dashed rgba(0,0,0,0.18)' : `1px solid ${pal.b}`,
+      borderTopLeftRadius: isTrueStart ? 8 : 0,
+      borderBottomLeftRadius: isTrueStart ? 8 : 0,
+      borderTopRightRadius: isTrueEnd ? 8 : 0,
+      borderBottomRightRadius: isTrueEnd ? 8 : 0,
+      color: textColor,
+    };
+
+    return (
+      <div
+        key={`${res.reservationNumber}-${seg.startIdx}`}
+        role={onReservationClick ? 'button' : undefined}
+        tabIndex={onReservationClick ? 0 : undefined}
+        onClick={onReservationClick ? () => onReservationClick(res) : undefined}
+        onKeyDown={
+          onReservationClick
+            ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReservationClick(res); } }
+            : undefined
+        }
+        title={title}
+        className={`relative flex items-center gap-1 px-1 overflow-hidden ${onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
+        style={barStyle}
+      >
+        {seg.kind !== 'blackout' && (
+          <span
+            className="inline-flex items-center justify-center rounded-full text-white font-medium shrink-0"
+            style={{ width: 18, height: 18, fontSize: 9, background: pal.a }}
+          >
+            {initialsOf(res)}
+          </span>
+        )}
+        {seg.kind === 'nonarrival' && (
+          <span className="text-[10px] leading-none shrink-0" aria-hidden>🚨</span>
+        )}
+        {flag && (
+          <span
+            className="inline-flex items-center justify-center rounded-full bg-white shrink-0 shadow-sm"
+            style={{ width: 14, height: 14, fontSize: 8, color: flag.color, fontWeight: 700 }}
+            title={flag.glyph}
+          >
+            {flag.glyph}
+          </span>
+        )}
+        <span className="text-[11px] font-medium leading-none truncate select-none">{label}</span>
+        {seg.resold && (
+          <span
+            className="absolute bottom-0 right-0"
+            style={{ width: 0, height: 0, borderLeft: '5px solid transparent', borderBottom: '5px solid #7C3AED' }}
+            title="Resold from a non-arrival"
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
@@ -353,18 +500,18 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
 
           {/* Legend — mode-dependent fills + always-on status overlays */}
           <div className="flex items-center gap-2 sm:gap-3 text-xs text-gray-500 flex-wrap">
-            {legendItems.map(({ label, cls }) => (
+            {legendItems.map(({ label, pal }) => (
               <span key={label} className="flex items-center gap-1.5" title={label}>
-                <span className={`inline-block w-3 h-3 rounded-sm ${cls}`} />
+                <span className="inline-block w-3 h-3 rounded" style={{ background: pal.f, border: `1px solid ${pal.b}` }} />
                 <span className="hidden lg:inline">{label}</span>
               </span>
             ))}
             <span className="flex items-center gap-1.5" title="Non-arrival">
-              <span className={`inline-block w-3 h-3 rounded-sm ${NON_ARRIVAL_FILL}`} />
+              <span className="inline-block w-3 h-3 rounded" style={{ background: NA_PAL.f, border: `1px solid ${NA_PAL.b}`, backgroundImage: NA_STRIPE }} />
               <span className="hidden lg:inline">Non-arrival</span>
             </span>
             <span className="flex items-center gap-1.5" title="Blackout">
-              <span className={`inline-block w-3 h-3 rounded-sm ${BLACKOUT_FILL}`} />
+              <span className="inline-block w-3 h-3 rounded" style={{ background: BLACKOUT_PAL.f, backgroundImage: BLACKOUT_STRIPE }} />
               <span className="hidden lg:inline">Blackout</span>
             </span>
           </div>
@@ -373,10 +520,11 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
 
       {/* Grid — scrollable on small screens */}
       <div className="overflow-x-auto">
-        <table className="border-collapse w-full">
-          <thead>
-            <tr>
-              <th className="w-14" />
+        <div style={{ minWidth }}>
+          {/* Day header */}
+          <div style={{ display: 'grid', gridTemplateColumns: rowCols, alignItems: 'end' }} className="mb-1.5">
+            <div />
+            <div style={{ display: 'grid', gridTemplateColumns: trackCols }}>
               {days.map((date) => {
                 const d = new Date(date + "T00:00:00");
                 const dayNum = d.getDate();
@@ -385,11 +533,10 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 const bookedCount = bookedCountByDate[date] ?? 0;
                 const pct = Math.round((bookedCount / ROOMS.length) * 100);
                 const dayAbbr = d.toLocaleString("en-GB", { weekday: "short" }).slice(0, 2);
-
                 return (
-                  <th key={date} className="px-px pb-1 min-w-[2rem]">
+                  <div key={date} className="px-px">
                     <div
-                      className={`rounded-sm px-0.5 py-0.5 ${occHeaderClass(pct)} ${isToday ? "ring-2 ring-indigo-400 ring-inset" : ""}`}
+                      className={`rounded-md px-0.5 py-0.5 ${occHeaderClass(pct)} ${isToday ? "ring-2 ring-indigo-400 ring-inset" : ""}`}
                       title={bookedCount === 0 ? "All rooms free" : `${bookedCount} / ${ROOMS.length} rooms booked`}
                     >
                       <div className={`text-center text-xs font-bold leading-none ${isToday ? "underline" : ""}`}>{dayNum}</div>
@@ -398,12 +545,12 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                         {showMonth ? d.toLocaleString("en-GB", { month: "short" }) : ""}
                       </div>
                     </div>
-                  </th>
+                  </div>
                 );
               })}
-              <th className="pl-2 pb-1 text-[10px] font-medium text-gray-400 text-right align-bottom">Occ</th>
-            </tr>
-          </thead>
+            </div>
+            <div className="pl-2 text-[10px] font-medium text-gray-400 text-right">Occ</div>
+          </div>
 
           {categoryGroups.map((group) => {
             const style = CATEGORY_STYLES[group.category];
@@ -411,167 +558,111 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             const groupRooms = group.rooms;
             const occPct = occByCategory[group.category] ?? 0;
             return (
-              <tbody key={group.category}>
+              <div key={group.category}>
                 {/* Category header row — collapse toggle + occupancy % for the window */}
-                <tr>
-                  <td colSpan={days.length + 2} className={`p-0 ${style.headerBorder} border-t border-b`}>
-                    <div className={`w-full flex items-center gap-2 px-2 py-1.5 ${style.headerBg} ${style.headerText}`}>
-                      <button
-                        onClick={() => setCollapsed((c) => ({ ...c, [group.category]: !c[group.category] }))}
-                        className="flex items-center gap-2 hover:brightness-95 transition"
-                        title={isCollapsed ? `Show ${group.category} rooms` : `Hide ${group.category} rooms`}
-                      >
-                        <svg
-                          className={`w-3.5 h-3.5 ${style.chevron} transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
-                          fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                        </svg>
-                        <span className="text-xs font-semibold uppercase tracking-wide">{group.category}</span>
-                        <span className="text-[11px] opacity-70 font-medium">
-                          · {groupRooms.length} room{groupRooms.length === 1 ? '' : 's'}
-                        </span>
-                      </button>
-                      {/* Occupancy for the displayed period */}
-                      <span className="ml-auto flex items-center gap-2" title={`${group.category} occupancy for ${formatDateRange(days)}`}>
-                        <span className="text-[11px] opacity-70 hidden sm:inline">occupancy</span>
-                        <span className="inline-block w-16 h-1.5 rounded-full bg-black/10 overflow-hidden">
-                          <span className={`block h-1.5 ${occFillClass(occPct)}`} style={{ width: `${occPct}%` }} />
-                        </span>
-                        <span className="text-xs font-semibold tabular-nums">{occPct}%</span>
-                      </span>
-                    </div>
-                  </td>
-                </tr>
+                <div className={`flex items-center gap-2 px-2 py-1.5 my-1 rounded-md border ${style.headerBorder} ${style.headerBg} ${style.headerText}`}>
+                  <button
+                    onClick={() => setCollapsed((c) => ({ ...c, [group.category]: !c[group.category] }))}
+                    className="flex items-center gap-2 hover:brightness-95 transition"
+                    title={isCollapsed ? `Show ${group.category} rooms` : `Hide ${group.category} rooms`}
+                  >
+                    <svg
+                      className={`w-3.5 h-3.5 ${style.chevron} transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                    <span className="text-xs font-semibold uppercase tracking-wide">{group.category}</span>
+                    <span className="text-[11px] opacity-70 font-medium">
+                      · {groupRooms.length} room{groupRooms.length === 1 ? '' : 's'}
+                    </span>
+                  </button>
+                  {/* Occupancy for the displayed period */}
+                  <span className="ml-auto flex items-center gap-2" title={`${group.category} occupancy for ${formatDateRange(days)}`}>
+                    <span className="text-[11px] opacity-70 hidden sm:inline">occupancy</span>
+                    <span className="inline-block w-16 h-1.5 rounded-full bg-black/10 overflow-hidden">
+                      <span className={`block h-1.5 ${occFillClass(occPct)}`} style={{ width: `${occPct}%` }} />
+                    </span>
+                    <span className="text-xs font-semibold tabular-nums">{occPct}%</span>
+                  </span>
+                </div>
 
                 {/* Day-cell rows */}
                 {!isCollapsed && groupRooms.map((room) => (
-                  <tr key={room}>
-                    <td className="pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap">{room}</td>
+                  <div key={room} style={{ display: 'grid', gridTemplateColumns: rowCols, alignItems: 'center', height: ROW_H }}>
+                    <div className="pr-2 text-xs font-medium text-gray-500 text-right whitespace-nowrap">{room}</div>
 
-                    {days.map((date) => {
-                      const isToday = date === todayStr;
-                      const { kind, res } = resolveCell(reservations, room as Room, date);
-                      const clickable = kind !== 'empty' && !!onReservationClick;
-
-                      let inner: ReactNode = null;
-                      let title = `${room} — free`;
-                      let barCls = 'bg-gray-100'; // empty
-                      let isStart = false;
-                      let isEnd = false;
-
-                      if (res && kind !== 'empty') {
-                        isStart = res.checkInDate === date;
-                        isEnd = nextDay(date) === res.checkOutDate;
-                        if (kind === 'active') {
-                          barCls = cellFill(res, date);
-                          const flag = flagByRes[res.reservationNumber];
-                          const resold = findNonArrivalForCell(reservations, room as Room, date) !== null;
-                          title = `${room} — ${`${res.firstName} ${res.lastName}`.trim() || 'booked'}${resold ? ' (resold from a non-arrival)' : ''}`;
-                          inner = (
-                            <>
-                              {isStart && flag && (
-                                <span
-                                  className="absolute top-0 left-0 inline-flex items-center justify-center w-3 h-3 rounded-full bg-white text-[8px] font-bold leading-none shadow-sm"
-                                  style={{ color: flag.color }}
-                                >
-                                  {flag.glyph}
-                                </span>
-                              )}
-                              <span className="text-[9px] font-bold leading-none select-none tracking-tight">{initialsOf(res)}</span>
-                              {resold && (
-                                <span
-                                  className="absolute bottom-0 right-0 w-0 h-0 border-l-[5px] border-b-[5px] border-l-transparent border-b-purple-600"
-                                  title="Resold from a non-arrival"
-                                />
-                              )}
-                            </>
-                          );
-                        } else if (kind === 'blackout') {
-                          barCls = BLACKOUT_FILL;
-                          title = `${room} — blacked out`;
-                          inner = isStart ? <span className="text-[9px] font-bold leading-none select-none">BLK</span> : null;
-                        } else {
-                          // non-arrival — room freed for resale, not yet resold
-                          barCls = NON_ARRIVAL_FILL;
-                          title = `${room} — non-arrival (room freed for resale)`;
-                          inner = (
-                            <span className="flex items-center gap-0.5 text-[9px] font-bold leading-none select-none text-purple-900">
-                              {isStart && <span className="text-[10px]">🚨</span>}
-                              {initialsOf(res)}
-                            </span>
-                          );
-                        }
-                      }
-
-                      const handleClick = clickable && res ? () => onReservationClick!(res) : undefined;
-
-                      return (
-                        <td key={date} className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}>
+                    {/* Track: background day columns + booking bars overlaid in the same grid row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: trackCols, position: 'relative', height: ROW_H }}>
+                      {days.map((date, idx) => {
+                        const isToday = date === todayStr;
+                        const bg =
+                          colorBy === 'occupancy'
+                            ? occCellBg(Math.round(((bookedCountByDate[date] ?? 0) / ROOMS.length) * 100))
+                            : undefined;
+                        return (
                           <div
-                            className={`relative h-5 flex items-center justify-center ${barCls} ${
-                              kind === 'empty' ? 'rounded-sm' : 'border-y border-gray-800/50'
-                            } ${isStart ? 'ml-1 rounded-l-md border-l border-gray-800/50' : ''} ${
-                              isEnd ? 'mr-1 rounded-r-md border-r border-gray-800/50' : ''
-                            } ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}
-                            title={title}
-                            onClick={handleClick}
-                          >
-                            {inner}
-                          </div>
-                        </td>
-                      );
-                    })}
+                            key={date}
+                            style={{ gridColumn: `${idx + 1} / ${idx + 2}`, gridRow: 1, background: bg }}
+                            className={`border-r border-gray-100 ${isToday ? 'bg-indigo-50/60' : ''}`}
+                          />
+                        );
+                      })}
+                      {(segmentsByRoom[room] ?? []).map((seg) => renderBar(room as Room, seg))}
+                    </div>
 
                     {/* Per-room occupancy for the visible window */}
-                    <td className="pl-2 py-0.5 text-xs text-right tabular-nums text-gray-600 whitespace-nowrap">
-                      {occByRoom[room] ?? 0}%
-                    </td>
-                  </tr>
+                    <div className="pl-2 flex items-center justify-end gap-1.5 whitespace-nowrap">
+                      <span className="inline-block w-8 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                        <span className={`block h-1.5 ${occFillClass(occByRoom[room] ?? 0)}`} style={{ width: `${occByRoom[room] ?? 0}%` }} />
+                      </span>
+                      <span className="text-xs text-gray-600 tabular-nums w-8 text-right">{occByRoom[room] ?? 0}%</span>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
+              </div>
             );
           })}
 
           {/* Parking rows */}
           {showParking && (
-            <tbody>
-              {PARKING_SPACES.map((ps, psIdx) => {
+            <div className="mt-2 pt-2 border-t border-gray-200">
+              {PARKING_SPACES.map((ps) => {
                 const spaceGrid = parkingResult.grid.get(ps.space);
                 return (
-                  <tr key={ps.space}>
-                    <td className={`pr-2 py-0.5 text-xs font-medium text-gray-500 text-right whitespace-nowrap ${psIdx === 0 ? "pt-2 border-t border-gray-200" : ""}`}>
-                      {parkingRowLabel(ps.space)}
-                    </td>
-                    {days.map((date) => {
-                      const cell = spaceGrid?.get(date) ?? null;
-                      const isToday = date === todayStr;
-                      const occupied = cell != null;
-                      const occupantRes = occupied
-                        ? reservations.find((r) => r.reservationNumber === cell!.reservationNumber)
-                        : null;
-                      const roomStr = occupantRes ? formatRoomForTooltip(occupantRes.room) : '';
-
-                      return (
-                        <td key={date} className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""} ${psIdx === 0 ? "pt-2 border-t border-gray-200" : ""}`}>
-                          <div
-                            className={`h-5 rounded-sm flex items-center justify-center ${occupied ? "bg-red-400" : "bg-emerald-200"}`}
-                            title={occupied ? `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}` : `P${ps.space} — free`}
-                          >
-                            {occupied && (
-                              <span className="text-[9px] font-bold text-white leading-none select-none">{cell!.initials}</span>
-                            )}
+                  <div key={ps.space} style={{ display: 'grid', gridTemplateColumns: rowCols, alignItems: 'center', height: ROW_H }}>
+                    <div className="pr-2 text-xs font-medium text-gray-500 text-right whitespace-nowrap">{parkingRowLabel(ps.space)}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: trackCols, height: ROW_H, alignItems: 'center' }}>
+                      {days.map((date) => {
+                        const cell = spaceGrid?.get(date) ?? null;
+                        const isToday = date === todayStr;
+                        const occupied = cell != null;
+                        const occupantRes = occupied
+                          ? reservations.find((r) => r.reservationNumber === cell!.reservationNumber)
+                          : null;
+                        const roomStr = occupantRes ? formatRoomForTooltip(occupantRes.room) : '';
+                        return (
+                          <div key={date} className="px-px flex items-center">
+                            <div
+                              className={`w-full flex items-center justify-center rounded ${occupied ? "bg-rose-200" : "bg-emerald-50"} ${isToday ? 'ring-1 ring-indigo-300 ring-inset' : ''}`}
+                              style={{ height: BAR_H }}
+                              title={occupied ? `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}` : `P${ps.space} — free`}
+                            >
+                              {occupied && (
+                                <span className="text-[9px] font-bold text-rose-800 leading-none select-none">{cell!.initials}</span>
+                              )}
+                            </div>
                           </div>
-                        </td>
-                      );
-                    })}
-                    <td />
-                  </tr>
+                        );
+                      })}
+                    </div>
+                    <div />
+                  </div>
                 );
               })}
-            </tbody>
+            </div>
           )}
-        </table>
+        </div>
       </div>
     </div>
   );
