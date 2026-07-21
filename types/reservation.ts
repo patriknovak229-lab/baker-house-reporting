@@ -112,6 +112,17 @@ export interface InvoiceModification {
   createdAt: string; // ISO timestamp
 }
 
+/**
+ * Non-arrival details, persisted in the `baker:reservation-overrides` map.
+ * See the `nonArrival` field on Reservation.
+ */
+export interface NonArrival {
+  flaggedAt: string;         // ISO timestamp when flagged
+  flaggedBy: string;         // operator email
+  reason?: string;           // optional free-text note
+  originalPriceCzk: number;  // Beds24 price snapshot at flag time
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -195,6 +206,17 @@ export interface Reservation {
    * are the expected miss: Beds24 truncates the source field past a char limit.
    */
   rateType?: RateType | null;
+  /**
+   * Beds24 booking status, passed through so the UI can tell cancellations
+   * apart. Typical values: 'confirmed' | 'new' | 'request' | 'cancelled' | 'black'.
+   */
+  status?: string;
+  /**
+   * True when the Beds24 status is cancelled/canceled. Cancelled bookings are
+   * shown in Transactions (red flag) but excluded from the default Active view
+   * and from revenue/occupancy/commission — UNLESS flagged as a non-arrival.
+   */
+  isCancelled?: boolean;
 
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)
@@ -224,6 +246,20 @@ export interface Reservation {
    * overrides so the operator keeps full control (manual wins over auto).
    */
   perkOverrides?: import("@/utils/ratePerks").PerkOverrides;
+  /**
+   * Non-arrival marker. Set when a guest can't come and can't cancel on the OTA
+   * without penalty: the operator cancels the booking in Beds24 to free the
+   * nights for resale, but we keep charging per the OTA. Flagged non-arrivals
+   * stay visible in Transactions + the Active view and are counted in
+   * performance at `nonArrivalNetPriceCzk`. Persisted in `baker:reservation-overrides`.
+   */
+  nonArrival?: NonArrival | null;
+  /**
+   * Net revenue retained from a non-arrival after any channel-side refund.
+   * Operator-editable; defaults to the original booking price. Only meaningful
+   * when `nonArrival` is set.
+   */
+  nonArrivalNetPriceCzk?: number | null;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this

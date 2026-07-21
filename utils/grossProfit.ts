@@ -109,7 +109,7 @@ export function computeGrossProfit(
 
   const checkoutKeys = new Set<string>();
   for (const r of reservations) {
-    if (r.paymentStatus === 'Refunded') continue;
+    if (r.paymentStatus === 'Refunded' || r.isCancelled) continue;
     const rid = ROOM_TO_BEDS24_ID[r.room];
     if (rid) checkoutKeys.add(`${r.checkOutDate}|${rid}`);
   }
@@ -129,12 +129,21 @@ export function computeGrossProfit(
   let carryInCount = 0;
   for (const r of reservations) {
     if (r.paymentStatus === 'Refunded') continue;
+    // Plain cancellations contribute nothing. A non-arrival is kept but counted
+    // at its net-retained price (original minus any channel-side refund); no OTA
+    // commission / payment fee is deducted again since the operator enters the
+    // net amount they actually keep.
+    if (r.isCancelled && !r.nonArrival) continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
-    gbv += r.price * fraction;
-    otaCommission += r.commissionAmount * fraction;
-    paymentFees += r.paymentChargeAmount * fraction;
-    netSales += (r.price - r.commissionAmount - r.paymentChargeAmount) * fraction;
+    const isNonArrival = !!r.nonArrival;
+    const price = isNonArrival ? (r.nonArrivalNetPriceCzk ?? r.price) : r.price;
+    const commission = isNonArrival ? 0 : r.commissionAmount;
+    const fees = isNonArrival ? 0 : r.paymentChargeAmount;
+    gbv += price * fraction;
+    otaCommission += commission * fraction;
+    paymentFees += fees * fraction;
+    netSales += (price - commission - fees) * fraction;
     const roomInScopeForRes = allRoomsSelected || (selectedRooms?.includes(r.room) ?? true);
     if (nights > 0 && roomInScopeForRes) {
       reservationCount += 1;
@@ -183,7 +192,7 @@ export function computeGrossProfit(
   // Per-reservation entries — only count those tied to reservations whose
   // checkOut falls in the period AND whose room is in scope.
   for (const r of reservations) {
-    if (r.paymentStatus === 'Refunded') continue;
+    if (r.paymentStatus === 'Refunded' || r.isCancelled) continue;
     if (r.checkOutDate < dateRange.start || r.checkOutDate > dateRange.end) continue;
     if (selectedRooms && !selectedRooms.includes(r.room)) continue;
     const res = byReservation[r.reservationNumber];

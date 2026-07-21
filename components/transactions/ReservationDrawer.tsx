@@ -33,6 +33,9 @@ import {
 } from "@/utils/invoiceUtils";
 import type { PaymentQRInfo } from "@/utils/invoiceUtils";
 import { formatPhoneDisplay } from "@/utils/stringUtils";
+import { useSession } from "next-auth/react";
+import { canMutate } from "@/utils/roles";
+import type { Role } from "@/utils/roles";
 import {
   autoRatePerks,
   effectiveRatePerks,
@@ -1813,6 +1816,10 @@ export default function ReservationDrawer({
   onPaymentCreated,
   saveStatus = 'idle',
 }: ReservationDrawerProps) {
+  const { data: naSession } = useSession();
+  const naUserEmail = (naSession?.user as { email?: string } | undefined)?.email ?? "";
+  const naUserRole = (naSession?.user as { role?: Role } | undefined)?.role;
+  const canEditNonArrival = naUserRole ? canMutate(naUserRole, "transactions") : false;
   const [notes, setNotes] = useState("");
   const [newIssueText, setNewIssueText] = useState("");
   const [newIssueDate, setNewIssueDate] = useState(() => defaultIssueDate("problem", reservation));
@@ -2983,6 +2990,57 @@ export default function ReservationDrawer({
                 )}
               </div>
             )}
+
+            {/* Non-arrival — guest can't come and can't cancel on the OTA. We
+                cancel in Beds24 to resell the nights but keep charging; revenue
+                counts the net retained after any channel-side refund. */}
+            <div className="mt-3">
+              {reservation.nonArrival ? (
+                <div className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-purple-800">
+                      🚨 Non-arrival
+                    </span>
+                    {canEditNonArrival && (
+                      <button
+                        onClick={() => onUpdate({ ...reservation, nonArrival: null, nonArrivalNetPriceCzk: null })}
+                        className="text-[11px] text-purple-600 hover:underline"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-purple-600 mt-0.5">
+                    Cancelled in Beds24 to resell the nights; guest still charged via {reservation.channel}.
+                  </p>
+                  <div className="mt-2 flex items-end gap-3 flex-wrap">
+                    <label className="text-[11px] text-purple-700">
+                      Net retained (Kč)
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        defaultValue={reservation.nonArrivalNetPriceCzk ?? reservation.nonArrival.originalPriceCzk}
+                        onBlur={(e) => onUpdate({ ...reservation, nonArrivalNetPriceCzk: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+                        disabled={!canEditNonArrival}
+                        className="block w-32 mt-0.5 border border-purple-200 rounded px-2 py-1 text-sm text-purple-900 bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-60"
+                      />
+                    </label>
+                    <span className="text-[11px] text-purple-500 pb-1.5">
+                      Original {formatCurrency(reservation.nonArrival.originalPriceCzk)}
+                    </span>
+                  </div>
+                </div>
+              ) : canEditNonArrival ? (
+                <button
+                  onClick={() => onUpdate({ ...reservation, nonArrival: { flaggedAt: new Date().toISOString(), flaggedBy: naUserEmail, originalPriceCzk: reservation.price }, nonArrivalNetPriceCzk: reservation.price })}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors"
+                  title="Guest can't come and can't cancel on the OTA — free the room to resell while still charging"
+                >
+                  🚨 Mark as non-arrival
+                </button>
+              ) : null}
+            </div>
 
             <div className="flex items-center gap-2 flex-wrap mt-2">
               <button

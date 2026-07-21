@@ -78,6 +78,7 @@ function isRoomBooked(reservations: Reservation[], room: Room, date: string): bo
   return reservations.some(
     (r) =>
       !r.isBlackout && // blackouts get their own dedicated cell treatment
+      !r.isCancelled && // cancelled + non-arrival bookings free the room
       roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
@@ -96,6 +97,7 @@ function isRoomBlackoutOnly(reservations: Reservation[], room: Room, date: strin
   const hasReal = reservations.some(
     (r) =>
       !r.isBlackout &&
+      !r.isCancelled &&
       roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
@@ -126,6 +128,7 @@ function findReservationForCell(
   const real = reservations.find(
     (r) =>
       !r.isBlackout &&
+      !r.isCancelled &&
       roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&
@@ -146,6 +149,7 @@ function getGuest(reservations: Reservation[], room: Room, date: string): { name
   const res = reservations.find(
     (r) =>
       !r.isBlackout &&
+      !r.isCancelled &&
       roomMatches(r, room) &&
       r.paymentStatus !== "Refunded" &&
       r.checkInDate <= date &&

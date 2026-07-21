@@ -48,6 +48,8 @@ type LocalFields = {
   invoiceModifications?: import('@/types/reservation').InvoiceModification[];
   postStayAcknowledgedAt?: string;
   postStaySnapshot?: import('@/types/reservation').BookingSnapshot;
+  nonArrival?: import('@/types/reservation').NonArrival | null;
+  nonArrivalNetPriceCzk?: number | null;
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -68,6 +70,8 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
   if (r.postStayAcknowledgedAt) local.postStayAcknowledgedAt = r.postStayAcknowledgedAt;
   if (r.postStaySnapshot) local.postStaySnapshot = r.postStaySnapshot;
+  if (r.nonArrival) local.nonArrival = r.nonArrival;
+  if (r.nonArrivalNetPriceCzk != null) local.nonArrivalNetPriceCzk = r.nonArrivalNetPriceCzk;
   return local;
 }
 
@@ -843,6 +847,11 @@ export default function TransactionsPage() {
       // Guest rating — good / bad / unrated (matches the smiley in the table)
       if (filters.ratings.length > 0 && !filters.ratings.includes(ratingClass(res))) return false;
 
+      // Cancelled bookings are hidden from the Active view (they would flood it
+      // with a year of guest cancellations). Non-arrivals stay — we're still
+      // owed on them and they behave like a live reservation.
+      if (filters.activeOnly && res.isCancelled && !res.nonArrival) return false;
+
       // Active only — check-out within the last 7 days, in-house, or upcoming
       if (filters.activeOnly && res.checkOutDate < activeCutoff) return false;
 
@@ -896,27 +905,33 @@ export default function TransactionsPage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Reservations</h1>
           {(() => {
-            // "Real" reservations = everything currently in view minus blackouts
-            // (Beds24 cancellations are already excluded by the /api/bookings
-            // sync — status="cancelled" rows are filtered out server-side.)
-            const realCount = reservations.filter((r) => !r.isBlackout).length;
-            const blackoutCount = reservations.length - realCount;
+            // "Real" reservations = active guest stays: not blackouts, not
+            // cancelled. Cancelled bookings are now ADMITTED into the list
+            // (shown with a Cancelled flag, hidden from the Active view), so they
+            // must be excluded from these headline counts. Non-arrivals are
+            // cancelled-in-Beds24 too, so they get their own line.
+            const realCount = reservations.filter((r) => !r.isBlackout && !r.isCancelled).length;
+            const blackoutCount = reservations.filter((r) => r.isBlackout).length;
+            const nonArrivalCount = reservations.filter((r) => r.nonArrival).length;
+            const cancelledCount = reservations.filter((r) => r.isCancelled && !r.nonArrival).length;
             // "Served" = stays we've actually delivered: checked out (departure
             // in the past) OR currently in-house — i.e. the stay has started
-            // (check-in today or earlier). Excludes future + blackouts.
+            // (check-in today or earlier). Excludes future, blackouts, cancelled.
             const today = new Date().toLocaleDateString("sv-SE");
             const servedCount = reservations.filter(
-              (r) => !r.isBlackout && r.checkInDate <= today,
+              (r) => !r.isBlackout && !r.isCancelled && r.checkInDate <= today,
             ).length;
             return (
               <p
                 className="text-sm text-gray-400 mt-0.5"
-                title="Cancellations are already excluded from the sync. Blackouts (status=black) are counted separately. “Served” = stays already checked out or currently in-house."
+                title="“Real” = active guest stays (excludes blackouts and cancellations). Non-arrivals and cancellations are counted separately. “Served” = stays already checked out or currently in-house."
               >
                 {realCount} reservation{realCount === 1 ? '' : 's'}
                 {' '}
                 <span className="text-gray-500">({servedCount} served)</span>
+                {nonArrivalCount > 0 && <> · {nonArrivalCount} non-arrival{nonArrivalCount === 1 ? '' : 's'}</>}
                 {blackoutCount > 0 && <> · {blackoutCount} blackout{blackoutCount === 1 ? '' : 's'}</>}
+                {cancelledCount > 0 && <> · {cancelledCount} cancelled</>}
                 {' · '}{filtered.length} shown
               </p>
             );

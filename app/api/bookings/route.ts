@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, RateType } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, RateType, NonArrival } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
@@ -123,6 +123,7 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   const rateMap: Record<string, RateType> = {};
   const perkMap: Record<string, RatePerks> = {};
   for (const r of reservations) {
+    if (r.isCancelled) continue;
     const ov = overrides[r.reservationNumber];
     const eff = ov?.rateTypeOverride ?? r.rateType ?? null;
     if (eff) rateMap[r.reservationNumber] = eff;
@@ -133,6 +134,33 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
     }
   }
   await Promise.all([redis.set(RATE_TYPES_KEY, rateMap), redis.set(RATE_PERKS_KEY, perkMap)]);
+}
+
+/**
+ * Fold the non-arrival overlay (flag + editable net price) from
+ * `baker:reservation-overrides` onto reservations server-side, so every
+ * consumer — Transactions, Performance, Commission, the calendar — sees the
+ * same non-arrival state without each having to merge local overrides itself.
+ * The Transactions client still layers the full override set on top (identical
+ * values), keeping optimistic UI updates instant.
+ */
+async function attachNonArrivalOverlay(reservations: Reservation[]): Promise<Reservation[]> {
+  const redis = getRedis();
+  if (!redis) return reservations;
+  const overrides =
+    (await redis.get<
+      Record<string, { nonArrival?: NonArrival | null; nonArrivalNetPriceCzk?: number | null }>
+    >(RESERVATION_OVERRIDES_KEY)) ?? {};
+  if (Object.keys(overrides).length === 0) return reservations;
+  return reservations.map((r) => {
+    const ov = overrides[r.reservationNumber];
+    if (!ov?.nonArrival) return r;
+    return {
+      ...r,
+      nonArrival: ov.nonArrival,
+      nonArrivalNetPriceCzk: ov.nonArrivalNetPriceCzk ?? ov.nonArrival.originalPriceCzk,
+    };
+  });
 }
 
 // ─── Room mapping ──────────────────────────────────────────────────────────────
@@ -678,6 +706,8 @@ function mapToReservation(b: Beds24Booking): Reservation {
     commissionAmount,
     paymentChargeAmount,
     ...(rateType ? { rateType } : {}),
+    ...(b.status ? { status: b.status } : {}),
+    ...((b.status === 'cancelled' || b.status === 'canceled') ? { isCancelled: true } : {}),
     // Locally managed — Redis will layer these in Phase 3
     additionalEmail: "",
     paymentStatusOverride: null,
@@ -736,7 +766,7 @@ function tagOverlappingReservations(reservations: Reservation[]): Reservation[] 
   // Build (reservation, rooms) tuples once
   type Item = { res: Reservation; rooms: Set<string>; inMs: number; outMs: number };
   const items: Item[] = reservations
-    .filter((r) => !r.isBlackout && r.checkInDate && r.checkOutDate)
+    .filter((r) => !r.isBlackout && !r.isCancelled && r.checkInDate && r.checkOutDate)
     .map((r) => {
       const rooms = new Set<string>();
       if (r.room) rooms.add(r.room);
@@ -1171,26 +1201,36 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: rows.length, today, rows });
     }
 
-    const grouped = mergeGroupedBookings(
-      raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled")
-    );
+    // Active bookings keep the existing grouping (VR ↔ physical, Booking.com
+    // multi-unit). Cancelled bookings are admitted too — shown in Transactions
+    // with a Cancelled flag, but excluded from the Active view and from
+    // revenue/occupancy/commission (see grossProfit + OccupancyCalendar). They
+    // are mapped individually: grouping is a live-inventory concern that doesn't
+    // apply to a cancellation.
+    const isCancelledStatus = (b: Beds24Booking) =>
+      b.status === "cancelled" || b.status === "canceled";
+    const grouped = mergeGroupedBookings(raw.filter((b) => !isCancelledStatus(b)));
     const mapped = grouped.map(mapToReservation);
+    const cancelledMapped = raw.filter(isCancelledStatus).map(mapToReservation);
 
     // Attach synced guest reviews (Booking.com / Airbnb). Reviews key off the
     // channel reference (Beds24 `apiReference`), not the booking id. `grouped`
     // is parallel to `mapped`, so we read each booking's apiReference by index.
+    // Cancelled bookings don't carry reviews.
     const reviews = await getReviews(token);
-    const reservations = mapped.map((r, i) => {
+    const activeWithReviews = mapped.map((r, i) => {
       const ref = grouped[i].apiReference;
       const rating = ref ? reviews[String(ref)] : undefined;
       return rating ? { ...r, syncedRating: rating } : r;
     });
+    const reservations = [...activeWithReviews, ...cancelledMapped];
 
     const withStripeFees = await aggregateStripeFees(reservations);
     const withOverlapFlags = tagOverlappingReservations(withStripeFees);
+    const withNonArrival = await attachNonArrivalOverlay(withOverlapFlags);
 
     // Publish effective rate types for the cleaning app (rate-based perks).
-    await persistRateTypeMap(withOverlapFlags).catch((err) =>
+    await persistRateTypeMap(withNonArrival).catch((err) =>
       console.error("[bookings] rate-type map persist failed:", err),
     );
 
@@ -1204,7 +1244,7 @@ export async function GET(req: NextRequest) {
       return [] as Reservation[];
     });
 
-    return NextResponse.json([...withOverlapFlags, ...overrideBlackouts]);
+    return NextResponse.json([...withNonArrival, ...overrideBlackouts]);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
