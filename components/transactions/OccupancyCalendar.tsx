@@ -209,6 +209,13 @@ function occCellBg(pct: number): string {
   if (pct <= 66) return "#FAC775";
   return "#F7C1C1";
 }
+// Full heat treatment (fill + border + text) for the per-night occupancy tiles.
+function occHeat(pct: number): { bg: string; bd: string; tx: string } {
+  if (pct <= 0) return { bg: occCellBg(pct), bd: '#5DCAA5', tx: '#0F6E56' };
+  if (pct <= 33) return { bg: occCellBg(pct), bd: '#EF9F27', tx: '#854F0B' };
+  if (pct <= 66) return { bg: occCellBg(pct), bd: '#BA7517', tx: '#633806' };
+  return { bg: occCellBg(pct), bd: '#E24B4A', tx: '#791F1F' };
+}
 
 function parkingRowLabel(space: string): string {
   return `P${space}`;
@@ -426,6 +433,112 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     );
   }
 
+  // Per-day coverage for a room, derived from its segments (occupancy tile mode).
+  function occCover(room: Room): Array<{ seg: Segment; first: boolean; last: boolean } | null> {
+    const arr: Array<{ seg: Segment; first: boolean; last: boolean } | null> = new Array(days.length).fill(null);
+    for (const s of segmentsByRoom[room] ?? []) {
+      for (let i = s.startIdx; i <= s.endIdx; i++) arr[i] = { seg: s, first: i === s.startIdx, last: i === s.endIdx };
+    }
+    return arr;
+  }
+
+  // A single night rendered as a discrete tile, tinted by that day's whole-
+  // property occupancy (green→red). Used only in the "occupancy" colour-by
+  // mode, where clear per-night boxes matter more than a continuous bar.
+  function renderOccTile(room: Room, idx: number, cover: { seg: Segment; first: boolean; last: boolean } | null): ReactNode {
+    const date = days[idx];
+    const isToday = date === todayStr;
+    if (!cover) {
+      return (
+        <div
+          key={date}
+          style={{ gridColumn: `${idx + 1} / ${idx + 2}`, height: BAR_H, margin: '0 1px', borderRadius: 6 }}
+          className={isToday ? 'bg-indigo-50' : ''}
+        />
+      );
+    }
+    const { seg, first, last } = cover;
+    const res = seg.res;
+    const pct = Math.round(((bookedCountByDate[date] ?? 0) / ROOMS.length) * 100);
+    const heat = occHeat(pct);
+    let bg: string, border: string, textColor: string;
+    let bgImage: string | undefined;
+    if (seg.kind === 'blackout') {
+      bg = BLACKOUT_PAL.f; border = BLACKOUT_PAL.b; textColor = BLACKOUT_PAL.t; bgImage = BLACKOUT_STRIPE;
+    } else if (seg.kind === 'nonarrival') {
+      bg = NA_PAL.f; border = NA_PAL.b; textColor = NA_PAL.t; bgImage = NA_STRIPE;
+    } else {
+      bg = heat.bg; border = heat.bd; textColor = heat.tx;
+    }
+    const trueStart = res.checkInDate === days[seg.startIdx];
+    const trueEnd = nextDay(days[seg.endIdx]) === res.checkOutDate;
+    const lr = first && trueStart ? 8 : 3;
+    const rr = last && trueEnd ? 8 : 3;
+    const flag = seg.kind === 'active' ? flagByRes[res.reservationNumber] : null;
+    const avatarBg = seg.kind === 'nonarrival' ? NA_PAL.a : '#444441';
+    const title =
+      seg.kind === 'blackout'
+        ? `${room} — blacked out`
+        : seg.kind === 'nonarrival'
+        ? `${room} — non-arrival (room freed for resale)`
+        : `${room} — ${guestName(res) || 'booked'}`;
+
+    let inner: ReactNode = null;
+    if (seg.kind === 'blackout') {
+      inner = first ? <span className="text-[9px] font-medium leading-none" style={{ color: textColor }}>BLK</span> : null;
+    } else if (first) {
+      inner = (
+        <span
+          className="relative inline-flex items-center justify-center rounded-full text-white font-medium"
+          style={{ width: 18, height: 18, fontSize: 9, background: avatarBg }}
+        >
+          {initialsOf(res)}
+          {flag && (
+            <span
+              className="absolute inline-flex items-center justify-center rounded-full bg-white shadow-sm"
+              style={{ top: -4, right: -5, width: 13, height: 13, fontSize: 8, fontWeight: 700, color: flag.color }}
+            >
+              {flag.glyph}
+            </span>
+          )}
+          {seg.kind === 'nonarrival' && (
+            <span className="absolute leading-none" style={{ top: -5, left: -5, fontSize: 9 }} aria-hidden>🚨</span>
+          )}
+        </span>
+      );
+    } else {
+      inner = <span className="text-[9px] font-medium leading-none select-none" style={{ color: textColor }}>{initialsOf(res)}</span>;
+    }
+
+    return (
+      <div
+        key={date}
+        role={onReservationClick ? 'button' : undefined}
+        tabIndex={onReservationClick ? 0 : undefined}
+        onClick={onReservationClick ? () => onReservationClick(res) : undefined}
+        onKeyDown={
+          onReservationClick
+            ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReservationClick(res); } }
+            : undefined
+        }
+        title={title}
+        className={`flex items-center justify-center overflow-hidden ${onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
+        style={{
+          gridColumn: `${idx + 1} / ${idx + 2}`,
+          height: BAR_H,
+          margin: '0 1px',
+          background: bg,
+          backgroundImage: bgImage,
+          border: `1px solid ${border}`,
+          borderRadius: `${lr}px ${rr}px ${rr}px ${lr}px`,
+          color: textColor,
+        }}
+      >
+        {inner}
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
       {/* Header */}
@@ -592,23 +705,25 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                   <div key={room} style={{ display: 'grid', gridTemplateColumns: rowCols, alignItems: 'center', height: ROW_H }}>
                     <div className="pr-2 text-xs font-medium text-gray-500 text-right whitespace-nowrap">{room}</div>
 
-                    {/* Track: background day columns + booking bars overlaid in the same grid row */}
+                    {/* Track: continuous bars (rate / channel) or per-night tiles (occupancy) */}
                     <div style={{ display: 'grid', gridTemplateColumns: trackCols, position: 'relative', height: ROW_H }}>
-                      {days.map((date, idx) => {
-                        const isToday = date === todayStr;
-                        const bg =
-                          colorBy === 'occupancy'
-                            ? occCellBg(Math.round(((bookedCountByDate[date] ?? 0) / ROOMS.length) * 100))
-                            : undefined;
-                        return (
-                          <div
-                            key={date}
-                            style={{ gridColumn: `${idx + 1} / ${idx + 2}`, gridRow: 1, background: bg }}
-                            className={`border-r border-gray-100 ${isToday ? 'bg-indigo-50/60' : ''}`}
-                          />
-                        );
-                      })}
-                      {(segmentsByRoom[room] ?? []).map((seg) => renderBar(room as Room, seg))}
+                      {colorBy === 'occupancy' ? (
+                        occCover(room as Room).map((cover, idx) => renderOccTile(room as Room, idx, cover))
+                      ) : (
+                        <>
+                          {days.map((date, idx) => {
+                            const isToday = date === todayStr;
+                            return (
+                              <div
+                                key={date}
+                                style={{ gridColumn: `${idx + 1} / ${idx + 2}`, gridRow: 1 }}
+                                className={`border-r border-gray-100 ${isToday ? 'bg-indigo-50/60' : ''}`}
+                              />
+                            );
+                          })}
+                          {(segmentsByRoom[room] ?? []).map((seg) => renderBar(room as Room, seg))}
+                        </>
+                      )}
                     </div>
 
                     {/* Per-room occupancy for the visible window */}
