@@ -38,13 +38,13 @@ type ColorBy = 'rate' | 'channel' | 'occupancy';
 
 // Rate fills reuse today's rate palette. Booked-but-no-rate (e.g. Direct) → slate.
 const RATE_FILL: Record<string, string> = {
-  "Standard":       "bg-blue-200 text-blue-900",
-  "Flexi":          "bg-emerald-200 text-emerald-900",
-  "Weekly":         "bg-amber-200 text-amber-900",
-  "Non-Refundable": "bg-red-200 text-red-900",
-  "One-Night":      "bg-violet-200 text-violet-900",
+  "Standard":       "bg-blue-500 text-white",
+  "Flexi":          "bg-emerald-500 text-white",
+  "Weekly":         "bg-amber-400 text-amber-950",
+  "Non-Refundable": "bg-red-500 text-white",
+  "One-Night":      "bg-violet-500 text-white",
 };
-const RATE_FILL_NONE = "bg-slate-200 text-slate-700";
+const RATE_FILL_NONE = "bg-slate-400 text-white";
 
 const CHANNEL_FILL: Record<string, string> = {
   "Booking.com":  "bg-[#003B95] text-white",
@@ -109,7 +109,12 @@ function coversCell(r: Reservation, room: string, date: string): boolean {
 function findActiveRes(reservations: Reservation[], room: Room, date: string): Reservation | null {
   return (
     reservations.find(
-      (r) => !r.isBlackout && !r.isCancelled && r.paymentStatus !== "Refunded" && coversCell(r, room, date),
+      (r) =>
+        !r.isBlackout &&
+        !r.isCancelled &&
+        !r.nonArrival && // a flagged non-arrival frees the room even before the Beds24 cancel syncs
+        r.paymentStatus !== "Refunded" &&
+        coversCell(r, room, date),
     ) ?? null
   );
 }
@@ -148,12 +153,14 @@ function initialsOf(r: Reservation): string {
   return [r.firstName?.[0], r.lastName?.[0]].filter(Boolean).join("").toUpperCase();
 }
 
-// Highest-priority flag glyph for the arrival cell (problem > VIP > high-value > repeat).
-function flagGlyph(flags: CustomerFlag[]): string | null {
-  if (flags.includes("Problematic Customer")) return "⚠";
-  if (flags.includes("VIP Customer")) return "👑";
-  if (flags.includes("High Value Customer")) return "★";
-  if (flags.includes("Repeat Customer")) return "↩";
+// Highest-priority flag for a reservation (problem > VIP > high-value > repeat).
+// Fixed colours (NOT inherited from the pill): star = gold, crown = red,
+// problem = red, repeat = indigo — rendered in a white chip so they read on any fill.
+function flagInfo(flags: CustomerFlag[]): { glyph: string; color: string } | null {
+  if (flags.includes("Problematic Customer")) return { glyph: "!", color: "#dc2626" };
+  if (flags.includes("VIP Customer")) return { glyph: "♛", color: "#dc2626" };
+  if (flags.includes("High Value Customer")) return { glyph: "★", color: "#d97706" };
+  if (flags.includes("Repeat Customer")) return { glyph: "↻", color: "#4f46e5" };
   return null;
 }
 
@@ -218,6 +225,26 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     }
     return m;
   }, [reservations, days, categoryGroups]);
+
+  // Per-room occupancy % across the visible window (right-hand column).
+  const occByRoom = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const room of ROOMS) {
+      let sold = 0;
+      for (const date of days) if (isRoomBooked(reservations, room, date)) sold += 1;
+      m[room] = days.length > 0 ? Math.round((sold / days.length) * 100) : 0;
+    }
+    return m;
+  }, [reservations, days]);
+
+  // Effective guest flag per reservation (computed once, not per cell).
+  const flagByRes = useMemo(() => {
+    const m: Record<string, { glyph: string; color: string } | null> = {};
+    for (const r of reservations) {
+      if (!r.isBlackout) m[r.reservationNumber] = flagInfo(getEffectiveFlags(r, reservations));
+    }
+    return m;
+  }, [reservations]);
 
   function cellFill(res: Reservation, date: string): string {
     if (colorBy === 'channel') return CHANNEL_FILL[res.channel] ?? CHANNEL_FILL_NONE;
@@ -374,6 +401,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                   </th>
                 );
               })}
+              <th className="pl-2 pb-1 text-[10px] font-medium text-gray-400 text-right align-bottom">Occ</th>
             </tr>
           </thead>
 
@@ -386,7 +414,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
               <tbody key={group.category}>
                 {/* Category header row — collapse toggle + occupancy % for the window */}
                 <tr>
-                  <td colSpan={days.length + 1} className={`p-0 ${style.headerBorder} border-t border-b`}>
+                  <td colSpan={days.length + 2} className={`p-0 ${style.headerBorder} border-t border-b`}>
                     <div className={`w-full flex items-center gap-2 px-2 py-1.5 ${style.headerBg} ${style.headerText}`}>
                       <button
                         onClick={() => setCollapsed((c) => ({ ...c, [group.category]: !c[group.category] }))}
@@ -437,23 +465,42 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                         isEnd = nextDay(date) === res.checkOutDate;
                         if (kind === 'active') {
                           barCls = cellFill(res, date);
-                          const glyph = isStart ? flagGlyph(getEffectiveFlags(res, reservations)) : null;
-                          title = `${room} — ${`${res.firstName} ${res.lastName}`.trim() || 'booked'}`;
-                          inner = isStart ? (
-                            <span className="flex items-center gap-0.5 text-[9px] font-bold leading-none select-none tracking-tight truncate px-0.5">
-                              {glyph && <span>{glyph}</span>}
-                              {initialsOf(res)}
-                            </span>
-                          ) : null;
+                          const flag = flagByRes[res.reservationNumber];
+                          const resold = findNonArrivalForCell(reservations, room as Room, date) !== null;
+                          title = `${room} — ${`${res.firstName} ${res.lastName}`.trim() || 'booked'}${resold ? ' (resold from a non-arrival)' : ''}`;
+                          inner = (
+                            <>
+                              {isStart && flag && (
+                                <span
+                                  className="absolute top-0 left-0 inline-flex items-center justify-center w-3 h-3 rounded-full bg-white text-[8px] font-bold leading-none shadow-sm"
+                                  style={{ color: flag.color }}
+                                >
+                                  {flag.glyph}
+                                </span>
+                              )}
+                              <span className="text-[9px] font-bold leading-none select-none tracking-tight">{initialsOf(res)}</span>
+                              {resold && (
+                                <span
+                                  className="absolute bottom-0 right-0 w-0 h-0 border-l-[5px] border-b-[5px] border-l-transparent border-b-purple-600"
+                                  title="Resold from a non-arrival"
+                                />
+                              )}
+                            </>
+                          );
                         } else if (kind === 'blackout') {
                           barCls = BLACKOUT_FILL;
                           title = `${room} — blacked out`;
                           inner = isStart ? <span className="text-[9px] font-bold leading-none select-none">BLK</span> : null;
                         } else {
-                          // non-arrival
+                          // non-arrival — room freed for resale, not yet resold
                           barCls = NON_ARRIVAL_FILL;
                           title = `${room} — non-arrival (room freed for resale)`;
-                          inner = isStart ? <span className="text-[10px] leading-none select-none">🚨</span> : null;
+                          inner = (
+                            <span className="flex items-center gap-0.5 text-[9px] font-bold leading-none select-none text-purple-900">
+                              {isStart && <span className="text-[10px]">🚨</span>}
+                              {initialsOf(res)}
+                            </span>
+                          );
                         }
                       }
 
@@ -462,11 +509,11 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                       return (
                         <td key={date} className={`px-px py-0.5 ${isToday ? "ring-1 ring-indigo-300 ring-inset" : ""}`}>
                           <div
-                            className={`h-5 flex items-center justify-center ${barCls} ${
-                              kind === 'empty' ? 'rounded-sm' : ''
-                            } ${isStart ? 'ml-1 rounded-l-md' : ''} ${isEnd ? 'mr-1 rounded-r-md' : ''} ${
-                              clickable ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''
-                            }`}
+                            className={`relative h-5 flex items-center justify-center ${barCls} ${
+                              kind === 'empty' ? 'rounded-sm' : 'border-y border-gray-800/50'
+                            } ${isStart ? 'ml-1 rounded-l-md border-l border-gray-800/50' : ''} ${
+                              isEnd ? 'mr-1 rounded-r-md border-r border-gray-800/50' : ''
+                            } ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-inset' : ''}`}
                             title={title}
                             onClick={handleClick}
                           >
@@ -475,6 +522,11 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                         </td>
                       );
                     })}
+
+                    {/* Per-room occupancy for the visible window */}
+                    <td className="pl-2 py-0.5 text-xs text-right tabular-nums text-gray-600 whitespace-nowrap">
+                      {occByRoom[room] ?? 0}%
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -513,6 +565,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                         </td>
                       );
                     })}
+                    <td />
                   </tr>
                 );
               })}
