@@ -17,6 +17,7 @@
 import type { Reservation } from '@/types/reservation';
 import type { DateRange } from '@/utils/periodUtils';
 import { daysBetween, getNightsInPeriod, isReservationInPeriod } from '@/utils/periodUtils';
+import { reservationRevenue } from '@/utils/reservationRevenue';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import type { SnapshotData } from '@/types/occupancySnapshot';
 
@@ -64,14 +65,21 @@ export function computeSnapshotData(
 ): SnapshotData {
   const roomSet = new Set(rooms);
 
-  // Mirror PerformancePage.filteredReservations exactly.
+  // Mirror PerformancePage.filteredReservations exactly: drop blackouts + plain
+  // cancellations (non-arrivals stay — they carry net revenue but no occupancy).
   const inScope = expandLinkedReservations(reservations).filter(
-    (r) => !r.isBlackout && isReservationInPeriod(r, range) && roomSet.has(r.room),
+    (r) =>
+      !r.isBlackout &&
+      !(r.isCancelled && !r.nonArrival) &&
+      isReservationInPeriod(r, range) &&
+      roomSet.has(r.room),
   );
+  // Occupancy counts physical stays only — non-arrivals freed their room.
+  const occupancyInScope = inScope.filter((r) => !r.nonArrival);
 
   const daysInPeriod = daysBetween(range.start, range.end);
   const availableTotal = rooms.length * daysInPeriod;
-  const soldTotal = inScope.reduce((sum, r) => sum + getNightsInPeriod(r, range), 0);
+  const soldTotal = occupancyInScope.reduce((sum, r) => sum + getNightsInPeriod(r, range), 0);
 
   // Gross sales — pro-rated by nights-in-period, refunded excluded (GBVAdrView).
   const grossSalesCzk = opts.includeGrossSales
@@ -80,14 +88,14 @@ export function computeSnapshotData(
           if (r.paymentStatus === 'Refunded') return sum;
           const nights = getNightsInPeriod(r, range);
           const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
-          return sum + r.price * fraction;
+          return sum + reservationRevenue(r).gbv * fraction;
         }, 0),
       )
     : undefined;
 
   // Per-room occupancy (OccupancyView).
   const perRoom = rooms.map((room) => {
-    const soldNights = inScope
+    const soldNights = occupancyInScope
       .filter((r) => r.room === room)
       .reduce((sum, r) => sum + getNightsInPeriod(r, range), 0);
     return {
@@ -103,7 +111,7 @@ export function computeSnapshotData(
   const calendar = {
     dates,
     perRoom: rooms.map((room) => {
-      const roomRes = inScope.filter((r) => r.room === room);
+      const roomRes = occupancyInScope.filter((r) => r.room === room);
       return {
         room,
         occupied: dates.map((night) => roomRes.some((r) => occupiesNight(r, night))),

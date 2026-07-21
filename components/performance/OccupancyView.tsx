@@ -28,11 +28,15 @@ function OccupancyBar({ value }: { value: number }) {
 export default function OccupancyView({ reservations, dateRange, selectedRooms }: Props) {
   const daysInPeriod = daysBetween(dateRange.start, dateRange.end);
   const availableTotal = selectedRooms.length * daysInPeriod;
-  const soldTotal = reservations.reduce((sum, r) => sum + getNightsInPeriod(r, dateRange), 0);
+  // Non-arrivals freed their room (the guest never came) — they carry revenue but
+  // no physical occupancy, so drop them from sold-nights. Plain cancellations are
+  // already excluded upstream in PerformancePage.
+  const occupancyReservations = reservations.filter((r) => !r.nonArrival);
+  const soldTotal = occupancyReservations.reduce((sum, r) => sum + getNightsInPeriod(r, dateRange), 0);
   const occupancyPct = pct(soldTotal, availableTotal);
 
   const perRoom = selectedRooms.map((room) => {
-    const roomReservations = reservations.filter((r) => r.room === room);
+    const roomReservations = occupancyReservations.filter((r) => r.room === room);
     const soldNights = roomReservations.reduce((sum, r) => sum + getNightsInPeriod(r, dateRange), 0);
     return { room, soldNights, available: daysInPeriod, pct: pct(soldNights, daysInPeriod) };
   });

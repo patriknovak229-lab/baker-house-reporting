@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import type { Reservation } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
+import { reservationRevenue } from "@/utils/reservationRevenue";
 import type { DateRange } from "@/utils/periodUtils";
 import { CHANNEL_COLORS, CHANNEL_COLOR_FALLBACK as FALLBACK_COLOR } from "@/utils/channelColors";
 
@@ -42,7 +43,7 @@ function buildStats(reservations: Reservation[], dateRange: DateRange): ChannelS
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0, gbv: 0 };
     map[r.channel].reservations += 1;
     map[r.channel].nights += nights;
-    map[r.channel].gbv += r.price * fraction;
+    map[r.channel].gbv += reservationRevenue(r).gbv * fraction;
   }
   return Object.entries(map).map(([channel, data]) => ({
     channel,

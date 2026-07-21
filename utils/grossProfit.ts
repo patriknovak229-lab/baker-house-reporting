@@ -13,6 +13,7 @@
  */
 import type { Reservation, Room } from '@/types/reservation';
 import { getNightsInPeriod } from '@/utils/periodUtils';
+import { reservationRevenue } from '@/utils/reservationRevenue';
 import type { DateRange } from '@/utils/periodUtils';
 import type {
   VariableCostEntry,
@@ -136,10 +137,7 @@ export function computeGrossProfit(
     if (r.isCancelled && !r.nonArrival) continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
-    const isNonArrival = !!r.nonArrival;
-    const price = isNonArrival ? (r.nonArrivalNetPriceCzk ?? r.price) : r.price;
-    const commission = isNonArrival ? 0 : r.commissionAmount;
-    const fees = isNonArrival ? 0 : r.paymentChargeAmount;
+    const { gbv: price, commission, fee: fees } = reservationRevenue(r);
     gbv += price * fraction;
     otaCommission += commission * fraction;
     paymentFees += fees * fraction;

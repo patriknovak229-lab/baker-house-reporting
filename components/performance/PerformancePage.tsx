@@ -105,6 +105,9 @@ export default function PerformancePage() {
         (r) =>
           // Blackouts are room blocks (no revenue, no guest) — exclude from performance metrics
           !r.isBlackout &&
+          // Plain cancellations contribute nothing — no revenue, no occupancy. Non-arrivals
+          // stay (net-retained revenue); OccupancyView drops them from sold-nights.
+          !(r.isCancelled && !r.nonArrival) &&
           isReservationInPeriod(r, dateRange) &&
           selectedRooms.includes(r.room),
       ),

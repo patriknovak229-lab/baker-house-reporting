@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import type { Reservation } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
+import { reservationRevenue } from "@/utils/reservationRevenue";
 import type { DateRange } from "@/utils/periodUtils";
 import { CHANNEL_COLORS, CHANNEL_COLOR_FALLBACK as FALLBACK_COLOR } from "@/utils/channelColors";
 
@@ -70,9 +71,10 @@ function computeBreakdown(reservations: Reservation[], dateRange: DateRange): {
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     if (!map[r.channel]) map[r.channel] = { gbv: 0, commission: 0, paymentFee: 0 };
-    map[r.channel].gbv += r.price * fraction;
-    map[r.channel].commission += r.commissionAmount * fraction;
-    map[r.channel].paymentFee += r.paymentChargeAmount * fraction;
+    const rev = reservationRevenue(r);
+    map[r.channel].gbv += rev.gbv * fraction;
+    map[r.channel].commission += rev.commission * fraction;
+    map[r.channel].paymentFee += rev.fee * fraction;
   }
 
   const byChannel: ChannelBreakdown[] = Object.entries(map).map(([channel, data]) => ({
