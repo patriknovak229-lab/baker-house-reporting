@@ -364,7 +364,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
 
     const label =
       seg.kind === 'blackout' ? 'Blackout' : guestName(res) || (seg.kind === 'nonarrival' ? 'Non-arrival' : 'Booked');
-    const note = seg.kind !== 'blackout' ? (res.notes ?? '').trim() : '';
+    // Note preview only in the Rate view — skipped in Channel + Occupancy.
+    const note = colorBy === 'rate' && seg.kind !== 'blackout' ? (res.notes ?? '').trim() : '';
     const title =
       seg.kind === 'blackout'
         ? `${room} — blacked out`
@@ -497,14 +498,12 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     const trueEnd = nextDay(days[seg.endIdx]) === res.checkOutDate;
     const lr = first && trueStart ? 8 : 3;
     const rr = last && trueEnd ? 8 : 3;
-    const note = seg.kind !== 'blackout' ? (res.notes ?? '').trim() : '';
     const title =
       seg.kind === 'blackout'
         ? `${room} — blacked out`
         : seg.kind === 'nonarrival'
         ? `${room} — non-arrival (room freed for resale)`
         : `${room} — ${guestName(res) || 'booked'}`;
-    const fullTitle = note ? `${title} · note: ${note}` : title;
 
     return (
       <div
@@ -517,7 +516,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReservationClick(res); } }
             : undefined
         }
-        title={fullTitle}
+        title={title}
         className={onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}
         style={{
           gridColumn: `${idx + 1} / ${idx + 2}`,
@@ -541,7 +540,6 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     const res = seg.res;
     const label =
       seg.kind === 'blackout' ? 'Blackout' : guestName(res) || (seg.kind === 'nonarrival' ? 'Non-arrival' : 'Booked');
-    const note = seg.kind !== 'blackout' ? (res.notes ?? '').trim() : '';
     const flag = seg.kind === 'active' ? flagByRes[res.reservationNumber] : null;
     const avatarBg = seg.kind === 'nonarrival' ? NA_PAL.a : '#444441';
     const dark = seg.kind === 'blackout';
@@ -583,15 +581,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
           </span>
         )}
         {seg.kind === 'nonarrival' && <span className="text-[10px] leading-none shrink-0" aria-hidden>🚨</span>}
-        <span className="text-[11px] leading-none truncate select-none">
-          <span className="font-medium">{label}</span>
-          {note && (
-            <span style={{ opacity: 0.8 }}>
-              {' '}
-              <span aria-hidden>·</span> {note}
-            </span>
-          )}
-        </span>
+        <span className="text-[11px] font-medium leading-none truncate select-none">{label}</span>
       </div>
     );
   }
