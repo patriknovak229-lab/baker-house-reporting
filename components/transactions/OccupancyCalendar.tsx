@@ -194,26 +194,26 @@ function flagInfo(flags: CustomerFlag[]): { glyph: string; color: string } | nul
 // All hex (inline styles) so it never depends on the Tailwind colour palette.
 type OccBand = 'green' | 'yellow' | 'orange' | 'red';
 function occBand(pct: number): OccBand {
-  if (pct >= 90) return 'red';
-  if (pct >= 80) return 'orange';
+  if (pct >= 80) return 'red';
+  if (pct >= 70) return 'orange';
   if (pct >= 50) return 'yellow';
   return 'green';
 }
-// Tile fill / border / text for the per-night occupancy tiles.
+// Tile fill / border / text for the per-night occupancy tiles (darker fills).
 const OCC_TILE: Record<OccBand, { bg: string; bd: string; tx: string }> = {
-  green:  { bg: '#D1FAE5', bd: '#34D399', tx: '#065F46' },
-  yellow: { bg: '#FEF9C3', bd: '#FACC15', tx: '#854D0E' },
-  orange: { bg: '#FFEDD5', bd: '#FB923C', tx: '#9A3412' },
-  red:    { bg: '#FEE2E2', bd: '#F87171', tx: '#991B1B' },
+  green:  { bg: '#A7F3D0', bd: '#10B981', tx: '#064E3B' },
+  yellow: { bg: '#FEF08A', bd: '#EAB308', tx: '#713F12' },
+  orange: { bg: '#FED7AA', bd: '#F97316', tx: '#7C2D12' },
+  red:    { bg: '#FECACA', bd: '#EF4444', tx: '#7F1D1D' },
 };
 // Solid fill for the per-room / per-category occupancy progress bars.
-const OCC_SOLID: Record<OccBand, string> = { green: '#10B981', yellow: '#FACC15', orange: '#F97316', red: '#EF4444' };
-// Light chip (fill + text) for the day-header occupancy heat.
+const OCC_SOLID: Record<OccBand, string> = { green: '#059669', yellow: '#EAB308', orange: '#EA580C', red: '#DC2626' };
+// Chip (fill + text) for the day-header occupancy heat (darker to match tiles).
 const OCC_CHIP: Record<OccBand, { bg: string; tx: string }> = {
-  green:  { bg: '#D1FAE5', tx: '#047857' },
-  yellow: { bg: '#FEF9C3', tx: '#A16207' },
-  orange: { bg: '#FFEDD5', tx: '#C2410C' },
-  red:    { bg: '#FEE2E2', tx: '#B91C1C' },
+  green:  { bg: '#A7F3D0', tx: '#065F46' },
+  yellow: { bg: '#FEF08A', tx: '#854D0E' },
+  orange: { bg: '#FED7AA', tx: '#9A3412' },
+  red:    { bg: '#FECACA', tx: '#991B1B' },
 };
 function occHeat(pct: number): { bg: string; bd: string; tx: string } { return OCC_TILE[occBand(pct)]; }
 function occBarColor(pct: number): string { return OCC_SOLID[occBand(pct)]; }
@@ -349,8 +349,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
       : [
           { label: "< 50%", pal: { f: occHeat(0).bg, b: occHeat(0).bd, t: '', a: '' } },
           { label: "50%+", pal: { f: occHeat(60).bg, b: occHeat(60).bd, t: '', a: '' } },
+          { label: "70%+", pal: { f: occHeat(75).bg, b: occHeat(75).bd, t: '', a: '' } },
           { label: "80%+", pal: { f: occHeat(85).bg, b: occHeat(85).bd, t: '', a: '' } },
-          { label: "90%+", pal: { f: occHeat(95).bg, b: occHeat(95).bd, t: '', a: '' } },
         ];
 
   function renderBar(room: Room, seg: Segment): ReactNode {
@@ -364,12 +364,14 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
 
     const label =
       seg.kind === 'blackout' ? 'Blackout' : guestName(res) || (seg.kind === 'nonarrival' ? 'Non-arrival' : 'Booked');
+    const note = seg.kind !== 'blackout' ? (res.notes ?? '').trim() : '';
     const title =
       seg.kind === 'blackout'
         ? `${room} — blacked out`
         : seg.kind === 'nonarrival'
         ? `${room} — non-arrival (room freed for resale)`
         : `${room} — ${label}${seg.resold ? ' (resold from a non-arrival)' : ''}`;
+    const fullTitle = note ? `${title} · note: ${note}` : title;
 
     const barStyle: CSSProperties = {
       gridColumn: `${seg.startIdx + 1} / ${seg.endIdx + 2}`,
@@ -399,7 +401,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReservationClick(res); } }
             : undefined
         }
-        title={title}
+        title={fullTitle}
         className={`relative flex items-center gap-1 px-1 overflow-hidden ${onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
         style={barStyle}
       >
@@ -423,7 +425,15 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             {flag.glyph}
           </span>
         )}
-        <span className="text-[11px] font-medium leading-none truncate select-none">{label}</span>
+        <span className="text-[11px] leading-none truncate select-none">
+          <span className="font-medium">{label}</span>
+          {note && (
+            <span style={{ opacity: 0.7 }}>
+              {' '}
+              <span aria-hidden>·</span> {note}
+            </span>
+          )}
+        </span>
         {seg.resold && (
           <span
             className="absolute bottom-0 right-0"
@@ -466,7 +476,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
           className="flex items-center justify-center"
           title={`${room} — free`}
         >
-          <span className="text-[9px] leading-none select-none" style={{ color: isToday ? '#6366F1' : '#9CA3AF' }}>{dayNum}</span>
+          <span className="text-[10px] font-medium leading-none select-none" style={{ color: isToday ? '#4338CA' : '#4B5563' }}>{dayNum}</span>
         </div>
       );
     }
@@ -489,12 +499,14 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     const rr = last && trueEnd ? 8 : 3;
     const flag = seg.kind === 'active' ? flagByRes[res.reservationNumber] : null;
     const avatarBg = seg.kind === 'nonarrival' ? NA_PAL.a : '#444441';
+    const note = seg.kind !== 'blackout' ? (res.notes ?? '').trim() : '';
     const title =
       seg.kind === 'blackout'
         ? `${room} — blacked out`
         : seg.kind === 'nonarrival'
         ? `${room} — non-arrival (room freed for resale)`
         : `${room} — ${guestName(res) || 'booked'}`;
+    const fullTitle = note ? `${title} · note: ${note}` : title;
 
     let inner: ReactNode = null;
     if (seg.kind === 'blackout') {
@@ -534,8 +546,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onReservationClick(res); } }
             : undefined
         }
-        title={title}
-        className={`flex items-center justify-center overflow-hidden ${onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
+        title={fullTitle}
+        className={`relative flex items-center justify-center overflow-hidden ${onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
         style={{
           gridColumn: `${idx + 1} / ${idx + 2}`,
           height: BAR_H,
@@ -548,6 +560,13 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
         }}
       >
         {inner}
+        {first && note && (
+          <span
+            className="absolute rounded-full"
+            style={{ top: 2, right: 3, width: 5, height: 5, background: '#334155' }}
+            title="Has a note"
+          />
+        )}
       </div>
     );
   }
