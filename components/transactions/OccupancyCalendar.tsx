@@ -189,33 +189,35 @@ function flagInfo(flags: CustomerFlag[]): { glyph: string; color: string } | nul
   return null;
 }
 
-// Occupancy heat — 0 green, ≤33 amber, ≤66 orange, >66 red (full = red, kept scale).
-function occHeaderClass(pct: number): string {
-  if (pct <= 0) return "bg-emerald-100 text-emerald-700";
-  if (pct <= 33) return "bg-amber-100 text-amber-700";
-  if (pct <= 66) return "bg-orange-100 text-orange-700";
-  return "bg-red-100 text-red-700";
+// Occupancy heat scale — below 50 % green, 50 %+ yellow, 80 %+ orange, 90 %+ red.
+// Drives the day-header chips, the per-night tiles, and the occupancy bars.
+// All hex (inline styles) so it never depends on the Tailwind colour palette.
+type OccBand = 'green' | 'yellow' | 'orange' | 'red';
+function occBand(pct: number): OccBand {
+  if (pct >= 90) return 'red';
+  if (pct >= 80) return 'orange';
+  if (pct >= 50) return 'yellow';
+  return 'green';
 }
-function occFillClass(pct: number): string {
-  if (pct <= 0) return "bg-emerald-400";
-  if (pct <= 33) return "bg-amber-400";
-  if (pct <= 66) return "bg-orange-500";
-  return "bg-red-500";
-}
-// Light heat fill behind the day columns in the "occupancy" colour-by mode.
-function occCellBg(pct: number): string {
-  if (pct <= 0) return "#E1F5EE";
-  if (pct <= 33) return "#FAEEDA";
-  if (pct <= 66) return "#FAC775";
-  return "#F7C1C1";
-}
-// Full heat treatment (fill + border + text) for the per-night occupancy tiles.
-function occHeat(pct: number): { bg: string; bd: string; tx: string } {
-  if (pct <= 0) return { bg: occCellBg(pct), bd: '#5DCAA5', tx: '#0F6E56' };
-  if (pct <= 33) return { bg: occCellBg(pct), bd: '#EF9F27', tx: '#854F0B' };
-  if (pct <= 66) return { bg: occCellBg(pct), bd: '#BA7517', tx: '#633806' };
-  return { bg: occCellBg(pct), bd: '#E24B4A', tx: '#791F1F' };
-}
+// Tile fill / border / text for the per-night occupancy tiles.
+const OCC_TILE: Record<OccBand, { bg: string; bd: string; tx: string }> = {
+  green:  { bg: '#D1FAE5', bd: '#34D399', tx: '#065F46' },
+  yellow: { bg: '#FEF9C3', bd: '#FACC15', tx: '#854D0E' },
+  orange: { bg: '#FFEDD5', bd: '#FB923C', tx: '#9A3412' },
+  red:    { bg: '#FEE2E2', bd: '#F87171', tx: '#991B1B' },
+};
+// Solid fill for the per-room / per-category occupancy progress bars.
+const OCC_SOLID: Record<OccBand, string> = { green: '#10B981', yellow: '#FACC15', orange: '#F97316', red: '#EF4444' };
+// Light chip (fill + text) for the day-header occupancy heat.
+const OCC_CHIP: Record<OccBand, { bg: string; tx: string }> = {
+  green:  { bg: '#D1FAE5', tx: '#047857' },
+  yellow: { bg: '#FEF9C3', tx: '#A16207' },
+  orange: { bg: '#FFEDD5', tx: '#C2410C' },
+  red:    { bg: '#FEE2E2', tx: '#B91C1C' },
+};
+function occHeat(pct: number): { bg: string; bd: string; tx: string } { return OCC_TILE[occBand(pct)]; }
+function occBarColor(pct: number): string { return OCC_SOLID[occBand(pct)]; }
+function occChip(pct: number): { bg: string; tx: string } { return OCC_CHIP[occBand(pct)]; }
 
 function parkingRowLabel(space: string): string {
   return `P${space}`;
@@ -231,7 +233,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
   const todayStr = getTodayStr();
   const [startOffset, setStartOffset] = useState(0);
   const [showParking, setShowParking] = useState(false);
-  const [colorBy, setColorBy] = useState<ColorBy>('rate');
+  const [colorBy, setColorBy] = useState<ColorBy>('occupancy');
   const [collapsed, setCollapsed] = useState<Record<RoomCategory, boolean>>({
     Urban:  false,
     Deluxe: false,
@@ -345,10 +347,10 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
           { label: "Direct", pal: CHANNEL_FILL.Direct },
         ]
       : [
-          { label: "Free", pal: { f: occCellBg(0), b: '#9FE1CB', t: '', a: '' } },
-          { label: "Low", pal: { f: occCellBg(30), b: '#FAC775', t: '', a: '' } },
-          { label: "High", pal: { f: occCellBg(60), b: '#EF9F27', t: '', a: '' } },
-          { label: "Full", pal: { f: occCellBg(100), b: '#E24B4A', t: '', a: '' } },
+          { label: "< 50%", pal: { f: occHeat(0).bg, b: occHeat(0).bd, t: '', a: '' } },
+          { label: "50%+", pal: { f: occHeat(60).bg, b: occHeat(60).bd, t: '', a: '' } },
+          { label: "80%+", pal: { f: occHeat(85).bg, b: occHeat(85).bd, t: '', a: '' } },
+          { label: "90%+", pal: { f: occHeat(95).bg, b: occHeat(95).bd, t: '', a: '' } },
         ];
 
   function renderBar(room: Room, seg: Segment): ReactNode {
@@ -449,12 +451,23 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     const date = days[idx];
     const isToday = date === todayStr;
     if (!cover) {
+      const dayNum = new Date(date + 'T00:00:00').getDate();
       return (
         <div
           key={date}
-          style={{ gridColumn: `${idx + 1} / ${idx + 2}`, height: BAR_H, margin: '0 1px', borderRadius: 6 }}
-          className={isToday ? 'bg-indigo-50' : ''}
-        />
+          style={{
+            gridColumn: `${idx + 1} / ${idx + 2}`,
+            height: BAR_H,
+            margin: '0 1px',
+            borderRadius: 6,
+            border: isToday ? '1px solid #A5B4FC' : '1px solid #E5E7EB',
+            background: isToday ? '#EEF2FF' : undefined,
+          }}
+          className="flex items-center justify-center"
+          title={`${room} — free`}
+        >
+          <span className="text-[9px] leading-none select-none" style={{ color: isToday ? '#6366F1' : '#9CA3AF' }}>{dayNum}</span>
+        </div>
       );
     }
     const { seg, first, last } = cover;
@@ -566,8 +579,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
           {/* Navigation */}
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setStartOffset((o) => Math.max(o - 7, -7))}
-              disabled={startOffset <= -7}
+              onClick={() => setStartOffset((o) => Math.max(o - 7, -14))}
+              disabled={startOffset <= -14}
               className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               title="Previous week"
             >
@@ -576,14 +589,14 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
               </svg>
             </button>
 
-            {startOffset !== 0 && (
-              <button
-                onClick={() => setStartOffset(0)}
-                className="px-2 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-              >
-                Today
-              </button>
-            )}
+            <button
+              onClick={() => setStartOffset(0)}
+              disabled={startOffset === 0}
+              className="px-2 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent"
+              title="Jump to today"
+            >
+              Today
+            </button>
 
             <button
               onClick={() => setStartOffset((o) => o + 7)}
@@ -642,20 +655,21 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 const d = new Date(date + "T00:00:00");
                 const dayNum = d.getDate();
                 const isToday = date === todayStr;
-                const showMonth = dayNum === 1 || date === days[0];
                 const bookedCount = bookedCountByDate[date] ?? 0;
                 const pct = Math.round((bookedCount / ROOMS.length) * 100);
+                const chip = occChip(pct);
                 const dayAbbr = d.toLocaleString("en-GB", { weekday: "short" }).slice(0, 2);
                 return (
                   <div key={date} className="px-px">
                     <div
-                      className={`rounded-md px-0.5 py-0.5 ${occHeaderClass(pct)} ${isToday ? "ring-2 ring-indigo-400 ring-inset" : ""}`}
+                      className={`rounded-md px-0.5 py-0.5 ${isToday ? "ring-2 ring-indigo-400 ring-inset" : ""}`}
+                      style={{ background: chip.bg, color: chip.tx }}
                       title={bookedCount === 0 ? "All rooms free" : `${bookedCount} / ${ROOMS.length} rooms booked`}
                     >
                       <div className={`text-center text-xs font-bold leading-none ${isToday ? "underline" : ""}`}>{dayNum}</div>
                       <div className="text-center text-[9px] leading-tight opacity-70">{dayAbbr}</div>
                       <div className="text-center text-[9px] leading-tight opacity-70 h-3">
-                        {showMonth ? d.toLocaleString("en-GB", { month: "short" }) : ""}
+                        {d.toLocaleString("en-GB", { month: "short" })}
                       </div>
                     </div>
                   </div>
@@ -694,7 +708,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                   <span className="ml-auto flex items-center gap-2" title={`${group.category} occupancy for ${formatDateRange(days)}`}>
                     <span className="text-[11px] opacity-70 hidden sm:inline">occupancy</span>
                     <span className="inline-block w-16 h-1.5 rounded-full bg-black/10 overflow-hidden">
-                      <span className={`block h-1.5 ${occFillClass(occPct)}`} style={{ width: `${occPct}%` }} />
+                      <span className="block h-1.5" style={{ width: `${occPct}%`, background: occBarColor(occPct) }} />
                     </span>
                     <span className="text-xs font-semibold tabular-nums">{occPct}%</span>
                   </span>
@@ -729,7 +743,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                     {/* Per-room occupancy for the visible window */}
                     <div className="pl-2 flex items-center justify-end gap-1.5 whitespace-nowrap">
                       <span className="inline-block w-8 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                        <span className={`block h-1.5 ${occFillClass(occByRoom[room] ?? 0)}`} style={{ width: `${occByRoom[room] ?? 0}%` }} />
+                        <span className="block h-1.5" style={{ width: `${occByRoom[room] ?? 0}%`, background: occBarColor(occByRoom[room] ?? 0) }} />
                       </span>
                       <span className="text-xs text-gray-600 tabular-nums w-8 text-right">{occByRoom[room] ?? 0}%</span>
                     </div>
