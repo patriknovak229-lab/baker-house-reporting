@@ -485,25 +485,56 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     const res = seg.res;
     const pct = Math.round(((bookedCountByDate[date] ?? 0) / ROOMS.length) * 100);
     const heat = occHeat(pct);
-    let bg: string, border: string;
+    let bg: string, border: string, textColor: string;
     let bgImage: string | undefined;
     if (seg.kind === 'blackout') {
-      bg = BLACKOUT_PAL.f; border = BLACKOUT_PAL.b; bgImage = BLACKOUT_STRIPE;
+      bg = BLACKOUT_PAL.f; border = BLACKOUT_PAL.b; textColor = BLACKOUT_PAL.t; bgImage = BLACKOUT_STRIPE;
     } else if (seg.kind === 'nonarrival') {
-      bg = NA_PAL.f; border = NA_PAL.b; bgImage = NA_STRIPE;
+      bg = NA_PAL.f; border = NA_PAL.b; textColor = NA_PAL.t; bgImage = NA_STRIPE;
     } else {
-      bg = heat.bg; border = heat.bd;
+      bg = heat.bg; border = heat.bd; textColor = heat.tx;
     }
     const trueStart = res.checkInDate === days[seg.startIdx];
     const trueEnd = nextDay(days[seg.endIdx]) === res.checkOutDate;
     const lr = first && trueStart ? 8 : 3;
     const rr = last && trueEnd ? 8 : 3;
+    const flag = seg.kind === 'active' ? flagByRes[res.reservationNumber] : null;
+    const avatarBg = seg.kind === 'nonarrival' ? NA_PAL.a : '#444441';
     const title =
       seg.kind === 'blackout'
         ? `${room} — blacked out`
         : seg.kind === 'nonarrival'
         ? `${room} — non-arrival (room freed for resale)`
         : `${room} — ${guestName(res) || 'booked'}`;
+
+    // Avatar + flag/siren on the check-in tile; compact initials on the
+    // continuation nights. No spanning name label (too cluttered to read).
+    let inner: ReactNode = null;
+    if (seg.kind === 'blackout') {
+      inner = first ? <span className="text-[9px] font-medium leading-none" style={{ color: textColor }}>BLK</span> : null;
+    } else if (first) {
+      inner = (
+        <span
+          className="relative inline-flex items-center justify-center rounded-full text-white font-medium"
+          style={{ width: 18, height: 18, fontSize: 9, background: avatarBg }}
+        >
+          {initialsOf(res)}
+          {flag && (
+            <span
+              className="absolute inline-flex items-center justify-center rounded-full bg-white shadow-sm"
+              style={{ top: -4, right: -5, width: 13, height: 13, fontSize: 8, fontWeight: 700, color: flag.color }}
+            >
+              {flag.glyph}
+            </span>
+          )}
+          {seg.kind === 'nonarrival' && (
+            <span className="absolute leading-none" style={{ top: -5, left: -5, fontSize: 9 }} aria-hidden>🚨</span>
+          )}
+        </span>
+      );
+    } else {
+      inner = <span className="text-[9px] font-medium leading-none select-none" style={{ color: textColor }}>{initialsOf(res)}</span>;
+    }
 
     return (
       <div
@@ -517,7 +548,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             : undefined
         }
         title={title}
-        className={onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}
+        className={`relative flex items-center justify-center overflow-hidden ${onReservationClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
         style={{
           gridColumn: `${idx + 1} / ${idx + 2}`,
           gridRow: 1,
@@ -528,60 +559,10 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
           backgroundImage: bgImage,
           border: `1px solid ${border}`,
           borderRadius: `${lr}px ${rr}px ${rr}px ${lr}px`,
-        }}
-      />
-    );
-  }
-
-  // Always-visible label overlaid across a booking's night tiles in occupancy
-  // mode: avatar + guest name + note. pointer-events:none so the tiles beneath
-  // stay clickable; a white text-shadow keeps it legible over the heat fills.
-  function renderOccLabel(room: Room, seg: Segment): ReactNode {
-    const res = seg.res;
-    const label =
-      seg.kind === 'blackout' ? 'Blackout' : guestName(res) || (seg.kind === 'nonarrival' ? 'Non-arrival' : 'Booked');
-    const flag = seg.kind === 'active' ? flagByRes[res.reservationNumber] : null;
-    const avatarBg = seg.kind === 'nonarrival' ? NA_PAL.a : '#444441';
-    const dark = seg.kind === 'blackout';
-    const textColor = dark ? '#F1EFE8' : seg.kind === 'nonarrival' ? NA_PAL.t : '#1F2937';
-    return (
-      <div
-        key={`lbl-${res.reservationNumber}-${seg.startIdx}`}
-        aria-hidden
-        style={{
-          gridColumn: `${seg.startIdx + 1} / ${seg.endIdx + 2}`,
-          gridRow: 1,
-          alignSelf: 'center',
-          zIndex: 2,
-          pointerEvents: 'none',
-          height: BAR_H,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: '0 5px',
-          overflow: 'hidden',
           color: textColor,
-          textShadow: dark ? undefined : '0 0 2px rgba(255,255,255,0.9)',
         }}
       >
-        {seg.kind !== 'blackout' && (
-          <span
-            className="relative inline-flex items-center justify-center rounded-full text-white font-medium shrink-0"
-            style={{ width: 18, height: 18, fontSize: 9, background: avatarBg, textShadow: 'none' }}
-          >
-            {initialsOf(res)}
-            {flag && (
-              <span
-                className="absolute inline-flex items-center justify-center rounded-full bg-white shadow-sm"
-                style={{ top: -4, right: -5, width: 13, height: 13, fontSize: 8, fontWeight: 700, color: flag.color }}
-              >
-                {flag.glyph}
-              </span>
-            )}
-          </span>
-        )}
-        {seg.kind === 'nonarrival' && <span className="text-[10px] leading-none shrink-0" aria-hidden>🚨</span>}
-        <span className="text-[11px] font-medium leading-none truncate select-none">{label}</span>
+        {inner}
       </div>
     );
   }
@@ -756,10 +737,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                     {/* Track: continuous bars (rate / channel) or per-night tiles (occupancy) */}
                     <div style={{ display: 'grid', gridTemplateColumns: trackCols, position: 'relative', height: ROW_H }}>
                       {colorBy === 'occupancy' ? (
-                        <>
-                          {occCover(room as Room).map((cover, idx) => renderOccTile(room as Room, idx, cover))}
-                          {(segmentsByRoom[room] ?? []).map((seg) => renderOccLabel(room as Room, seg))}
-                        </>
+                        occCover(room as Room).map((cover, idx) => renderOccTile(room as Room, idx, cover))
                       ) : (
                         <>
                           {days.map((date, idx) => {
