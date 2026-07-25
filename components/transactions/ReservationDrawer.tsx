@@ -1115,14 +1115,16 @@ function RateTypeControl({
  */
 function PerksControl({
   rate,
+  reservationDate,
   override,
   onOverride,
 }: {
   rate: RateType | null;
+  reservationDate?: string | null;
   override: PerkOverrides | null | undefined;
   onOverride: (v: PerkOverrides) => void;
 }) {
-  const auto = autoRatePerks(rate);
+  const auto = autoRatePerks(rate, reservationDate);
   const eff = effectiveRatePerks(auto, override);
   const ov: PerkOverrides = override ?? {};
   const [editingWine, setEditingWine] = useState(false);
@@ -2012,6 +2014,8 @@ export default function ReservationDrawer({
   const [modifyRoom, setModifyRoom] = useState("");
   const [modifyGuestName, setModifyGuestName] = useState("");
   const [modifyLineDescription, setModifyLineDescription] = useState("");
+  // Invoice total override (string so it can be left blank = use booking price).
+  const [modifyAmount, setModifyAmount] = useState("");
 
   const parkingResult = useMemo(() => computeParking(allReservations), [allReservations]);
   const myParking = reservation ? parkingResult.byReservation.get(reservation.reservationNumber) ?? null : null;
@@ -2042,6 +2046,7 @@ export default function ReservationDrawer({
       setModifyRoom(reservation.room);
       setModifyGuestName("");
       setModifyLineDescription("");
+      setModifyAmount("");
       if (reservation.invoiceData) {
         setInvoiceForm({ ...reservation.invoiceData });
       } else {
@@ -2139,6 +2144,10 @@ export default function ReservationDrawer({
   function saveModification() {
     const validRanges = modifyDateRanges.filter(r => r.from && r.to && r.from < r.to);
     if (validRanges.length === 0) return;
+    // Optional invoice-total override — self-contained to this invoice, never
+    // touches the booking price. Blank/invalid = fall back to res.price.
+    const parsedAmount = Number(modifyAmount.trim());
+    const hasAmount = modifyAmount.trim() !== "" && Number.isFinite(parsedAmount) && parsedAmount >= 0;
     const mod: InvoiceModification = {
       id: Date.now().toString(),
       dateRanges: validRanges,
@@ -2147,6 +2156,7 @@ export default function ReservationDrawer({
       room: modifyRoom,
       ...(modifyGuestName.trim() ? { guestName: modifyGuestName.trim() } : {}),
       ...(modifyLineDescription.trim() ? { lineDescription: modifyLineDescription.trim() } : {}),
+      ...(hasAmount ? { amount: parsedAmount } : {}),
       createdAt: new Date().toISOString(),
     };
     onUpdate({
@@ -3032,6 +3042,7 @@ export default function ReservationDrawer({
                 {showRatePlan && (
                   <PerksControl
                     rate={reservation.rateTypeOverride ?? reservation.rateType ?? null}
+                    reservationDate={reservation.reservationDate}
                     override={reservation.perkOverrides}
                     onOverride={(v) => onUpdate({ ...reservation, perkOverrides: v })}
                   />
@@ -4372,6 +4383,26 @@ export default function ReservationDrawer({
                       </div>
                     </div>
 
+                    {/* Invoice amount override — self-contained to this invoice.
+                        Blank = booking price. NEVER changes res.price / payment. */}
+                    <div>
+                      <label className="text-[11px] text-gray-500 block mb-1">
+                        Invoice amount (CZK) <span className="text-gray-400 font-normal">(optional override)</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={modifyAmount}
+                        onChange={(e) => setModifyAmount(e.target.value)}
+                        placeholder={`${formatCurrency(reservation.price)} · booking price`}
+                        className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
+                      />
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        Changes only this invoice&apos;s total — the booking price and payment stay unchanged.
+                      </p>
+                    </div>
+
                     <button
                       onClick={saveModification}
                       disabled={modifyDateRanges.every(r => !r.from || !r.to || r.from >= r.to)}
@@ -4433,6 +4464,11 @@ export default function ReservationDrawer({
                             <p className="text-[11px] text-gray-600 leading-snug">
                               {rangeStr} · {mod.numberOfNights}N · {mod.numberOfGuests} guests · {mod.room}
                             </p>
+                            {mod.amount != null && (
+                              <p className="text-[11px] font-medium text-amber-700 leading-snug">
+                                Amount: {formatCurrency(mod.amount)} <span className="font-normal text-gray-400">(booking price {formatCurrency(reservation.price)})</span>
+                              </p>
+                            )}
                           </div>
                         );
                       })}

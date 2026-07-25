@@ -81,20 +81,25 @@ export function buildInvoiceHTML(
   const lineDescription = modification?.lineDescription?.trim()
     || "Ubytování / Accommodation";
 
+  // Invoice total: a modification may override the amount (self-contained to
+  // this invoice — never touches res.price / the booking). Falls back to the
+  // booking price when no override is set.
+  const invoiceTotal = modification?.amount != null ? modification.amount : res.price;
+
   // ── Line items ──────────────────────────────────────────────────────────────
   let lineItemsHtml: string;
   if (modification && modification.dateRanges.length > 0) {
     const totalNights = modification.numberOfNights > 0 ? modification.numberOfNights : 1;
-    const avgPPN = res.price / totalNights; // price per night (average)
+    const avgPPN = invoiceTotal / totalNights; // price per night (average)
 
-    // Distribute total price across ranges; last range absorbs rounding
+    // Distribute the invoice total across ranges; last range absorbs rounding
     const ranges = modification.dateRanges;
     const nightsList = ranges.map(r => nightsBetween(r.from, r.to));
     const linePrices: number[] = [];
     for (let i = 0; i < ranges.length; i++) {
       if (i === ranges.length - 1) {
         const sumSoFar = linePrices.reduce((s, v) => s + v, 0);
-        linePrices.push(res.price - sumSoFar);
+        linePrices.push(invoiceTotal - sumSoFar);
       } else {
         linePrices.push(Math.round(nightsList[i] * avgPPN));
       }
@@ -193,7 +198,7 @@ export function buildInvoiceHTML(
     ${lineItemsHtml}
     <div style="display:flex;justify-content:space-between;margin-top:8px;font-weight:bold;font-size:15px">
       <span>Celkem / Total</span>
-      <span style="color:${GOLD}">${formatCurrency(res.price)}</span>
+      <span style="color:${GOLD}">${formatCurrency(invoiceTotal)}</span>
     </div>
   </div>
 

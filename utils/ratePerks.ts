@@ -42,16 +42,37 @@ export interface PerkOverrides {
 }
 
 /**
+ * Standard-rate perk change. The Standard rate's perk was reworked: it now
+ * grants an early check-in instead of a late check-out. Gated by booking-made
+ * date so bookings keep what they were sold — only Standard reservations CREATED
+ * on/after this date get the new perk; earlier ones keep the previous late
+ * check-out. Compared against the reservation's `reservationDate` (YYYY-MM-DD);
+ * an empty/unknown date is treated as pre-change (keeps late check-out).
+ */
+export const STANDARD_PERK_CHANGE_DATE = "2026-07-23";
+
+/**
  * Perks a booked rate grants before any operator override.
  *   Non-Refundable / One-Night → none
- *   Standard → late checkout
+ *   Standard → late check-out   (booked before STANDARD_PERK_CHANGE_DATE)
+ *           → early check-in    (booked on/after STANDARD_PERK_CHANGE_DATE)
  *   Flexi    → early check-in + late checkout
  *   Weekly   → early check-in + late checkout + welcome bottle of wine
+ *
+ * `reservationDate` is the booking-made date (YYYY-MM-DD); it only drives the
+ * Standard rate's date gate and is ignored by every other rate.
  */
-export function autoRatePerks(rate: RateType | null | undefined): RatePerks {
+export function autoRatePerks(
+  rate: RateType | null | undefined,
+  reservationDate?: string | null,
+): RatePerks {
   switch (rate) {
-    case "Standard":
-      return { earlyCheckIn: false, lateCheckout: true, specialTreatment: null };
+    case "Standard": {
+      const bookedSinceChange = !!reservationDate && reservationDate >= STANDARD_PERK_CHANGE_DATE;
+      return bookedSinceChange
+        ? { earlyCheckIn: true, lateCheckout: false, specialTreatment: null }
+        : { earlyCheckIn: false, lateCheckout: true, specialTreatment: null };
+    }
     case "Flexi":
       return { earlyCheckIn: true, lateCheckout: true, specialTreatment: null };
     case "Weekly":

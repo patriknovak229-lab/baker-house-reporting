@@ -109,6 +109,13 @@ export interface InvoiceModification {
   guestName?: string;
   /** Override the line-item description (defaults to "Ubytování / Accommodation"). */
   lineDescription?: string;
+  /**
+   * Override the invoice TOTAL in CZK — self-contained to this invoice variant.
+   * When set, line-item prices are distributed to sum to this amount and the
+   * Total row shows it. Purely display: NEVER changes the booking price
+   * (`res.price`), payment status, or anything in Beds24. Absent = use res.price.
+   */
+  amount?: number;
   createdAt: string; // ISO timestamp
 }
 

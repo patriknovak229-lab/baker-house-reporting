@@ -5,12 +5,14 @@ import {
   isPerkOverridden,
   hasAnyPerk,
   WINE_TREATMENT_NOTE,
+  STANDARD_PERK_CHANGE_DATE,
 } from "./ratePerks";
 
 describe("autoRatePerks", () => {
   it("maps each rate to the agreed perks", () => {
     expect(autoRatePerks("Non-Refundable")).toEqual({ earlyCheckIn: false, lateCheckout: false, specialTreatment: null });
     expect(autoRatePerks("One-Night")).toEqual({ earlyCheckIn: false, lateCheckout: false, specialTreatment: null });
+    // Standard with no/unknown booking date = pre-change perk (late check-out).
     expect(autoRatePerks("Standard")).toEqual({ earlyCheckIn: false, lateCheckout: true, specialTreatment: null });
     expect(autoRatePerks("Flexi")).toEqual({ earlyCheckIn: true, lateCheckout: true, specialTreatment: null });
     expect(autoRatePerks("Weekly")).toEqual({ earlyCheckIn: true, lateCheckout: true, specialTreatment: WINE_TREATMENT_NOTE });
@@ -19,6 +21,24 @@ describe("autoRatePerks", () => {
   it("grants nothing for null/unknown rate", () => {
     expect(hasAnyPerk(autoRatePerks(null))).toBe(false);
     expect(hasAnyPerk(autoRatePerks(undefined))).toBe(false);
+  });
+
+  it("date-gates the Standard perk on booking-made date", () => {
+    const oldPerk = { earlyCheckIn: false, lateCheckout: true, specialTreatment: null };
+    const newPerk = { earlyCheckIn: true, lateCheckout: false, specialTreatment: null };
+    // Booked before the change → keeps late check-out.
+    expect(autoRatePerks("Standard", "2000-01-01")).toEqual(oldPerk);
+    // Empty/unknown date → treated as pre-change.
+    expect(autoRatePerks("Standard", "")).toEqual(oldPerk);
+    // Booked on the cutoff (inclusive) or later → early check-in, no late check-out.
+    expect(autoRatePerks("Standard", STANDARD_PERK_CHANGE_DATE)).toEqual(newPerk);
+    expect(autoRatePerks("Standard", "2999-01-01")).toEqual(newPerk);
+  });
+
+  it("ignores booking date for non-Standard rates", () => {
+    expect(autoRatePerks("Flexi", "2999-01-01")).toEqual({ earlyCheckIn: true, lateCheckout: true, specialTreatment: null });
+    expect(autoRatePerks("Weekly", STANDARD_PERK_CHANGE_DATE)).toEqual({ earlyCheckIn: true, lateCheckout: true, specialTreatment: WINE_TREATMENT_NOTE });
+    expect(autoRatePerks("Non-Refundable", "2999-01-01")).toEqual({ earlyCheckIn: false, lateCheckout: false, specialTreatment: null });
   });
 });
 

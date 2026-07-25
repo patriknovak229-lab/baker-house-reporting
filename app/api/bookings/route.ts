@@ -128,7 +128,8 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
     const eff = ov?.rateTypeOverride ?? r.rateType ?? null;
     if (eff) rateMap[r.reservationNumber] = eff;
     // Effective perks = rate-derived auto value, then operator override wins.
-    const perks = effectiveRatePerks(autoRatePerks(eff), ov?.perkOverrides);
+    // Pass reservationDate so the Standard rate's perk date-gate applies.
+    const perks = effectiveRatePerks(autoRatePerks(eff, r.reservationDate), ov?.perkOverrides);
     if (perks.earlyCheckIn || perks.lateCheckout || perks.specialTreatment != null) {
       perkMap[r.reservationNumber] = perks;
     }

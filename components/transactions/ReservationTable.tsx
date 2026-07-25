@@ -220,7 +220,7 @@ function IssueBadge({ category, texts }: { category: IssueCategory; texts: strin
  * here — the operator toggles them in the drawer's Perks section.
  */
 function PerkBadges({ res }: { res: Reservation }) {
-  const perks = effectiveRatePerks(autoRatePerks(effectiveRateType(res)), res.perkOverrides);
+  const perks = effectiveRatePerks(autoRatePerks(effectiveRateType(res), res.reservationDate), res.perkOverrides);
   if (!hasAnyPerk(perks)) return null;
   const chip = "inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full text-white text-[10px] font-bold";
   return (

@@ -131,7 +131,8 @@ export function detectRateType(input: {
 
   // Direct-Web (our booking site): only one rate is sold online → always
   // Standard. There's no channel rate text to parse, so return before the
-  // signal check. (Standard grants no auto perks — same as any Standard rate.)
+  // signal check. (Follows the Standard perk policy like any Standard rate —
+  // see autoRatePerks / STANDARD_PERK_CHANGE_DATE.)
   if (input.channel === "Direct-Web") return "Standard";
 
   const hay = input.signals

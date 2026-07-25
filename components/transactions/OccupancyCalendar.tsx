@@ -34,7 +34,9 @@ const CATEGORY_STYLES: Record<RoomCategory, { headerBg: string; headerText: stri
 // the default; channel uses OTA brand colours; occupancy tints the day columns
 // with the green→red heat and leaves the bars transparent so it reads through.
 // Non-arrival + blackout are status overlays shown in every mode.
-type ColorBy = 'rate' | 'channel' | 'occupancy';
+// "bookings" is different in kind: it recolours the calendar by how many
+// reservations were *made* on each date (a look-back heatmap), not by stay.
+type ColorBy = 'rate' | 'channel' | 'occupancy' | 'bookings';
 
 // A booking bar's palette: soft fill (f), border (b), text (t), avatar chip (a).
 // Fills sit one step up from the lightest tint so the colour reads at a glance
@@ -219,6 +221,37 @@ function occHeat(pct: number): { bg: string; bd: string; tx: string } { return O
 function occBarColor(pct: number): string { return OCC_SOLID[occBand(pct)]; }
 function occChip(pct: number): { bg: string; tx: string } { return OCC_CHIP[occBand(pct)]; }
 
+// ─── New-bookings heat (count of reservations *made* on a date) ────────────────
+// Drives the "Bookings" colour-by view. Unlike occupancy (a % of inventory),
+// booking counts have no natural ceiling, so the scale is adaptive: the busiest
+// visible day is red and everything else scales against it. Zero gets a muted
+// "none" tint so quiet days recede and busy days pop.
+type MadeBand = 'none' | 'green' | 'yellow' | 'orange' | 'red';
+const MADE_TILE: Record<MadeBand, { bg: string; bd: string; tx: string }> = {
+  none:   { bg: '#F3F4F6', bd: '#E5E7EB', tx: '#9CA3AF' },
+  green:  OCC_TILE.green,
+  yellow: OCC_TILE.yellow,
+  orange: OCC_TILE.orange,
+  red:    OCC_TILE.red,
+};
+const MADE_CHIP: Record<MadeBand, { bg: string; tx: string }> = {
+  none:   { bg: '#F9FAFB', tx: '#9CA3AF' },
+  green:  OCC_CHIP.green,
+  yellow: OCC_CHIP.yellow,
+  orange: OCC_CHIP.orange,
+  red:    OCC_CHIP.red,
+};
+// A day's count relative to the busiest visible day (max). Thresholds are
+// fractions of that peak, so the palette always spans the actual data range.
+function madeBand(count: number, max: number): MadeBand {
+  if (count <= 0 || max <= 0) return 'none';
+  const r = count / max;
+  if (r >= 0.8) return 'red';
+  if (r >= 0.55) return 'orange';
+  if (r >= 0.3) return 'yellow';
+  return 'green';
+}
+
 function parkingRowLabel(space: string): string {
   return `P${space}`;
 }
@@ -239,7 +272,13 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     Deluxe: false,
   });
 
-  const days = useMemo(() => get30DaysFrom(todayStr, startOffset), [todayStr, startOffset]);
+  // The "Bookings" view looks backward (bookings are made before the stay), so
+  // its window ENDS at today+offset; every other view starts at today+offset.
+  const isBookings = colorBy === 'bookings';
+  const days = useMemo(
+    () => get30DaysFrom(todayStr, isBookings ? startOffset - 29 : startOffset),
+    [todayStr, startOffset, isBookings],
+  );
   const parkingResult = useMemo(() => computeParking(reservations), [reservations]);
   const categoryGroups = useMemo(() => groupRoomsByCategory(), []);
 
@@ -257,6 +296,38 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     }
     return m;
   }, [reservations, days]);
+
+  // New bookings made per visible day (by reservationDate) — drives the
+  // "Bookings" colour-by view. Blackouts aren't guest reservations, so they're
+  // excluded; each booking is counted once by its reservation number.
+  const newBookingsByDate = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const date of days) m[date] = 0;
+    const counted = new Set<string>();
+    for (const r of reservations) {
+      if (r.isBlackout) continue;
+      if (counted.has(r.reservationNumber)) continue;
+      counted.add(r.reservationNumber);
+      const d = r.reservationDate;
+      if (d && d in m) m[d] += 1;
+    }
+    return m;
+  }, [reservations, days]);
+
+  // Window roll-up for the "Bookings" view: total made, the busiest-day peak
+  // (which anchors the adaptive colour scale) and that busiest day (caption).
+  const newBookingStats = useMemo(() => {
+    let total = 0;
+    let max = 0;
+    let busiest: { date: string; count: number } | null = null;
+    for (const date of days) {
+      const c = newBookingsByDate[date] ?? 0;
+      total += c;
+      if (c > max) max = c;
+      if (c > 0 && (!busiest || c > busiest.count)) busiest = { date, count: c };
+    }
+    return { total, max, busiest };
+  }, [days, newBookingsByDate]);
 
   // Per-category occupancy % across the visible window (sold room-nights ÷ available).
   const occByCategory = useMemo(() => {
@@ -346,11 +417,18 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
           { label: "Airbnb", pal: CHANNEL_FILL.Airbnb },
           { label: "Direct", pal: CHANNEL_FILL.Direct },
         ]
-      : [
+      : colorBy === 'occupancy'
+      ? [
           { label: "< 50%", pal: { f: occHeat(0).bg, b: occHeat(0).bd, t: '', a: '' } },
           { label: "50%+", pal: { f: occHeat(60).bg, b: occHeat(60).bd, t: '', a: '' } },
           { label: "70%+", pal: { f: occHeat(75).bg, b: occHeat(75).bd, t: '', a: '' } },
           { label: "80%+", pal: { f: occHeat(85).bg, b: occHeat(85).bd, t: '', a: '' } },
+        ]
+      : [
+          { label: "None", pal: { f: MADE_TILE.none.bg, b: MADE_TILE.none.bd, t: '', a: '' } },
+          { label: "Few", pal: { f: MADE_TILE.green.bg, b: MADE_TILE.green.bd, t: '', a: '' } },
+          { label: "More", pal: { f: MADE_TILE.orange.bg, b: MADE_TILE.orange.bd, t: '', a: '' } },
+          { label: "Most", pal: { f: MADE_TILE.red.bg, b: MADE_TILE.red.bd, t: '', a: '' } },
         ];
 
   function renderBar(room: Room, seg: Segment): ReactNode {
@@ -572,7 +650,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-y-2 mb-4">
         <div className="flex items-center gap-2 min-w-0">
-          <p className="text-sm font-semibold text-gray-700">Availability</p>
+          <p className="text-sm font-semibold text-gray-700">{isBookings ? 'New bookings' : 'Availability'}</p>
           <span className="text-xs text-gray-400 truncate">{formatDateRange(days)}</span>
         </div>
 
@@ -582,20 +660,26 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             <span className="hidden sm:inline">Colour by</span>
             <select
               value={colorBy}
-              onChange={(e) => setColorBy(e.target.value as ColorBy)}
+              onChange={(e) => {
+                // Reset the window so each mode lands on its home range
+                // (forward for stay views, look-back for bookings).
+                setColorBy(e.target.value as ColorBy);
+                setStartOffset(0);
+              }}
               className="border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="rate">Rate</option>
               <option value="channel">Channel</option>
               <option value="occupancy">Occupancy</option>
+              <option value="bookings">Bookings</option>
             </select>
           </label>
 
           {/* Navigation */}
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setStartOffset((o) => Math.max(o - 7, -14))}
-              disabled={startOffset <= -14}
+              onClick={() => setStartOffset((o) => Math.max(o - 7, isBookings ? -168 : -14))}
+              disabled={startOffset <= (isBookings ? -168 : -14)}
               className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               title="Previous week"
             >
@@ -614,8 +698,9 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             </button>
 
             <button
-              onClick={() => setStartOffset((o) => o + 7)}
-              className="p-1 rounded hover:bg-gray-100 text-gray-500 transition-colors"
+              onClick={() => setStartOffset((o) => (isBookings ? Math.min(o + 7, 0) : o + 7))}
+              disabled={isBookings && startOffset >= 0}
+              className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               title="Next week"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -624,7 +709,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             </button>
           </div>
 
-          {/* Parking toggle */}
+          {/* Parking toggle — irrelevant to the bookings-pace view */}
+          {!isBookings && (
           <button
             onClick={() => setShowParking((v) => !v)}
             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
@@ -638,6 +724,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
               Parking
             </span>
           </button>
+          )}
 
           {/* Legend — mode-dependent fills + always-on status overlays */}
           <div className="flex items-center gap-2 sm:gap-3 text-xs text-gray-500 flex-wrap">
@@ -647,14 +734,18 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 <span className="hidden lg:inline">{label}</span>
               </span>
             ))}
-            <span className="flex items-center gap-1.5" title="Non-arrival">
-              <span className="inline-block w-3 h-3 rounded" style={{ background: NA_PAL.f, border: `1px solid ${NA_PAL.b}`, backgroundImage: NA_STRIPE }} />
-              <span className="hidden lg:inline">Non-arrival</span>
-            </span>
-            <span className="flex items-center gap-1.5" title="Blackout">
-              <span className="inline-block w-3 h-3 rounded" style={{ background: BLACKOUT_PAL.f, backgroundImage: BLACKOUT_STRIPE }} />
-              <span className="hidden lg:inline">Blackout</span>
-            </span>
+            {!isBookings && (
+              <>
+                <span className="flex items-center gap-1.5" title="Non-arrival">
+                  <span className="inline-block w-3 h-3 rounded" style={{ background: NA_PAL.f, border: `1px solid ${NA_PAL.b}`, backgroundImage: NA_STRIPE }} />
+                  <span className="hidden lg:inline">Non-arrival</span>
+                </span>
+                <span className="flex items-center gap-1.5" title="Blackout">
+                  <span className="inline-block w-3 h-3 rounded" style={{ background: BLACKOUT_PAL.f, backgroundImage: BLACKOUT_STRIPE }} />
+                  <span className="hidden lg:inline">Blackout</span>
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -672,14 +763,18 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 const isToday = date === todayStr;
                 const bookedCount = bookedCountByDate[date] ?? 0;
                 const pct = Math.round((bookedCount / ROOMS.length) * 100);
-                const chip = occChip(pct);
+                const madeCount = newBookingsByDate[date] ?? 0;
+                const chip = isBookings ? MADE_CHIP[madeBand(madeCount, newBookingStats.max)] : occChip(pct);
+                const chipTitle = isBookings
+                  ? `${madeCount} booking${madeCount === 1 ? '' : 's'} made`
+                  : bookedCount === 0 ? "All rooms free" : `${bookedCount} / ${ROOMS.length} rooms booked`;
                 const dayAbbr = d.toLocaleString("en-GB", { weekday: "short" }).slice(0, 2);
                 return (
                   <div key={date} className="px-px">
                     <div
                       className={`rounded-md px-0.5 py-0.5 ${isToday ? "ring-2 ring-indigo-400 ring-inset" : ""}`}
                       style={{ background: chip.bg, color: chip.tx }}
-                      title={bookedCount === 0 ? "All rooms free" : `${bookedCount} / ${ROOMS.length} rooms booked`}
+                      title={chipTitle}
                     >
                       <div className={`text-center text-xs font-bold leading-none ${isToday ? "underline" : ""}`}>{dayNum}</div>
                       <div className="text-center text-[9px] leading-tight opacity-70">{dayAbbr}</div>
@@ -691,9 +786,45 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 );
               })}
             </div>
-            <div className="pl-2 text-[10px] font-medium text-gray-400 text-right">Occ</div>
+            <div className="pl-2 text-[10px] font-medium text-gray-400 text-right">{isBookings ? 'Total' : 'Occ'}</div>
           </div>
 
+          {isBookings ? (
+            /* Bookings view — a single look-back heat strip: one cell per day,
+               tinted by how many reservations were made that day (count shown). */
+            <div className="mt-1">
+              <div style={{ display: 'grid', gridTemplateColumns: rowCols, alignItems: 'center' }}>
+                <div className="pr-2 text-xs font-medium text-gray-500 text-right whitespace-nowrap">New</div>
+                <div style={{ display: 'grid', gridTemplateColumns: trackCols }}>
+                  {days.map((date) => {
+                    const count = newBookingsByDate[date] ?? 0;
+                    const tile = MADE_TILE[madeBand(count, newBookingStats.max)];
+                    const isToday = date === todayStr;
+                    const label = new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                    return (
+                      <div key={date} className="px-px">
+                        <div
+                          className={`flex items-center justify-center rounded-md ${isToday ? 'ring-2 ring-indigo-400 ring-inset' : ''}`}
+                          style={{ height: '3rem', background: tile.bg, border: `1px solid ${tile.bd}`, color: tile.tx }}
+                          title={`${count} booking${count === 1 ? '' : 's'} made on ${label}`}
+                        >
+                          <span className="text-sm font-bold tabular-nums leading-none">{count > 0 ? count : ''}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="pl-2 text-right text-xs font-semibold text-gray-600 tabular-nums">{newBookingStats.total}</div>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-400">
+                New bookings per day, by the date each reservation was made · {newBookingStats.total} in this window
+                {newBookingStats.busiest
+                  ? ` · busiest ${new Date(newBookingStats.busiest.date + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} (${newBookingStats.busiest.count})`
+                  : ''}
+              </p>
+            </div>
+          ) : (
+          <>
           {categoryGroups.map((group) => {
             const style = CATEGORY_STYLES[group.category];
             const isCollapsed = collapsed[group.category];
@@ -805,6 +936,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 );
               })}
             </div>
+          )}
+          </>
           )}
         </div>
       </div>
