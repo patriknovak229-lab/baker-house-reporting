@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/send-scheduled-payments",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/check-reviews",
+      "schedule": "0 8 * * *"
     }
   ]
 }
