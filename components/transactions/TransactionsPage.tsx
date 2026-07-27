@@ -1159,6 +1159,7 @@ export default function TransactionsPage() {
         || unreadBookings.length > 0
         || upcomingEarlyCheckins.length > 0
         || upcomingLateCheckouts.length > 0
+        || turnoverClashes.length > 0
         || unallocatedReservations.length > 0
         || activeBlackouts.length > 0
         || postStayChanges.length > 0) && (
