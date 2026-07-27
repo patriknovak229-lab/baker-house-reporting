@@ -93,10 +93,14 @@ export default function PerformancePage() {
   });
   const [selectedRooms, setSelectedRooms] = useState<Room[]>([...ALL_ROOMS]);
   const [shareOpen, setShareOpen] = useState(false);
+  // Month chosen in the "Month Picker" preset ("YYYY-MM"); defaults to this month.
+  const [pickedMonth, setPickedMonth] = useState<string>(
+    () => new Date().toLocaleDateString("sv-SE").slice(0, 7),
+  );
 
   const dateRange = useMemo(
-    () => getPeriodDateRange(period, customRange),
-    [period, customRange]
+    () => getPeriodDateRange(period, customRange, pickedMonth),
+    [period, customRange, pickedMonth]
   );
 
   const filteredReservations = useMemo(
@@ -217,6 +221,8 @@ export default function PerformancePage() {
               onChange={setPeriod}
               customRange={customRange}
               onCustomRangeChange={setCustomRange}
+              pickedMonth={pickedMonth}
+              onPickedMonthChange={setPickedMonth}
             />
           </div>
           <div>

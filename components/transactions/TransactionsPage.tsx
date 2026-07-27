@@ -21,6 +21,7 @@ import PriceCheckModal from "./PriceCheckModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
+import { computeTurnoverClashes } from "@/utils/turnoverClash";
 import { planForUnallocated } from "@/utils/roomAllocation";
 import { ratingClass } from "@/utils/rating";
 import { useSession } from "next-auth/react";
@@ -505,6 +506,7 @@ export default function TransactionsPage() {
   const [taskAlertOpen, setTaskAlertOpen] = useState(false);
   const [earlyCheckinPanelOpen, setEarlyCheckinPanelOpen] = useState(false);
   const [lateCheckoutPanelOpen, setLateCheckoutPanelOpen] = useState(false);
+  const [clashPanelOpen, setClashPanelOpen] = useState(false);
   const [unallocatedPanelOpen, setUnallocatedPanelOpen] = useState(false);
   const [blackoutsPanelOpen, setBlackoutsPanelOpen] = useState(false);
   /** Per-blackout deletion state (reservationNumber → pending). Keeps the
@@ -579,6 +581,11 @@ export default function TransactionsPage() {
     () => upcomingUnresolved.filter((x) => x.overdue).length,
     [upcomingUnresolved],
   );
+
+  // Late-checkout ↔ early-check-in turnover clashes (same room, same day) —
+  // rate-perk-derived, so two back-to-back Flexi stays surface here for the
+  // operator to manage with cleaners. Carries a move suggestion when possible.
+  const turnoverClashes = useMemo(() => computeTurnoverClashes(reservations), [reservations]);
 
   /**
    * Reservations sitting on a virtual room with no physical allocation —
@@ -1281,6 +1288,25 @@ export default function TransactionsPage() {
                 </svg>
               </button>
             )}
+            {turnoverClashes.length > 0 && (
+              <button
+                onClick={() => setClashPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-50 border border-rose-300 text-rose-800 text-sm font-medium hover:bg-rose-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                {turnoverClashes.length} turnover {turnoverClashes.length === 1 ? "clash" : "clashes"}
+                <span className="text-rose-600 font-normal">· late-out vs early-in</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${clashPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
             {(() => {
               const pendingMsgIds = new Set<number>([
                 ...pendingDrafts.map((d) => d.beds24MessageId),
@@ -1396,6 +1422,59 @@ export default function TransactionsPage() {
                       </td>
                       <td className="px-4 py-2 text-orange-700 max-w-md">
                         <div className="line-clamp-2">{issue.text}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Turnover clashes panel — late checkout vs early check-in, same room/day */}
+          {turnoverClashes.length > 0 && clashPanelOpen && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 overflow-hidden">
+              <div className="px-4 py-2 border-b border-rose-200 text-xs text-rose-700">
+                Same room, same day: a late checkout (until 12:00) meets an early check-in (from 13:00) — the cleaning window is ~1&nbsp;hour. Coordinate with cleaners, or use the suggested like-for-like move.
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-rose-200">
+                    {["Room", "Turnover", "Leaving · late 12:00", "Arriving · early 13:00", "Suggestion"].map((h) => (
+                      <th key={h} className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-rose-100">
+                  {turnoverClashes.map((c) => (
+                    <tr key={`${c.room}-${c.date}-${c.incoming.reservationNumber}`} className="hover:bg-rose-100">
+                      <td className="px-4 py-2 font-medium text-rose-900 whitespace-nowrap">{c.room}</td>
+                      <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{c.date}</td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <button
+                          onClick={() => { setSelectedReservation(c.outgoing); setClashPanelOpen(false); }}
+                          className="text-rose-800 hover:underline text-left"
+                        >
+                          {c.outgoing.firstName} {c.outgoing.lastName}{" "}
+                          <span className="text-rose-400 font-mono text-[11px]">{c.outgoing.reservationNumber}</span>
+                        </button>
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <button
+                          onClick={() => { setSelectedReservation(c.incoming); setClashPanelOpen(false); }}
+                          className="text-rose-800 hover:underline text-left"
+                        >
+                          {c.incoming.firstName} {c.incoming.lastName}{" "}
+                          <span className="text-rose-400 font-mono text-[11px]">{c.incoming.reservationNumber}</span>
+                        </button>
+                      </td>
+                      <td className="px-4 py-2 text-rose-700 text-xs">
+                        {c.suggestion ? (
+                          <>Move {c.suggestion.who === "incoming" ? "arriving" : "leaving"} guest → <span className="font-semibold text-rose-900">{c.suggestion.toRoom}</span> <span className="text-rose-400">(free)</span></>
+                        ) : (
+                          <span className="text-rose-400">no free like-for-like room</span>
+                        )}
                       </td>
                     </tr>
                   ))}

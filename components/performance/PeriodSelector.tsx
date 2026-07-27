@@ -7,6 +7,9 @@ interface Props {
   onChange: (period: PeriodKey) => void;
   customRange: DateRange;
   onCustomRangeChange: (range: DateRange) => void;
+  /** "YYYY-MM" chosen in the Month Picker preset. */
+  pickedMonth: string;
+  onPickedMonthChange: (ym: string) => void;
 }
 
 export default function PeriodSelector({
@@ -14,6 +17,8 @@ export default function PeriodSelector({
   onChange,
   customRange,
   onCustomRangeChange,
+  pickedMonth,
+  onPickedMonthChange,
 }: Props) {
   return (
     <div>
@@ -32,6 +37,17 @@ export default function PeriodSelector({
           </button>
         ))}
       </div>
+
+      {selected === "pick-month" && (
+        <div className="mt-3">
+          <input
+            type="month"
+            value={pickedMonth}
+            onChange={(e) => onPickedMonthChange(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+      )}
 
       {selected === "custom" && (
         <div className="flex items-center gap-2 mt-3">

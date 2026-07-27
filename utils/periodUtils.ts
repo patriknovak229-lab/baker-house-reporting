@@ -3,8 +3,8 @@ import type { Reservation } from "@/types/reservation";
 export type PeriodKey =
   | "current-month"
   | "last-month"
-  | "last-30-days"
   | "next-month"
+  | "pick-month"
   | "custom";
 
 export interface DateRange {
@@ -20,8 +20,8 @@ export interface PeriodOption {
 export const PERIOD_OPTIONS: PeriodOption[] = [
   { key: "current-month", label: "Current Month" },
   { key: "last-month",    label: "Last Month" },
-  { key: "last-30-days",  label: "Last 30 Days" },
   { key: "next-month",    label: "Next Month" },
+  { key: "pick-month",    label: "Month Picker" },
   { key: "custom",        label: "Custom Range" },
 ];
 
@@ -86,7 +86,9 @@ function addMonths(dateStr: string, months: number): string {
 
 export function getPeriodDateRange(
   period: PeriodKey,
-  customRange?: DateRange
+  customRange?: DateRange,
+  /** "YYYY-MM" of the month chosen in the Month Picker (defaults to current). */
+  pickedMonth?: string,
 ): DateRange {
   const t = today();
   const yesterday = addDays(t, -1);
@@ -100,12 +102,15 @@ export function getPeriodDateRange(
       return { start: firstOfLastMonth, end: endOfMonth(firstOfLastMonth) };
     }
 
-    case "last-30-days":
-      return { start: addDays(t, -30), end: yesterday };
-
     case "next-month": {
       const firstOfNextMonth = startOfMonth(addMonths(t, 1));
       return { start: firstOfNextMonth, end: endOfMonth(firstOfNextMonth) };
+    }
+
+    case "pick-month": {
+      // pickedMonth is "YYYY-MM"; fall back to the current month if unset.
+      const first = (pickedMonth && /^\d{4}-\d{2}$/.test(pickedMonth) ? pickedMonth : t.slice(0, 7)) + "-01";
+      return { start: first, end: endOfMonth(first) };
     }
 
     case "custom":
