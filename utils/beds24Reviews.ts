@@ -22,7 +22,10 @@ const BEDS24_API_BASE = "https://beds24.com/api/v2";
 // reviews (they fall off the end of the cap). We therefore fetch a short rolling
 // window that stays comfortably under 100 rows, and callers merge each fetch into
 // a persisted cache (union by apiReference) so older reviews are retained.
-export const REVIEWS_LOOKBACK_DAYS = 120;
+// Sized for headroom: at ~25 Booking.com reviews/month a 60-day window is ~50
+// rows (~2x margin under the cap). Merge means a shorter window loses no history,
+// so keep this small — raise it only if the daily cron may miss several days.
+export const REVIEWS_LOOKBACK_DAYS = 60;
 
 /** Rolling `from` date (YYYY-MM-DD) — REVIEWS_LOOKBACK_DAYS ago. */
 export function reviewsFromDate(): string {
