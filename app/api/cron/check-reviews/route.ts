@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { requireRole } from "@/utils/authGuard";
 import { getAccessToken } from "@/utils/beds24Auth";
-import { fetchReviews } from "@/utils/beds24Reviews";
+import { fetchReviews, reviewsFromDate, mergeReviews } from "@/utils/beds24Reviews";
 import { sendTelegram, escapeHtml } from "@/utils/telegram";
 import { mapRoom, PHYSICAL_ROOM_IDS, REVIEWS_PROPERTY_ID } from "@/utils/rooms";
 import type { GuestRating } from "@/types/reservation";
@@ -34,13 +34,6 @@ function getRedis(): Redis {
     url: process.env.UPSTASH_REDIS_REST_URL!,
     token: process.env.UPSTASH_REDIS_REST_TOKEN!,
   });
-}
-
-/** Booking.com's review endpoint needs a `from` — look back 2 years for past stays. */
-function reviewFromDate(): string {
-  const from = new Date();
-  from.setUTCFullYear(from.getUTCFullYear() - 2);
-  return from.toISOString().slice(0, 10);
 }
 
 function friendlyDate(iso?: string): string | null {
@@ -109,7 +102,7 @@ export async function POST(req: NextRequest) {
   const byRef = await fetchReviews(token, {
     propertyId: REVIEWS_PROPERTY_ID,
     roomIds: PHYSICAL_ROOM_IDS,
-    from: reviewFromDate(),
+    from: reviewsFromDate(),
   });
 
   // Empty almost always means a transient fetch failure (an active property has
@@ -119,7 +112,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Refresh the shared cache so the dashboard's lazy getReviews() benefits too.
-  const reviewsCache: ReviewsCache = { fetchedAt: Date.now(), byRef };
+  // Merge (union by apiReference) so this recent-window fetch never drops older
+  // reviews captured by earlier runs. The new/changed diff below still runs
+  // against the fresh window, so only genuinely recent reviews trigger alerts.
+  const prevCache = await redis.get<ReviewsCache>(REVIEWS_CACHE_KEY);
+  const reviewsCache: ReviewsCache = { fetchedAt: Date.now(), byRef: mergeReviews(prevCache?.byRef, byRef) };
   await redis.set(REVIEWS_CACHE_KEY, reviewsCache);
 
   const notified = await redis.get<NotifiedMap>(REVIEWS_NOTIFIED_KEY);

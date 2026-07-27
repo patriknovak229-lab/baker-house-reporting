@@ -8,7 +8,7 @@ import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { autoRatePerks, effectiveRatePerks } from "@/utils/ratePerks";
 import type { PerkOverrides, RatePerks } from "@/utils/ratePerks";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
-import { fetchReviews, fetchRawReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
+import { fetchReviews, fetchRawReviews, reviewsFromDate, mergeReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
 import type { GuestRating } from "@/types/reservation";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
@@ -23,14 +23,14 @@ const REVIEWS_PROPERTY_ID = 311322; // Baker House Apartments (single-property a
 type ReviewsCache = { fetchedAt: number; byRef: Record<string, GuestRating> };
 
 /** Inputs the review endpoints require: propertyId + a `from` date (Booking.com)
- *  and the room ids to sweep (Airbnb). `from` looks back 2 years for past stays. */
+ *  and the room ids to sweep (Airbnb). `from` is a short rolling window so the
+ *  Booking.com endpoint's 100-row (oldest-first) cap never hides the newest
+ *  reviews — older ones are retained via the merged cache in getReviews(). */
 function reviewFetchOptions(): ReviewFetchOptions {
-  const from = new Date();
-  from.setUTCFullYear(from.getUTCFullYear() - 2);
   return {
     propertyId: REVIEWS_PROPERTY_ID,
     roomIds: PHYSICAL_ROOM_IDS,
-    from: from.toISOString().slice(0, 10),
+    from: reviewsFromDate(),
   };
 }
 
@@ -48,7 +48,11 @@ async function getReviews(token: string): Promise<Record<string, GuestRating>> {
   if (fresh) return cached!.byRef;
 
   try {
-    const byRef = await fetchReviews(token, reviewFetchOptions());
+    const fetched = await fetchReviews(token, reviewFetchOptions());
+    // The fetch only sees a recent rolling window (Beds24's Booking.com endpoint
+    // caps at 100 oldest-first), so merge into the cache to retain older reviews
+    // captured by earlier windows — union by apiReference.
+    const byRef = mergeReviews(cached?.byRef, fetched);
     if (redis) await redis.set(REVIEWS_CACHE_KEY, { fetchedAt: Date.now(), byRef });
     return byRef;
   } catch (err) {

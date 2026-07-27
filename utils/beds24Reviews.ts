@@ -16,6 +16,29 @@ import type { GuestRating } from "@/types/reservation";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
+// Beds24's Booking.com review endpoint caps its response at 100 rows sorted
+// OLDEST-first and reports `nextPageExists:false` even when more exist — so once
+// a property passes 100 reviews a wide `from` window silently drops the NEWEST
+// reviews (they fall off the end of the cap). We therefore fetch a short rolling
+// window that stays comfortably under 100 rows, and callers merge each fetch into
+// a persisted cache (union by apiReference) so older reviews are retained.
+export const REVIEWS_LOOKBACK_DAYS = 120;
+
+/** Rolling `from` date (YYYY-MM-DD) — REVIEWS_LOOKBACK_DAYS ago. */
+export function reviewsFromDate(): string {
+  const from = new Date();
+  from.setUTCDate(from.getUTCDate() - REVIEWS_LOOKBACK_DAYS);
+  return from.toISOString().slice(0, 10);
+}
+
+/** Union two review maps by apiReference; `next` wins on conflicts (score changes). */
+export function mergeReviews(
+  prev: Record<string, GuestRating> | undefined,
+  next: Record<string, GuestRating>,
+): Record<string, GuestRating> {
+  return { ...(prev ?? {}), ...next };
+}
+
 export interface ReviewFetchOptions {
   propertyId: number;
   roomIds: number[];
