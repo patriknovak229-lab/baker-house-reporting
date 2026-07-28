@@ -15,11 +15,12 @@ import type { GuestRating } from "@/types/reservation";
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 const ADDITIONAL_PAYMENTS_KEY = "baker:additional-payments";
 
-// Synced guest reviews (Booking.com / Airbnb) cache. Reviews are low-volume and
-// change slowly, so we re-fetch from Beds24 at most once per this window rather
-// than on every bookings sync. Keyed by booking channel reference (apiReference).
+// Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
+// reference (apiReference). This window also gates how promptly a new review can
+// alert Telegram: getReviews() only re-fetches (and thus runs notifyNewReviews)
+// once it expires, so keep it short enough that new reviews surface quickly.
 const REVIEWS_CACHE_KEY = "baker:beds24-reviews-cache";
-const REVIEWS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 h
+const REVIEWS_CACHE_MAX_AGE_MS = 30 * 60 * 1000; // 30 min
 const REVIEWS_PROPERTY_ID = 311322; // Baker House Apartments (single-property account)
 type ReviewsCache = { fetchedAt: number; byRef: Record<string, GuestRating> };
 
