@@ -118,11 +118,13 @@ export async function notifyNewReviews(
     }
     if (fresh.length === 0) return { fresh: 0, notified: 0 };
 
-    // Resolve reservation details from the bookings cache (keyed by apiReference).
-    const bookings = (await redis.get<CachedBooking[]>(BOOKINGS_CACHE_KEY)) ?? [];
+    // Resolve reservation details from the bookings cache. It's stored as a
+    // Record<bookingId, booking> (see app/api/bookings + the beds24 webhook), so
+    // iterate its values — NOT the object itself, which isn't iterable.
+    const bookings = (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
     const byApiRef = new Map<string, CachedBooking>();
-    for (const b of bookings) {
-      if (b.apiReference) byApiRef.set(String(b.apiReference), b);
+    for (const b of Object.values(bookings)) {
+      if (b?.apiReference) byApiRef.set(String(b.apiReference), b);
     }
 
     const nextNotified: NotifiedMap = { ...notified };
