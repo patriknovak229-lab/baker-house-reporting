@@ -9,6 +9,7 @@ import { autoRatePerks, effectiveRatePerks } from "@/utils/ratePerks";
 import type { PerkOverrides, RatePerks } from "@/utils/ratePerks";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { fetchReviews, fetchRawReviews, reviewsFromDate, mergeReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
+import { notifyNewReviews } from "@/utils/reviewAlerts";
 import type { GuestRating } from "@/types/reservation";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
@@ -53,7 +54,18 @@ async function getReviews(token: string): Promise<Record<string, GuestRating>> {
     // caps at 100 oldest-first), so merge into the cache to retain older reviews
     // captured by earlier windows — union by apiReference.
     const byRef = mergeReviews(cached?.byRef, fetched);
-    if (redis) await redis.set(REVIEWS_CACHE_KEY, { fetchedAt: Date.now(), byRef });
+    if (redis) {
+      await redis.set(REVIEWS_CACHE_KEY, { fetchedAt: Date.now(), byRef });
+      // Fire Telegram for any new/changed reviews in this fresh pull so alerts
+      // aren't gated behind the daily cron. Same shared dedupe (notified map) +
+      // lock, so no duplicates across the cron and concurrent dashboard loads.
+      // Never let an alert failure break the bookings response.
+      try {
+        await notifyNewReviews(redis, fetched);
+      } catch (err) {
+        console.error("[bookings] review alert failed:", err);
+      }
+    }
     return byRef;
   } catch (err) {
     console.error("[bookings] review fetch failed:", err);
