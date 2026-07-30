@@ -348,9 +348,13 @@ function NightGrid({ board, loading }: { board: OccupancyBoard; loading: boolean
               <th className="sticky left-0 z-10 bg-white" />
               {dates.map((d, i) => (
                 <th key={d} className="align-bottom p-0">
-                  {monthStartFlags[i] && (
-                    <div className="text-[10px] font-semibold text-gray-500 text-left whitespace-nowrap pb-0.5">{monthLabel(d)}</div>
-                  )}
+                  {/* Month label floats in a fixed-height strip (absolute → never
+                      widens the 24px day column, which caused a gap after day 1). */}
+                  <div className="relative h-3.5">
+                    {monthStartFlags[i] && (
+                      <div className="absolute bottom-0 left-0 text-[10px] font-semibold text-gray-500 whitespace-nowrap">{monthLabel(d)}</div>
+                    )}
+                  </div>
                   <div className={`text-[10px] leading-tight w-6 ${isWeekend(d) ? 'text-gray-400' : 'text-gray-500'}`}>
                     <div>{WEEKDAY[weekdayIdx(d)]}</div>
                     <div className="font-medium">{dayOfMonth(d)}</div>
