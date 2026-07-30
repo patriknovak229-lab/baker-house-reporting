@@ -1,5 +1,10 @@
-export type Role = 'admin' | 'super' | 'viewer' | 'accountant';
+export type Role = 'admin' | 'super' | 'viewer' | 'accountant' | 'occupancy';
 export type Tab = 'transactions' | 'performance' | 'accounting' | 'pricing';
+
+// The stakeholder occupancy page (/occupancy) is viewable by every valid role.
+// `occupancy` is the standalone stakeholder role — it can see ONLY that page and
+// has no access to any reporting-app tab.
+export const OCCUPANCY_VIEW_ROLES: Role[] = ['admin', 'super', 'viewer', 'accountant', 'occupancy'];
 
 const TAB_ACCESS: Record<Tab, Role[]> = {
   transactions: ['admin', 'super'],
@@ -19,6 +24,9 @@ export function getRoleForEmail(email: string): Role | null {
   if (check('SUPER_EMAILS')) return 'super';
   if (check('VIEWER_EMAILS')) return 'viewer';
   if (check('ACCOUNTANT_EMAILS')) return 'accountant';
+  // Stakeholder occupancy-only accounts — lowest priority so an email that also
+  // appears in a higher list keeps its fuller role.
+  if (check('OCCUPANCY_EMAILS')) return 'occupancy';
   return null;
 }
 
