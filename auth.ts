@@ -4,6 +4,9 @@ import { getRoleForEmail } from '@/utils/roles';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
+    // Operator sign-in (main app). Needs Gmail-read + Drive for the reconciliation
+    // / Drive-upload features, so it requests those sensitive scopes + an offline
+    // refresh token. This is the provider that drives the "unverified app" screen.
     Google({
       authorization: {
         params: {
@@ -12,6 +15,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           prompt: 'consent',
         },
       },
+    }),
+    // Stakeholder "viewer" sign-in (occupancy page only). Bare-minimum identity
+    // scopes — no Gmail/Drive — so there's no sensitive-scope consent, no
+    // "unverified app" warning, and it doesn't count against the OAuth user cap.
+    // Same underlying OAuth client; callback path is /api/auth/callback/google-viewer.
+    Google({
+      id: 'google-viewer',
+      name: 'Google',
+      clientId: process.env.AUTH_GOOGLE_ID,
+      clientSecret: process.env.AUTH_GOOGLE_SECRET,
+      authorization: { params: { scope: 'openid email profile' } },
     }),
   ],
   pages: { signIn: '/login' },

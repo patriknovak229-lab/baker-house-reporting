@@ -23,7 +23,13 @@ export default auth((req) => {
   }
 
   if (!isLoggedIn) {
-    return NextResponse.redirect(new URL('/login', nextUrl));
+    // Stakeholders reaching /occupancy get the minimal-scope viewer sign-in
+    // (?view=1); everyone else gets the normal operator sign-in.
+    const loginUrl = new URL('/login', nextUrl);
+    if (nextUrl.pathname === '/occupancy' || nextUrl.pathname.startsWith('/occupancy/')) {
+      loginUrl.searchParams.set('view', '1');
+    }
+    return NextResponse.redirect(loginUrl);
   }
 
   return NextResponse.next();

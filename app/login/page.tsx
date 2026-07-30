@@ -1,11 +1,29 @@
 import { signIn } from '@/auth';
 import { redirect } from 'next/navigation';
 
-export default function LoginPage() {
+// Two sign-in flows sharing one page:
+//  - operator (default): full-scope `google` provider → reporting app.
+//  - viewer (`?view=1`, used by the /occupancy redirect): minimal-scope
+//    `google-viewer` provider → occupancy page. No Gmail/Drive consent.
+async function signInOperator() {
+  'use server';
+  await signIn('google', { redirectTo: '/' });
+}
+async function signInViewer() {
+  'use server';
+  await signIn('google-viewer', { redirectTo: '/occupancy' });
+}
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   // In local dev with the bypass configured, skip the login form entirely.
   if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
     redirect('/');
   }
+  const viewer = (await searchParams)?.view === '1';
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 w-full max-w-sm text-center">
@@ -13,13 +31,8 @@ export default function LoginPage() {
           <span className="text-white font-bold text-lg">BH</span>
         </div>
         <h1 className="text-xl font-semibold text-gray-900 mb-1">Baker House</h1>
-        <p className="text-sm text-gray-500 mb-8">Apartments reporting</p>
-        <form
-          action={async () => {
-            'use server';
-            await signIn('google', { redirectTo: '/' });
-          }}
-        >
+        <p className="text-sm text-gray-500 mb-8">{viewer ? 'Occupancy overview' : 'Apartments reporting'}</p>
+        <form action={viewer ? signInViewer : signInOperator}>
           <button
             type="submit"
             className="w-full flex items-center justify-center gap-3 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors cursor-pointer"
