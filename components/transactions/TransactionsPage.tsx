@@ -18,6 +18,7 @@ import BlackoutModal from "./BlackoutModal";
 import PaymentLinkModal from "./PaymentLinkModal";
 import CreateVoucherModal from "./CreateVoucherModal";
 import PriceCheckModal from "./PriceCheckModal";
+import MassMessageModal from "./MassMessageModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
@@ -214,6 +215,7 @@ export default function TransactionsPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [showPriceCheck, setShowPriceCheck] = useState(false);
+  const [showMassMessageModal, setShowMassMessageModal] = useState(false);
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
   // Single source of truth for "are we saving / did we save / did it fail" so
   // the drawer can render one consistent toast for any onUpdate-driven write.
@@ -998,6 +1000,16 @@ export default function TransactionsPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
               </svg>
               Black Out
+            </button>
+            <button
+              onClick={() => setShowMassMessageModal(true)}
+              title="Broadcast a one-way message to a segment of current or upcoming guests"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium transition-colors shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+              </svg>
+              Message Guests
             </button>
             </>
           )}
@@ -2286,6 +2298,14 @@ export default function TransactionsPage() {
       {/* Price check modal */}
       {showPriceCheck && (
         <PriceCheckModal onClose={() => setShowPriceCheck(false)} />
+      )}
+
+      {/* Mass guest messaging (broadcast) */}
+      {showMassMessageModal && (
+        <MassMessageModal
+          reservations={reservations}
+          onClose={() => setShowMassMessageModal(false)}
+        />
       )}
 
       {/* Create voucher modal */}
