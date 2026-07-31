@@ -66,11 +66,19 @@ describe('segment: staying', () => {
     expect(out).toHaveLength(1);
   });
 
-  it('includes a guest arriving today and a guest leaving today (checkout-inclusive)', () => {
+  it("includes today's check-INs but excludes today's check-OUTs (checkout-exclusive)", () => {
     const arrivingToday = res({ reservationNumber: 'BH-1', checkInDate: TODAY, checkOutDate: '2026-08-03' });
     const leavingToday = res({ reservationNumber: 'BH-2', checkInDate: '2026-07-28', checkOutDate: TODAY });
     const out = resolveRecipients([arrivingToday, leavingToday], opts({ segment: 'staying' }));
-    expect(out.map((r) => r.reservationNumber).sort()).toEqual(['BH-1', 'BH-2']);
+    expect(out.map((r) => r.reservationNumber)).toEqual(['BH-1']);
+  });
+
+  it("routes today's check-outs to 'leaving' (days: 0), not 'staying'", () => {
+    const leavingToday = res({ reservationNumber: 'BH-2', checkInDate: '2026-07-28', checkOutDate: TODAY });
+    expect(resolveRecipients([leavingToday], opts({ segment: 'staying' }))).toHaveLength(0);
+    expect(
+      resolveRecipients([leavingToday], opts({ segment: 'leaving', days: 0 })).map((r) => r.reservationNumber),
+    ).toEqual(['BH-2']);
   });
 
   it('excludes a guest who already left and one who has not arrived', () => {
@@ -82,18 +90,20 @@ describe('segment: staying', () => {
 });
 
 describe('segment: arriving', () => {
-  it('includes check-ins from today through today+days inclusive', () => {
-    const today = res({ reservationNumber: 'BH-1', checkInDate: TODAY, checkOutDate: '2026-08-04' });
-    const inWindow = res({ reservationNumber: 'BH-2', checkInDate: '2026-08-03', checkOutDate: '2026-08-06' });
-    const justOut = res({ reservationNumber: 'BH-3', checkInDate: '2026-08-04', checkOutDate: '2026-08-06' });
-    const out = resolveRecipients([today, inWindow, justOut], opts({ segment: 'arriving', days: 3 }));
-    expect(out.map((r) => r.reservationNumber).sort()).toEqual(['BH-1', 'BH-2']);
+  it("includes future check-ins through today+days but excludes today's arrivals", () => {
+    const arrivingToday = res({ reservationNumber: 'BH-1', checkInDate: TODAY, checkOutDate: '2026-08-04' });
+    const tomorrow = res({ reservationNumber: 'BH-2', checkInDate: '2026-08-01', checkOutDate: '2026-08-04' });
+    const lastDay = res({ reservationNumber: 'BH-3', checkInDate: '2026-08-03', checkOutDate: '2026-08-06' });
+    const justOut = res({ reservationNumber: 'BH-4', checkInDate: '2026-08-04', checkOutDate: '2026-08-06' });
+    const out = resolveRecipients([arrivingToday, tomorrow, lastDay, justOut], opts({ segment: 'arriving', days: 3 }));
+    // today's arrival (BH-1) belongs to 'staying'; BH-4 is one day past the window
+    expect(out.map((r) => r.reservationNumber).sort()).toEqual(['BH-2', 'BH-3']);
   });
 
-  it('days=0 means arriving today only', () => {
-    const today = res({ reservationNumber: 'BH-1', checkInDate: TODAY, checkOutDate: '2026-08-04' });
-    const tomorrow = res({ reservationNumber: 'BH-2', checkInDate: '2026-08-01', checkOutDate: '2026-08-04' });
-    const out = resolveRecipients([today, tomorrow], opts({ segment: 'arriving', days: 0 }));
+  it('days=1 means arriving tomorrow only', () => {
+    const tomorrow = res({ reservationNumber: 'BH-1', checkInDate: '2026-08-01', checkOutDate: '2026-08-04' });
+    const dayAfter = res({ reservationNumber: 'BH-2', checkInDate: '2026-08-02', checkOutDate: '2026-08-04' });
+    const out = resolveRecipients([tomorrow, dayAfter], opts({ segment: 'arriving', days: 1 }));
     expect(out.map((r) => r.reservationNumber)).toEqual(['BH-1']);
   });
 });

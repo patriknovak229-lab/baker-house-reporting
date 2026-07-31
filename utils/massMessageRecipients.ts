@@ -19,7 +19,8 @@ export type UnreachableReason = 'no-email' | 'email-disabled' | 'bad-booking-id'
 
 export interface ResolveOptions {
   segment: Segment;
-  /** Only used for 'arriving' / 'leaving'. Window is today … today+days inclusive. */
+  /** Window size for 'arriving' / 'leaving'. 'arriving' = (today, today+days]
+   *  — today's arrivals belong to 'staying'. 'leaving' = [today, today+days]. */
   days: number;
   /** When true, direct-booking guests with an email on file are emailed. */
   emailDirect: boolean;
@@ -86,16 +87,20 @@ function pickEmail(r: Reservation): string {
 function inSegment(r: Reservation, opts: ResolveOptions): boolean {
   const { segment, today } = opts;
   if (segment === 'staying') {
-    // Checkout-INCLUSIVE: a guest leaving today may still be on-property this
-    // morning, so an outage/notice broadcast should still reach them.
-    return r.checkInDate <= today && r.checkOutDate >= today;
+    // Checkout-EXCLUSIVE ("here tonight"): mid-stay guests + today's check-INs
+    // (on-property all afternoon/night). Today's check-OUTs are dropped — they
+    // leave in the morning, so a notice is redundant; reach them via 'leaving'
+    // (days: 0). This intentionally undercounts vs the room grid by same-day departures.
+    return r.checkInDate <= today && r.checkOutDate > today;
   }
   const span = Math.max(0, Math.floor(opts.days));
   const end = addDays(today, span);
   if (segment === 'arriving') {
-    return r.checkInDate >= today && r.checkInDate <= end;
+    // Strictly FUTURE arrivals (from tomorrow). Today's arrivals already belong
+    // to 'staying', so exclude them here to keep the two segments disjoint.
+    return r.checkInDate > today && r.checkInDate <= end;
   }
-  // leaving
+  // leaving — check-outs from today (inclusive) through today+days
   return r.checkOutDate >= today && r.checkOutDate <= end;
 }
 

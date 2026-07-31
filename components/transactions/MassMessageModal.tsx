@@ -35,8 +35,8 @@ const SEGMENT_LABELS: Record<Segment, string> = {
 };
 
 const SEGMENT_HINTS: Record<Segment, string> = {
-  staying: 'Everyone on-property today (includes guests arriving or leaving today).',
-  arriving: 'Guests whose check-in falls within the window (today counts as day 0).',
+  staying: "Guests here tonight — mid-stay plus today's check-ins. (Today's check-outs are covered by Leaving.)",
+  arriving: "Upcoming arrivals from tomorrow onward — today's arrivals are already in Currently staying.",
   leaving: 'Guests whose check-out falls within the window (today counts as day 0).',
 };
 
@@ -172,7 +172,11 @@ export default function MassMessageModal({ reservations, onClose }: Props) {
                         type="radio"
                         name="segment"
                         checked={segment === s}
-                        onChange={() => setSegment(s)}
+                        onChange={() => {
+                          setSegment(s);
+                          // 'arriving' starts at tomorrow, so days must be ≥ 1.
+                          if (s === 'arriving' && days < 1) setDays(1);
+                        }}
                         className="mt-0.5 accent-sky-600"
                       />
                       <div className="min-w-0">
@@ -187,20 +191,25 @@ export default function MassMessageModal({ reservations, onClose }: Props) {
               {(segment === 'arriving' || segment === 'leaving') && (
                 <div className="flex items-center gap-2">
                   <label className="text-xs font-medium text-gray-600">
-                    {segment === 'arriving' ? 'Arriving within the next' : 'Leaving within the next'}
+                    {segment === 'arriving' ? 'Arriving in the next' : 'Leaving within the next'}
                   </label>
                   <input
                     type="number"
-                    min={0}
+                    min={segment === 'arriving' ? 1 : 0}
                     max={60}
                     value={days}
                     onChange={(e) => {
                       const n = parseInt(e.target.value, 10);
-                      setDays(Number.isFinite(n) ? Math.min(60, Math.max(0, n)) : 0);
+                      const floor = segment === 'arriving' ? 1 : 0;
+                      setDays(Number.isFinite(n) ? Math.min(60, Math.max(floor, n)) : floor);
                     }}
                     className="w-16 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-sky-300"
                   />
-                  <span className="text-xs text-gray-600">day(s) — including today</span>
+                  <span className="text-xs text-gray-600">
+                    {segment === 'arriving'
+                      ? 'day(s) — from tomorrow (today is in Currently staying)'
+                      : 'day(s) — including today'}
+                  </span>
                 </div>
               )}
 
