@@ -644,6 +644,41 @@ export default function TransactionsPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+
+        // Leave a task on every reservation that changed room, so the operator
+        // can cleanly follow up — verify in Beds24, and (for a guest who was
+        // already sent check-in info) send the room-change notice. Best-effort:
+        // the move already succeeded, so a task-write hiccup mustn't surface as
+        // a move failure (Beds24 + the Telegram alert are the source of truth).
+        try {
+          const todayIso = pragueToday();
+          const stamp = Date.now();
+          await Promise.all(
+            plan.moves.map((m) => {
+              const r = reservations.find((x) => x.reservationNumber === m.reservationNumber);
+              if (!r) return Promise.resolve();
+              const notice = m.needsGuestNotice
+                ? " — ⚠ guest already sent check-in info: inform them of the new room / door code"
+                : "";
+              const issue: Issue = {
+                id: `${stamp}-${m.reservationNumber}`,
+                category: "problem",
+                text: `🔀 Room reassigned ${m.from} → ${m.to} to fit an arriving guest${notice}`,
+                actionableDate: todayIso,
+                resolved: false,
+                createdAt: new Date().toISOString(),
+              };
+              const fields = extractLocalFields(r);
+              return persistOverride(r.reservationNumber, {
+                ...fields,
+                issues: [...(fields.issues ?? []), issue],
+              });
+            }),
+          );
+        } catch (taskErr) {
+          console.error("[reallocation] move applied but follow-up task creation failed", taskErr);
+        }
+
         await fetchReservations();
       } catch (e) {
         setResolveError((prev) => ({
@@ -654,7 +689,7 @@ export default function TransactionsPage() {
         setResolveBusy(null);
       }
     },
-    [unallocatedPlans, fetchReservations],
+    [unallocatedPlans, fetchReservations, reservations],
   );
 
   /**
@@ -1708,9 +1743,20 @@ export default function TransactionsPage() {
                                   <li key={m.reservationNumber} className="text-[11px] text-amber-800">
                                     ↪ Move <span className="font-medium">{m.label ?? m.reservationNumber}</span>{" "}
                                     {m.from} → {m.to}
+                                    {m.needsGuestNotice && (
+                                      <span className="ml-1 font-medium text-rose-700">
+                                        · ⚠ arriving soon — inform guest of new room
+                                      </span>
+                                    )}
                                   </li>
                                 ))}
                               </ul>
+                            )}
+                            {result.plan.escalated && (
+                              <p className="mt-1.5 text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">
+                                No move-free solution exists — this plan relocates a guest who was already sent
+                                check-in info. Approving means you&apos;ll message them their new room / door code.
+                              </p>
                             )}
                             <div className="mt-2 flex items-center gap-2">
                               <button

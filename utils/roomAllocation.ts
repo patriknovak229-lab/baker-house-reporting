@@ -110,6 +110,13 @@ export interface ReallocInput {
   currentRoom: string | null;
   /** false = pinned (in-house guest, cannot be moved). */
   movable: boolean;
+  /**
+   * true = the guest is inside the check-in-info window (arriving by tomorrow),
+   * so their room/door code has likely already gone out. Such bookings are
+   * moved only as a last resort, and any move of one is flagged for a guest
+   * notice. Ignored by the core solver — the caller acts on it.
+   */
+  messaged?: boolean;
   /** Display name for the UI (guest name etc.). Optional. */
   label?: string;
 }
@@ -119,6 +126,8 @@ export interface ReallocMove {
   from: string; // current unit
   to: string; // new unit
   label?: string;
+  /** Moving this guest requires informing them (they were already messaged). */
+  needsGuestNotice?: boolean;
 }
 
 export interface ReallocPlacement {
@@ -129,6 +138,11 @@ export interface ReallocPlacement {
 
 export interface ReallocPlan {
   feasible: boolean;
+  /**
+   * true = solvable only by moving a guest who's already been sent check-in
+   * info (silent reshuffle was impossible). Such moves carry `needsGuestNotice`.
+   */
+  escalated?: boolean;
   /** Why it can't be solved within the type (only when !feasible). */
   reason?: string;
   /** Unallocated booking(s) → their assigned unit. */
@@ -192,13 +206,15 @@ export function planReallocation(
   const pinned = component.filter((r) => !r.movable);
   const movable = component.filter((r) => r.movable);
 
-  // Safety valve — the backtracking below is O(units^movable) worst case
-  // (units ≤ 3 per group), so the cost is driven by how many bookings could
-  // MOVE, not by the raw component size. Pinned in-house guests only seed the
-  // calendar for free, so a dense peak-season component of mostly-arrived
-  // guests is still trivial to solve. Cap on the movable count so we bail to
-  // manual handling only when the real search space is genuinely large.
-  if (movable.length > 12) {
+  // Safety valve. The backtracking is O(units^movable) worst case (units ≤ 3),
+  // but the fewest-move pruning makes feasible cases cheap in practice — a real
+  // 15-movable peak-season component solves in ~36 search nodes, because every
+  // far-future booking parks in its current unit on the first branch. So the
+  // movable COUNT isn't the real cost, and we don't cap on it (an earlier
+  // `> 12` cap needlessly punted solvable cases to manual). Instead the search
+  // itself is bounded by a node budget (below); this guard only trips on
+  // pathologically large inputs where even setting up is pointless.
+  if (movable.length > 30) {
     return {
       ...empty,
       reason: "Too many movable bookings to auto-resolve — handle manually in Beds24.",
@@ -235,10 +251,19 @@ export function planReallocation(
   let bestMoves = Infinity;
   let bestAssignment: Record<string, string> | null = null;
 
+  // Hard bound on the search so a pathological (usually infeasible, un-prunable)
+  // input can never hang the operator's browser. Feasible cases finish in a
+  // tiny fraction of this; 500k cheap nodes is sub-100ms if it's ever reached.
+  let searchNodes = 0;
+  let aborted = false;
+  const NODE_BUDGET = 500_000;
+
   const assignment: Record<string, string> = {};
   for (const p of pinned) assignment[p.reservationNumber] = p.currentRoom!;
 
   const recurse = (i: number, movesSoFar: number) => {
+    if (aborted) return;
+    if (++searchNodes > NODE_BUDGET) { aborted = true; return; }
     if (movesSoFar >= bestMoves) return; // prune
     if (i === movable.length) {
       bestMoves = movesSoFar;
@@ -261,8 +286,9 @@ export function planReallocation(
   if (!bestAssignment) {
     return {
       ...empty,
-      reason:
-        "No conflict-free arrangement exists within this room type — likely oversold for these dates (a cross-type move or refusing the booking may be required).",
+      reason: aborted
+        ? "Reshuffle search too large to auto-resolve — handle manually in Beds24."
+        : "No conflict-free arrangement exists within this room type — likely oversold for these dates (a cross-type move or refusing the booking may be required).",
     };
   }
 
@@ -302,6 +328,13 @@ function nameOf(r: ResRef): string {
   return n || r.reservationNumber;
 }
 
+/** Add `n` days to a 'YYYY-MM-DD' date (UTC math — inputs carry no time). */
+function addDaysISO(iso: string, n: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 /**
  * Find the allocation group for an unallocated booking and compute the
  * fewest-move plan to give it a home — scoping/pinning the rest of the group
@@ -310,6 +343,12 @@ function nameOf(r: ResRef): string {
  *   - in-house stays (arrived, not departed) are pinned,
  *   - blackouts and multi-unit packages are pinned (we never move those here),
  *   - other unallocated bookings of the same type are solved together.
+ *
+ * Two-tier by guest-messaging state. Guests arriving by tomorrow have likely
+ * already been sent their room/door code, so we first try a "silent" reshuffle
+ * that leaves them put. Only if that's impossible do we escalate — allowing
+ * those guests to move too, marking each such move `needsGuestNotice` and the
+ * plan `escalated` so the operator knows to re-message them.
  */
 export function planForUnallocated(
   all: ResRef[],
@@ -323,6 +362,7 @@ export function planForUnallocated(
   const group = groupForTypeLabel(target.room);
   if (!group) return { error: `No shuffleable units for room type "${target.room}"` };
 
+  const tomorrow = addDaysISO(today, 1);
   const unitNames = group.units.map((u) => u.room);
   const inputs: ReallocInput[] = [];
 
@@ -353,6 +393,9 @@ export function planForUnallocated(
     const inHouse = r.checkInDate <= today && r.checkOutDate > today;
     const isPackage = (r.linkedRooms?.length ?? 0) > 1;
     const movable = !inHouse && !r.isBlackout && !isPackage;
+    // Arriving today is already `inHouse` (pinned); "messaged" catches the
+    // next tier out — arriving tomorrow — whose check-in info has gone out.
+    const messaged = movable && r.checkInDate <= tomorrow;
 
     for (const unit of occupiedUnits) {
       inputs.push({
@@ -363,10 +406,32 @@ export function planForUnallocated(
         checkOut: r.checkOutDate,
         currentRoom: unit,
         movable,
+        messaged,
         label: nameOf(r),
       });
     }
   }
 
-  return { group, plan: planReallocation(group, inputs) };
+  // Pass 1 (silent): resolve WITHOUT moving anyone who's already been sent
+  // check-in info — the ideal outcome, since no guest needs re-messaging.
+  const silentInputs = inputs.map((i) => (i.messaged ? { ...i, movable: false } : i));
+  const silent = planReallocation(group, silentInputs);
+  if (silent.feasible) return { group, plan: silent };
+
+  // Pass 2 (escalation): silent was impossible, so allow moving the messaged
+  // guests too. Flag each such move + the plan so the operator informs them.
+  const escalated = planReallocation(group, inputs);
+  if (!escalated.feasible) return { group, plan: escalated };
+
+  const messagedIds = new Set(inputs.filter((i) => i.messaged).map((i) => i.reservationNumber));
+  return {
+    group,
+    plan: {
+      ...escalated,
+      escalated: true,
+      moves: escalated.moves.map((m) =>
+        messagedIds.has(m.reservationNumber) ? { ...m, needsGuestNotice: true } : m,
+      ),
+    },
+  };
 }
