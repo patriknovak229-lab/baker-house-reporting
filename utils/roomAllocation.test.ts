@@ -160,4 +160,26 @@ describe("planForUnallocated (two-tier, guest-messaging aware)", () => {
     expect(plan.escalated).toBeFalsy();
     expect(plan.moves.every((m) => !m.needsGuestNotice)).toBe(true);
   });
+
+  it("ignores cancelled bookings (they hold no room) — no false 'no arrangement'", () => {
+    // A cancelled booking sitting on K.103 across Aug 1–6 would, if counted,
+    // block the only free unit on Aug 3 and make the case look infeasible.
+    // Cancellations are hidden on the calendar grid, so this is exactly the
+    // false negative that hit the live Viktorie case.
+    const withGhost: ResRef[] = [
+      ...MONTH,
+      { reservationNumber: "CANCELLED-X", room: "K.103", checkInDate: "2026-08-01", checkOutDate: "2026-08-06", isCancelled: true },
+    ];
+    const out = planForUnallocated(withGhost, "BH-90890877", TODAY);
+    expect("error" in out).toBe(false);
+    if ("error" in out) return;
+    const { plan } = out;
+
+    expect(plan.feasible).toBe(true); // cancelled ghost ignored → solvable
+    expect(plan.placements).toEqual([
+      expect.objectContaining({ reservationNumber: "BH-90890877", room: "K.103" }),
+    ]);
+    expect(plan.moves).toHaveLength(4);
+    expect(plan.moves.some((m) => m.reservationNumber === "CANCELLED-X")).toBe(false);
+  });
 });

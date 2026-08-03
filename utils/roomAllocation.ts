@@ -318,6 +318,8 @@ export interface ResRef {
   checkOutDate: string;
   isUnallocatedVR?: boolean;
   isBlackout?: boolean;
+  /** Cancelled bookings hold no room — they must not count as occupancy. */
+  isCancelled?: boolean;
   linkedRooms?: string[];
   firstName?: string;
   lastName?: string;
@@ -368,6 +370,11 @@ export function planForUnallocated(
 
   for (const r of all) {
     if (r.checkOutDate <= today) continue; // departed — irrelevant
+    // Cancelled bookings (incl. non-arrivals) free their nights — they occupy
+    // no unit, even though they linger in the reservations array. The calendar
+    // grid hides them too; counting them here is what made a genuinely free
+    // unit look booked and produced a false "no arrangement exists".
+    if (r.isCancelled) continue;
 
     // Unallocated booking of THIS type → a seed to place.
     if (r.isUnallocatedVR) {
