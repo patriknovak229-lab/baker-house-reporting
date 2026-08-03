@@ -189,16 +189,21 @@ export function planReallocation(
   }
   const component = [...inComponent].map((id) => byId.get(id)!);
 
-  // Safety valve — the component is normally a handful of bookings.
-  if (component.length > 16) {
-    return {
-      ...empty,
-      reason: "Too many overlapping bookings to auto-resolve — handle manually in Beds24.",
-    };
-  }
-
   const pinned = component.filter((r) => !r.movable);
   const movable = component.filter((r) => r.movable);
+
+  // Safety valve — the backtracking below is O(units^movable) worst case
+  // (units ≤ 3 per group), so the cost is driven by how many bookings could
+  // MOVE, not by the raw component size. Pinned in-house guests only seed the
+  // calendar for free, so a dense peak-season component of mostly-arrived
+  // guests is still trivial to solve. Cap on the movable count so we bail to
+  // manual handling only when the real search space is genuinely large.
+  if (movable.length > 12) {
+    return {
+      ...empty,
+      reason: "Too many movable bookings to auto-resolve — handle manually in Beds24.",
+    };
+  }
 
   // ── Seed unit→intervals with the pinned (in-house) bookings ──
   const unitIntervals: Record<string, ReallocInput[]> = {};

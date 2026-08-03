@@ -160,3 +160,13 @@ export function scaleFixedCosts(monthlyCost: number, range: DateRange): number {
   // Use 30.44 (avg days/month) as the divisor so partial months scale correctly
   return (monthlyCost / 30.44) * days;
 }
+
+/** Today's date as 'YYYY-MM-DD' in the property's timezone (Europe/Prague).
+ *  Both client (browser TZ, usually but not always Prague) and server (Vercel,
+ *  UTC) must share this so their notion of "today" agrees — e.g. a booking
+ *  arriving "today" in Prague is classified in-house consistently on both
+ *  sides, even in the after-midnight-Prague / still-yesterday-UTC window.
+ *  'sv-SE' yields ISO format. */
+export function pragueToday(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Prague" });
+}

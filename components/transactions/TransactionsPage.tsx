@@ -24,6 +24,7 @@ import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { computeTurnoverClashes } from "@/utils/turnoverClash";
 import { planForUnallocated } from "@/utils/roomAllocation";
+import { pragueToday } from "@/utils/periodUtils";
 import { ratingClass } from "@/utils/rating";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
@@ -608,7 +609,7 @@ export default function TransactionsPage() {
    * Recomputed whenever bookings change so a just-executed move clears it.
    */
   const unallocatedPlans = useMemo(() => {
-    const today = new Date().toLocaleDateString("sv-SE");
+    const today = pragueToday();
     const map: Record<string, ReturnType<typeof planForUnallocated>> = {};
     for (const r of unallocatedReservations) {
       map[r.reservationNumber] = planForUnallocated(reservations, r.reservationNumber, today);

@@ -52,12 +52,9 @@ export interface RecipientCounts {
   total: number;
 }
 
-/** Today's date in the property's timezone as 'YYYY-MM-DD'. Forced to
- *  Europe/Prague so an after-midnight-Prague send from a UTC server (Vercel)
- *  still segments against the correct local day. 'sv-SE' yields ISO format. */
-export function pragueToday(): string {
-  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' });
-}
+/** Today's date in Europe/Prague as 'YYYY-MM-DD'. Re-exported from periodUtils
+ *  (the shared date-utils home) so callers importing it from here keep working. */
+export { pragueToday } from '@/utils/periodUtils';
 
 /** Add `n` days to a 'YYYY-MM-DD' date. UTC math keeps it DST-safe (the input
  *  carries no time-of-day, so there is no wall-clock ambiguity). */

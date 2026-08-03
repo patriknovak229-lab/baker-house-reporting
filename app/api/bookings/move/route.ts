@@ -27,6 +27,7 @@ import {
   groupForRoom,
   type AllocationGroup,
 } from "@/utils/roomAllocation";
+import { pragueToday } from "@/utils/periodUtils";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -41,10 +42,6 @@ interface Beds24Booking {
 interface MoveInput {
   reservationNumber: string;
   toRoom: string;
-}
-
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function overlaps(a: { arrival: string; departure: string }, b: { arrival: string; departure: string }): boolean {
@@ -129,7 +126,7 @@ export async function POST(req: NextRequest) {
   }
 
   const movedById = new Map(movedBookings.map((b) => [b.id, b]));
-  const today = todayStr();
+  const today = pragueToday();
 
   for (const p of parsed) {
     const b = movedById.get(p.bookingId);
