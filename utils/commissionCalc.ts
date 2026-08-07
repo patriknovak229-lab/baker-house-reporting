@@ -21,6 +21,7 @@ import {
   URBAN_POOL_DIVISOR,
   type CommissionUnit,
 } from '@/utils/commissionConfig';
+import { ROOM_TO_BEDS24_ID, BEDS24_ID_TO_ROOM } from '@/app/api/variable-costs/route';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 
 export interface VariableCostBundle {
@@ -39,6 +40,51 @@ export function monthRange(month: string): DateRange {
   const lastDay = new Date(y, m, 0).getDate(); // day 0 of next month = last of this
   const end = `${month}-${String(lastDay).padStart(2, '0')}`;
   return { start, end };
+}
+
+/** One billed cleaning event (a checkout cell with a cleaner assigned), with
+ *  whether a laundry provider was saved for it. Powers the reconciliation
+ *  drill-down so the operator can spot cleanings with no laundry. */
+export interface CleaningEventRow {
+  date: string;
+  roomId: string;
+  room: string;
+  cleaning: number;
+  laundry: number;
+  sets: number;
+  hasLaundry: boolean;
+}
+
+/** Every billed cleaning event for a unit's rooms in a month, sorted by date.
+ *  Mirrors how computeGrossProfit counts cleanings/laundry (byDateRoom cells
+ *  with cleaning > 0), so the list reconciles with the card's counts. */
+export function cleaningEventsForUnit(
+  unit: CommissionUnit,
+  month: string,
+  costs: VariableCostBundle,
+): CleaningEventRow[] {
+  const range = monthRange(month);
+  const rooms = unit.mode === 'urban-pool' ? URBAN_POOL_ROOMS : [unit.room];
+  const roomIds = new Set(rooms.map((r) => ROOM_TO_BEDS24_ID[r]).filter(Boolean));
+
+  const rows: CleaningEventRow[] = [];
+  for (const [key, v] of Object.entries(costs.byDateRoom)) {
+    const [date, roomId] = key.split('|');
+    if (!date || !roomId || !roomIds.has(roomId)) continue;
+    if (date < range.start || date > range.end) continue;
+    if ((v.cleaning ?? 0) <= 0) continue; // only billed cleaning events
+    rows.push({
+      date,
+      roomId,
+      room: BEDS24_ID_TO_ROOM[roomId] ?? roomId,
+      cleaning: v.cleaning ?? 0,
+      laundry: v.laundry ?? 0,
+      sets: v.laundrySets ?? 0,
+      hasLaundry: (v.laundry ?? 0) > 0,
+    });
+  }
+  rows.sort((a, b) => (a.date === b.date ? a.room.localeCompare(b.room) : a.date.localeCompare(b.date)));
+  return rows;
 }
 
 /** The computed part of a settlement (everything except persistence fields). */

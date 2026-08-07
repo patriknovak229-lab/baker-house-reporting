@@ -7,8 +7,8 @@ import type {
   VariableCostsResponse,
   VariableCostsLookup,
 } from '@/app/api/variable-costs/route';
-import { COMMISSION_UNITS, COMMISSION_RATE } from '@/utils/commissionConfig';
-import { computeSettlement, type VariableCostBundle, type ComputedSettlement } from '@/utils/commissionCalc';
+import { COMMISSION_UNITS, COMMISSION_RATE, getCommissionUnit } from '@/utils/commissionConfig';
+import { computeSettlement, cleaningEventsForUnit, type VariableCostBundle, type ComputedSettlement } from '@/utils/commissionCalc';
 import { formatCurrency } from '@/utils/formatters';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -57,16 +57,20 @@ export default function CommissionPage() {
   const [busyUnit, setBusyUnit] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
+  const [logUnitId, setLogUnitId] = useState<string | null>(null);
+  const [ownerEmails, setOwnerEmails] = useState<Record<string, string>>({});
+  const [emailModal, setEmailModal] = useState<CommissionSettlement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [bRes, cRes, sRes, tRes] = await Promise.all([
+      const [bRes, cRes, sRes, tRes, eRes] = await Promise.all([
         fetch('/api/bookings'),
         fetch('/api/variable-costs'),
         fetch('/api/commission'),
         fetch('/api/bank-transactions'),
+        fetch('/api/commission/email'),
       ]);
       if (!bRes.ok) {
         const j = await bRes.json().catch(() => ({}));
@@ -98,6 +102,7 @@ export default function CommissionPage() {
       }
       if (sRes.ok) setSettlements(await sRes.json());
       if (tRes.ok) setBankTx(await tRes.json());
+      if (eRes.ok) setOwnerEmails(await eRes.json());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
@@ -290,10 +295,15 @@ export default function CommissionPage() {
                 </span>
               </div>
 
-              {/* Reconciliation status */}
-              <div className={`mt-1 mb-3 text-[11px] font-medium px-2 py-1 rounded-md ${c.reconciles ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                {c.reconciles ? '✓ Reconciled with cleaning app' : `⚠ ${c.reconcileNote}`}
-              </div>
+              {/* Reconciliation status — click to inspect the cleaning events */}
+              <button
+                onClick={() => setLogUnitId(c.unitId)}
+                title="View cleaning events for this month"
+                className={`mt-1 mb-3 w-full flex items-center justify-between gap-2 text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${c.reconciles ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+              >
+                <span>{c.reconciles ? '✓ Reconciled with cleaning app' : `⚠ ${c.reconcileNote}`}</span>
+                <span className="opacity-60 underline underline-offset-2 whitespace-nowrap">view log</span>
+              </button>
 
               {/* Compact waterfall */}
               <dl className="text-sm space-y-1.5">
@@ -405,6 +415,7 @@ export default function CommissionPage() {
                         </td>
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
                           <button onClick={() => handleExport(s)} className="text-xs text-indigo-600 hover:underline mr-3">PDF</button>
+                          <button onClick={() => setEmailModal(s)} className="text-xs text-emerald-600 hover:underline mr-3">Email owner</button>
                           <button onClick={() => handleDelete(s)} className="text-xs text-gray-400 hover:text-rose-600 hover:underline">Delete</button>
                         </td>
                       </tr>
@@ -415,6 +426,170 @@ export default function CommissionPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Cleaning-events drill-down */}
+      {logUnitId && costs && (() => {
+        const unit = getCommissionUnit(logUnitId);
+        if (!unit) return null;
+        const events = cleaningEventsForUnit(unit, month, costs);
+        const withLaundry = events.filter((e) => e.hasLaundry).length;
+        const noLaundry = events.length - withLaundry;
+        const scope = unit.mode === 'urban-pool' ? 'Urban pool (K.102 + K.103 + K.106)' : unit.id;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setLogUnitId(null)}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Cleaning events — {monthLabel(month)}</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">{scope}</p>
+                </div>
+                <button onClick={() => setLogUnitId(null)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+              </div>
+
+              <div className="flex gap-2 px-5 py-3 border-b border-gray-100 text-xs">
+                <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700 font-medium">{events.length} cleanings</span>
+                <span className="px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 font-medium">{withLaundry} with laundry</span>
+                <span className={`px-2 py-1 rounded-md font-medium ${noLaundry > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-400'}`}>{noLaundry} no laundry</span>
+              </div>
+
+              <div className="overflow-y-auto">
+                {events.length === 0 ? (
+                  <p className="px-5 py-8 text-sm text-gray-400 text-center">No cleaning events this month.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
+                        <th className="px-5 py-2">Date</th>
+                        <th className="px-3 py-2">Room</th>
+                        <th className="px-3 py-2 text-right">Cleaning</th>
+                        <th className="px-3 py-2 text-right">Laundry</th>
+                        <th className="px-5 py-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {events.map((e) => (
+                        <tr key={`${e.date}|${e.roomId}`} className={e.hasLaundry ? '' : 'bg-amber-50/50'}>
+                          <td className="px-5 py-2 whitespace-nowrap tabular-nums">{e.date}</td>
+                          <td className="px-3 py-2 font-medium text-gray-800">{e.room}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-gray-600">{formatCurrency(e.cleaning)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-gray-600">
+                            {e.hasLaundry ? `${formatCurrency(e.laundry)} · ${e.sets} set${e.sets !== 1 ? 's' : ''}` : '—'}
+                          </td>
+                          <td className="px-5 py-2">
+                            {e.hasLaundry ? (
+                              <span className="text-xs text-emerald-600">✓ laundry</span>
+                            ) : (
+                              <span className="text-xs font-medium text-amber-700">⚠ no laundry provider</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="px-5 py-3 border-t border-gray-100 text-[11px] text-gray-500">
+                A cleaning with <span className="text-amber-700 font-medium">no laundry provider</span> either had no linen change or is missing an assignment in the cleaning app. Amounts here are the raw cleaning-app costs before the ÷{unit.mode === 'urban-pool' ? '3 pool split' : '1'}.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Email settlement to owner */}
+      {emailModal && (
+        <EmailOwnerModal
+          settlement={emailModal}
+          defaultEmail={ownerEmails[emailModal.ownerName] ?? ''}
+          onClose={() => setEmailModal(null)}
+          onSaved={(ownerName, email) => setOwnerEmails((prev) => ({ ...prev, [ownerName]: email }))}
+        />
+      )}
+    </div>
+  );
+}
+
+function EmailOwnerModal({
+  settlement,
+  defaultEmail,
+  onClose,
+  onSaved,
+}: {
+  settlement: CommissionSettlement;
+  defaultEmail: string;
+  onClose: () => void;
+  onSaved: (ownerName: string, email: string) => void;
+}) {
+  const [email, setEmail] = useState(defaultEmail);
+  const [saveEmail, setSaveEmail] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  async function send() {
+    setSending(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/commission/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settlement, email: email.trim(), saveEmail }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'Send failed');
+      if (saveEmail) onSaved(settlement.ownerName, email.trim());
+      setSent(true);
+      setTimeout(onClose, 1200);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Send failed');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-100">
+          <h3 className="text-base font-semibold text-gray-900">Email settlement to owner</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {settlement.unitId} · {settlement.ownerName} · payable {formatCurrency(settlement.payableToOwner)}
+          </p>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          <label className="block">
+            <span className="text-xs font-medium text-gray-600">Owner email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="owner@example.com"
+              autoFocus
+              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input type="checkbox" checked={saveEmail} onChange={(e) => setSaveEmail(e.target.checked)} className="rounded border-gray-300" />
+            Save this email for {settlement.ownerName}&apos;s future settlements
+          </label>
+          <p className="text-[11px] text-gray-400">
+            Sends the PDF statement as an attachment. The owner&apos;s address is stored for pre-fill only.
+          </p>
+          {error && <p className="text-xs text-rose-600">{error}</p>}
+        </div>
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+          <button
+            onClick={send}
+            disabled={!valid || sending || sent}
+            className="px-4 py-2 rounded-md bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {sent ? '✓ Sent' : sending ? 'Sending…' : 'Send PDF'}
+          </button>
+        </div>
       </div>
     </div>
   );
