@@ -52,6 +52,9 @@ export interface CommissionSettlement {
   status: CommissionSettlementStatus;
   bankTransactionId?: string;
   reconciledAt?: string;
+  /** Set when the PDF was last emailed to the owner → drives the "Sent" badge. */
+  emailedAt?: string;
+  emailedTo?: string;
   createdAt: string;
   createdBy: string;
 }

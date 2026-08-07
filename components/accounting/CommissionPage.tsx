@@ -376,6 +376,7 @@ export default function CommissionPage() {
                     <th className="px-4 py-2.5">Apartment</th>
                     <th className="px-4 py-2.5">Owner</th>
                     <th className="px-4 py-2.5 text-right">Payable</th>
+                    <th className="px-4 py-2.5">Status</th>
                     <th className="px-4 py-2.5">Bank payout</th>
                     <th className="px-4 py-2.5 text-right">Actions</th>
                   </tr>
@@ -389,6 +390,7 @@ export default function CommissionPage() {
                         <td className="px-4 py-2.5 font-medium text-gray-800">{s.unitId}</td>
                         <td className="px-4 py-2.5 text-gray-600">{s.ownerName}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums font-medium text-emerald-700">{formatCurrency(s.payableToOwner)}</td>
+                        <td className="px-4 py-2.5"><StatusBadges settlement={s} /></td>
                         <td className="px-4 py-2.5">
                           {s.status === 'reconciled' && linkedTx ? (
                             <span className="inline-flex items-center gap-1.5">
@@ -505,6 +507,7 @@ export default function CommissionPage() {
           defaultEmail={ownerEmails[emailModal.ownerName] ?? ''}
           onClose={() => setEmailModal(null)}
           onSaved={(ownerName, email) => setOwnerEmails((prev) => ({ ...prev, [ownerName]: email }))}
+          onSent={(updated) => setSettlements((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))}
         />
       )}
     </div>
@@ -516,11 +519,13 @@ function EmailOwnerModal({
   defaultEmail,
   onClose,
   onSaved,
+  onSent,
 }: {
   settlement: CommissionSettlement;
   defaultEmail: string;
   onClose: () => void;
   onSaved: (ownerName: string, email: string) => void;
+  onSent: (updated: CommissionSettlement) => void;
 }) {
   const [email, setEmail] = useState(defaultEmail);
   const [saveEmail, setSaveEmail] = useState(true);
@@ -539,8 +544,10 @@ function EmailOwnerModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ settlement, email: email.trim(), saveEmail }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'Send failed');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Send failed');
       if (saveEmail) onSaved(settlement.ownerName, email.trim());
+      if (data.settlement) onSent(data.settlement as CommissionSettlement);
       setSent(true);
       setTimeout(onClose, 1200);
     } catch (err) {
@@ -591,6 +598,23 @@ function EmailOwnerModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Composable status badges for a settlement. "Issued" shows only until it has
+ *  been sent or paid; "Sent" and "Paid out" co-exist. */
+function StatusBadges({ settlement }: { settlement: CommissionSettlement }) {
+  const sent = !!settlement.emailedAt;
+  const paidOut = !!settlement.bankTransactionId;
+  const pill = (label: string, cls: string, title?: string) => (
+    <span title={title} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${cls}`}>{label}</span>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {!sent && !paidOut && pill('Issued', 'bg-slate-100 text-slate-600')}
+      {sent && pill('Sent', 'bg-sky-100 text-sky-700', settlement.emailedAt ? `Emailed ${settlement.emailedTo ?? ''} on ${new Date(settlement.emailedAt).toLocaleDateString('en-GB')}` : undefined)}
+      {paidOut && pill('Paid out', 'bg-emerald-100 text-emerald-700', settlement.reconciledAt ? `Linked ${new Date(settlement.reconciledAt).toLocaleDateString('en-GB')}` : undefined)}
     </div>
   );
 }

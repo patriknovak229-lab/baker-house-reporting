@@ -13,6 +13,7 @@ export const revalidate = 0;
 // Saved owner emails, keyed by owner name so re-issuing the same owner's units
 // pre-fills the address. Shared across all of that owner's apartments.
 const EMAIL_KEY = 'baker:commission-owner-emails';
+const SETTLEMENTS_KEY = 'baker:commission-settlements';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function monthLabel(month: string): string {
@@ -91,16 +92,26 @@ export async function POST(req: NextRequest) {
       attachments: [{ filename, content: pdfBuffer, contentType: 'application/pdf' }],
     });
 
-    if (saveEmail) {
-      const redis = getRedis();
-      if (redis) {
+    const sentAt = new Date().toISOString();
+    let updated: CommissionSettlement | undefined;
+    const redis = getRedis();
+    if (redis) {
+      // Stamp the stored settlement so the history shows a "Sent" status.
+      const list = (await redis.get<CommissionSettlement[]>(SETTLEMENTS_KEY)) ?? [];
+      const idx = list.findIndex((s) => s.id === settlement.id);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], emailedAt: sentAt, emailedTo: email };
+        updated = list[idx];
+        await redis.set(SETTLEMENTS_KEY, list);
+      }
+      if (saveEmail) {
         const map = (await redis.get<Record<string, string>>(EMAIL_KEY)) ?? {};
         map[settlement.ownerName] = email;
         await redis.set(EMAIL_KEY, map);
       }
     }
 
-    return NextResponse.json({ ok: true, savedEmail: saveEmail ? email : undefined });
+    return NextResponse.json({ ok: true, savedEmail: saveEmail ? email : undefined, settlement: updated });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Email send failed' },
