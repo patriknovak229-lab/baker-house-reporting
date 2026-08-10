@@ -1,0 +1,40 @@
+CREATE TABLE "bank_transactions" (
+	"id" text PRIMARY KEY NOT NULL,
+	"date" date NOT NULL,
+	"value_date" date,
+	"amount" numeric NOT NULL,
+	"direction" text NOT NULL,
+	"currency" text NOT NULL,
+	"counterparty_account" text,
+	"counterparty_name" text,
+	"variable_symbol" text,
+	"constant_symbol" text,
+	"specific_symbol" text,
+	"description" text,
+	"my_description" text,
+	"transaction_type" text,
+	"original_amount" numeric,
+	"original_currency" text,
+	"state" text NOT NULL,
+	"invoice_id" text,
+	"invoice_ids" text[],
+	"linked_transaction_id" text,
+	"gross_amount" numeric,
+	"deducted_invoice_ids" text[],
+	"revenue_invoice_id" text,
+	"commission_settlement_id" text,
+	"settlement_group_id" text,
+	"ignore_category" text,
+	"ignore_note" text,
+	"cost_category" text,
+	"cost_note" text,
+	"suggestion_dismissed" boolean,
+	"reconciled_at" timestamp with time zone,
+	"ignored_at" timestamp with time zone,
+	"imported_at" timestamp with time zone NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "reservation_overrides" (
+	"reservation_number" text PRIMARY KEY NOT NULL,
+	"data" jsonb NOT NULL
+);
