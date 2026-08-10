@@ -60,7 +60,7 @@ _Single source of truth for the AI guest-messaging assistant (it writes to guest
 | O.308 | Ottův dům | 2KK · high-standard | 3rd | Up to 4 | 1 king bed + sofa bed | Balcony ~8 m² (very good view) | Yes | Yes | Smaller 2KK; only BHA unit outside Karlův dům; minibar items are in the **kitchen fridge** (no separate minibar fridge) |
 
 **Property-wide:**
-- **No air-conditioning** in any apartment — it isn't permitted in the complex. (An alternative is being explored, but the assistant must **not** promise it to guests.)
+- **No air-conditioning** anywhere in the complex — a deliberate house standard, not a missing amenity (see §8 "Climate & keeping cool" for how to reassure guests: in-apartment air cooler, north/west aspect, external roller shutters).
 - **Children** are welcome only in the **2KK** apartments (K.201, O.308). The 1KK Urban and Deluxe units are for **2 adults** (no children).
 - **Beds are king-size** throughout.
 - Urban **terraces** sit ~**120 cm above** the courtyard with **greenery** between the terrace and the walkway — so they feel private, not at passer-by level.
@@ -95,18 +95,18 @@ _Single source of truth for the AI guest-messaging assistant (it writes to guest
   - **Included** (e.g. Standard / Flexi / Weekly): confirm it warmly — the guest may **stay in the apartment until 12:00**.
   - **NOT included:** staying later isn't possible — we need to prepare the apartment for the next guest. Make the guest feel heard, and if it helps, offer that **the car can stay in the garage until 12:00** even though apartment check-out is 10:30.
 - **Luggage after check-out:** as at arrival — guests can leave bags at reception **if space allows** (limited room); just ask reception.
-- **Check-out process:** simply **leave the keys at reception**. The garage gate opens automatically on the way out (no chip needed to exit).
+- **Check-out process / leaving:** just **shut the apartment door — no need to lock up** — and **leave the keys at reception** (the keys never need to leave the property). To reach the car, take the **staircase or the elevator by reception** down to the garage; the **garage gate opens automatically on the way out**, so no chip/fob is needed to exit.
 > **Fill in (optional) —** anything you'd like guests to do before leaving (close windows, start the dishwasher, take out trash if bins are full → §9)?
 
 ## 6. Parking
 
 - Underground garage at **Bratislavská 82**; spaces are on the lower sub-level, close to the elevators up to the apartments.
-- **Each apartment has exactly ONE assigned space.** No second/extra space — politely decline a second car.
+- **Each apartment has exactly ONE assigned space, and guests must use THAT designated spot only.** A second/extra space isn't possible — politely decline a second car. Parking in a **different** spot isn't allowed either: if the assigned space is occupied or there's any parking problem, the guest should **contact us to resolve it** (reception / WhatsApp) rather than moving to another spot.
 - **Collect keys from reception first**, before entering the garage — the keys include the chip/fob that opens the garage door (1–2 min; you can stop briefly in front of reception while collecting them).
-- **The correct entrance is NOT the first gate** next to the main entrance (that's a service/emergency door) — it's the next gate along, ~**20 m from the reception door**.
+- **Finding the garage gate:** the gate right next to the main entrance is only a **service/emergency door — NOT the garage**. The real garage gate is on the **same side, ~20 m further down the street**. There's currently **construction next to the main entrance**, so the garage gate may **not be visible from the entrance** — tell guests to continue ~20 m along the same side.
 - **Leaving is automatic** — the door opens on its own, no chip needed; drop keys at reception and drive out.
 - **Height limit: 200 cm.** Taller vehicles can't enter.
-- **No EV charging** in the garage.
+- **No EV charging.** There *is* a charging station in the garage, but it's **not available for guest use** — EV charging is not possible at the moment. (Don't tell guests there's no charger; the point is they can't use it.)
 - **Parking timing (applies to every booking, any rate):** guests may **park from 13:00 on arrival day** (even before check-in) and **keep the car until 12:00 on departure day** (after the 10:30 check-out) — that's fine and doesn't affect our operations, so confirm it directly. Beyond that we can't help: **no multi-day holds and no keeping a car for a later pickup** (e.g. leaving Saturday, collecting it Sunday) → hold reply / operator. This parking window is separate from the rate's early-check-in / late-checkout perk, which is about access to the **apartment** (see §4 / §5).
 > **Fill in —** if guests need a taller vehicle / extra car / EV charging, is there a **nearby alternative** (public garage, paid lot) you'd point them to?
 
@@ -125,12 +125,14 @@ Standard fit-out below is from the Deluxe home guide (K.202/K.203); the Urban an
 - **Laundry:** in-apartment **washer–dryer combo**; **detergent**, cleaning supplies and an **iron** provided; pull-out drying rack in the wardrobe.
 - **Beds:** **king-size 180×200 cm** with premium 7-zone mattresses.
 - **Storage:** lockable wardrobe with hangers, luggage rack, shoe rack & wall hooks, **vacuum cleaner** in the wardrobe.
-- **Climate — no air-conditioning** (not permitted in the complex; an alternative is being explored but must not be promised). **Heating:** radiator with a manual thermostat (by the balcony door).
+- **Climate & keeping cool — no air-conditioning, and none can be fitted.** This is a deliberate, complex-wide rule (it protects the building's premium look and avoids the noise of external units) — frame it as part of the property's standard, **never** as a shortcoming, and don't lecture the guest on the reasons. Lead instead with how we keep guests comfortable: **every apartment has a high-performing air cooler**; the apartments face **north / north-west**, so they're naturally shielded from the strongest sun; and **external electric roller shutters** block the sun very effectively. For a heat-wave or "is there AC?" question, briefly note there's no AC (by design) and reassure warmly with the cooler + the aspect + the shutters, so the guest feels confident booking even in summer. **Heating:** radiator with a manual thermostat (by the balcony door).
 - **TV & internet:** **Samsung 4K TV** on **high-speed wired internet**; streaming apps installed (**Netflix** — guest uses their own login); live TV via the **"Sledování TV"** app. WiFi per room (see §7).
 - **Minibar:** Deluxe units (K.201/202/203) + O.308 only — complimentary; Urban units have none (see §2).
 - **Blinds (how they work):** automatic — **hold** the up/down arrow for full movement, **short press** to tilt the angle.
 - **Children's beds:** no cots at the moment; the family units (K.201, O.308) have **folding children's beds in the wardrobe**.
-- **Bath vs shower:** **bathtub with hand shower** in K.102, K.106, K.201, K.202, K.203; **walk-in corner shower** in K.103 and O.308.
+- **Bath vs shower:** **every apartment has a bathtub with a handheld shower** — the **only** exception is **K.103**, which has a **walk-in corner shower and no bathtub**.
+- **Toilet:** the two **2KK** apartments (**K.201, O.308**) have a **separate WC**; all the **1KK** apartments have the toilet **in the bathroom**.
+- **Bathroom questions:** when a guest asks about the bath vs shower or the toilet, reassure them briefly and politely.
 - **Elevator & access:** a lift runs from the **garage** (a few metres from the parking spots, behind a clearly-labelled door) up to the apartments; building entrances are clearly signed and intuitive to find.
 - **Safe:** no in-room safe.
 
@@ -293,7 +295,7 @@ The printed guide placed in each apartment. The assistant should use the one mat
 _(Relaxation zone, sauna, massages, yoga, meeting room & café — same as the Deluxe 1KK guide above.)_
 
 ### O.308 (2KK, Ottův dům)
-One **king-size bed** plus a **sleeping sofa**; bookable for **up to 4 guests**. Same standard as K.201, with two known differences: a **walk-in corner shower** (not a bathtub), and the **minibar items are kept in the kitchen fridge** (no separate minibar).
+One **king-size bed** plus a **sleeping sofa**; bookable for **up to 4 guests**. Same standard as K.201 — including a **bathtub** (with handheld shower) and a **separate WC**. The one known difference: the **minibar items are kept in the kitchen fridge** (no separate minibar).
 
 **Bedding:** for **1–2 guests** only the main bed is made up; for **3–4 guests** the **sofa is also prepared, with two bedding sets**.
 > **Fill in —** paste the O.308 home guide here if it differs further.

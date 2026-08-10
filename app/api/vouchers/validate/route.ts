@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
-import type { Voucher } from '@/types/voucher';
-
-const KEY = 'baker:vouchers';
+import { readAllVouchers } from '@/utils/vouchersStore';
 
 // GET /api/vouchers/validate?code=XXX — public endpoint (no auth)
 // Called by rental-site to check if a voucher is valid and return discount info.
@@ -13,12 +10,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ valid: false, reason: 'code is required' }, { status: 400 });
   }
 
-  const redis = new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-
-  const vouchers = await redis.get<Voucher[]>(KEY) ?? [];
+  const vouchers = await readAllVouchers();
   const codeNorm = code.toLowerCase();
   const voucher = vouchers.find((v) => v.code.toLowerCase() === codeNorm);
 

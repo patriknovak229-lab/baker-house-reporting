@@ -1,16 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { Voucher } from '@/types/voucher';
-
-const KEY = 'baker:vouchers';
-
-function getRedis(): Redis {
-  return new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
+import { readAllVouchers, writeAllVouchers } from '@/utils/vouchersStore';
 
 // DELETE /api/vouchers/[id] — soft-delete (set status to 'deleted')
 // Cannot delete a used voucher.
@@ -22,8 +12,7 @@ export async function DELETE(
   if ('error' in guard) return guard.error;
 
   const { id } = await params;
-  const redis = getRedis();
-  const vouchers = await redis.get<Voucher[]>(KEY) ?? [];
+  const vouchers = await readAllVouchers();
   const idx = vouchers.findIndex((v) => v.id === id);
 
   if (idx === -1) {
@@ -35,6 +24,6 @@ export async function DELETE(
   }
 
   vouchers[idx] = { ...vouchers[idx], status: 'deleted' };
-  await redis.set(KEY, vouchers);
+  await writeAllVouchers(vouchers);
   return NextResponse.json({ ok: true });
 }

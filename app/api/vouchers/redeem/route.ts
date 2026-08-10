@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
-import type { Voucher } from '@/types/voucher';
-
-const KEY = 'baker:vouchers';
+import { readAllVouchers, writeAllVouchers } from '@/utils/vouchersStore';
 
 // POST /api/vouchers/redeem — public endpoint (no auth)
 // Called by rental-site after a successful booking to mark the voucher as used.
@@ -18,12 +15,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'code is required' }, { status: 400 });
   }
 
-  const redis = new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-
-  const vouchers = await redis.get<Voucher[]>(KEY) ?? [];
+  const vouchers = await readAllVouchers();
   const codeNorm = code.trim().toLowerCase();
   const idx = vouchers.findIndex((v) => v.code.toLowerCase() === codeNorm);
 
@@ -54,6 +46,6 @@ export async function POST(req: NextRequest) {
       : {}),
   };
 
-  await redis.set(KEY, vouchers);
+  await writeAllVouchers(vouchers);
   return NextResponse.json({ ok: true });
 }

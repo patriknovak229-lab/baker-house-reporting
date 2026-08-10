@@ -1,25 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
+import { readAllVouchers, writeAllVouchers } from '@/utils/vouchersStore';
 import type { Voucher } from '@/types/voucher';
-
-const KEY = 'baker:vouchers';
-
-function getRedis(): Redis {
-  return new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 // GET /api/vouchers — list all vouchers
 export async function GET() {
   const guard = await requireRole(['admin', 'super', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  const vouchers = await redis.get<Voucher[]>(KEY) ?? [];
+  const vouchers = await readAllVouchers();
   return NextResponse.json(vouchers);
 }
 
@@ -55,8 +45,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'percentage value cannot exceed 100' }, { status: 400 });
   }
 
-  const redis = getRedis();
-  const existing = await redis.get<Voucher[]>(KEY) ?? [];
+  const existing = await readAllVouchers();
 
   // Check for duplicate code (case-insensitive) among active vouchers
   const codeNorm = code.trim().toLowerCase();
@@ -83,6 +72,6 @@ export async function POST(req: NextRequest) {
     createdBy: creatorEmail,
   };
 
-  await redis.set(KEY, [...existing, voucher]);
+  await writeAllVouchers([...existing, voucher]);
   return NextResponse.json(voucher, { status: 201 });
 }
