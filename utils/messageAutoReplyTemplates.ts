@@ -51,6 +51,11 @@ export function buildTemplate(
       return buildEarlyCheckinTemplate();
     case 'late-checkout':
       return buildLateCheckoutTemplate();
+    default:
+      // Newer AI-composed categories (acknowledgement, air-conditioning,
+      // bathroom, checkout) have no deterministic template — the KB-grounded
+      // composer handles them. Dormant path returns null for these.
+      return null;
   }
 }
 

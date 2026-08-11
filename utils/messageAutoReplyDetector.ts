@@ -29,6 +29,10 @@ export type AutoReplyCategory =
   | 'early-checkin'
   | 'late-checkout'
   | 'invoice-request'
+  | 'acknowledgement'
+  | 'air-conditioning'
+  | 'bathroom'
+  | 'checkout'
   | 'other';
 
 /**
@@ -72,9 +76,13 @@ Pick ONE category that best matches the guest's INTENT:
   Vehicle HEIGHT or size-limit questions do NOT go here — classify those as "other" for the operator.
 - wifi — asking for wifi password, network name, or how to connect.
 - minibar — asking about the minibar (what's inside, prices, can they take items, restock).
+- air-conditioning — asking about air-conditioning / A/C, cooling, fans, or whether the apartment gets too hot / stays cool in summer / during a heat wave.
+- bathroom — asking about the bathroom fit-out: bathtub vs shower / shower corner, or whether there is a separate toilet (WC).
 - early-checkin — asking to access the APARTMENT earlier than the standard 15:00 ("we'll arrive at noon, can we go up?"). If the guest only asks about parking the CAR before check-in, that is parking with parkingIntent "outside-hours", not early-checkin.
-- late-checkout — asking to stay in the APARTMENT later than the standard 10:30 ("can we keep the room until X"). If the guest only asks about keeping the CAR in the garage after checkout, that is parking with parkingIntent "outside-hours", not late-checkout.
+- late-checkout — asking to STAY in the APARTMENT later than the standard 10:30 ("can we keep the room until X"). About staying longer — NOT the mechanics of leaving; those are "checkout". If the guest only asks about keeping the CAR in the garage after checkout, that is parking with parkingIntent "outside-hours", not late-checkout.
+- checkout — asking HOW to check out / leave: where to leave the keys, how to get out of the garage on the way out, or whether they need to lock the apartment. This is the departure PROCESS, not a request to stay later (that is late-checkout).
 - invoice-request — asking for an invoice / fakturu / fakturovat / VAT receipt. Includes Booking.com's "I need an invoice" auto-template AND ad-hoc requests like "could you send me an invoice for company X, IČO Y". Also: messages that ONLY contain billing details ("our IČO is 12345678" or "Company name: ABC s.r.o.") — those are follow-ups to a prior invoice request and should be routed here too.
+- acknowledgement — the guest's message is JUST thanks, an acknowledgement, or a sign-off with nothing actually asked ("Thank you!", "Perfect, see you then", "Great, looking forward to it", a thumbs-up). Nothing is being requested. If they thank you AND ask something, classify by what they asked — not acknowledgement.
 - other — anything else (greetings, complaints, restaurant tips, lost items, etc.). When the message asks about TWO categories at once (e.g. parking AND wifi), return "other" — the operator handles compound queries.
 
 Output ONLY a single JSON object on one line, no preamble:
@@ -176,6 +184,10 @@ function normaliseCategory(v: unknown): AutoReplyCategory | null {
     case 'early-checkin':
     case 'late-checkout':
     case 'invoice-request':
+    case 'acknowledgement':
+    case 'air-conditioning':
+    case 'bathroom':
+    case 'checkout':
     case 'other':
       return s;
     default:

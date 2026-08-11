@@ -68,7 +68,10 @@ export const LATE_CHECKOUT_FACTS = `
 - Never promise a specific later time without operator confirmation.
 `.trim();
 
-const FACTS_BY_CATEGORY: Record<Exclude<AutoReplyCategory, 'invoice-request' | 'other'>, string> = {
+// Partial map: only the categories that have a deterministic facts sheet.
+// Newer AI-composed categories (acknowledgement, air-conditioning, bathroom,
+// checkout) aren't here — the composer answers them from the knowledge base.
+const FACTS_BY_CATEGORY: Partial<Record<AutoReplyCategory, string>> = {
   parking: PARKING_FACTS,
   wifi: WIFI_FACTS,
   minibar: MINIBAR_FACTS,
