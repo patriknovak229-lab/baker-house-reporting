@@ -5,12 +5,12 @@ import nodemailer from 'nodemailer';
 import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { SplitPayment } from '@/types/splitPayment';
+import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
 
 export const maxDuration = 60;
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-const SCHEDULED_KEY = 'baker:scheduled-split-payments';
 const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
 const MAX_FAILURE_COUNT = 5;
 
@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? 'https://reporting.bakerhouseapartments.cz';
 
   const [scheduled, additional] = await Promise.all([
-    redis.get<SplitPayment[]>(SCHEDULED_KEY).then((v) => v ?? []),
+    readAllSplitPayments(),
     redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
   ]);
 
@@ -226,7 +226,7 @@ export async function POST(req: NextRequest) {
   // Persist updated arrays (scheduled was mutated in place, so updates are reflected)
   try {
     await Promise.all([
-      redis.set(SCHEDULED_KEY, scheduled),
+      writeAllSplitPayments(scheduled),
       additionalNew.length !== additional.length
         ? redis.set(ADDITIONAL_PAYMENTS_KEY, additionalNew)
         : Promise.resolve(),

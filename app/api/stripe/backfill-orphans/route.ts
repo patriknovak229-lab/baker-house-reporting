@@ -22,9 +22,9 @@ import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { SplitPayment } from '@/types/splitPayment';
 import type { Reservation } from '@/types/reservation';
+import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
 
 const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
-const SCHEDULED_KEY = 'baker:scheduled-split-payments';
 
 const ORPHAN_PATTERN = /\[object\s+object\]/i;
 const TIME_TOLERANCE_MS = 5 * 60 * 1000; // 5 minutes
@@ -118,7 +118,7 @@ async function buildReport(req: NextRequest): Promise<OrphanReport> {
   const redis = getRedis();
   const [aps, sps, reservations] = await Promise.all([
     redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
-    redis.get<SplitPayment[]>(SCHEDULED_KEY).then((v) => v ?? []),
+    readAllSplitPayments(),
     fetchReservations(req),
   ]);
 
@@ -208,7 +208,7 @@ export async function POST(req: NextRequest) {
     const redis = getRedis();
     const [aps, sps] = await Promise.all([
       redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
-      redis.get<SplitPayment[]>(SCHEDULED_KEY).then((v) => v ?? []),
+      readAllSplitPayments(),
     ]);
 
     let apMutated = false;
@@ -232,7 +232,7 @@ export async function POST(req: NextRequest) {
 
     const writes: Promise<unknown>[] = [];
     if (apMutated) writes.push(redis.set(ADDITIONAL_PAYMENTS_KEY, aps));
-    if (spMutated) writes.push(redis.set(SCHEDULED_KEY, sps));
+    if (spMutated) writes.push(writeAllSplitPayments(sps));
     await Promise.all(writes);
 
     return NextResponse.json({

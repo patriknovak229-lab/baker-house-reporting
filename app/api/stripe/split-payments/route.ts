@@ -4,10 +4,10 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { SplitPayment } from '@/types/splitPayment';
+import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-const SCHEDULED_KEY = 'baker:scheduled-split-payments';
 const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
 
 function getRedis(): Redis {
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
 
   // Read existing collections once
   const [scheduled, additional] = await Promise.all([
-    redis.get<SplitPayment[]>(SCHEDULED_KEY).then((v) => v ?? []),
+    readAllSplitPayments(),
     redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
   ]);
 
@@ -250,7 +250,7 @@ export async function POST(req: NextRequest) {
   // Persist atomically (best effort — Upstash doesn't have transactions, but two SETs are quick)
   try {
     await Promise.all([
-      redis.set(SCHEDULED_KEY, [...scheduled, ...newScheduled]),
+      writeAllSplitPayments([...scheduled, ...newScheduled]),
       newAdditional.length > 0
         ? redis.set(ADDITIONAL_PAYMENTS_KEY, [...additional, ...newAdditional])
         : Promise.resolve(),
@@ -276,8 +276,7 @@ export async function GET(req: NextRequest) {
   if ('error' in authResult) return authResult.error;
 
   const reservationNumber = req.nextUrl.searchParams.get('reservationNumber');
-  const redis = getRedis();
-  const all = (await redis.get<SplitPayment[]>(SCHEDULED_KEY)) ?? [];
+  const all = await readAllSplitPayments();
 
   if (reservationNumber) {
     const filtered = all
