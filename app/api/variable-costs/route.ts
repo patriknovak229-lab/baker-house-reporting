@@ -274,20 +274,46 @@ export async function GET() {
     redis.get('baker:cleaning-adjustments'),
   ]);
 
-  // Set of valid (date, roomId) cleanings — Beds24 tasks + manual laundry
-  // events. Used to reject orphan laundry assignments whose underlying
-  // event has been removed.
-  const validLaundryKeys = new Set<string>();
+  // Checkout tasks from the current Beds24 schedule snapshot — the source of
+  // truth for which (date, roomId) cells had a real checkout. The cleaning app
+  // counts cleanings off these tasks, not off raw assignments, so we use them
+  // to reject orphaned cleaning/laundry assignments left behind by cancelled
+  // or moved bookings.
+  const checkoutTaskKeys = new Set<string>();
   try {
     const snapRaw = (await redis.get('baker:beds24-schedule-snapshot')) as {
       schedule?: { tasks?: Array<{ date: string; roomId: string }> };
     } | null;
     for (const t of snapRaw?.schedule?.tasks ?? []) {
-      validLaundryKeys.add(`${t.date}|${t.roomId}`);
+      checkoutTaskKeys.add(`${t.date}|${t.roomId}`);
     }
   } catch {
     /* if snapshot missing, fall back to counting every assignment */
   }
+  // Only apply the orphan filter when we actually have a snapshot — otherwise
+  // fall back to counting everything rather than silently zeroing the dashboard.
+  const hasSnapshot = checkoutTaskKeys.size > 0;
+
+  // Dismissed cleanings (operator removed — stay prolonged etc.). The cleaning
+  // app filters these out of its task list before counting, so exclude them.
+  const dismissedKeySet = new Set<string>(
+    (Array.isArray(dismissedRaw) ? dismissedRaw : [])
+      .map((d: { date?: string; roomId?: string }) => (d?.date && d?.roomId ? `${d.date}|${d.roomId}` : ''))
+      .filter(Boolean),
+  );
+
+  // Manual (off-checkout) cleanings — real cleanings even without a Beds24
+  // checkout task on that date.
+  const manualCleaningKeySet = new Set<string>(
+    (Array.isArray(manualCleaningRaw) ? manualCleaningRaw : [])
+      .map((m: { date?: string; roomId?: string }) => (m?.date && m?.roomId ? `${m.date}|${m.roomId}` : ''))
+      .filter(Boolean),
+  );
+
+  // Set of valid (date, roomId) LAUNDRY cells — Beds24 tasks + manual laundry
+  // events + manual cleanings. Used to reject orphan laundry assignments whose
+  // underlying event has been removed.
+  const validLaundryKeys = new Set<string>(checkoutTaskKeys);
   const manualLaundryEvents = (Array.isArray(manualLaundryRaw) ? manualLaundryRaw : []) as Array<{
     date: string;
     roomId: string;
@@ -295,13 +321,14 @@ export async function GET() {
   for (const m of manualLaundryEvents) {
     validLaundryKeys.add(`${m.date}|${m.roomId}`);
   }
-  // Manual (off-checkout) cleanings are real cleanings too — their laundry
-  // must not be treated as an orphan just because there's no Beds24 checkout
-  // task on that date. Without this, a mid-stay/special cleaning's laundry was
-  // silently dropped from the reporting totals.
-  for (const m of (Array.isArray(manualCleaningRaw) ? manualCleaningRaw : []) as Array<{ date?: string; roomId?: string }>) {
-    if (m?.date && m?.roomId) validLaundryKeys.add(`${m.date}|${m.roomId}`);
-  }
+  for (const k of manualCleaningKeySet) validLaundryKeys.add(k);
+
+  // Set of valid (date, roomId) CLEANING cells — live checkout tasks (minus
+  // dismissed) + manual cleanings. Mirrors the cleaning app, which only counts
+  // a cleaning when a checkout task exists; a raw assignment left behind by a
+  // cancelled/moved booking is an orphan and must not be billed.
+  const validCleaningKeys = new Set<string>(manualCleaningKeySet);
+  for (const k of checkoutTaskKeys) if (!dismissedKeySet.has(k)) validCleaningKeys.add(k);
 
   const cleanersConfig = (cleanersRaw ?? { cleaners: [], rates: {}, archived: [] }) as CleanersConfig;
   // Merge archived cleaner rates into the lookup so historical assignments
@@ -345,9 +372,15 @@ export async function GET() {
   }
 
   // ── Cleaning: nested assignments[date][roomId] → cleanerId → rate ────────
+  //    An assignment only bills when a live checkout task (or manual cleaning)
+  //    exists for that date+room — otherwise it's an orphan from a cancelled or
+  //    moved booking. This mirrors the cleaning app, which counts checkout
+  //    tasks rather than raw assignments.
   for (const [date, rooms] of Object.entries(cleaningAssignments)) {
     for (const [roomId, cleanerId] of Object.entries(rooms)) {
       if (!cleanerId) continue;
+      const key = `${date}|${roomId}`;
+      if (hasSnapshot && !validCleaningKeys.has(key)) continue;
       const rate = cleanersConfig.rates[cleanerId]?.[roomId] ?? 0;
       if (rate > 0) {
         ensureEntry(date, roomId).cleaning = rate;
