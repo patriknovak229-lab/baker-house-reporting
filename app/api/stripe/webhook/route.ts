@@ -8,6 +8,7 @@ import type {
 } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
+import { readAllStripePayments, writeAllStripePayments } from '@/utils/stripePaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -125,9 +126,11 @@ export async function POST(req: NextRequest) {
     paidAt:            new Date().toISOString(),
   };
 
-  // Persist to legacy Redis list (backwards compat)
-  const existingRecords = await redis.get<StripePaymentRecord[]>('baker:stripe-payments') ?? [];
-  await redis.set('baker:stripe-payments', [...existingRecords, record]);
+  // Persist to the stripe-payments log (append). Flag-aware store: Redis today,
+  // Postgres once STORE_STRIPE_PAYMENTS=postgres. Refunds/fees stay in
+  // additional-payments below — untouched by this write.
+  const existingRecords = await readAllStripePayments();
+  await writeAllStripePayments([...existingRecords, record]);
 
   // Pull the Stripe processing fee from the BalanceTransaction linked to this
   // session's PaymentIntent → Charge. Captured per-payment so we can roll it up

@@ -22,12 +22,12 @@ import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';
+import { readAllStripePayments } from '@/utils/stripePaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 const ADDITIONAL_PAYMENTS_KEY  = 'baker:additional-payments';
 const REVENUE_INVOICES_KEY     = 'baker:revenue-invoices';
-const STRIPE_PAYMENTS_KEY      = 'baker:stripe-payments';
 
 function getRedis(): Redis {
   return new Redis({
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
     } else {
       // Auto-match: score every record and pick the best above threshold.
       // Threshold of 30 means at least one strong signal is required.
-      const rawRecords = (await redis.get<StripePaymentRecord[]>(STRIPE_PAYMENTS_KEY)) ?? [];
+      const rawRecords = await readAllStripePayments();
       const scored = rawRecords
         .map((r) => {
           let score = 0;
