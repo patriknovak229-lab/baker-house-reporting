@@ -30,18 +30,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { EmailSendLogEntry } from '@/types/emailSendLog';
-
-const LOG_KEY = 'baker:email-send-log';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllEmailSendLog, writeAllEmailSendLog } from '@/utils/emailSendLogStore';
 
 export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
@@ -78,16 +69,11 @@ export async function POST(req: NextRequest) {
   if (!reservationNumber)
     return NextResponse.json({ error: '`reservationNumber` is required' }, { status: 400 });
 
-  const redis = getRedis();
-  if (!redis) {
-    // Without Redis we can't log, but the operator already triggered the
-    // WhatsApp send client-side. Don't 500 — return ok with a hint so the
-    // UI doesn't show a misleading error.
-    return NextResponse.json({ ok: true, logged: false, reason: 'Redis not configured' });
-  }
-
+  // Best-effort audit log — the operator already triggered the WhatsApp send
+  // client-side, so a storage failure must not 500 (that would show a
+  // misleading error in the UI). Log the append failure and return logged:false.
   try {
-    const existing = (await redis.get<EmailSendLogEntry[]>(LOG_KEY)) ?? [];
+    const existing = await readAllEmailSendLog();
     const entry: EmailSendLogEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       reservationNumber,
@@ -99,7 +85,7 @@ export async function POST(req: NextRequest) {
       sentAt: new Date().toISOString(),
       sentBy: guard.email,
     };
-    await redis.set(LOG_KEY, [...existing, entry]);
+    await writeAllEmailSendLog([...existing, entry]);
     return NextResponse.json({ ok: true, logged: true });
   } catch (err) {
     console.error('[log-guest-message] Failed to append send log:', err);

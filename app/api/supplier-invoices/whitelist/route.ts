@@ -1,24 +1,13 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { WhitelistedSupplier } from '@/types/supplierInvoice';
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
-
-const REDIS_KEY = 'baker:supplier-whitelist';
-
-async function getWhitelist(): Promise<WhitelistedSupplier[]> {
-  return (await redis.get<WhitelistedSupplier[]>(REDIS_KEY)) ?? [];
-}
+import { readAllSupplierWhitelist, writeAllSupplierWhitelist } from '@/utils/supplierWhitelistStore';
 
 // GET — list all whitelisted suppliers (admin + accountant)
 export async function GET() {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
-  return NextResponse.json(await getWhitelist());
+  return NextResponse.json(await readAllSupplierWhitelist());
 }
 
 // POST — add a supplier to the whitelist (admin only)
@@ -36,7 +25,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'supplierName is required' }, { status: 400 });
   }
 
-  const whitelist = await getWhitelist();
+  const whitelist = await readAllSupplierWhitelist();
   const nameNorm = supplierName.trim().toLowerCase();
   const icoNorm = (supplierICO ?? '').toLowerCase().replace(/\s+/g, '');
 
@@ -56,7 +45,7 @@ export async function POST(request: Request) {
     addedAt: new Date().toISOString(),
   };
 
-  await redis.set(REDIS_KEY, [...whitelist, entry]);
+  await writeAllSupplierWhitelist([...whitelist, entry]);
   return NextResponse.json(entry, { status: 201 });
 }
 
@@ -68,7 +57,7 @@ export async function DELETE(request: Request) {
   const { id } = await request.json() as { id?: string };
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
 
-  const whitelist = await getWhitelist();
-  await redis.set(REDIS_KEY, whitelist.filter((s) => s.id !== id));
+  const whitelist = await readAllSupplierWhitelist();
+  await writeAllSupplierWhitelist(whitelist.filter((s) => s.id !== id));
   return NextResponse.json({ ok: true });
 }

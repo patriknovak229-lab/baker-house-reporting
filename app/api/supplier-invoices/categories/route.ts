@@ -1,15 +1,8 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { InvoiceCategory } from '@/types/supplierInvoice';
 import { paletteColorAt } from '@/utils/categoryColors';
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
-
-const REDIS_KEY = 'baker:invoice-categories';
+import { readAllInvoiceCategories, writeAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
 
 const DEFAULT_CATEGORIES: InvoiceCategory[] = [
   { id: 'cleaning',    label: 'Cleaning',    color: '#DBEAFE' }, // blue
@@ -22,9 +15,9 @@ const DEFAULT_CATEGORIES: InvoiceCategory[] = [
 ];
 
 async function getCategories(): Promise<InvoiceCategory[]> {
-  const stored = await redis.get<InvoiceCategory[]>(REDIS_KEY);
+  const stored = await readAllInvoiceCategories();
   if (!stored || stored.length === 0) {
-    await redis.set(REDIS_KEY, DEFAULT_CATEGORIES);
+    await writeAllInvoiceCategories(DEFAULT_CATEGORIES);
     return DEFAULT_CATEGORIES;
   }
   // Migrate any stored entries that are missing a colour (zero-downtime)
@@ -34,7 +27,7 @@ async function getCategories(): Promise<InvoiceCategory[]> {
       ...c,
       color: c.color ?? paletteColorAt(i).bg,
     }));
-    await redis.set(REDIS_KEY, migrated);
+    await writeAllInvoiceCategories(migrated);
     return migrated;
   }
   return stored;
@@ -69,7 +62,7 @@ export async function POST(request: Request) {
   const assignedColor = color ?? paletteColorAt(categories.length).bg;
   const newCategory: InvoiceCategory = { id, label: label.trim(), color: assignedColor };
   const updated = [...categories, newCategory];
-  await redis.set(REDIS_KEY, updated);
+  await writeAllInvoiceCategories(updated);
   return NextResponse.json(newCategory, { status: 201 });
 }
 
@@ -83,6 +76,6 @@ export async function DELETE(request: Request) {
 
   const categories = await getCategories();
   const updated = categories.filter((c) => c.id !== id);
-  await redis.set(REDIS_KEY, updated);
+  await writeAllInvoiceCategories(updated);
   return NextResponse.json({ ok: true });
 }

@@ -12,20 +12,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { sendSms, smsConfigured } from '@/utils/sms';
 import { toE164 } from '@/utils/phone';
 import type { EmailSendLogEntry } from '@/types/emailSendLog';
-
-const LOG_KEY = 'baker:email-send-log';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllEmailSendLog, writeAllEmailSendLog } from '@/utils/emailSendLogStore';
 
 export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
@@ -85,25 +76,22 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Audit log (best-effort — the SMS already went out) ────────────
-  const redis = getRedis();
-  if (redis) {
-    try {
-      const existing = (await redis.get<EmailSendLogEntry[]>(LOG_KEY)) ?? [];
-      const entry: EmailSendLogEntry = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        reservationNumber,
-        templateId: body.templateId?.trim() || 'sms',
-        templateLabel: body.templateLabel?.trim() || 'SMS',
-        channel: 'sms',
-        to,
-        subject: '',
-        sentAt: new Date().toISOString(),
-        sentBy: guard.email,
-      };
-      await redis.set(LOG_KEY, [...existing, entry]);
-    } catch (logErr) {
-      console.warn('[sms/send] audit log append failed:', logErr);
-    }
+  try {
+    const existing = await readAllEmailSendLog();
+    const entry: EmailSendLogEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      reservationNumber,
+      templateId: body.templateId?.trim() || 'sms',
+      templateLabel: body.templateLabel?.trim() || 'SMS',
+      channel: 'sms',
+      to,
+      subject: '',
+      sentAt: new Date().toISOString(),
+      sentBy: guard.email,
+    };
+    await writeAllEmailSendLog([...existing, entry]);
+  } catch (logErr) {
+    console.warn('[sms/send] audit log append failed:', logErr);
   }
 
   return NextResponse.json({ ok: true, sid, status, to });

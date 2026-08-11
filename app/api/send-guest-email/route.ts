@@ -14,19 +14,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { EmailSendLogEntry } from '@/types/emailSendLog';
+import { readAllEmailSendLog, writeAllEmailSendLog } from '@/utils/emailSendLogStore';
 
 const RESERVATIONS_ALIAS = 'reservations@bakerhouseapartments.cz';
-const LOG_KEY = 'baker:email-send-log';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
 
 /** Quick-and-dirty HTML → plain text for the multipart text/plain fallback.
  *  Mail clients that strip HTML still see something readable. */
@@ -114,28 +106,25 @@ export async function POST(req: NextRequest) {
       html,
     });
 
-    // Append to the email-send audit log. Best-effort — a failed Redis write
-    // doesn't roll back the send (the email already left). Only logged when
-    // we have enough context to make the entry useful (reservation + template).
+    // Append to the email-send audit log. Best-effort — a failed write doesn't
+    // roll back the send (the email already left). Only logged when we have
+    // enough context to make the entry useful (reservation + template).
     if (reservationNumber && templateId) {
-      const redis = getRedis();
-      if (redis) {
-        try {
-          const existing = (await redis.get<EmailSendLogEntry[]>(LOG_KEY)) ?? [];
-          const entry: EmailSendLogEntry = {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            reservationNumber,
-            templateId,
-            templateLabel: templateLabel || templateId,
-            to,
-            subject,
-            sentAt: new Date().toISOString(),
-            sentBy: guard.email,
-          };
-          await redis.set(LOG_KEY, [...existing, entry]);
-        } catch (logErr) {
-          console.error('[send-guest-email] Failed to append send log:', logErr);
-        }
+      try {
+        const existing = await readAllEmailSendLog();
+        const entry: EmailSendLogEntry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          reservationNumber,
+          templateId,
+          templateLabel: templateLabel || templateId,
+          to,
+          subject,
+          sentAt: new Date().toISOString(),
+          sentBy: guard.email,
+        };
+        await writeAllEmailSendLog([...existing, entry]);
+      } catch (logErr) {
+        console.error('[send-guest-email] Failed to append send log:', logErr);
       }
     }
 

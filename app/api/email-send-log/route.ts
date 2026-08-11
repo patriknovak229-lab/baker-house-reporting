@@ -11,24 +11,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { EmailSendLogEntry } from '@/types/emailSendLog';
-
-const KEY = 'baker:email-send-log';
-
-function getRedis(): Redis {
-  return new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
+import { readAllEmailSendLog } from '@/utils/emailSendLogStore';
 
 export async function GET() {
   const guard = await requireRole(['admin', 'super', 'accountant', 'viewer']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  const entries = (await redis.get<EmailSendLogEntry[]>(KEY)) ?? [];
+  const entries = await readAllEmailSendLog();
   return NextResponse.json(entries);
 }
