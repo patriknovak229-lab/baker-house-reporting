@@ -7,7 +7,7 @@ import { auth } from '@/auth';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
-import type { SettlementGroup } from '@/types/settlementGroup';
+import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { classifyCost, RECURRING_ENTRY } from '@/utils/costBridge';
 
 /** Fixed Drive folder the accountant asked exports to be uploaded into. */
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
     redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
     redis.get<BankTransaction[]>('baker:bank-transactions'),
-    redis.get<SettlementGroup[]>('baker:settlement-groups'),
+    readAllSettlementGroups(),
   ]);
   const revenueInvoices  = rawRevenue  ?? [];
   const supplierInvoices = rawSupplier ?? [];

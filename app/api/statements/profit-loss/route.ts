@@ -5,6 +5,7 @@ import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
 import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
+import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { classifyCost, RECURRING_ENTRY, type StatutoryLine } from '@/utils/costBridge';
 
 const redis = new Redis({
@@ -98,7 +99,7 @@ export async function GET(req: NextRequest) {
     redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
     redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
     redis.get<BankTransaction[]>('baker:bank-transactions'),
-    redis.get<SettlementGroup[]>('baker:settlement-groups'),
+    readAllSettlementGroups(),
   ]);
 
   const revenueInvoices: RevenueInvoice[]   = rawRevenue  ?? [];

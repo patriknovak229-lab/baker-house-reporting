@@ -5,7 +5,7 @@ import { requireRole } from '@/utils/authGuard';
 import { auth } from '@/auth';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
-import type { SettlementGroup } from '@/types/settlementGroup';
+import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import {
   getOrCreateInvoiceFolder,
   getOrCreateSubfolder,
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
   const [rawSupplier, rawRevenue, rawGroups] = await Promise.all([
     redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
     redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
-    redis.get<SettlementGroup[]>('baker:settlement-groups'),
+    readAllSettlementGroups(),
   ]);
   const supplierInvoices = rawSupplier ?? [];
   const revenueInvoices  = rawRevenue  ?? [];

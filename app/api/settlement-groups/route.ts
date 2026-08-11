@@ -6,8 +6,8 @@ import type { BankTransaction } from '@/types/bankTransaction';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { REVENUE_KEY, SUPPLIER_KEY, buildSettlementRevenue, buildSettlementCost, appendRecords } from '@/utils/settlementRecords';
+import { readAllSettlementGroups, appendSettlementGroups } from '@/utils/settlementGroupsStore';
 
-const GROUPS_KEY = 'baker:settlement-groups';
 const TX_KEY     = 'baker:bank-transactions';
 
 function getRedis(): Redis | null {
@@ -22,10 +22,7 @@ export async function GET() {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  const groups = (await redis.get<SettlementGroup[]>(GROUPS_KEY)) ?? [];
+  const groups = await readAllSettlementGroups();
   groups.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return NextResponse.json(groups);
 }
@@ -112,7 +109,8 @@ export async function POST(request: Request) {
 
   // Persist group + records append-safe (verify-and-retry so a concurrent settlement
   // save can't clobber a just-added revenue/cost record — see appendRecords).
-  await appendRecords(redis, GROUPS_KEY, [group]);
+  // Groups go through the flag-aware store; revenue/supplier stay on Redis.
+  await appendSettlementGroups([group]);
   if (body.transactionId) await redis.set(TX_KEY, updatedTxs);
   if (revenueInvoice) await appendRecords(redis, REVENUE_KEY, [revenueInvoice]);
   if (costInvoice) await appendRecords(redis, SUPPLIER_KEY, [costInvoice]);

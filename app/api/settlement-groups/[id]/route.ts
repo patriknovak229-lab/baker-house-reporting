@@ -6,8 +6,8 @@ import type { BankTransaction } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { REVENUE_KEY, settlementDisplayName } from '@/utils/settlementRecords';
+import { readAllSettlementGroups, writeAllSettlementGroups } from '@/utils/settlementGroupsStore';
 
-const GROUPS_KEY   = 'baker:settlement-groups';
 const TX_KEY       = 'baker:bank-transactions';
 const INV_KEY      = 'baker:supplier-invoices';
 
@@ -50,7 +50,7 @@ export async function PUT(request: Request, { params }: Params) {
 
   // Load everything
   const [groups, txs, invoices] = await Promise.all([
-    redis.get<SettlementGroup[]>(GROUPS_KEY).then((g) => g ?? []),
+    readAllSettlementGroups(),
     redis.get<BankTransaction[]>(TX_KEY).then((t) => t ?? []),
     redis.get<SupplierInvoice[]>(INV_KEY).then((i) => i ?? []),
   ]);
@@ -162,7 +162,7 @@ export async function PUT(request: Request, { params }: Params) {
   }
 
   await Promise.all([
-    redis.set(GROUPS_KEY, updatedGroups),
+    writeAllSettlementGroups(updatedGroups),
     redis.set(TX_KEY, updatedTxs),
     redis.set(INV_KEY, updatedInvoices),
     ...(updatedRevenue ? [redis.set(REVENUE_KEY, updatedRevenue)] : []),
@@ -185,7 +185,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
 
   const [groups, txs, invoices] = await Promise.all([
-    redis.get<SettlementGroup[]>(GROUPS_KEY).then((g) => g ?? []),
+    readAllSettlementGroups(),
     redis.get<BankTransaction[]>(TX_KEY).then((t) => t ?? []),
     redis.get<SupplierInvoice[]>(INV_KEY).then((i) => i ?? []),
   ]);
@@ -222,7 +222,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   const updatedGroups = groups.filter((g) => g.id !== id);
 
   await Promise.all([
-    redis.set(GROUPS_KEY, updatedGroups),
+    writeAllSettlementGroups(updatedGroups),
     redis.set(TX_KEY, updatedTxs),
     redis.set(INV_KEY, updatedInvoices),
     ...(updatedRevenue ? [redis.set(REVENUE_KEY, updatedRevenue)] : []),
