@@ -1,21 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 import type { ComputedSettlement } from '@/utils/commissionCalc';
+import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-const KEY = 'baker:commission-settlements';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
 
 export function settlementId(unitId: string, month: string): string {
   return `settle-${unitId}-${month}`;
@@ -26,10 +17,7 @@ export async function GET() {
   const guard = await requireRole(['admin', 'super', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  const settlements = (await redis.get<CommissionSettlement[]>(KEY)) ?? [];
+  const settlements = await readAllCommissionSettlements();
   return NextResponse.json(settlements);
 }
 
@@ -49,10 +37,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'unitId and month are required' }, { status: 400 });
   }
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  const existing = (await redis.get<CommissionSettlement[]>(KEY)) ?? [];
+  const existing = await readAllCommissionSettlements();
   const id = settlementId(body.unitId, body.month);
   const prior = existing.find((s) => s.id === id);
 
@@ -81,6 +66,6 @@ export async function POST(req: NextRequest) {
     ? existing.map((s) => (s.id === id ? settlement : s))
     : [...existing, settlement];
 
-  await redis.set(KEY, next);
+  await writeAllCommissionSettlements(next);
   return NextResponse.json(settlement);
 }

@@ -6,14 +6,15 @@ import type { CommissionSettlement } from '@/types/commissionSettlement';
 import { buildSettlementHTML } from '@/utils/settlementHtml';
 import { generatePDF } from '@/utils/pdfGenerate';
 import { formatCurrency } from '@/utils/formatters';
+import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 // Saved owner emails, keyed by owner name so re-issuing the same owner's units
 // pre-fills the address. Shared across all of that owner's apartments.
+// (Ancillary pre-fill map — stays in Redis, not a migrated domain.)
 const EMAIL_KEY = 'baker:commission-owner-emails';
-const SETTLEMENTS_KEY = 'baker:commission-settlements';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 function monthLabel(month: string): string {
@@ -94,17 +95,20 @@ export async function POST(req: NextRequest) {
 
     const sentAt = new Date().toISOString();
     let updated: CommissionSettlement | undefined;
-    const redis = getRedis();
-    if (redis) {
-      // Stamp the stored settlement so the history shows a "Sent" status.
-      const list = (await redis.get<CommissionSettlement[]>(SETTLEMENTS_KEY)) ?? [];
-      const idx = list.findIndex((s) => s.id === settlement.id);
-      if (idx !== -1) {
-        list[idx] = { ...list[idx], emailedAt: sentAt, emailedTo: email };
-        updated = list[idx];
-        await redis.set(SETTLEMENTS_KEY, list);
-      }
-      if (saveEmail) {
+
+    // Stamp the stored settlement so the history shows a "Sent" status.
+    const list = await readAllCommissionSettlements();
+    const idx = list.findIndex((s) => s.id === settlement.id);
+    if (idx !== -1) {
+      list[idx] = { ...list[idx], emailedAt: sentAt, emailedTo: email };
+      updated = list[idx];
+      await writeAllCommissionSettlements(list);
+    }
+
+    // Owner-name → email pre-fill map is ancillary — keep it in Redis.
+    if (saveEmail) {
+      const redis = getRedis();
+      if (redis) {
         const map = (await redis.get<Record<string, string>>(EMAIL_KEY)) ?? {};
         map[settlement.ownerName] = email;
         await redis.set(EMAIL_KEY, map);

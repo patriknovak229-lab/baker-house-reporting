@@ -3,11 +3,13 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 import type { BankTransaction } from '@/types/bankTransaction';
+import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-const KEY = 'baker:commission-settlements';
+// Bank transactions are a later migration wave — still read/written via Redis
+// here (the reciprocal commissionSettlementId link on the tx).
 const TX_KEY = 'baker:bank-transactions';
 
 function getRedis(): Redis | null {
@@ -37,8 +39,10 @@ export async function PUT(
   const { id } = await params;
   const body = (await request.json()) as ActionBody;
 
-  const [rawS, rawTx] = await Promise.all([redis.get(KEY), redis.get(TX_KEY)]);
-  const settlements = (Array.isArray(rawS) ? rawS : []) as CommissionSettlement[];
+  const [settlements, rawTx] = await Promise.all([
+    readAllCommissionSettlements(),
+    redis.get(TX_KEY),
+  ]);
   const transactions = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
 
   const idx = settlements.findIndex((s) => s.id === id);
@@ -62,7 +66,7 @@ export async function PUT(
     settlements[idx] = { ...s, status: 'reconciled', bankTransactionId: body.bankTransactionId, reconciledAt: now };
     transactions[txIdx] = { ...transactions[txIdx], commissionSettlementId: id };
 
-    await Promise.all([redis.set(KEY, settlements), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllCommissionSettlements(settlements), redis.set(TX_KEY, transactions)]);
     return NextResponse.json({ settlement: settlements[idx], transaction: transactions[txIdx] });
   }
 
@@ -74,7 +78,7 @@ export async function PUT(
       }
     }
     settlements[idx] = { ...s, status: 'issued', bankTransactionId: undefined, reconciledAt: undefined };
-    await Promise.all([redis.set(KEY, settlements), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllCommissionSettlements(settlements), redis.set(TX_KEY, transactions)]);
     return NextResponse.json({ settlement: settlements[idx] });
   }
 
@@ -93,8 +97,10 @@ export async function DELETE(
   if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
   const { id } = await params;
-  const [rawS, rawTx] = await Promise.all([redis.get(KEY), redis.get(TX_KEY)]);
-  const settlements = (Array.isArray(rawS) ? rawS : []) as CommissionSettlement[];
+  const [settlements, rawTx] = await Promise.all([
+    readAllCommissionSettlements(),
+    redis.get(TX_KEY),
+  ]);
   const transactions = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
 
   const s = settlements.find((x) => x.id === id);
@@ -111,7 +117,7 @@ export async function DELETE(
   }
 
   await Promise.all([
-    redis.set(KEY, nextSettlements),
+    writeAllCommissionSettlements(nextSettlements),
     txChanged ? redis.set(TX_KEY, transactions) : Promise.resolve(),
   ]);
   return NextResponse.json({ ok: true });
