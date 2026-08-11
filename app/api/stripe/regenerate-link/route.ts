@@ -16,20 +16,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { AdditionalPayment } from '@/types/additionalPayment';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
@@ -41,8 +31,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'paymentId is required' }, { status: 400 });
   }
 
-  const redis = getRedis();
-  const payments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const payments = await readAllAdditionalPayments();
   const idx = payments.findIndex((p) => p.id === paymentId);
   if (idx === -1) {
     return NextResponse.json({ error: 'AdditionalPayment not found' }, { status: 404 });
@@ -103,7 +92,7 @@ export async function POST(req: NextRequest) {
     id: session.id,
     createdAt: new Date().toISOString(),
   };
-  await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+  await writeAllAdditionalPayments(payments);
 
   return NextResponse.json({
     ok: true,

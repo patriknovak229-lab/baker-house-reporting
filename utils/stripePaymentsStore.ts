@@ -10,7 +10,7 @@
  * path stores the array verbatim (no PK), exactly as before.
  *
  * SCOPE: only the baker:stripe-payments key moves. Refunds/fees/status live in
- * baker:additional-payments and are NOT touched by this store.
+ * the additional_payments domain (its own store) and are NOT touched here.
  */
 import { Redis } from '@upstash/redis';
 import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';

@@ -8,7 +8,7 @@
  *
  * SCOPE: only the baker:scheduled-split-payments key moves. The parallel
  * AdditionalPayment records (baker:additional-payments) that these same routes
- * create/mutate stay on Redis — a later wave — and are NOT touched by this store.
+ * create/mutate are handled by additionalPaymentsStore, not this store.
  */
 import { Redis } from '@upstash/redis';
 import type { SplitPayment } from '@/types/splitPayment';

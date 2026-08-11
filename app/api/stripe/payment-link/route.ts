@@ -1,19 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
-
-function getRedis(): Redis {
-  return new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 export async function POST(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
@@ -60,8 +51,7 @@ export async function POST(req: NextRequest) {
   // When linked to a reservation, create a pending AdditionalPayment record
   if (reservationNumber) {
     try {
-      const redis = getRedis();
-      const existing = await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY) ?? [];
+      const existing = await readAllAdditionalPayments();
       const record: AdditionalPayment = {
         id:                session.id,
         reservationNumber: reservationNumber,
@@ -73,7 +63,7 @@ export async function POST(req: NextRequest) {
         createdAt:         new Date().toISOString(),
         ...(isMainPayment ? { isMainPayment: true } : {}),
       };
-      await redis.set(ADDITIONAL_PAYMENTS_KEY, [...existing, record]);
+      await writeAllAdditionalPayments([...existing, record]);
     } catch (err) {
       // Non-fatal — payment link still works even if pending record fails
       console.error('[payment-link] Failed to create AdditionalPayment record:', err);

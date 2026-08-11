@@ -18,12 +18,11 @@
  */
 
 import { Redis } from '@upstash/redis';
-import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { PaymentStatus } from '@/types/reservation';
 import { getAccessToken } from '@/utils/beds24Auth';
+import { readAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
 const OVERRIDES_KEY = 'baker:reservation-overrides';
 
 interface LocalFields {
@@ -86,7 +85,7 @@ export async function recomputePaymentOverride(
   reservationNumber: string,
 ): Promise<{ applied: boolean; status: PaymentStatus | null; paidSum: number; bookingPrice: number | null }> {
   const [allPayments, overridesRaw, bookingPrice] = await Promise.all([
-    redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
+    readAllAdditionalPayments(),
     redis.get(OVERRIDES_KEY),
     fetchBookingPrice(reservationNumber),
   ]);

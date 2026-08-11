@@ -1,25 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Redis } from '@upstash/redis';
 import nodemailer from 'nodemailer';
 import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { SplitPayment } from '@/types/splitPayment';
 import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 export const maxDuration = 60;
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
 const MAX_FAILURE_COUNT = 5;
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
@@ -123,13 +115,12 @@ export async function POST(req: NextRequest) {
     if ('error' in authResult) return authResult.error;
   }
 
-  const redis = getRedis();
   const today = todayUTC();
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? 'https://reporting.bakerhouseapartments.cz';
 
   const [scheduled, additional] = await Promise.all([
     readAllSplitPayments(),
-    redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
+    readAllAdditionalPayments(),
   ]);
 
   const due = scheduled.filter((sp) => sp.status === 'scheduled' && sp.sendDate <= today);
@@ -228,7 +219,7 @@ export async function POST(req: NextRequest) {
     await Promise.all([
       writeAllSplitPayments(scheduled),
       additionalNew.length !== additional.length
-        ? redis.set(ADDITIONAL_PAYMENTS_KEY, additionalNew)
+        ? writeAllAdditionalPayments(additionalNew)
         : Promise.resolve(),
     ]);
   } catch (err) {

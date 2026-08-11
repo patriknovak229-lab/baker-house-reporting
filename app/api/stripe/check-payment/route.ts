@@ -23,10 +23,10 @@ import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additio
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';
 import { readAllStripePayments } from '@/utils/stripePaymentsStore';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-const ADDITIONAL_PAYMENTS_KEY  = 'baker:additional-payments';
 const REVENUE_INVOICES_KEY     = 'baker:revenue-invoices';
 
 function getRedis(): Redis {
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
   }
 
   const redis = getRedis();
-  const allPayments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const allPayments = await readAllAdditionalPayments();
 
   const linked = allPayments.filter((p) => p.reservationNumber === reservationNumber);
 
@@ -304,7 +304,7 @@ export async function POST(req: NextRequest) {
     // Persist
     try {
       await Promise.all([
-        redis.set(ADDITIONAL_PAYMENTS_KEY, [...allPayments, newAp]),
+        writeAllAdditionalPayments([...allPayments, newAp]),
         ...(invoiceExists ? [] : [redis.set(REVENUE_INVOICES_KEY, updatedInvoices)]),
       ]);
     } catch (err) {
@@ -456,7 +456,7 @@ export async function POST(req: NextRequest) {
 
   // Persist mutations atomically (best effort — Upstash has no transactions)
   const writes: Promise<unknown>[] = [];
-  if (mutatedAdditional) writes.push(redis.set(ADDITIONAL_PAYMENTS_KEY, paymentsCopy));
+  if (mutatedAdditional) writes.push(writeAllAdditionalPayments(paymentsCopy));
   if (mutatedInvoices) writes.push(redis.set(REVENUE_INVOICES_KEY, invoicesCopy));
   if (writes.length > 0) {
     try {

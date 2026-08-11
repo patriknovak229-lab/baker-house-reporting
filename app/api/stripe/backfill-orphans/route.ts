@@ -17,24 +17,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { AdditionalPayment } from '@/types/additionalPayment';
-import type { SplitPayment } from '@/types/splitPayment';
 import type { Reservation } from '@/types/reservation';
 import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
-
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const ORPHAN_PATTERN = /\[object\s+object\]/i;
 const TIME_TOLERANCE_MS = 5 * 60 * 1000; // 5 minutes
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 interface OrphanReport {
   apOrphans: Array<{ id: string; reservationNumber: string; createdAt: string; guestEmail?: string; amountCzk: number; description: string }>;
@@ -115,9 +104,8 @@ function tryMatch(
 }
 
 async function buildReport(req: NextRequest): Promise<OrphanReport> {
-  const redis = getRedis();
   const [aps, sps, reservations] = await Promise.all([
-    redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
+    readAllAdditionalPayments(),
     readAllSplitPayments(),
     fetchReservations(req),
   ]);
@@ -205,9 +193,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, applied: 0, ...report });
     }
 
-    const redis = getRedis();
     const [aps, sps] = await Promise.all([
-      redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
+      readAllAdditionalPayments(),
       readAllSplitPayments(),
     ]);
 
@@ -231,7 +218,7 @@ export async function POST(req: NextRequest) {
     }
 
     const writes: Promise<unknown>[] = [];
-    if (apMutated) writes.push(redis.set(ADDITIONAL_PAYMENTS_KEY, aps));
+    if (apMutated) writes.push(writeAllAdditionalPayments(aps));
     if (spMutated) writes.push(writeAllSplitPayments(sps));
     await Promise.all(writes);
 

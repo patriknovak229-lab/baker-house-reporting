@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
-const KEY            = 'baker:additional-payments';
 const INVOICES_KEY   = 'baker:revenue-invoices';
 
 function getRedis(): Redis {
@@ -29,8 +28,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'status must be "unpaid" or "paid"' }, { status: 400 });
   }
 
-  const redis = getRedis();
-  const payments = await redis.get<AdditionalPayment[]>(KEY) ?? [];
+  const payments = await readAllAdditionalPayments();
   const idx = payments.findIndex((p) => p.id === id);
 
   if (idx === -1) {
@@ -43,7 +41,7 @@ export async function PATCH(
     paidAt: status === 'paid' ? (payments[idx].paidAt ?? new Date().toISOString()) : undefined,
   };
 
-  await redis.set(KEY, payments);
+  await writeAllAdditionalPayments(payments);
   return NextResponse.json(payments[idx]);
 }
 
@@ -58,7 +56,7 @@ export async function DELETE(
   const { id } = await params;
 
   const redis = getRedis();
-  const payments = await redis.get<AdditionalPayment[]>(KEY) ?? [];
+  const payments = await readAllAdditionalPayments();
   const filtered = payments.filter((p) => p.id !== id);
 
   if (filtered.length === payments.length) {
@@ -71,7 +69,7 @@ export async function DELETE(
   const filteredInvoices = invoices.filter((inv) => inv.id !== invoiceId);
 
   await Promise.all([
-    redis.set(KEY, filtered),
+    writeAllAdditionalPayments(filtered),
     filteredInvoices.length !== invoices.length
       ? redis.set(INVOICES_KEY, filteredInvoices)
       : Promise.resolve(),

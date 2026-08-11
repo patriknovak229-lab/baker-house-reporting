@@ -9,6 +9,7 @@ import type {
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import { readAllStripePayments, writeAllStripePayments } from '@/utils/stripePaymentsStore';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -17,7 +18,6 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
 const REVENUE_INVOICES_KEY    = 'baker:revenue-invoices';
 
 async function sendTelegram(message: string): Promise<void> {
@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
 
   // Update AdditionalPayment to paid + auto-create revenue invoice (when linked to reservation)
   if (record.reservationNumber) {
-    const payments = await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY) ?? [];
+    const payments = await readAllAdditionalPayments();
     const idx = payments.findIndex((p) => p.id === session.id);
 
     if (idx !== -1) {
@@ -199,7 +199,7 @@ export async function POST(req: NextRequest) {
         payments[idx] = { ...payments[idx], invoiceId };
       }
 
-      await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+      await writeAllAdditionalPayments(payments);
     }
 
     // Reconcile reservation paymentStatusOverride based on the new payment state.
@@ -281,7 +281,7 @@ async function handleChargeFeeSync(charge: Stripe.Charge): Promise<void> {
     return;
   }
 
-  const payments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const payments = await readAllAdditionalPayments();
   const idx = payments.findIndex((p) => p.id === session.id);
   if (idx === -1) return;
 
@@ -289,7 +289,7 @@ async function handleChargeFeeSync(charge: Stripe.Charge): Promise<void> {
   if (payments[idx].stripeFeeCzk === fee) return;
 
   payments[idx] = { ...payments[idx], stripeFeeCzk: fee };
-  await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+  await writeAllAdditionalPayments(payments);
 
   // Roll the new fee total up to reservation.paymentChargeAmount
   const reservationNumber = payments[idx].reservationNumber;
@@ -346,7 +346,7 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
   const session = await findSessionByPaymentIntent(piId);
   if (!session) return;
 
-  const payments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const payments = await readAllAdditionalPayments();
   const idx = payments.findIndex((p) => p.id === session.id);
   if (idx === -1) return;
 
@@ -396,7 +396,7 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
   }
 
   payments[idx] = { ...payment, refunds: merged, status: newStatus };
-  await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+  await writeAllAdditionalPayments(payments);
 
   // Reconcile reservation paymentStatusOverride
   if (payment.reservationNumber) {

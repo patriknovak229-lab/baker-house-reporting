@@ -37,6 +37,7 @@ import type {
   AdditionalPaymentStatus,
   PaymentRefund,
 } from '@/types/additionalPayment';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -44,8 +45,6 @@ const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
-
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
 
 async function sendTelegram(message: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -81,7 +80,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Load + validate AdditionalPayment ───
-  const payments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const payments = await readAllAdditionalPayments();
   const idx = payments.findIndex((p) => p.id === sessionId);
   if (idx === -1) {
     return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
@@ -174,7 +173,7 @@ export async function POST(req: NextRequest) {
   else newStatus = 'partially-refunded';
 
   payments[idx] = { ...payment, refunds: newRefunds, status: newStatus };
-  await redis.set(ADDITIONAL_PAYMENTS_KEY, payments);
+  await writeAllAdditionalPayments(payments);
 
   // Reconcile reservation payment status badge
   if (payment.reservationNumber) {

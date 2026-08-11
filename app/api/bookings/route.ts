@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Reservation, RateType } from "@/types/reservation";
-import type { AdditionalPayment } from "@/types/additionalPayment";
+import { readAllAdditionalPayments } from "@/utils/additionalPaymentsStore";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
@@ -10,8 +10,6 @@ import { fetchReviews, fetchRawReviews, reviewsFromDate, mergeReviews, type Revi
 import { notifyNewReviews } from "@/utils/reviewAlerts";
 import type { GuestRating } from "@/types/reservation";
 import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, attachNonArrivalOverlay, mapChannel, mapRoom, infoItemsText, BEDS24_API_BASE, RESERVATION_OVERRIDES_KEY, APP_PHONE_MARKER, type Beds24Booking } from "@/utils/beds24Reservations";
-
-const ADDITIONAL_PAYMENTS_KEY = "baker:additional-payments";
 
 // Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
 // reference (apiReference). This window also gates how promptly a new review can
@@ -82,10 +80,7 @@ async function getReviews(token: string): Promise<Record<string, GuestRating>> {
  * so every consumer (Transactions, Performance, Statements) reads a single number.
  */
 async function aggregateStripeFees(reservations: Reservation[]): Promise<Reservation[]> {
-  const redis = getRedis();
-  if (!redis) return reservations;
-
-  const allPayments = (await redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY)) ?? [];
+  const allPayments = await readAllAdditionalPayments();
   const feeByRes = new Map<string, number>();
   for (const ap of allPayments) {
     // Include paid / partially-refunded / refunded — the Stripe fee was

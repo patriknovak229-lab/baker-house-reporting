@@ -1,21 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { SplitPayment } from '@/types/splitPayment';
 import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
+import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-const ADDITIONAL_PAYMENTS_KEY = 'baker:additional-payments';
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 /** YYYY-MM-DD in UTC. */
 function todayUTC(): string {
@@ -126,13 +117,12 @@ export async function POST(req: NextRequest) {
   }
 
   const today = todayUTC();
-  const redis = getRedis();
   const createdAt = new Date().toISOString();
 
   // Read existing collections once
   const [scheduled, additional] = await Promise.all([
     readAllSplitPayments(),
-    redis.get<AdditionalPayment[]>(ADDITIONAL_PAYMENTS_KEY).then((v) => v ?? []),
+    readAllAdditionalPayments(),
   ]);
 
   type ResultRow = {
@@ -252,7 +242,7 @@ export async function POST(req: NextRequest) {
     await Promise.all([
       writeAllSplitPayments([...scheduled, ...newScheduled]),
       newAdditional.length > 0
-        ? redis.set(ADDITIONAL_PAYMENTS_KEY, [...additional, ...newAdditional])
+        ? writeAllAdditionalPayments([...additional, ...newAdditional])
         : Promise.resolve(),
     ]);
   } catch (err) {
