@@ -11,11 +11,10 @@ import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
+import { readAllAutoReplyLog, readAllAutoReplyEditLog } from '@/utils/autoReplyLogStore';
 
-const LOG_KEY = 'baker:auto-reply:log';
 const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 const INVOICE_REQUESTS_KEY = 'baker:invoice-requests';
-const EDIT_LOG_KEY = 'baker:auto-reply:edit-log';
 
 /**
  * Graduation thresholds for the per-category readiness table. A category is a
@@ -245,10 +244,10 @@ export async function GET() {
   }
 
   const [log, lastPoll, invoiceRequests, editLog] = await Promise.all([
-    redis.get<AutoReplyLogEntry[]>(LOG_KEY).then((v) => v ?? []),
+    readAllAutoReplyLog<AutoReplyLogEntry>(),
     redis.get<number>(LAST_POLL_KEY),
     redis.get<InvoiceRequest[]>(INVOICE_REQUESTS_KEY).then((v) => v ?? []),
-    redis.get<EditLogEntry[]>(EDIT_LOG_KEY).then((v) => v ?? []),
+    readAllAutoReplyEditLog<EditLogEntry>(),
   ]);
 
   // Per-category readiness — computed over the FULL retained log (not the

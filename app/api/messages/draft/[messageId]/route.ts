@@ -19,10 +19,15 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { sendBeds24Message } from '@/utils/beds24Messages';
 import { translateReplyToGuest } from '@/utils/translateReply';
+import {
+  readAllAutoReplyLog,
+  writeAllAutoReplyLog,
+  readAllAutoReplyEditLog,
+  writeAllAutoReplyEditLog,
+} from '@/utils/autoReplyLogStore';
 
 const PENDING_DRAFTS_KEY = 'baker:auto-reply:pending-drafts';
 const PENDING_OTHERS_KEY = 'baker:auto-reply:pending-others';
-const LOG_KEY = 'baker:auto-reply:log';
 const LOG_MAX_ENTRIES = 500;
 
 interface PendingDraft {
@@ -106,16 +111,15 @@ async function removePending(redis: Redis, messageId: string): Promise<void> {
   ]);
 }
 
-async function appendLog(redis: Redis, entry: AutoReplyLogEntry): Promise<void> {
-  const log = (await redis.get<AutoReplyLogEntry[]>(LOG_KEY)) ?? [];
+async function appendLog(entry: AutoReplyLogEntry): Promise<void> {
+  const log = await readAllAutoReplyLog<AutoReplyLogEntry>();
   const next = [entry, ...log].slice(0, LOG_MAX_ENTRIES);
-  await redis.set(LOG_KEY, next);
+  await writeAllAutoReplyLog(next);
 }
 
 // Light edit-capture: records when the operator changed the AI's draft, so we
 // can later look for patterns (what gets corrected, and how) and fold them
 // into the knowledge base. Storage only for now — no analysis pipeline yet.
-const EDIT_LOG_KEY = 'baker:auto-reply:edit-log';
 const EDIT_LOG_MAX = 500;
 
 interface EditLogEntry {
@@ -130,11 +134,11 @@ interface EditLogEntry {
   editedAt: string;
 }
 
-async function appendEditLog(redis: Redis, entry: EditLogEntry): Promise<void> {
+async function appendEditLog(entry: EditLogEntry): Promise<void> {
   try {
-    const log = (await redis.get<EditLogEntry[]>(EDIT_LOG_KEY)) ?? [];
+    const log = await readAllAutoReplyEditLog<EditLogEntry>();
     const next = [entry, ...log].slice(0, EDIT_LOG_MAX);
-    await redis.set(EDIT_LOG_KEY, next);
+    await writeAllAutoReplyEditLog(next);
   } catch (err) {
     console.warn('[messages/draft] edit-log append failed:', err);
   }
@@ -202,7 +206,7 @@ export async function POST(
       textToSend = await translateReplyToGuest(proposedText, targetLanguage as string);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await appendLog(redis, {
+      await appendLog({
         id: makeLogId(),
         beds24MessageId: pending.entry.beds24MessageId,
         beds24SentMessageId: null,
@@ -226,7 +230,7 @@ export async function POST(
     sentMessageId = result.messageId;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await appendLog(redis, {
+    await appendLog({
       id: makeLogId(),
       beds24MessageId: pending.entry.beds24MessageId,
       beds24SentMessageId: null,
@@ -244,7 +248,7 @@ export async function POST(
   }
 
   await removePending(redis, messageId);
-  await appendLog(redis, {
+  await appendLog({
     id: makeLogId(),
     beds24MessageId: pending.entry.beds24MessageId,
     beds24SentMessageId: sentMessageId,
@@ -269,7 +273,7 @@ export async function POST(
   const aiDraft = (pending.entry.draftText ?? '').trim();
   const operatorSource = (body.sourceText ?? body.text ?? '').trim();
   if (aiDraft && operatorSource && operatorSource !== aiDraft) {
-    await appendEditLog(redis, {
+    await appendEditLog({
       beds24MessageId: pending.entry.beds24MessageId,
       bookingId: pending.entry.bookingId,
       reservationNumber: pending.entry.reservationNumber,
@@ -308,7 +312,7 @@ export async function DELETE(
   }
 
   await removePending(redis, messageId);
-  await appendLog(redis, {
+  await appendLog({
     id: makeLogId(),
     beds24MessageId: pending.entry.beds24MessageId,
     beds24SentMessageId: null,

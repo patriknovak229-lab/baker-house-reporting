@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
+import { readAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { requireRole } from '@/utils/authGuard';
 import { isInvoiceRequest, parseInvoiceRequest } from '@/utils/invoiceRequestParser';
@@ -174,19 +175,16 @@ export async function GET(req: NextRequest) {
   // the bot. Best-effort — if Redis is unreachable, messages render
   // without the ⚡ Auto chip rather than the whole thread failing.
   const autoReplyMessageIds = new Set<number>();
-  const redis = getRedis();
-  if (redis) {
-    try {
-      const log = (await redis.get<AutoReplyLogEntry[]>('baker:auto-reply:log')) ?? [];
-      for (const entry of log) {
-        if (entry.bookingId !== Number(bookingId)) continue;
-        if (entry.beds24SentMessageId != null) {
-          autoReplyMessageIds.add(entry.beds24SentMessageId);
-        }
+  try {
+    const log = await readAllAutoReplyLog<AutoReplyLogEntry>();
+    for (const entry of log) {
+      if (entry.bookingId !== Number(bookingId)) continue;
+      if (entry.beds24SentMessageId != null) {
+        autoReplyMessageIds.add(entry.beds24SentMessageId);
       }
-    } catch (err) {
-      console.warn('[messages] auto-reply log read failed:', err);
     }
+  } catch (err) {
+    console.warn('[messages] auto-reply log read failed:', err);
   }
 
   // Sort by time ascending so order is deterministic regardless of how

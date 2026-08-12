@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { getAccessToken } from '@/utils/beds24Auth';
+import { readAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import type {
   PendingDraft,
   PendingOther,
@@ -8,7 +9,6 @@ import type {
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const ACTIVE_WINDOW_MS = 120 * 60 * 1000; // 120 minutes
-const AUTO_REPLY_LOG_KEY = 'baker:auto-reply:log';
 const PENDING_DRAFTS_KEY = 'baker:auto-reply:pending-drafts';
 const PENDING_OTHERS_KEY = 'baker:auto-reply:pending-others';
 /** Drop pending entries older than 14 days on read — bounded backstop in
@@ -121,12 +121,10 @@ export async function GET() {
   // Load auto-reply log once; filter per booking inside the loop.
   let autoReplyLog: AutoReplyLogEntry[] = [];
   const redis = getRedis();
-  if (redis) {
-    try {
-      autoReplyLog = (await redis.get<AutoReplyLogEntry[]>(AUTO_REPLY_LOG_KEY)) ?? [];
-    } catch (err) {
-      console.warn('[messages/unread] auto-reply log read failed:', err);
-    }
+  try {
+    autoReplyLog = await readAllAutoReplyLog<AutoReplyLogEntry>();
+  } catch (err) {
+    console.warn('[messages/unread] auto-reply log read failed:', err);
   }
 
   const bookings: UnreadBookingSummary[] = [];

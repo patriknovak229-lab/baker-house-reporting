@@ -34,6 +34,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { Redis } from '@upstash/redis';
+import { readAllAutoReplyLog, writeAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import type { Reservation, Issue, Room, InvoiceData } from '@/types/reservation';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
@@ -107,7 +108,6 @@ export const maxDuration = 60;
 
 // Redis keys
 const PROCESSED_KEY = 'baker:auto-reply:processed'; // Set<beds24MessageId>
-const LOG_KEY = 'baker:auto-reply:log';             // AutoReplyLogEntry[]
 const RATE_LIMIT_PREFIX = 'baker:auto-reply:count'; // :{bookingId}:{yyyymmdd}
 const BOOKINGS_CACHE_KEY = 'baker:beds24-bookings-cache';
 const LOCAL_STATE_KEY = 'baker:reservation-overrides';
@@ -1395,11 +1395,11 @@ function trimQuote(s: string): string {
 // ─── Audit log ───────────────────────────────────────────────────────────────
 
 async function appendLog(redis: Redis | null, entry: AutoReplyLogEntry): Promise<void> {
-  if (!redis) return;
-  const existing = (await redis.get<AutoReplyLogEntry[]>(LOG_KEY)) ?? [];
+  if (!redis) return; // best-effort: skip audit logging if Redis env is absent
+  const existing = await readAllAutoReplyLog<AutoReplyLogEntry>();
   // Keep most recent 500 entries to bound memory
   const next = [...existing, entry].slice(-500);
-  await redis.set(LOG_KEY, next);
+  await writeAllAutoReplyLog(next);
 }
 
 function makeLogId(): string {
