@@ -10,26 +10,15 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { InvoiceRequest } from '@/types/invoiceRequest';
-
-const KEY = 'baker:invoice-requests';
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
+import { readAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 
 export async function GET(req: NextRequest) {
   const guard = await requireRole(['admin', 'super', 'viewer', 'accountant']);
   if ('error' in guard) return guard.error;
 
   const reservationNumber = req.nextUrl.searchParams.get('reservationNumber');
-  const redis = getRedis();
-  const all = (await redis.get<InvoiceRequest[]>(KEY)) ?? [];
+  const all = await readAllInvoiceRequests();
 
   const filtered = reservationNumber
     ? all.filter((r) => r.reservationNumber === reservationNumber)

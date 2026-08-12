@@ -6,9 +6,9 @@ import { requireRole } from '@/utils/authGuard';
 import { isInvoiceRequest, parseInvoiceRequest } from '@/utils/invoiceRequestParser';
 import { sendBeds24Message } from '@/utils/beds24Messages';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
+import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
-const INVOICE_REQUESTS_KEY = 'baker:invoice-requests';
 
 function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -57,7 +57,7 @@ async function detectAndStoreInvoiceRequests(
   const guestMessages = raw.filter((m) => m.source === 'guest' && isInvoiceRequest(m.message));
   if (guestMessages.length === 0) return;
 
-  const existing = (await redis.get<InvoiceRequest[]>(INVOICE_REQUESTS_KEY)) ?? [];
+  const existing = await readAllInvoiceRequests();
   const knownIds = new Set(existing.map((r) => r.beds24MessageId));
   const newOnes: InvoiceRequest[] = [];
   for (const m of guestMessages) {
@@ -77,7 +77,7 @@ async function detectAndStoreInvoiceRequests(
     });
   }
   if (newOnes.length === 0) return;
-  await redis.set(INVOICE_REQUESTS_KEY, [...existing, ...newOnes]);
+  await writeAllInvoiceRequests([...existing, ...newOnes]);
 }
 
 // ── Beds24 message shape (verify `time` field name against ?raw=true if needed) ──

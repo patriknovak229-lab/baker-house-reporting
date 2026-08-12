@@ -35,6 +35,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { readAllAutoReplyLog, writeAllAutoReplyLog } from '@/utils/autoReplyLogStore';
+import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 import type { Reservation, Issue, Room, InvoiceData } from '@/types/reservation';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
@@ -96,7 +97,6 @@ const NEW_BOOKING_DEBOUNCE_KEY = 'baker:new-booking:debounce-until';
  * No TTL — we want to keep the most recent value indefinitely.
  */
 const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
-const INVOICE_REQUESTS_KEY = 'baker:invoice-requests';
 
 // Invoice flow: how long to wait between the initial ask and the
 // (single) reminder. Per operator policy: remind once after 24 hours
@@ -1439,7 +1439,7 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
   const { redis, bookingId, messageId, messageText } = args;
   if (!redis) return false;
 
-  const all = (await redis.get<InvoiceRequest[]>(INVOICE_REQUESTS_KEY)) ?? [];
+  const all = await readAllInvoiceRequests();
   const forThisBooking = all.filter(
     (r) => r.reservationNumber === `BH-${bookingId}`,
   );
@@ -1686,7 +1686,7 @@ async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<void> {
     asksCount: 1,
     lastAskedAt: new Date().toISOString(),
   };
-  await persistInvoiceRequests(redis, [...allRequests, finalRequest]);
+  await persistInvoiceRequests([...allRequests, finalRequest]);
   await appendLog(redis, {
     id: makeLogId(),
     beds24MessageId: messageId,
@@ -1752,7 +1752,7 @@ async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<void> {
   // Still missing — DO NOT send another ask here (the 24h reminder pass
   // handles the single follow-up). Just persist the merged fields and
   // log so we have a paper trail.
-  await persistInvoiceRequests(redis, replaceInvoiceRequest(allRequests, updatedRequest));
+  await persistInvoiceRequests(replaceInvoiceRequest(allRequests, updatedRequest));
   await appendLog(redis, {
     id: makeLogId(),
     beds24MessageId: messageId,
@@ -1859,7 +1859,6 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     processedAt: new Date().toISOString(),
   };
   await persistInvoiceRequests(
-    redis,
     replaceOrAppendInvoiceRequest(allRequests, completedRequest),
   );
 
@@ -1904,7 +1903,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
  * if the guest never replies. Per operator policy: no further nudges.
  */
 async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
-  const all = (await redis.get<InvoiceRequest[]>(INVOICE_REQUESTS_KEY)) ?? [];
+  const all = await readAllInvoiceRequests();
   const now = Date.now();
   const due = all.filter(
     (r) =>
@@ -1979,16 +1978,15 @@ async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
       decidedAt: new Date().toISOString(),
     });
   }
-  await persistInvoiceRequests(redis, updated);
+  await persistInvoiceRequests(updated);
 }
 
 // ─── Invoice-request Redis helpers ───────────────────────────────────────────
 
 async function persistInvoiceRequests(
-  redis: Redis,
   requests: InvoiceRequest[],
 ): Promise<void> {
-  await redis.set(INVOICE_REQUESTS_KEY, requests);
+  await writeAllInvoiceRequests(requests);
 }
 
 /** Update an existing request in-place by id. Adds it if not present. */

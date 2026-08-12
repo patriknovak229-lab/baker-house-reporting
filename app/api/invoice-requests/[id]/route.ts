@@ -13,18 +13,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { InvoiceRequest, InvoiceRequestStatus } from '@/types/invoiceRequest';
-
-const KEY = 'baker:invoice-requests';
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
+import type { InvoiceRequestStatus } from '@/types/invoiceRequest';
+import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 
 export async function POST(
   req: NextRequest,
@@ -44,8 +35,7 @@ export async function POST(
     return NextResponse.json({ error: 'action must be "accept" or "reject"' }, { status: 400 });
   }
 
-  const redis = getRedis();
-  const all = (await redis.get<InvoiceRequest[]>(KEY)) ?? [];
+  const all = await readAllInvoiceRequests();
   const idx = all.findIndex((r) => r.id === id);
   if (idx === -1) {
     return NextResponse.json({ error: 'Invoice request not found' }, { status: 404 });
@@ -57,7 +47,7 @@ export async function POST(
     status: newStatus,
     processedAt: new Date().toISOString(),
   };
-  await redis.set(KEY, all);
+  await writeAllInvoiceRequests(all);
 
   return NextResponse.json({ ok: true, request: all[idx] });
 }
