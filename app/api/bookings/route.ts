@@ -11,6 +11,7 @@ import { notifyNewReviews } from "@/utils/reviewAlerts";
 import type { GuestRating } from "@/types/reservation";
 import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, attachNonArrivalOverlay, mapChannel, mapRoom, infoItemsText, BEDS24_API_BASE, APP_PHONE_MARKER, type Beds24Booking } from "@/utils/beds24Reservations";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
+import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 
 // Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
 // reference (apiReference). This window also gates how promptly a new review can
@@ -452,6 +453,14 @@ export async function GET(req: NextRequest) {
     });
     const reservations = [...activeWithReviews, ...cancelledMapped];
 
+    // Channel reference per reservation — the mirror keeps it so a future reader
+    // can re-join reviews without re-deriving the grouping. Same index-parallel
+    // relationship `activeWithReviews` above relies on; cancelled rows map 1:1.
+    const apiReferenceByReservation: Record<string, string> = {};
+    for (const b of [...grouped, ...raw.filter(isCancelledStatus)]) {
+      if (b.apiReference) apiReferenceByReservation[`BH-${b.id}`] = String(b.apiReference);
+    }
+
     const withStripeFees = await aggregateStripeFees(reservations);
     const withOverlapFlags = tagOverlappingReservations(withStripeFees);
     const withNonArrival = await attachNonArrivalOverlay(withOverlapFlags);
@@ -466,10 +475,28 @@ export async function GET(req: NextRequest) {
     // (POST /inventory/rooms/calendar with override="blackout"); they are
     // invisible to GET /bookings. Fetch them here and merge as synthetic
     // Reservation rows so the calendar + reservation list see them too.
+    let overrideBlackoutsOk = true;
     const overrideBlackouts = await fetchOverrideBlackouts(token).catch((err) => {
       console.error('[bookings] inventory-override fetch failed:', err);
+      overrideBlackoutsOk = false;
       return [] as Reservation[];
     });
+
+    // ── Bookings mirror (derived read-model, write-only for now) ──
+    // Publishes the normalized set to Postgres so Performance/Commission can
+    // eventually SELECT instead of each re-running this sync. Nothing reads it
+    // yet, it's off unless WRITE_BOOKINGS_MIRROR=true, and — like the rate-type
+    // map above — a failure is logged and never affects this response.
+    // `reservations` (pre-overlay) is mirrored deliberately: overrides, the
+    // Stripe-fee roll-up and overlap flags stay read-time concerns.
+    if (bookingsMirrorWriteEnabled()) {
+      await publishBookingsMirror({
+        reservations,
+        apiReferenceByReservation,
+        // null = the calendar fetch failed, so keep the blackouts already mirrored.
+        overrideBlackouts: overrideBlackoutsOk ? overrideBlackouts : null,
+      }).catch((err) => console.error('[bookings] mirror publish failed:', err));
+    }
 
     return NextResponse.json([...withNonArrival, ...overrideBlackouts]);
   } catch (err) {

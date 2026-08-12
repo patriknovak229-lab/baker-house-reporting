@@ -1,0 +1,40 @@
+CREATE TABLE "bookings_mirror" (
+	"reservation_number" text PRIMARY KEY NOT NULL,
+	"source" text NOT NULL,
+	"beds24_id" bigint,
+	"api_reference" text,
+	"channel" text NOT NULL,
+	"room" text NOT NULL,
+	"linked_rooms" text[],
+	"check_in_date" date,
+	"check_out_date" date,
+	"reservation_date" date,
+	"booking_timestamp" timestamp with time zone,
+	"modified_at" timestamp with time zone,
+	"number_of_nights" integer NOT NULL,
+	"number_of_guests" integer NOT NULL,
+	"first_name" text NOT NULL,
+	"last_name" text NOT NULL,
+	"email" text NOT NULL,
+	"phone" text NOT NULL,
+	"nationality" text NOT NULL,
+	"price" numeric NOT NULL,
+	"amount_paid" numeric NOT NULL,
+	"commission_amount" numeric NOT NULL,
+	"payment_charge_amount" numeric NOT NULL,
+	"payment_status" text NOT NULL,
+	"cleaning_status" text NOT NULL,
+	"rate_type" text,
+	"status" text,
+	"is_cancelled" boolean DEFAULT false NOT NULL,
+	"is_blackout" boolean DEFAULT false NOT NULL,
+	"is_unallocated_vr" boolean DEFAULT false NOT NULL,
+	"blackout_created_by" text,
+	"blackout_reason" text,
+	"synced_rating" jsonb,
+	"synced_at" timestamp with time zone NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX "bookings_mirror_check_in_idx" ON "bookings_mirror" USING btree ("check_in_date");--> statement-breakpoint
+CREATE INDEX "bookings_mirror_check_out_idx" ON "bookings_mirror" USING btree ("check_out_date");--> statement-breakpoint
+CREATE INDEX "bookings_mirror_source_idx" ON "bookings_mirror" USING btree ("source");

@@ -43,6 +43,13 @@
       "when": 1786364117868,
       "tag": "0005_secret_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786546081317,
+      "tag": "0006_closed_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }
