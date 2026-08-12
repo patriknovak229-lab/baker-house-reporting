@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { google } from 'googleapis';
 import ExcelJS from 'exceljs';
 import { requireRole } from '@/utils/authGuard';
@@ -9,6 +8,7 @@ import type { BankTransaction } from '@/types/bankTransaction';
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { readAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { classifyCost, RECURRING_ENTRY } from '@/utils/costBridge';
 
 /** Fixed Drive folder the accountant asked exports to be uploaded into. */
@@ -16,11 +16,6 @@ const EXPORT_FOLDER_ID = '1NgIm5ScAhCryR6YHsCCKuw5likraY7jl';
 
 /** Revenue ledger account (Tržby z prodeje služeb). */
 const REVENUE_ACCOUNT = '602';
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
 
 /** Accrual period key — matches the P&L route (prefer DUZP / taxable-supply date). */
 function costDate(inv: SupplierInvoice): string {
@@ -113,7 +108,7 @@ export async function POST(req: NextRequest) {
   const [revenueInvoices, supplierInvoices, rawTxs, rawGroups] = await Promise.all([
     readAllRevenueInvoices(),
     readAllSupplierInvoices(),
-    redis.get<BankTransaction[]>('baker:bank-transactions'),
+    readAllBankTransactions(),
     readAllSettlementGroups(),
   ]);
   const bankTxs          = rawTxs      ?? [];

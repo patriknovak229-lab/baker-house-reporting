@@ -17,9 +17,18 @@ async function main() {
     token: process.env.UPSTASH_REDIS_REST_TOKEN!,
   });
   const arr = (await redis.get<BankTransaction[]>(KEY)) ?? [];
-  let up = 0, sk = 0;
+  // Collapse same-hash duplicate rows rank-first (matching the app's dedupeById
+  // and the store's replaceAll) so an upsert can't leave the wrong survivor.
+  const rank = (s: BankTransaction['state']) => (s === 'unmatched' || s === 'revenue' ? 0 : 1);
+  const byId = new Map<string, BankTransaction>();
+  let sk = 0;
   for (const t of arr) {
     if (!t?.id) { sk++; continue; }
+    const cur = byId.get(t.id);
+    if (!cur || rank(t.state) > rank(cur.state)) byId.set(t.id, t);
+  }
+  let up = 0;
+  for (const t of byId.values()) {
     const row: BankTransactionInsert = {
       id: t.id,
       date: t.date.slice(0, 10),

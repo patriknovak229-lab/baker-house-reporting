@@ -1,23 +1,13 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { SettlementGroup } from '@/types/settlementGroup';
-import type { BankTransaction } from '@/types/bankTransaction';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { buildSettlementRevenue, buildSettlementCost } from '@/utils/settlementRecords';
 import { readAllSettlementGroups, appendSettlementGroups } from '@/utils/settlementGroupsStore';
 import { appendRevenueInvoices } from '@/utils/revenueInvoicesStore';
 import { appendSupplierInvoices } from '@/utils/supplierInvoicesStore';
-
-const TX_KEY     = 'baker:bank-transactions';
-
-function getRedis(): Redis | null {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 
 // GET /api/settlement-groups — return all groups sorted newest first
 export async function GET() {
@@ -37,9 +27,6 @@ export async function GET() {
 export async function POST(request: Request) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
-
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
   const body = await request.json() as {
     name: string;
@@ -99,7 +86,7 @@ export async function POST(request: Request) {
   }
 
   // If starting with a transaction, mark it grouped
-  const txs = (await redis.get<BankTransaction[]>(TX_KEY)) ?? [];
+  const txs = await readAllBankTransactions();
   const updatedTxs = body.transactionId
     ? txs.map((t) =>
         t.id === body.transactionId
@@ -111,10 +98,11 @@ export async function POST(request: Request) {
 
   // Persist group + records append-safe (verify-and-retry so a concurrent settlement
   // save can't clobber a just-added revenue/cost record — see appendRecords).
-  // Groups, revenue and supplier records all go through their flag-aware stores;
-  // the bank transaction stays on Redis (bank_transactions is a later wave).
+  // Groups, revenue/supplier records and the bank transaction all go through
+  // their flag-aware stores; ordering (group → tx → revenue → supplier) is kept
+  // sequential (not Promise.all) so a mid-sequence failure fails the same way.
   await appendSettlementGroups([group]);
-  if (body.transactionId) await redis.set(TX_KEY, updatedTxs);
+  if (body.transactionId) await writeAllBankTransactions(updatedTxs);
   if (revenueInvoice) await appendRevenueInvoices([revenueInvoice]);
   if (costInvoice) await appendSupplierInvoices([costInvoice]);
 

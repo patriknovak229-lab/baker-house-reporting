@@ -1,23 +1,10 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { CommissionSettlement } from '@/types/commissionSettlement';
-import type { BankTransaction } from '@/types/bankTransaction';
 import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-// Bank transactions are a later migration wave — still read/written via Redis
-// here (the reciprocal commissionSettlementId link on the tx).
-const TX_KEY = 'baker:bank-transactions';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
 
 type ActionBody =
   | { action: 'link_bank'; bankTransactionId: string }
@@ -33,17 +20,13 @@ export async function PUT(
   const guard = await requireRole(['admin', 'super', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   const { id } = await params;
   const body = (await request.json()) as ActionBody;
 
-  const [settlements, rawTx] = await Promise.all([
+  const [settlements, transactions] = await Promise.all([
     readAllCommissionSettlements(),
-    redis.get(TX_KEY),
+    readAllBankTransactions(),
   ]);
-  const transactions = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
 
   const idx = settlements.findIndex((s) => s.id === id);
   if (idx === -1) return NextResponse.json({ error: 'Settlement not found' }, { status: 404 });
@@ -66,7 +49,7 @@ export async function PUT(
     settlements[idx] = { ...s, status: 'reconciled', bankTransactionId: body.bankTransactionId, reconciledAt: now };
     transactions[txIdx] = { ...transactions[txIdx], commissionSettlementId: id };
 
-    await Promise.all([writeAllCommissionSettlements(settlements), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllCommissionSettlements(settlements), writeAllBankTransactions(transactions)]);
     return NextResponse.json({ settlement: settlements[idx], transaction: transactions[txIdx] });
   }
 
@@ -78,7 +61,7 @@ export async function PUT(
       }
     }
     settlements[idx] = { ...s, status: 'issued', bankTransactionId: undefined, reconciledAt: undefined };
-    await Promise.all([writeAllCommissionSettlements(settlements), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllCommissionSettlements(settlements), writeAllBankTransactions(transactions)]);
     return NextResponse.json({ settlement: settlements[idx] });
   }
 
@@ -93,15 +76,11 @@ export async function DELETE(
   const guard = await requireRole(['admin', 'super', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   const { id } = await params;
-  const [settlements, rawTx] = await Promise.all([
+  const [settlements, transactions] = await Promise.all([
     readAllCommissionSettlements(),
-    redis.get(TX_KEY),
+    readAllBankTransactions(),
   ]);
-  const transactions = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
 
   const s = settlements.find((x) => x.id === id);
   if (!s) return NextResponse.json({ error: 'Settlement not found' }, { status: 404 });
@@ -118,7 +97,7 @@ export async function DELETE(
 
   await Promise.all([
     writeAllCommissionSettlements(nextSettlements),
-    txChanged ? redis.set(TX_KEY, transactions) : Promise.resolve(),
+    txChanged ? writeAllBankTransactions(transactions) : Promise.resolve(),
   ]);
   return NextResponse.json({ ok: true });
 }

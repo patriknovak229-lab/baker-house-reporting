@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
@@ -8,12 +7,8 @@ import { type SettlementGroup, isReportSettlement } from '@/types/settlementGrou
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { readAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { classifyCost, RECURRING_ENTRY, type StatutoryLine } from '@/utils/costBridge';
-
-const redis = new Redis({
-  url:   process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
 
 /** OTA-named suppliers — used to flag legacy commission invoices not backed by a settlement */
 const OTA_SUPPLIER_RE = /booking\.?com|airbnb/i;
@@ -100,7 +95,7 @@ export async function GET(req: NextRequest) {
   const [revenueInvoices, supplierInvoices, rawTxs, rawGroups] = await Promise.all([
     readAllRevenueInvoices(),
     readAllSupplierInvoices(),
-    redis.get<BankTransaction[]>('baker:bank-transactions'),
+    readAllBankTransactions(),
     readAllSettlementGroups(),
   ]);
 

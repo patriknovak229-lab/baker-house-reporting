@@ -1,20 +1,11 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { BankTransaction, IgnoreCategoryId, RecurringCostCategoryId } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import type { BankCostRule } from '@/types/bankCostWhitelist';
-import { BANK_COST_WHITELIST_KEY, buildRuleFromTx } from '@/types/bankCostWhitelist';
+import { buildRuleFromTx } from '@/types/bankCostWhitelist';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
-
-const TX_KEY = 'baker:bank-transactions';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
+import { readAllBankCostWhitelist, writeAllBankCostWhitelist } from '@/utils/bankCostWhitelistStore';
 
 type ReconcileBody      = { action: 'reconcile'; invoiceId?: string; invoiceIds?: string[] };
 type IgnoreBody         = { action: 'ignore'; ignoreCategory: IgnoreCategoryId; ignoreNote?: string };
@@ -54,15 +45,10 @@ export async function PUT(
   const { id } = await params;
   const body = await request.json() as PutBody;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  const [rawTx, invoices] = await Promise.all([
-    redis.get(TX_KEY),
+  const [transactions, invoices] = await Promise.all([
+    readAllBankTransactions(),
     readAllSupplierInvoices(),
   ]);
-
-  const transactions = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
 
   const txIdx = transactions.findIndex((t) => t.id === id);
   if (txIdx === -1) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
@@ -144,10 +130,9 @@ export async function PUT(
         fixedAmount: body.whitelist.fixedAmount,
       });
       if (rule) {
-        const rawRules = await redis.get(BANK_COST_WHITELIST_KEY);
-        const rules = (Array.isArray(rawRules) ? rawRules : []) as BankCostRule[];
+        const rules = await readAllBankCostWhitelist();
         rules.push(rule);
-        await redis.set(BANK_COST_WHITELIST_KEY, rules);
+        await writeAllBankCostWhitelist(rules);
       }
     }
 
@@ -313,7 +298,7 @@ export async function PUT(
   transactions[txIdx] = tx;
 
   await Promise.all([
-    redis.set(TX_KEY, transactions),
+    writeAllBankTransactions(transactions),
     writeAllSupplierInvoices(invoices),
   ]);
 

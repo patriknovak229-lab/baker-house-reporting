@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { BankTransaction, BankTransactionDirection, BankTransactionState } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import type { BankCostRule } from '@/types/bankCostWhitelist';
-import { BANK_COST_WHITELIST_KEY, matchesCostRule } from '@/types/bankCostWhitelist';
+import { matchesCostRule } from '@/types/bankCostWhitelist';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
-
-const TX_KEY = 'baker:bank-transactions';
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
+import { readAllBankCostWhitelist } from '@/utils/bankCostWhitelistStore';
 
 /**
  * Collapse duplicate-id rows that predate the switch to the bank's unique
@@ -24,13 +22,6 @@ function dedupeById(txs: BankTransaction[]): { deduped: BankTransaction[]; remov
   }
   const deduped = [...byId.values()];
   return { deduped, removed: txs.length - deduped.length };
-}
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
 }
 
 // ── CSV parsing ──────────────────────────────────────────────────────────────
@@ -304,9 +295,6 @@ export async function POST(request: Request) {
   const guard = await requireRole(['admin']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   let csvText: string;
   try {
     const formData = await request.formData();
@@ -329,8 +317,7 @@ export async function POST(request: Request) {
 
   // Load existing transactions to deduplicate. Self-heal any legacy duplicate-id
   // rows (see dedupeById) so re-keyed pairs collapse automatically on import.
-  const rawTx = await redis.get(TX_KEY);
-  const rawExisting = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
+  const rawExisting = await readAllBankTransactions();
   const { deduped: existing, removed: selfHealed } = dedupeById(rawExisting);
   const existingIds = new Set(existing.map((t) => t.id));
 
@@ -350,7 +337,7 @@ export async function POST(request: Request) {
 
   if (newTxs.length === 0) {
     // Nothing new, but still persist a self-heal collapse if one happened.
-    if (selfHealed > 0) await redis.set(TX_KEY, existing);
+    if (selfHealed > 0) await writeAllBankTransactions(existing);
     return NextResponse.json({ imported: 0, duplicates, autoReconciled: 0, autoClassified: 0, transactions: existing });
   }
 
@@ -362,8 +349,7 @@ export async function POST(request: Request) {
   );
 
   // Recurring-cost whitelist — auto-classify contractual standing orders (rent, parking)
-  const rawRules = await redis.get(BANK_COST_WHITELIST_KEY);
-  const costRules = (Array.isArray(rawRules) ? rawRules : []) as BankCostRule[];
+  const costRules = await readAllBankCostWhitelist();
 
   const now = new Date().toISOString();
   let autoReconciled = 0;
@@ -414,7 +400,7 @@ export async function POST(request: Request) {
 
   // Persist both
   await Promise.all([
-    redis.set(TX_KEY, allTransactions),
+    writeAllBankTransactions(allTransactions),
     writeAllSupplierInvoices(updatedInvoices),
   ]);
 

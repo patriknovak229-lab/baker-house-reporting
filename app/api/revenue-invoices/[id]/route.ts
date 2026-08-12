@@ -1,18 +1,8 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { RevenueInvoiceCategory } from '@/types/revenueInvoice';
-import type { BankTransaction } from '@/types/bankTransaction';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
-
-const TX_KEY  = 'baker:bank-transactions';
-
-function getRedis(): Redis | null {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 
 type ActionBody =
   | { action: 'update_category'; category: RevenueInvoiceCategory }
@@ -26,14 +16,10 @@ export async function PUT(
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   const { id } = await params;
   const body = await request.json() as ActionBody;
 
-  const [invoices, rawTx] = await Promise.all([readAllRevenueInvoices(), redis.get(TX_KEY)]);
-  const transactions = (Array.isArray(rawTx)  ? rawTx  : []) as BankTransaction[];
+  const [invoices, transactions] = await Promise.all([readAllRevenueInvoices(), readAllBankTransactions()]);
 
   const invIdx = invoices.findIndex((i) => i.id === id);
   if (invIdx === -1) return NextResponse.json({ error: 'Revenue invoice not found' }, { status: 404 });
@@ -73,7 +59,7 @@ export async function PUT(
       reconciledAt: now,
     };
 
-    await Promise.all([writeAllRevenueInvoices(invoices), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllRevenueInvoices(invoices), writeAllBankTransactions(transactions)]);
     return NextResponse.json({ invoice: invoices[invIdx], transaction: transactions[txIdx] });
   }
 
@@ -93,7 +79,7 @@ export async function PUT(
       reconciledAt: undefined,
     };
 
-    await Promise.all([writeAllRevenueInvoices(invoices), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllRevenueInvoices(invoices), writeAllBankTransactions(transactions)]);
     return NextResponse.json({ invoice: invoices[invIdx] });
   }
 

@@ -1,22 +1,12 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
-import type { BankTransaction } from '@/types/bankTransaction';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { settlementDisplayName } from '@/utils/settlementRecords';
 import { readAllSettlementGroups, writeAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
-
-const TX_KEY       = 'baker:bank-transactions';
-
-function getRedis(): Redis | null {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -24,9 +14,6 @@ type Params = { params: Promise<{ id: string }> };
 export async function PUT(request: Request, { params }: Params) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
-
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
   const { id } = await params;
   const body = await request.json() as {
@@ -51,7 +38,7 @@ export async function PUT(request: Request, { params }: Params) {
   // Load everything
   const [groups, txs, invoices] = await Promise.all([
     readAllSettlementGroups(),
-    redis.get<BankTransaction[]>(TX_KEY).then((t) => t ?? []),
+    readAllBankTransactions(),
     readAllSupplierInvoices(),
   ]);
 
@@ -163,7 +150,7 @@ export async function PUT(request: Request, { params }: Params) {
 
   await Promise.all([
     writeAllSettlementGroups(updatedGroups),
-    redis.set(TX_KEY, updatedTxs),
+    writeAllBankTransactions(updatedTxs),
     writeAllSupplierInvoices(updatedInvoices),
     ...(updatedRevenue ? [writeAllRevenueInvoices(updatedRevenue)] : []),
   ]);
@@ -179,14 +166,11 @@ export async function DELETE(_request: Request, { params }: Params) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   const { id } = await params;
 
   const [groups, txs, invoices] = await Promise.all([
     readAllSettlementGroups(),
-    redis.get<BankTransaction[]>(TX_KEY).then((t) => t ?? []),
+    readAllBankTransactions(),
     readAllSupplierInvoices(),
   ]);
 
@@ -223,7 +207,7 @@ export async function DELETE(_request: Request, { params }: Params) {
 
   await Promise.all([
     writeAllSettlementGroups(updatedGroups),
-    redis.set(TX_KEY, updatedTxs),
+    writeAllBankTransactions(updatedTxs),
     writeAllSupplierInvoices(updatedInvoices),
     ...(updatedRevenue ? [writeAllRevenueInvoices(updatedRevenue)] : []),
   ]);

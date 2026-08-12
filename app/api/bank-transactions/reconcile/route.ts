@@ -1,18 +1,9 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
-
-const TX_KEY  = 'baker:bank-transactions';
-
-function getRedis(): Redis | null {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 
 /** Word-overlap name score (0–4): 4=exact, 3=mutual substring, 2=one-directional, 1=word overlap */
 function calcNameScore(txCounterparty: string, invSupplier: string): number {
@@ -76,11 +67,7 @@ export async function POST(request: Request) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  const [rawTx, invoices] = await Promise.all([redis.get(TX_KEY), readAllSupplierInvoices()]);
-  const transactions = (Array.isArray(rawTx)  ? rawTx  : []) as BankTransaction[];
+  const [transactions, invoices] = await Promise.all([readAllBankTransactions(), readAllSupplierInvoices()]);
 
   const unmatchedDebits  = transactions.filter((t) => t.direction === 'debit' && t.state === 'unmatched');
   const pendingInvoices  = invoices.filter((inv) => inv.status === 'pending' && !inv.bankTransactionId);
@@ -111,7 +98,7 @@ export async function POST(request: Request) {
   }
 
   if (matched > 0) {
-    await Promise.all([redis.set(TX_KEY, transactions), writeAllSupplierInvoices(invoices)]);
+    await Promise.all([writeAllBankTransactions(transactions), writeAllSupplierInvoices(invoices)]);
   }
 
   return NextResponse.json({ matched, transactions });

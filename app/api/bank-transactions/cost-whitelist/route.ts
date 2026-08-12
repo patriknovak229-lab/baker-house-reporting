@@ -1,37 +1,19 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { BankCostRule } from '@/types/bankCostWhitelist';
-import { BANK_COST_WHITELIST_KEY, ruleHasIdentity } from '@/types/bankCostWhitelist';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
-
-async function loadRules(redis: Redis): Promise<BankCostRule[]> {
-  const raw = await redis.get(BANK_COST_WHITELIST_KEY);
-  return (Array.isArray(raw) ? raw : []) as BankCostRule[];
-}
+import { ruleHasIdentity } from '@/types/bankCostWhitelist';
+import { readAllBankCostWhitelist, writeAllBankCostWhitelist } from '@/utils/bankCostWhitelistStore';
 
 export async function GET() {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  return NextResponse.json(await loadRules(redis));
+  return NextResponse.json(await readAllBankCostWhitelist());
 }
 
 export async function POST(request: Request) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
-
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
   const body = await request.json() as Partial<BankCostRule>;
   if (!ruleHasIdentity(body)) {
@@ -52,9 +34,9 @@ export async function POST(request: Request) {
     createdAt: new Date().toISOString(),
   };
 
-  const rules = await loadRules(redis);
+  const rules = await readAllBankCostWhitelist();
   rules.push(rule);
-  await redis.set(BANK_COST_WHITELIST_KEY, rules);
+  await writeAllBankCostWhitelist(rules);
 
   return NextResponse.json(rule, { status: 201 });
 }
@@ -63,15 +45,12 @@ export async function DELETE(request: Request) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   const id = new URL(request.url).searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id query param required' }, { status: 400 });
 
-  const rules = await loadRules(redis);
+  const rules = await readAllBankCostWhitelist();
   const next = rules.filter((r) => r.id !== id);
-  await redis.set(BANK_COST_WHITELIST_KEY, next);
+  await writeAllBankCostWhitelist(next);
 
   return NextResponse.json({ deleted: rules.length - next.length });
 }
