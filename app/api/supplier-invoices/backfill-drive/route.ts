@@ -63,7 +63,7 @@ export async function POST() {
   const drive = google.drive({ version: 'v3', auth: driveAuth });
 
   // Gmail client for the connected invoice account
-  const gmailResult = await createInvoiceGmailClient(redis);
+  const gmailResult = await createInvoiceGmailClient();
   if ('error' in gmailResult) {
     return NextResponse.json({ error: gmailResult.error }, { status: gmailResult.status });
   }

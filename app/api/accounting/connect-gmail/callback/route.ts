@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { Redis } from '@upstash/redis';
+import { writeGmailInvoiceToken } from '@/utils/gmailInvoiceTokenStore';
 
 const STATE_KEY = 'baker:gmail-oauth-state';
-const TOKEN_KEY = 'baker:gmail-invoice-token';
 
 export interface GmailInvoiceToken {
   refreshToken: string;
@@ -79,7 +79,7 @@ export async function GET(request: Request) {
     email,
     connectedAt: new Date().toISOString(),
   };
-  await redis.set(TOKEN_KEY, tokenData);
+  await writeGmailInvoiceToken(tokenData);
 
   // Redirect back to the app
   return NextResponse.redirect(`${appUrl}?gmailConnected=1`);

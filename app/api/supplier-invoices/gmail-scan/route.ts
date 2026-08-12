@@ -1,19 +1,8 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { SupplierInvoice } from '@/types/supplierInvoice';
-import type { GmailInvoiceToken } from '@/app/api/accounting/connect-gmail/callback/route';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
-
-const TOKEN_KEY = 'baker:gmail-invoice-token';
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readGmailInvoiceToken } from '@/utils/gmailInvoiceTokenStore';
 
 interface GmailAttachment {
   messageId: string;
@@ -98,11 +87,8 @@ export async function POST() {
   const label = process.env.GMAIL_INVOICE_LABEL;
   if (!label) return NextResponse.json({ error: 'GMAIL_INVOICE_LABEL not configured' }, { status: 503 });
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   // Load the stored OAuth token for the invoice Gmail account
-  const stored = await redis.get(TOKEN_KEY) as GmailInvoiceToken | null;
+  const stored = await readGmailInvoiceToken();
   if (!stored?.refreshToken) {
     return NextResponse.json(
       { error: 'Invoice Gmail account not connected. Please connect it in the Accounting settings.' },

@@ -1,9 +1,6 @@
 import { google } from 'googleapis';
 import type { gmail_v1 } from 'googleapis';
-import type { Redis } from '@upstash/redis';
-import type { GmailInvoiceToken } from '@/app/api/accounting/connect-gmail/callback/route';
-
-const TOKEN_KEY = 'baker:gmail-invoice-token';
+import { readGmailInvoiceToken } from '@/utils/gmailInvoiceTokenStore';
 
 export type MessagePart = {
   mimeType?: string | null;
@@ -72,10 +69,10 @@ export async function tryFetchPdf(url: string): Promise<Buffer | null> {
  * Returns a structured error (mirroring the requireRole guard shape) when the
  * account isn't connected or the stored refresh token can no longer be refreshed.
  */
-export async function createInvoiceGmailClient(
-  redis: Redis,
-): Promise<{ gmail: gmail_v1.Gmail } | { error: string; status: number }> {
-  const stored = (await redis.get(TOKEN_KEY)) as GmailInvoiceToken | null;
+export async function createInvoiceGmailClient(): Promise<
+  { gmail: gmail_v1.Gmail } | { error: string; status: number }
+> {
+  const stored = await readGmailInvoiceToken();
   if (!stored?.refreshToken) {
     return { error: 'Invoice Gmail account not connected. Connect it in the Accounting settings.', status: 401 };
   }
