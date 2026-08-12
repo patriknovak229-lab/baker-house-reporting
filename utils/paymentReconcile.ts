@@ -17,13 +17,12 @@
  * something, we leave it alone (they may have refunded, etc.).
  */
 
-import { Redis } from '@upstash/redis';
 import type { PaymentStatus } from '@/types/reservation';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { readAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
+import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
-const OVERRIDES_KEY = 'baker:reservation-overrides';
 
 interface LocalFields {
   paymentStatusOverride?: PaymentStatus | null;
@@ -81,19 +80,13 @@ function decideStatus(paidSum: number, bookingPrice: number): PaymentStatus | nu
  * deliberately, e.g. "Refunded" after a chargeback).
  */
 export async function recomputePaymentOverride(
-  redis: Redis,
   reservationNumber: string,
 ): Promise<{ applied: boolean; status: PaymentStatus | null; paidSum: number; bookingPrice: number | null }> {
-  const [allPayments, overridesRaw, bookingPrice] = await Promise.all([
+  const [allPayments, overrides, bookingPrice] = await Promise.all([
     readAllAdditionalPayments(),
-    redis.get(OVERRIDES_KEY),
+    readAllReservationOverrides<LocalFields>(),
     fetchBookingPrice(reservationNumber),
   ]);
-
-  const overrides: Record<string, LocalFields> =
-    overridesRaw && typeof overridesRaw === 'object'
-      ? (overridesRaw as Record<string, LocalFields>)
-      : {};
 
   // Sum net paid (amount minus successful/pending refunds) across all
   // AdditionalPayments for this reservation. A fully-refunded payment
@@ -141,7 +134,7 @@ export async function recomputePaymentOverride(
   }
 
   overrides[reservationNumber] = { ...current, paymentStatusOverride: newStatus };
-  await redis.set(OVERRIDES_KEY, overrides);
+  await writeAllReservationOverrides(overrides);
 
   return { applied: true, status: newStatus, paidSum, bookingPrice };
 }

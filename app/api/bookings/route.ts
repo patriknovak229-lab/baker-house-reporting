@@ -9,7 +9,8 @@ import type { PerkOverrides, RatePerks } from "@/utils/ratePerks";
 import { fetchReviews, fetchRawReviews, reviewsFromDate, mergeReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
 import { notifyNewReviews } from "@/utils/reviewAlerts";
 import type { GuestRating } from "@/types/reservation";
-import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, attachNonArrivalOverlay, mapChannel, mapRoom, infoItemsText, BEDS24_API_BASE, RESERVATION_OVERRIDES_KEY, APP_PHONE_MARKER, type Beds24Booking } from "@/utils/beds24Reservations";
+import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, attachNonArrivalOverlay, mapChannel, mapRoom, infoItemsText, BEDS24_API_BASE, APP_PHONE_MARKER, type Beds24Booking } from "@/utils/beds24Reservations";
+import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 
 // Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
 // reference (apiReference). This window also gates how promptly a new review can
@@ -119,10 +120,10 @@ const RATE_PERKS_KEY = "baker:reservation-rate-perks";
 async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
-  const overrides =
-    (await redis.get<
-      Record<string, { rateTypeOverride?: RateType | null; perkOverrides?: PerkOverrides }>
-    >(RESERVATION_OVERRIDES_KEY)) ?? {};
+  const overrides = await readAllReservationOverrides<{
+    rateTypeOverride?: RateType | null;
+    perkOverrides?: PerkOverrides;
+  }>();
   const rateMap: Record<string, RateType> = {};
   const perkMap: Record<string, RatePerks> = {};
   for (const r of reservations) {

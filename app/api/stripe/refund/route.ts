@@ -29,7 +29,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import type {
@@ -40,11 +39,6 @@ import type {
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
 
 async function sendTelegram(message: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -178,7 +172,7 @@ export async function POST(req: NextRequest) {
   // Reconcile reservation payment status badge
   if (payment.reservationNumber) {
     try {
-      await recomputePaymentOverride(redis, payment.reservationNumber);
+      await recomputePaymentOverride(payment.reservationNumber);
     } catch (err) {
       console.error('[stripe/refund] recomputePaymentOverride failed:', err);
     }

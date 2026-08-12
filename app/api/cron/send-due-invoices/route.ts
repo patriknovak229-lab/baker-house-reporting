@@ -28,10 +28,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { InvoiceData, Issue, InvoiceStatus, Reservation } from '@/types/reservation';
-import { buildReservationSet, RESERVATION_OVERRIDES_KEY } from '@/utils/beds24Reservations';
+import { buildReservationSet } from '@/utils/beds24Reservations';
+import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { sendInvoiceEmail } from '@/utils/invoiceSend';
 import { sendTelegram } from '@/utils/telegram';
 
@@ -46,13 +46,6 @@ interface OverrideEntry {
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
   issues?: Issue[];
-}
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
 }
 
 function todayUTC(): string {
@@ -77,7 +70,6 @@ export async function POST(req: NextRequest) {
     if ('error' in auth) return auth.error;
   }
 
-  const redis = getRedis();
   const today = todayUTC();
   const earliest = ymdDaysAgo(today, CATCHUP_DAYS);
 
@@ -91,8 +83,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Load failed: ${reason}` }, { status: 502 });
   }
 
-  const overrides =
-    (await redis.get<Record<string, OverrideEntry>>(RESERVATION_OVERRIDES_KEY)) ?? {};
+  const overrides = await readAllReservationOverrides<OverrideEntry>();
   const byNumber = new Map(reservations.map((r) => [r.reservationNumber, r]));
 
   let sent = 0;
@@ -166,7 +157,7 @@ export async function POST(req: NextRequest) {
 
   if (dirty) {
     try {
-      await redis.set(RESERVATION_OVERRIDES_KEY, overrides);
+      await writeAllReservationOverrides(overrides);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error('[cron/send-due-invoices] overrides write failed:', reason);

@@ -16,7 +16,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additionalPayment';
@@ -26,13 +25,6 @@ import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/a
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-function getRedis(): Redis {
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
 
 interface DetailRow {
   id: string;
@@ -63,7 +55,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'reservationNumber is required' }, { status: 400 });
   }
 
-  const redis = getRedis();
   const allPayments = await readAllAdditionalPayments();
 
   const linked = allPayments.filter((p) => p.reservationNumber === reservationNumber);
@@ -306,12 +297,12 @@ export async function POST(req: NextRequest) {
         ...(invoiceExists ? [] : [writeAllRevenueInvoices(updatedInvoices)]),
       ]);
     } catch (err) {
-      console.error('[check-payment] Redis write failed (web import):', err);
+      console.error('[check-payment] persist failed (web import):', err);
       return NextResponse.json({ error: 'Persist failed' }, { status: 500 });
     }
 
     // Recompute payment override now that we've recorded a paid amount
-    const reconcile = await recomputePaymentOverride(redis, reservationNumber);
+    const reconcile = await recomputePaymentOverride(reservationNumber);
 
     return NextResponse.json({
       ok: true,
@@ -460,7 +451,7 @@ export async function POST(req: NextRequest) {
     try {
       await Promise.all(writes);
     } catch (err) {
-      console.error('[check-payment] Redis write failed:', err);
+      console.error('[check-payment] persist failed:', err);
       return NextResponse.json(
         { error: 'Persist failed — payments may be in inconsistent state' },
         { status: 500 },
@@ -470,7 +461,7 @@ export async function POST(req: NextRequest) {
 
   // Always recompute override at the end, even if no AdditionalPayment changed
   // (covers the case where webhook updated AdditionalPayment but reconcile failed)
-  const reconcile = await recomputePaymentOverride(redis, reservationNumber);
+  const reconcile = await recomputePaymentOverride(reservationNumber);
 
   return NextResponse.json({
     ok: true,

@@ -36,6 +36,7 @@ import { after } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { readAllAutoReplyLog, writeAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
+import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import type { Reservation, Issue, Room, InvoiceData } from '@/types/reservation';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
@@ -112,7 +113,6 @@ export const maxDuration = 60;
 const PROCESSED_KEY = 'baker:auto-reply:processed'; // Set<beds24MessageId>
 const RATE_LIMIT_PREFIX = 'baker:auto-reply:count'; // :{bookingId}:{yyyymmdd}
 const BOOKINGS_CACHE_KEY = 'baker:beds24-bookings-cache';
-const LOCAL_STATE_KEY = 'baker:reservation-overrides';
 // Effective rate-driven perks (early check-in / late checkout) per reservation,
 // published by the bookings sync (see app/api/bookings persistRateTypeMap).
 // Keyed by reservationNumber; ABSENCE = no perks. Read-only here.
@@ -1209,15 +1209,15 @@ async function buildReservationContext(
   // Apply local-state overrides (parkingOverride + additionalEmail).
   // additionalEmail is needed by autoCompleteInvoiceRequest as a fallback
   // when the chat extraction couldn't pull an email.
+  // Overrides go through the flag-aware store (its own backend), so this read is
+  // no longer gated on the webhook's Redis client being present.
   let parkingOverride: string | undefined;
   let additionalEmail = '';
-  if (redis) {
-    const overrides =
-      (await redis.get<Record<string, { parkingOverride?: string; additionalEmail?: string }>>(LOCAL_STATE_KEY)) ?? {};
-    const own = overrides[`BH-${bookingId}`];
-    parkingOverride = own?.parkingOverride;
-    additionalEmail = own?.additionalEmail ?? '';
-  }
+  const overrides =
+    await readAllReservationOverrides<{ parkingOverride?: string; additionalEmail?: string }>();
+  const own = overrides[`BH-${bookingId}`];
+  parkingOverride = own?.parkingOverride;
+  additionalEmail = own?.additionalEmail ?? '';
 
   // Build a minimal Reservation just for what the templates need.
   // Fields not used by buildTemplate are left as sensible defaults.
@@ -1263,7 +1263,7 @@ async function buildReservationContext(
 async function loadAllReservations(redis: Redis | null): Promise<Reservation[]> {
   if (!redis) return [];
   const cached = (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
-  const overrides = (await redis.get<Record<string, { parkingOverride?: string }>>(LOCAL_STATE_KEY)) ?? {};
+  const overrides = await readAllReservationOverrides<{ parkingOverride?: string }>();
 
   const out: Reservation[] = [];
   for (const b of Object.values(cached)) {
@@ -1410,7 +1410,7 @@ async function appendIssueToReservation(
   originalMessage: string,
   reservation: Reservation,
 ): Promise<void> {
-  const overrides = (await redis.get<Record<string, { issues?: Issue[] }>>(LOCAL_STATE_KEY)) ?? {};
+  const overrides = await readAllReservationOverrides<{ issues?: Issue[] }>();
   const current = overrides[reservationNumber] ?? {};
   const issues: Issue[] = Array.isArray(current.issues) ? current.issues : [];
 
@@ -1448,7 +1448,7 @@ async function appendIssueToReservation(
     ...current,
     issues: [...issues, newIssue],
   };
-  await redis.set(LOCAL_STATE_KEY, overrides);
+  await writeAllReservationOverrides(overrides);
 }
 
 function trimQuote(s: string): string {
@@ -1859,7 +1859,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   // Persist invoiceData + create the red Send-invoice Issue via local-state.
   // Both end up in the same Redis blob so we do one read-modify-write.
   const overrides =
-    (await redis.get<Record<string, { invoiceData?: InvoiceData; issues?: Issue[]; additionalEmail?: string }>>(LOCAL_STATE_KEY)) ?? {};
+    await readAllReservationOverrides<{ invoiceData?: InvoiceData; issues?: Issue[]; additionalEmail?: string }>();
   const current = overrides[request.reservationNumber] ?? {};
 
   // Don't clobber any pre-existing invoiceData the operator may have set
@@ -1914,7 +1914,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     invoiceData: newInvoiceData,
     issues: [...issues, newIssue],
   };
-  await redis.set(LOCAL_STATE_KEY, overrides);
+  await writeAllReservationOverrides(overrides);
 
   // Mark the request auto-completed + persist
   const completedRequest: InvoiceRequest = {

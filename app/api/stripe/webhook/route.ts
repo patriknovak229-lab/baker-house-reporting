@@ -204,7 +204,7 @@ export async function POST(req: NextRequest) {
     // Reconcile reservation paymentStatusOverride based on the new payment state.
     // Best-effort: if Beds24 lookup fails or the override was manually set, this is a no-op.
     try {
-      await recomputePaymentOverride(redis, record.reservationNumber);
+      await recomputePaymentOverride(record.reservationNumber);
     } catch (err) {
       console.error('[stripe/webhook] recomputePaymentOverride failed:', err);
     }
@@ -294,7 +294,7 @@ async function handleChargeFeeSync(charge: Stripe.Charge): Promise<void> {
   const reservationNumber = payments[idx].reservationNumber;
   if (reservationNumber) {
     try {
-      await recomputePaymentOverride(redis, reservationNumber);
+      await recomputePaymentOverride(reservationNumber);
     } catch (err) {
       console.error('[stripe/webhook] recomputePaymentOverride after fee sync failed:', err);
     }
@@ -400,7 +400,7 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
   // Reconcile reservation paymentStatusOverride
   if (payment.reservationNumber) {
     try {
-      await recomputePaymentOverride(redis, payment.reservationNumber);
+      await recomputePaymentOverride(payment.reservationNumber);
     } catch (err) {
       console.error('[stripe/webhook] recomputePaymentOverride after refund sync failed:', err);
     }

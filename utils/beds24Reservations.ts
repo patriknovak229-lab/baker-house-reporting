@@ -11,6 +11,7 @@ import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArri
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
+import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 
 export const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -21,8 +22,6 @@ export function getRedis(): Redis | null {
   return new Redis({ url, token });
 }
 
-export const RESERVATION_OVERRIDES_KEY = "baker:reservation-overrides";
-
 /**
  * Fold the non-arrival overlay (flag + editable net price) from
  * `baker:reservation-overrides` onto reservations server-side, so every
@@ -32,12 +31,10 @@ export const RESERVATION_OVERRIDES_KEY = "baker:reservation-overrides";
  * values), keeping optimistic UI updates instant.
  */
 export async function attachNonArrivalOverlay(reservations: Reservation[]): Promise<Reservation[]> {
-  const redis = getRedis();
-  if (!redis) return reservations;
-  const overrides =
-    (await redis.get<
-      Record<string, { nonArrival?: NonArrival | null; nonArrivalNetPriceCzk?: number | null }>
-    >(RESERVATION_OVERRIDES_KEY)) ?? {};
+  const overrides = await readAllReservationOverrides<{
+    nonArrival?: NonArrival | null;
+    nonArrivalNetPriceCzk?: number | null;
+  }>();
   if (Object.keys(overrides).length === 0) return reservations;
   return reservations.map((r) => {
     const ov = overrides[r.reservationNumber];
