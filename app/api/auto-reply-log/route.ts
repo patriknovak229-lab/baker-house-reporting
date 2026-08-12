@@ -12,6 +12,7 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { readAllAutoReplyLog, readAllAutoReplyEditLog } from '@/utils/autoReplyLogStore';
 import { readAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
+import { readAutoSendCategories } from '@/data-access/autoSendCategories';
 
 const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 
@@ -242,11 +243,12 @@ export async function GET() {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
   }
 
-  const [log, lastPoll, invoiceRequests, editLog] = await Promise.all([
+  const [log, lastPoll, invoiceRequests, editLog, autoSendCategories] = await Promise.all([
     readAllAutoReplyLog<AutoReplyLogEntry>(),
     redis.get<number>(LAST_POLL_KEY),
     readAllInvoiceRequests(),
     readAllAutoReplyEditLog<EditLogEntry>(),
+    readAutoSendCategories().catch(() => [] as string[]),
   ]);
 
   // Per-category readiness — computed over the FULL retained log (not the
@@ -271,6 +273,8 @@ export async function GET() {
     categoryStats,
     // How many log rows the stats were computed over (the retained window).
     statsWindow: log.length,
+    // Categories the operator has flipped to auto-send (skip review).
+    autoSendCategories,
     activeInvoiceRequests,
     allInvoiceRequests: invoiceRequests,
   });

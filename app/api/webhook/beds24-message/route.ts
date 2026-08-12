@@ -40,6 +40,8 @@ import type { Reservation, Issue, Room, InvoiceData } from '@/types/reservation'
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { sendBeds24Message } from '@/utils/beds24Messages';
+import { translateReplyToGuest } from '@/utils/translateReply';
+import { readAutoSendCategories } from '@/data-access/autoSendCategories';
 import {
   detectAutoReplyCategory,
   type AutoReplyCategory,
@@ -660,6 +662,68 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     model = result.model;
   } catch (err) {
     console.error(`[ai-review] compose failed for ${bookingId}:`, err);
+  }
+
+  // ── Per-category auto-send gate ────────────────────────────────────────────
+  // Categories the operator flipped to auto-send (Postgres app_settings) skip
+  // the review queue: the composed Czech draft is translated and sent straight
+  // to the guest. Everything else — plus 'other', empty/SKIP drafts, and
+  // low-confidence detections — still queues for approval. Fail-safe: any error
+  // (config read, translate, or send) falls through to the review queue.
+  if (draftText && detection.category !== 'other' && detection.confidence >= CONFIDENCE_THRESHOLD) {
+    let enabled = false;
+    try {
+      enabled = (await readAutoSendCategories()).includes(detection.category);
+    } catch (err) {
+      console.warn(`[ai-review] auto-send config read failed for ${bookingId}:`, err);
+    }
+    if (enabled) {
+      const targetLang = detection.language;
+      try {
+        const textToSend =
+          targetLang && targetLang.toLowerCase() !== 'cs'
+            ? await translateReplyToGuest(draftText, targetLang)
+            : draftText;
+        const result = await sendBeds24Message(bookingId, textToSend);
+        await appendLog(redis, {
+          id: makeLogId(),
+          beds24MessageId: messageId,
+          beds24SentMessageId: result.messageId,
+          bookingId,
+          reservationNumber,
+          category: detection.category,
+          confidence: detection.confidence,
+          language: detection.language,
+          action: 'sent',
+          sentText: textToSend,
+          guestMessage: messageText,
+          detail: `auto-sent — category '${detection.category}' is enabled (${model})${
+            targetLang && targetLang.toLowerCase() !== 'cs' ? `; translated to ${targetLang}` : ''
+          }`,
+          decidedAt: new Date().toISOString(),
+        });
+        console.log(`[ai-review] booking ${bookingId} msg ${messageId} → AUTO-SENT (${detection.category})`);
+        return;
+      } catch (err) {
+        console.error(`[ai-review] auto-send failed for ${bookingId}, queuing for review:`, err);
+        await appendLog(redis, {
+          id: makeLogId(),
+          beds24MessageId: messageId,
+          beds24SentMessageId: null,
+          bookingId,
+          reservationNumber,
+          category: detection.category,
+          confidence: detection.confidence,
+          language: detection.language,
+          action: 'errored',
+          sentText: null,
+          guestMessage: messageText,
+          detail: `auto-send failed (${err instanceof Error ? err.message : String(err)}) — queued for operator`,
+          decidedAt: new Date().toISOString(),
+        });
+        // fall through to persist the pending draft + queued-draft log below
+      }
+    }
   }
 
   if (redis) {

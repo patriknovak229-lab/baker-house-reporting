@@ -41,9 +41,13 @@ interface LogResponse {
   log: AutoReplyLogEntry[];
   categoryStats: CategoryStat[];
   statsWindow: number;
+  autoSendCategories: string[];
   activeInvoiceRequests: InvoiceRequest[];
   allInvoiceRequests: InvoiceRequest[];
 }
+
+// Categories that can't be flipped to auto-send from the UI.
+const NON_AUTOSENDABLE = new Set(['other', 'invoice-request']);
 
 /**
  * /auto-reply-log
@@ -62,6 +66,39 @@ export default function AutoReplyLogPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  // Categories flipped to auto-send. Synced from the server; toggled optimistically.
+  const [autoSend, setAutoSend] = useState<string[]>([]);
+  const [savingCat, setSavingCat] = useState<string | null>(null);
+
+  const toggleAutoSend = useCallback(
+    async (category: string, enable: boolean) => {
+      const prev = autoSend;
+      const next = enable
+        ? [...new Set([...prev, category])]
+        : prev.filter((c) => c !== category);
+      setAutoSend(next); // optimistic
+      setSavingCat(category);
+      try {
+        const res = await fetch('/api/auto-reply-log/autosend', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ categories: next }),
+        });
+        if (!res.ok) {
+          const b = await res.json().catch(() => ({}));
+          throw new Error(b?.error ?? `HTTP ${res.status}`);
+        }
+        const body = await res.json();
+        if (Array.isArray(body.categories)) setAutoSend(body.categories);
+      } catch (e) {
+        setAutoSend(prev); // revert
+        alert(e instanceof Error ? e.message : 'Failed to update auto-send');
+      } finally {
+        setSavingCat(null);
+      }
+    },
+    [autoSend],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,7 +109,9 @@ export default function AutoReplyLogPage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.error ?? `HTTP ${res.status}`);
       }
-      setData(await res.json());
+      const json = (await res.json()) as LogResponse;
+      setData(json);
+      setAutoSend(json.autoSendCategories ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load');
     } finally {
@@ -142,7 +181,8 @@ export default function AutoReplyLogPage() {
               <b>Clean</b> = draft sent untouched · <b>Edited</b> = changed before sending ·{' '}
               <b>Dismissed</b> = thrown away. A category is{' '}
               <span className="font-semibold text-emerald-700">Ready</span> when it has ≥10
-              decisions, ≥85% clean and ≤10% dismissed.
+              decisions, ≥85% clean and ≤10% dismissed. Flip <b>Auto-send</b> on to let a category
+              reply <b>without operator review</b>; default is Review (you approve each).
             </p>
             <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
               <table className="min-w-full text-sm">
@@ -156,6 +196,7 @@ export default function AutoReplyLogPage() {
                     <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide" title="Discarded, never sent">Dismissed</th>
                     <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide" title="Avg fraction of words changed on the drafts that were edited">Avg edit</th>
                     <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wide">Verdict</th>
+                    <th className="px-3 py-2 text-center text-xs font-medium uppercase tracking-wide" title="Flip on to auto-send this category without operator review">Auto-send</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -184,6 +225,26 @@ export default function AutoReplyLogPage() {
                         <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${verdictClass(s.verdict)}`}>
                           {verdictLabel(s.verdict)}
                         </span>
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {NON_AUTOSENDABLE.has(s.category) ? (
+                          <span className="text-xs text-gray-300" title="Never auto-sends">—</span>
+                        ) : (
+                          <button
+                            onClick={() => toggleAutoSend(s.category, !autoSend.includes(s.category))}
+                            disabled={savingCat === s.category}
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors disabled:opacity-50 ${
+                              autoSend.includes(s.category)
+                                ? 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300'
+                                : 'bg-gray-100 text-gray-500 ring-1 ring-gray-200 hover:bg-gray-200'
+                            }`}
+                            title={autoSend.includes(s.category)
+                              ? 'Auto-sending — click to require review'
+                              : 'In review — click to auto-send'}
+                          >
+                            {autoSend.includes(s.category) ? 'Auto ✓' : 'Review'}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
