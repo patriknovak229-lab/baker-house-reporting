@@ -6,6 +6,8 @@ import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
 import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
+import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
+import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { classifyCost, RECURRING_ENTRY, type StatutoryLine } from '@/utils/costBridge';
 
 const redis = new Redis({
@@ -95,15 +97,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'from and to query params are required (YYYY-MM-DD)' }, { status: 400 });
   }
 
-  const [rawRevenue, rawSupplier, rawTxs, rawGroups] = await Promise.all([
-    redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
-    redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
+  const [revenueInvoices, supplierInvoices, rawTxs, rawGroups] = await Promise.all([
+    readAllRevenueInvoices(),
+    readAllSupplierInvoices(),
     redis.get<BankTransaction[]>('baker:bank-transactions'),
     readAllSettlementGroups(),
   ]);
 
-  const revenueInvoices: RevenueInvoice[]   = rawRevenue  ?? [];
-  const supplierInvoices: SupplierInvoice[] = rawSupplier ?? [];
   const bankTxs: BankTransaction[]          = rawTxs      ?? [];
   const settlementGroups: SettlementGroup[] = rawGroups   ?? [];
 

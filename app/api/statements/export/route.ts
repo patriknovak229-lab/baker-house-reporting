@@ -5,9 +5,10 @@ import ExcelJS from 'exceljs';
 import { requireRole } from '@/utils/authGuard';
 import { auth } from '@/auth';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
+import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
+import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { classifyCost, RECURRING_ENTRY } from '@/utils/costBridge';
 
 /** Fixed Drive folder the accountant asked exports to be uploaded into. */
@@ -109,14 +110,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'from and to query params are required (YYYY-MM-DD)' }, { status: 400 });
   }
 
-  const [rawRevenue, rawSupplier, rawTxs, rawGroups] = await Promise.all([
-    redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
-    redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
+  const [revenueInvoices, supplierInvoices, rawTxs, rawGroups] = await Promise.all([
+    readAllRevenueInvoices(),
+    readAllSupplierInvoices(),
     redis.get<BankTransaction[]>('baker:bank-transactions'),
     readAllSettlementGroups(),
   ]);
-  const revenueInvoices  = rawRevenue  ?? [];
-  const supplierInvoices = rawSupplier ?? [];
   const bankTxs          = rawTxs      ?? [];
   const settlementGroups = rawGroups   ?? [];
 

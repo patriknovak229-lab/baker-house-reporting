@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { SupplierInvoice } from '@/types/supplierInvoice';
-
-const INVOICES_KEY = 'baker:supplier-invoices';
+import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
 const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp']);
 
@@ -22,13 +19,6 @@ function mimeForExt(ext: string): string {
   }
 }
 
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
-
 export async function POST() {
   const guard = await requireRole(['admin']);
   if ('error' in guard) return guard.error;
@@ -37,9 +27,6 @@ export async function POST() {
   if (!folderPath) {
     return NextResponse.json({ error: 'ICLOUD_INVOICE_FOLDER not configured' }, { status: 503 });
   }
-
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
   // Resolve ~ to the actual home directory
   const resolvedFolder = folderPath.startsWith('~/')
@@ -57,8 +44,7 @@ export async function POST() {
   }
 
   // Load already-imported iCloud filenames to avoid duplicates
-  const raw = await redis.get(INVOICES_KEY);
-  const existing = (Array.isArray(raw) ? raw : []) as SupplierInvoice[];
+  const existing = await readAllSupplierInvoices();
   const importedFileNames = new Set(
     existing.map((inv) => inv.icloudFileName).filter(Boolean),
   );

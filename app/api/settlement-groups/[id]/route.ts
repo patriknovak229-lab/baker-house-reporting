@@ -3,13 +3,13 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
 import type { BankTransaction } from '@/types/bankTransaction';
-import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
-import { REVENUE_KEY, settlementDisplayName } from '@/utils/settlementRecords';
+import { settlementDisplayName } from '@/utils/settlementRecords';
 import { readAllSettlementGroups, writeAllSettlementGroups } from '@/utils/settlementGroupsStore';
+import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 const TX_KEY       = 'baker:bank-transactions';
-const INV_KEY      = 'baker:supplier-invoices';
 
 function getRedis(): Redis | null {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
@@ -52,7 +52,7 @@ export async function PUT(request: Request, { params }: Params) {
   const [groups, txs, invoices] = await Promise.all([
     readAllSettlementGroups(),
     redis.get<BankTransaction[]>(TX_KEY).then((t) => t ?? []),
-    redis.get<SupplierInvoice[]>(INV_KEY).then((i) => i ?? []),
+    readAllSupplierInvoices(),
   ]);
 
   const groupIdx = groups.findIndex((g) => g.id === id);
@@ -90,7 +90,7 @@ export async function PUT(request: Request, { params }: Params) {
         : inv,
     );
     if (group.revenueInvoiceId) {
-      const rev = (await redis.get<RevenueInvoice[]>(REVENUE_KEY)) ?? [];
+      const rev = await readAllRevenueInvoices();
       updatedRevenue = rev.map((r) =>
         r.id === group.revenueInvoiceId
           ? { ...r, amountCZK: group.grossAmount ?? r.amountCZK, invoiceDate: group.periodStart ?? r.invoiceDate, dueDate: group.periodStart ?? r.dueDate }
@@ -164,8 +164,8 @@ export async function PUT(request: Request, { params }: Params) {
   await Promise.all([
     writeAllSettlementGroups(updatedGroups),
     redis.set(TX_KEY, updatedTxs),
-    redis.set(INV_KEY, updatedInvoices),
-    ...(updatedRevenue ? [redis.set(REVENUE_KEY, updatedRevenue)] : []),
+    writeAllSupplierInvoices(updatedInvoices),
+    ...(updatedRevenue ? [writeAllRevenueInvoices(updatedRevenue)] : []),
   ]);
 
   return NextResponse.json({
@@ -187,7 +187,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   const [groups, txs, invoices] = await Promise.all([
     readAllSettlementGroups(),
     redis.get<BankTransaction[]>(TX_KEY).then((t) => t ?? []),
-    redis.get<SupplierInvoice[]>(INV_KEY).then((i) => i ?? []),
+    readAllSupplierInvoices(),
   ]);
 
   const group = groups.find((g) => g.id === id);
@@ -215,7 +215,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   // Report settlements also own the gross revenue record → delete it
   let updatedRevenue: RevenueInvoice[] | null = null;
   if (isReport && group.revenueInvoiceId) {
-    const rev = (await redis.get<RevenueInvoice[]>(REVENUE_KEY)) ?? [];
+    const rev = await readAllRevenueInvoices();
     updatedRevenue = rev.filter((r) => r.id !== group.revenueInvoiceId);
   }
 
@@ -224,8 +224,8 @@ export async function DELETE(_request: Request, { params }: Params) {
   await Promise.all([
     writeAllSettlementGroups(updatedGroups),
     redis.set(TX_KEY, updatedTxs),
-    redis.set(INV_KEY, updatedInvoices),
-    ...(updatedRevenue ? [redis.set(REVENUE_KEY, updatedRevenue)] : []),
+    writeAllSupplierInvoices(updatedInvoices),
+    ...(updatedRevenue ? [writeAllRevenueInvoices(updatedRevenue)] : []),
   ]);
 
   return NextResponse.json({ deleted: true });

@@ -4,8 +4,9 @@ import { google } from 'googleapis';
 import { requireRole } from '@/utils/authGuard';
 import { auth } from '@/auth';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
+import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
+import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import {
   getOrCreateInvoiceFolder,
   getOrCreateSubfolder,
@@ -63,13 +64,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'from and to query params are required (YYYY-MM-DD)' }, { status: 400 });
   }
 
-  const [rawSupplier, rawRevenue, rawGroups] = await Promise.all([
-    redis.get<SupplierInvoice[]>('baker:supplier-invoices'),
-    redis.get<RevenueInvoice[]>('baker:revenue-invoices'),
+  const [supplierInvoices, revenueInvoices, rawGroups] = await Promise.all([
+    readAllSupplierInvoices(),
+    readAllRevenueInvoices(),
     readAllSettlementGroups(),
   ]);
-  const supplierInvoices = rawSupplier ?? [];
-  const revenueInvoices  = rawRevenue  ?? [];
   const settlementGroups = rawGroups   ?? [];
 
   // OTA settlement/earnings report PDFs live on the SettlementGroup, not on the auto-created

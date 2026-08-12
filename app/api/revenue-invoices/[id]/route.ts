@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { RevenueInvoice, RevenueInvoiceCategory } from '@/types/revenueInvoice';
+import type { RevenueInvoiceCategory } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
-const REV_KEY = 'baker:revenue-invoices';
 const TX_KEY  = 'baker:bank-transactions';
 
 function getRedis(): Redis | null {
@@ -32,8 +32,7 @@ export async function PUT(
   const { id } = await params;
   const body = await request.json() as ActionBody;
 
-  const [rawRev, rawTx] = await Promise.all([redis.get(REV_KEY), redis.get(TX_KEY)]);
-  const invoices     = (Array.isArray(rawRev) ? rawRev : []) as RevenueInvoice[];
+  const [invoices, rawTx] = await Promise.all([readAllRevenueInvoices(), redis.get(TX_KEY)]);
   const transactions = (Array.isArray(rawTx)  ? rawTx  : []) as BankTransaction[];
 
   const invIdx = invoices.findIndex((i) => i.id === id);
@@ -44,7 +43,7 @@ export async function PUT(
 
   if (body.action === 'update_category') {
     invoices[invIdx] = { ...inv, category: body.category };
-    await redis.set(REV_KEY, invoices);
+    await writeAllRevenueInvoices(invoices);
     return NextResponse.json(invoices[invIdx]);
   }
 
@@ -74,7 +73,7 @@ export async function PUT(
       reconciledAt: now,
     };
 
-    await Promise.all([redis.set(REV_KEY, invoices), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllRevenueInvoices(invoices), redis.set(TX_KEY, transactions)]);
     return NextResponse.json({ invoice: invoices[invIdx], transaction: transactions[txIdx] });
   }
 
@@ -94,7 +93,7 @@ export async function PUT(
       reconciledAt: undefined,
     };
 
-    await Promise.all([redis.set(REV_KEY, invoices), redis.set(TX_KEY, transactions)]);
+    await Promise.all([writeAllRevenueInvoices(invoices), redis.set(TX_KEY, transactions)]);
     return NextResponse.json({ invoice: invoices[invIdx] });
   }
 

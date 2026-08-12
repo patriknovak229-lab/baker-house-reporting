@@ -4,8 +4,8 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { GmailInvoiceToken } from '@/app/api/accounting/connect-gmail/callback/route';
+import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
-const INVOICES_KEY = 'baker:supplier-invoices';
 const TOKEN_KEY = 'baker:gmail-invoice-token';
 
 function getRedis(): Redis | null {
@@ -131,8 +131,7 @@ export async function POST() {
   const gmail = google.gmail({ version: 'v1', auth: oauth2 });
 
   // Load already-imported Gmail message IDs to avoid duplicates
-  const raw = await redis.get(INVOICES_KEY);
-  const existing = (Array.isArray(raw) ? raw : []) as SupplierInvoice[];
+  const existing = await readAllSupplierInvoices();
   const importedIds = new Set(existing.map((inv) => inv.gmailMessageId).filter(Boolean));
 
   // Fetch all emails in the configured label (not just those with PDF attachments —

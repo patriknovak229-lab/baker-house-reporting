@@ -5,9 +5,7 @@ import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { createInvoiceGmailClient, fetchInvoicePdfForMessage } from '@/utils/gmailInvoice';
 import { uploadInvoicePdfToDrive } from '@/utils/driveInvoice';
-import type { SupplierInvoice } from '@/types/supplierInvoice';
-
-const INVOICES_KEY = 'baker:supplier-invoices';
+import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
 function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -39,8 +37,7 @@ export async function POST() {
     );
   }
 
-  const raw = await redis.get(INVOICES_KEY);
-  const invoices = (Array.isArray(raw) ? raw : []) as SupplierInvoice[];
+  const invoices = await readAllSupplierInvoices();
   const targets = invoices.filter((inv) => !inv.driveUrl && inv.gmailMessageId);
 
   if (targets.length === 0) {
@@ -107,7 +104,7 @@ export async function POST() {
   }
 
   if (updated > 0) {
-    await redis.set(INVOICES_KEY, invoices);
+    await writeAllSupplierInvoices(invoices);
   }
 
   return NextResponse.json({ scanned: targets.length, updated, failed });

@@ -23,8 +23,8 @@ import {
 } from '@/utils/invoiceUtils';
 import type { Reservation } from '@/types/reservation';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
-const REV_KEY          = 'baker:revenue-invoices';
 const FOLDER_CACHE_KEY = 'baker:drive-revenue-folder-id';
 const FOLDER_NAME      = 'Baker House - Příjmy';
 
@@ -123,9 +123,8 @@ export async function POST(request: Request) {
   const driveFileName = driveRes.data.name!;
   const driveUrl     = driveRes.data.webViewLink!;
 
-  // ── Upsert RevenueInvoice in Redis ───────────────────────────────────────
-  const raw      = await redis.get(REV_KEY);
-  const invoices = (Array.isArray(raw) ? raw : []) as RevenueInvoice[];
+  // ── Upsert RevenueInvoice ────────────────────────────────────────────────
+  const invoices = await readAllRevenueInvoices();
   const id       = `rev-${reservation.reservationNumber}`;
   const existing = invoices.findIndex((i) => i.id === id);
   const now      = new Date().toISOString();
@@ -153,7 +152,7 @@ export async function POST(request: Request) {
   } else {
     invoices.push(invoice);
   }
-  await redis.set(REV_KEY, invoices);
+  await writeAllRevenueInvoices(invoices);
 
   return NextResponse.json({ driveUrl, driveFileId, driveFileName, invoice });
 }

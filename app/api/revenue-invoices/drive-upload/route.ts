@@ -5,14 +5,13 @@ import sharp from 'sharp';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
-import type { RevenueInvoice } from '@/types/revenueInvoice';
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
-const REV_KEY          = 'baker:revenue-invoices';
 const FOLDER_CACHE_KEY = 'baker:drive-revenue-folder-id';
 const FOLDER_NAME      = 'Baker House - Příjmy';
 
@@ -114,14 +113,13 @@ export async function POST(request: Request) {
 
   const { id, name, webViewLink } = res.data;
 
-  // If invoiceId provided, persist drive fields back to Redis
+  // If invoiceId provided, persist drive fields back to the store
   if (invoiceId) {
-    const raw = await redis.get(REV_KEY);
-    const invoices = (Array.isArray(raw) ? raw : []) as RevenueInvoice[];
+    const invoices = await readAllRevenueInvoices();
     const idx = invoices.findIndex((i) => i.id === invoiceId);
     if (idx >= 0) {
       invoices[idx] = { ...invoices[idx], driveFileId: id!, driveFileName: name!, driveUrl: webViewLink! };
-      await redis.set(REV_KEY, invoices);
+      await writeAllRevenueInvoices(invoices);
       return NextResponse.json({ fileId: id, fileName: name, driveUrl: webViewLink, invoice: invoices[idx] });
     }
   }

@@ -10,6 +10,7 @@ import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import { readAllStripePayments, writeAllStripePayments } from '@/utils/stripePaymentsStore';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -17,8 +18,6 @@ const redis = new Redis({
   url:   process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
-
-const REVENUE_INVOICES_KEY    = 'baker:revenue-invoices';
 
 async function sendTelegram(message: string): Promise<void> {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
@@ -177,7 +176,7 @@ export async function POST(req: NextRequest) {
       const invoiceNumber = `PAY-${session.id.slice(-8).toUpperCase()}`;
       const invoiceDate = paidAt.slice(0, 10);
 
-      const invoices = await redis.get<RevenueInvoice[]>(REVENUE_INVOICES_KEY) ?? [];
+      const invoices = await readAllRevenueInvoices();
       const alreadyExists = invoices.some((i) => i.id === invoiceId);
 
       if (!alreadyExists) {
@@ -195,7 +194,7 @@ export async function POST(req: NextRequest) {
           description:       record.description,
           createdAt:         paidAt,
         };
-        await redis.set(REVENUE_INVOICES_KEY, [...invoices, newInvoice]);
+        await writeAllRevenueInvoices([...invoices, newInvoice]);
         payments[idx] = { ...payments[idx], invoiceId };
       }
 

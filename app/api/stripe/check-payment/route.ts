@@ -20,14 +20,12 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additionalPayment';
-import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';
 import { readAllStripePayments } from '@/utils/stripePaymentsStore';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-const REVENUE_INVOICES_KEY     = 'baker:revenue-invoices';
 
 function getRedis(): Redis {
   return new Redis({
@@ -275,7 +273,7 @@ export async function POST(req: NextRequest) {
     const invoiceId = `pay-${sessionId}`;
     const invoiceNumber = `PAY-${sessionId.slice(-8).toUpperCase()}`;
     const invoiceDate = finalPaidAt.slice(0, 10);
-    const invoices = (await redis.get<RevenueInvoice[]>(REVENUE_INVOICES_KEY)) ?? [];
+    const invoices = await readAllRevenueInvoices();
     const invoiceExists = invoices.some((i) => i.id === invoiceId);
     const updatedInvoices = invoiceExists
       ? invoices
@@ -305,7 +303,7 @@ export async function POST(req: NextRequest) {
     try {
       await Promise.all([
         writeAllAdditionalPayments([...allPayments, newAp]),
-        ...(invoiceExists ? [] : [redis.set(REVENUE_INVOICES_KEY, updatedInvoices)]),
+        ...(invoiceExists ? [] : [writeAllRevenueInvoices(updatedInvoices)]),
       ]);
     } catch (err) {
       console.error('[check-payment] Redis write failed (web import):', err);
@@ -353,7 +351,7 @@ export async function POST(req: NextRequest) {
   let mutatedAdditional = false;
   let mutatedInvoices = false;
   const paymentsCopy = [...allPayments];
-  const invoices = (await redis.get<RevenueInvoice[]>(REVENUE_INVOICES_KEY)) ?? [];
+  const invoices = await readAllRevenueInvoices();
   const invoicesCopy = [...invoices];
 
   for (const p of linked) {
@@ -457,7 +455,7 @@ export async function POST(req: NextRequest) {
   // Persist mutations atomically (best effort — Upstash has no transactions)
   const writes: Promise<unknown>[] = [];
   if (mutatedAdditional) writes.push(writeAllAdditionalPayments(paymentsCopy));
-  if (mutatedInvoices) writes.push(redis.set(REVENUE_INVOICES_KEY, invoicesCopy));
+  if (mutatedInvoices) writes.push(writeAllRevenueInvoices(invoicesCopy));
   if (writes.length > 0) {
     try {
       await Promise.all(writes);

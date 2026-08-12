@@ -3,9 +3,9 @@ import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
+import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
 const TX_KEY  = 'baker:bank-transactions';
-const INV_KEY = 'baker:supplier-invoices';
 
 function getRedis(): Redis | null {
   const url   = process.env.UPSTASH_REDIS_REST_URL;
@@ -79,9 +79,8 @@ export async function POST(request: Request) {
   const redis = getRedis();
   if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
-  const [rawTx, rawInv] = await Promise.all([redis.get(TX_KEY), redis.get(INV_KEY)]);
+  const [rawTx, invoices] = await Promise.all([redis.get(TX_KEY), readAllSupplierInvoices()]);
   const transactions = (Array.isArray(rawTx)  ? rawTx  : []) as BankTransaction[];
-  const invoices     = (Array.isArray(rawInv) ? rawInv : []) as SupplierInvoice[];
 
   const unmatchedDebits  = transactions.filter((t) => t.direction === 'debit' && t.state === 'unmatched');
   const pendingInvoices  = invoices.filter((inv) => inv.status === 'pending' && !inv.bankTransactionId);
@@ -112,7 +111,7 @@ export async function POST(request: Request) {
   }
 
   if (matched > 0) {
-    await Promise.all([redis.set(TX_KEY, transactions), redis.set(INV_KEY, invoices)]);
+    await Promise.all([redis.set(TX_KEY, transactions), writeAllSupplierInvoices(invoices)]);
   }
 
   return NextResponse.json({ matched, transactions });

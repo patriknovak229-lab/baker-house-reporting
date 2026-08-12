@@ -1,26 +1,13 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
-
-const KEY = 'baker:revenue-invoices';
-
-function getRedis(): Redis | null {
-  const url   = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return new Redis({ url, token });
-}
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 export async function GET() {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
-  const raw = await redis.get(KEY);
-  const invoices = (Array.isArray(raw) ? raw : []) as RevenueInvoice[];
+  const invoices = await readAllRevenueInvoices();
 
   // Return sorted newest first
   invoices.sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
@@ -32,17 +19,13 @@ export async function POST(request: Request) {
   const guard = await requireRole(['admin', 'accountant']);
   if ('error' in guard) return guard.error;
 
-  const redis = getRedis();
-  if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
-
   const body = await request.json() as Partial<RevenueInvoice>;
 
   if (!body.invoiceNumber || body.amountCZK == null || !body.invoiceDate) {
     return NextResponse.json({ error: 'Missing required fields: invoiceNumber, amountCZK, invoiceDate' }, { status: 400 });
   }
 
-  const raw = await redis.get(KEY);
-  const invoices = (Array.isArray(raw) ? raw : []) as RevenueInvoice[];
+  const invoices = await readAllRevenueInvoices();
 
   const now = new Date().toISOString();
   const id = body.id ?? crypto.randomUUID();
@@ -73,7 +56,7 @@ export async function POST(request: Request) {
     invoices.push(invoice);
   }
 
-  await redis.set(KEY, invoices);
+  await writeAllRevenueInvoices(invoices);
 
   return NextResponse.json(invoice, { status: existing >= 0 ? 200 : 201 });
 }

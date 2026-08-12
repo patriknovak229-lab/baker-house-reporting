@@ -5,9 +5,9 @@ import type { BankTransaction, BankTransactionDirection, BankTransactionState } 
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { BankCostRule } from '@/types/bankCostWhitelist';
 import { BANK_COST_WHITELIST_KEY, matchesCostRule } from '@/types/bankCostWhitelist';
+import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
 const TX_KEY = 'baker:bank-transactions';
-const INV_KEY = 'baker:supplier-invoices';
 
 /**
  * Collapse duplicate-id rows that predate the switch to the bank's unique
@@ -355,8 +355,7 @@ export async function POST(request: Request) {
   }
 
   // Load invoices for auto-reconciliation
-  const rawInv = await redis.get(INV_KEY);
-  const invoices = (Array.isArray(rawInv) ? rawInv : []) as SupplierInvoice[];
+  const invoices = await readAllSupplierInvoices();
   // Only consider pending invoices with no existing bank link
   const pendingInvoices = invoices.filter(
     (inv) => inv.status === 'pending' && !inv.bankTransactionId,
@@ -416,7 +415,7 @@ export async function POST(request: Request) {
   // Persist both
   await Promise.all([
     redis.set(TX_KEY, allTransactions),
-    redis.set(INV_KEY, updatedInvoices),
+    writeAllSupplierInvoices(updatedInvoices),
   ]);
 
   return NextResponse.json({

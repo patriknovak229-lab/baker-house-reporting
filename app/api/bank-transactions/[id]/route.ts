@@ -5,9 +5,9 @@ import type { BankTransaction, IgnoreCategoryId, RecurringCostCategoryId } from 
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { BankCostRule } from '@/types/bankCostWhitelist';
 import { BANK_COST_WHITELIST_KEY, buildRuleFromTx } from '@/types/bankCostWhitelist';
+import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
 const TX_KEY = 'baker:bank-transactions';
-const INV_KEY = 'baker:supplier-invoices';
 
 function getRedis(): Redis | null {
   const url = process.env.UPSTASH_REDIS_REST_URL;
@@ -57,13 +57,12 @@ export async function PUT(
   const redis = getRedis();
   if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
-  const [rawTx, rawInv] = await Promise.all([
+  const [rawTx, invoices] = await Promise.all([
     redis.get(TX_KEY),
-    redis.get(INV_KEY),
+    readAllSupplierInvoices(),
   ]);
 
   const transactions = (Array.isArray(rawTx) ? rawTx : []) as BankTransaction[];
-  const invoices     = (Array.isArray(rawInv) ? rawInv : []) as SupplierInvoice[];
 
   const txIdx = transactions.findIndex((t) => t.id === id);
   if (txIdx === -1) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
@@ -315,7 +314,7 @@ export async function PUT(
 
   await Promise.all([
     redis.set(TX_KEY, transactions),
-    redis.set(INV_KEY, invoices),
+    writeAllSupplierInvoices(invoices),
   ]);
 
   return NextResponse.json(tx);

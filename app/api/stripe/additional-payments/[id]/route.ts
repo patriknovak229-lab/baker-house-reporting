@@ -1,17 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
-import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
-
-const INVOICES_KEY   = 'baker:revenue-invoices';
-
-function getRedis(): Redis {
-  return new Redis({
-    url:   process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-}
+import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
 // PATCH /api/stripe/additional-payments/[id]  — override status
 export async function PATCH(
@@ -55,7 +45,6 @@ export async function DELETE(
 
   const { id } = await params;
 
-  const redis = getRedis();
   const payments = await readAllAdditionalPayments();
   const filtered = payments.filter((p) => p.id !== id);
 
@@ -65,13 +54,13 @@ export async function DELETE(
 
   // Remove the corresponding auto-created revenue invoice (id: pay-{sessionId})
   const invoiceId = `pay-${id}`;
-  const invoices = await redis.get<RevenueInvoice[]>(INVOICES_KEY) ?? [];
+  const invoices = await readAllRevenueInvoices();
   const filteredInvoices = invoices.filter((inv) => inv.id !== invoiceId);
 
   await Promise.all([
     writeAllAdditionalPayments(filtered),
     filteredInvoices.length !== invoices.length
-      ? redis.set(INVOICES_KEY, filteredInvoices)
+      ? writeAllRevenueInvoices(filteredInvoices)
       : Promise.resolve(),
   ]);
 

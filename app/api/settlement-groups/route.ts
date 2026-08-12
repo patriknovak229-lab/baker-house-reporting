@@ -5,8 +5,10 @@ import type { SettlementGroup } from '@/types/settlementGroup';
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
-import { REVENUE_KEY, SUPPLIER_KEY, buildSettlementRevenue, buildSettlementCost, appendRecords } from '@/utils/settlementRecords';
+import { buildSettlementRevenue, buildSettlementCost } from '@/utils/settlementRecords';
 import { readAllSettlementGroups, appendSettlementGroups } from '@/utils/settlementGroupsStore';
+import { appendRevenueInvoices } from '@/utils/revenueInvoicesStore';
+import { appendSupplierInvoices } from '@/utils/supplierInvoicesStore';
 
 const TX_KEY     = 'baker:bank-transactions';
 
@@ -109,11 +111,12 @@ export async function POST(request: Request) {
 
   // Persist group + records append-safe (verify-and-retry so a concurrent settlement
   // save can't clobber a just-added revenue/cost record — see appendRecords).
-  // Groups go through the flag-aware store; revenue/supplier stay on Redis.
+  // Groups, revenue and supplier records all go through their flag-aware stores;
+  // the bank transaction stays on Redis (bank_transactions is a later wave).
   await appendSettlementGroups([group]);
   if (body.transactionId) await redis.set(TX_KEY, updatedTxs);
-  if (revenueInvoice) await appendRecords(redis, REVENUE_KEY, [revenueInvoice]);
-  if (costInvoice) await appendRecords(redis, SUPPLIER_KEY, [costInvoice]);
+  if (revenueInvoice) await appendRevenueInvoices([revenueInvoice]);
+  if (costInvoice) await appendSupplierInvoices([costInvoice]);
 
   return NextResponse.json({ group, transaction: updatedTx, revenueInvoice, costInvoice }, { status: 201 });
 }
