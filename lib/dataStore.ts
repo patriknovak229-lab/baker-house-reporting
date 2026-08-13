@@ -57,6 +57,12 @@ const ENV_KEYS: Record<StoreDomain, string> = {
 
 const VALID_MODES: readonly StoreMode[] = ['redis', 'dual', 'postgres'];
 
+/** Every migrated domain, for reporting where each one currently reads from. */
+export const STORE_DOMAINS = Object.keys(ENV_KEYS) as StoreDomain[];
+
+/** The env var that switches a domain's backend. */
+export const storeEnvKey = (d: StoreDomain): string => ENV_KEYS[d];
+
 /** Resolve the current storage mode for a domain (defaults to 'redis'). */
 export function getStoreMode(domain: StoreDomain): StoreMode {
   const raw = process.env[ENV_KEYS[domain]]?.trim().toLowerCase();
