@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
-import type { ComputedSettlement } from '@/utils/commissionCalc';
+import { negativePayableWarning, type ComputedSettlement } from '@/utils/commissionCalc';
 import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
 
 export const dynamic = 'force-dynamic';
@@ -32,7 +32,10 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   const createdBy = session?.user?.email ?? guard.email ?? 'unknown';
 
-  const body = (await req.json()) as ComputedSettlement & { force?: boolean };
+  const body = (await req.json()) as ComputedSettlement & {
+    force?: boolean;
+    acknowledgeNegative?: boolean;
+  };
   if (!body?.unitId || !body?.month) {
     return NextResponse.json({ error: 'unitId and month are required' }, { status: 400 });
   }
@@ -48,8 +51,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { force: _force, ...computed } = body;
+  /**
+   * Negative-payable guard — see `negativePayableWarning` for why this warns
+   * rather than bans. Enforced server-side because this endpoint persists the
+   * CLIENT's computed body verbatim: a UI-only check would be bypassable and
+   * wouldn't survive a stale tab.
+   */
+  const negative = negativePayableWarning(body);
+  if (negative && !body.acknowledgeNegative) {
+    return NextResponse.json({ error: negative.message, code: negative.code }, { status: 409 });
+  }
+
+  // Strip the transport-only flags so neither is persisted into the snapshot.
+  const { force: _force, acknowledgeNegative: _ack, ...computed } = body;
   void _force;
+  void _ack;
 
   const settlement: CommissionSettlement = {
     ...computed,

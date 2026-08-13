@@ -8,7 +8,7 @@ import type {
   VariableCostsLookup,
 } from '@/app/api/variable-costs/route';
 import { COMMISSION_UNITS, COMMISSION_RATE, getCommissionUnit } from '@/utils/commissionConfig';
-import { computeSettlement, cleaningEventsForUnit, type VariableCostBundle, type ComputedSettlement } from '@/utils/commissionCalc';
+import { computeSettlement, cleaningEventsForUnit, negativePayableWarning, type VariableCostBundle, type ComputedSettlement } from '@/utils/commissionCalc';
 import { formatCurrency } from '@/utils/formatters';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -130,18 +130,30 @@ export default function CommissionPage() {
     return { gp, comm, pay };
   }, [computed]);
 
-  async function handleIssue(c: ComputedSettlement, force = false) {
+  async function handleIssue(
+    c: ComputedSettlement,
+    opts: { force?: boolean; acknowledgeNegative?: boolean } = {},
+  ) {
     setBusyUnit(c.unitId);
     try {
       const res = await fetch('/api/commission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...c, force }),
+        body: JSON.stringify({ ...c, ...opts }),
       });
       if (res.status === 409) {
         const j = await res.json();
+        // Two distinct blocks land here — confirm with the right question for each,
+        // and carry the previous acknowledgements forward so a settlement that hits
+        // both doesn't loop.
+        if (j.code === 'negative-payable') {
+          if (confirm(`${j.error}\n\nIssue this negative settlement anyway?`)) {
+            return handleIssue(c, { ...opts, acknowledgeNegative: true });
+          }
+          return;
+        }
         if (confirm(`${j.error}\n\nRe-issue anyway (this will unlink the bank payout)?`)) {
-          return handleIssue(c, true);
+          return handleIssue(c, { ...opts, force: true });
         }
         return;
       }
@@ -329,10 +341,31 @@ export default function CommissionPage() {
                 <Row label={`− Commission (${Math.round(COMMISSION_RATE * 100)}%)`} value={`−${formatCurrency(c.commissionAmount)}`} className="text-amber-700" />
               </dl>
 
-              <div className="mt-3 rounded-lg bg-emerald-50 px-3 py-2.5 flex items-center justify-between">
-                <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">Payable to owner</span>
-                <span className="text-lg font-bold text-emerald-700">{formatCurrency(c.payableToOwner)}</span>
+              {/* A negative payable means costs exceeded net sales. Most often that's
+                  a bookings sync that returned no reservations, not a real month —
+                  and issuing freezes the figure for good, so flag it in place rather
+                  than only in the confirm dialog. */}
+              <div
+                className={`mt-3 rounded-lg px-3 py-2.5 flex items-center justify-between ${
+                  c.payableToOwner < 0 ? 'bg-rose-50' : 'bg-emerald-50'
+                }`}
+              >
+                <span
+                  className={`text-xs font-semibold uppercase tracking-wide ${
+                    c.payableToOwner < 0 ? 'text-rose-700' : 'text-emerald-700'
+                  }`}
+                >
+                  {c.payableToOwner < 0 ? 'Owner would owe' : 'Payable to owner'}
+                </span>
+                <span className={`text-lg font-bold ${c.payableToOwner < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {formatCurrency(c.payableToOwner)}
+                </span>
               </div>
+              {negativePayableWarning(c) && (
+                <p className="mt-2 rounded-md bg-rose-50 px-3 py-2 text-[11px] leading-snug text-rose-700">
+                  ⚠ {negativePayableWarning(c)!.message}
+                </p>
+              )}
 
               {/* Actions */}
               <div className="mt-4 flex items-center gap-2">

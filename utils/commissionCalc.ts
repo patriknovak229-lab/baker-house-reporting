@@ -24,6 +24,38 @@ import {
 import { ROOM_TO_BEDS24_ID, BEDS24_ID_TO_ROOM } from '@/app/api/variable-costs/route';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 
+/**
+ * Flags a settlement whose payable has gone negative, i.e. costs exceeded net
+ * sales. `payableToOwner` is `grossProfit × 0.75`, so this happens whenever
+ * `operationalCosts > netSales`.
+ *
+ * The case that matters is `netSales === 0` with real costs: a thin or empty
+ * bookings sync produces exactly that on its own, because costs come from
+ * independent cleaning-app keys, and it renders as the owner owing us 75% of the
+ * month's costs. A genuinely closed month with subscriptions still running is
+ * also legitimately negative, so this is a WARNING and never a hard ban — but
+ * issued settlements are final by policy, so it must not happen by accident.
+ *
+ * Shared by the Commission UI banner and the POST /api/commission guard so the
+ * two can't drift. Returns null when there is nothing to warn about.
+ */
+export function negativePayableWarning(s: {
+  netSales?: number;
+  operationalCosts?: number;
+  payableToOwner?: number;
+}): { code: 'negative-payable'; zeroSales: boolean; message: string } | null {
+  if (typeof s.payableToOwner !== 'number' || !(s.payableToOwner < 0)) return null;
+  const zeroSales = !s.netSales;
+  const kc = (n: number) => `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
+  return {
+    code: 'negative-payable',
+    zeroSales,
+    message: zeroSales
+      ? `This month has NO net sales but ${kc(s.operationalCosts ?? 0)} of costs, so the settlement is negative (${kc(s.payableToOwner)}). That usually means the bookings sync returned no reservations for this period rather than a genuinely empty month — check the Transactions tab shows reservations for this month before continuing. Issued settlements are final.`
+      : `This settlement is negative (${kc(s.payableToOwner)}): costs exceed net sales for this period. Issued settlements are final.`,
+  };
+}
+
 export interface VariableCostBundle {
   byDateRoom: VariableCostsLookup;
   byReservation: Record<string, VariableCostEntry>;
