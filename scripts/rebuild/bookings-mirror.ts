@@ -1,16 +1,19 @@
 /**
- * Rebuild `bookings_mirror` from the raw Beds24 cache in Redis. No Beds24 calls.
- *
- * The mirror is a disposable read-model, so this is the recovery path: drop the
- * table, deploy a normalizer change, or suspect drift → re-run this and the
- * projection is authoritative-equivalent again.
+ * Refresh `bookings_mirror` from the raw Beds24 cache in Redis. No Beds24 calls.
  *
  *   npx tsx scripts/rebuild/bookings-mirror.ts
  *
+ * This TOPS UP the archive — it upserts whatever the cache currently holds and
+ * deletes nothing, so bookings that have already aged out of the cache keep their
+ * archived rows. It is NOT a from-scratch rebuild: since the archive is meant to
+ * outlive the cache, a wipe-and-reinsert would destroy exactly the history it
+ * exists to protect. To re-project the whole archive after a normalizer change,
+ * use the stored `raw` booking on each row instead of this script.
+ *
  * Runs regardless of WRITE_BOOKINGS_MIRROR (that flag gates the /api/bookings
  * side effect, not this deliberate action). Projects rows through the SAME
- * normalize pipeline + row mapper the route uses, so a rebuild and a live sync
- * cannot drift apart.
+ * normalize pipeline + row mapper the route uses, so this and a live sync cannot
+ * drift apart.
  */
 import '../_loadEnv';
 
@@ -56,18 +59,22 @@ async function main() {
   const reservations = [...active, ...cancelledRaw.map(mapToReservation)];
 
   const apiReferenceByReservation: Record<string, string> = {};
+  const rawByReservation: Record<string, Beds24Booking> = {};
   for (const b of [...grouped, ...cancelledRaw]) {
     if (b.apiReference) apiReferenceByReservation[`BH-${b.id}`] = String(b.apiReference);
+    rawByReservation[`BH-${b.id}`] = b;
   }
 
-  // The override-blackout cache has a 5-minute TTL. Absent = nothing to rebuild
-  // from → pass null so mirrored blackout rows are preserved, not wiped.
-  const overrideBlackouts = Array.isArray(blackoutsRaw) ? blackoutsRaw : null;
+  // Blackouts are only upserted here, never pruned: this script doesn't know the
+  // window the cached rows were fetched for, and pruning against an unknown window
+  // could delete a blackout on no evidence. Pruning is the live route's job.
+  const cachedBlackouts = Array.isArray(blackoutsRaw) ? blackoutsRaw : null;
 
   const result = await publishBookingsMirror({
     reservations,
     apiReferenceByReservation,
-    overrideBlackouts,
+    rawByReservation,
+    overrideBlackouts: cachedBlackouts ? { rows: cachedBlackouts } : null,
   });
 
   const { summarizeBookingsMirrorPg } = await import('../../data-access/bookingsMirror');
@@ -75,12 +82,15 @@ async function main() {
     JSON.stringify(
       {
         cachedBookings: raw.length,
-        mirroredBookings: result.bookings,
+        rowsUpserted: result.bookings,
+        skippedInvalid: result.skipped,
         activeGrouped: active.length,
         cancelled: cancelledRaw.length,
         withApiReference: Object.keys(apiReferenceByReservation).length,
-        overrideBlackouts:
-          overrideBlackouts == null ? 'cache absent — existing rows preserved' : result.overrides,
+        blackouts:
+          cachedBlackouts == null
+            ? 'cache absent — existing rows preserved'
+            : `${result.overrides} upserted (never pruned here)`,
         table: await summarizeBookingsMirrorPg(),
       },
       null,

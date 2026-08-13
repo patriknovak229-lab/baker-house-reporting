@@ -50,6 +50,20 @@
       "when": 1786546081317,
       "tag": "0006_closed_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786606779795,
+      "tag": "0007_smart_triton",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786607084079,
+      "tag": "0008_harsh_the_stranger",
+      "breakpoints": true
     }
   ]
 }

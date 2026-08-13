@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { toBookingsMirrorRow, bookingsMirrorWriteEnabled } from './bookingsMirror';
+import { toBookingsMirrorRow, bookingsMirrorWriteEnabled, isMirrorRowWritable } from './bookingsMirror';
 import { mapToReservation, type Beds24Booking } from './beds24Reservations';
 import type { Reservation } from '@/types/reservation';
-
-const SYNCED_AT = new Date('2026-08-12T10:00:00.000Z');
 
 /** Minimal normalized reservation; individual tests override the fields they assert. */
 function reservation(over: Partial<Reservation> = {}): Reservation {
@@ -41,7 +39,7 @@ function reservation(over: Partial<Reservation> = {}): Reservation {
 }
 
 const row = (r: Reservation, apiReference?: string | null) =>
-  toBookingsMirrorRow(r, { source: 'beds24-booking', apiReference, syncedAt: SYNCED_AT });
+  toBookingsMirrorRow(r, { source: 'beds24-booking', apiReference });
 
 describe('bookingsMirrorWriteEnabled', () => {
   const set = (v: string | undefined) => {
@@ -87,7 +85,6 @@ describe('toBookingsMirrorRow', () => {
       numberOfGuests: 2,
       status: 'confirmed',
       rateType: 'Non-Refundable',
-      syncedAt: SYNCED_AT,
     });
     expect(r.bookingTimestamp).toEqual(new Date('2026-08-01T09:30:00.000Z'));
   });
@@ -131,11 +128,27 @@ describe('toBookingsMirrorRow', () => {
   it('has no beds24 id for a synthetic inventory-override blackout row', () => {
     const r = toBookingsMirrorRow(
       reservation({ reservationNumber: 'OV-679704-2026-09-01-2026-09-03', isBlackout: true }),
-      { source: 'inventory-override', syncedAt: SYNCED_AT },
+      { source: 'inventory-override' },
     );
     expect(r.beds24Id).toBeNull();
     expect(r.source).toBe('inventory-override');
     expect(r.apiReference).toBeNull();
+  });
+
+  it('leaves freshness stamping to the database', () => {
+    // synced_at / first_seen_at must be column-defaulted, never caller-supplied —
+    // a skewed CLI clock would otherwise poison the staleness signal.
+    const r = row(reservation());
+    expect('syncedAt' in r).toBe(false);
+    expect('firstSeenAt' in r).toBe(false);
+  });
+
+  it('carries the raw booking so history can be re-projected later', () => {
+    const raw = { id: 12345, arrival: '2026-09-01' };
+    const r = toBookingsMirrorRow(reservation(), { source: 'beds24-booking', raw });
+    expect(r.raw).toEqual(raw);
+    // Blackout rows have no source booking.
+    expect(toBookingsMirrorRow(reservation(), { source: 'inventory-override' }).raw).toBeNull();
   });
 
   it('round-trips a real mapToReservation output — the projection stays in step with the normalizer', () => {
@@ -181,5 +194,28 @@ describe('toBookingsMirrorRow', () => {
       isCancelled: false,
       isBlackout: false,
     });
+  });
+});
+
+describe('isMirrorRowWritable', () => {
+  // The archive is upsert-only, so a degraded row doesn't just look wrong — it
+  // permanently overwrites good history. Both stay dates are the trust signal.
+  it('accepts a normal booking', () => {
+    expect(isMirrorRowWritable(row(reservation()))).toBe(true);
+  });
+
+  it('rejects a row whose stay dates were blank-coerced by the normalizer', () => {
+    expect(isMirrorRowWritable(row(reservation({ checkInDate: '' })))).toBe(false);
+    expect(isMirrorRowWritable(row(reservation({ checkOutDate: '' })))).toBe(false);
+    expect(isMirrorRowWritable(row(reservation({ checkInDate: '', checkOutDate: '' })))).toBe(false);
+  });
+
+  it('still accepts cancellations and blackouts — they carry real dates', () => {
+    expect(isMirrorRowWritable(row(reservation({ isCancelled: true, status: 'cancelled' })))).toBe(true);
+    const blackout = toBookingsMirrorRow(
+      reservation({ reservationNumber: 'OV-679704-2026-09-01-2026-09-03', isBlackout: true, reservationDate: '' }),
+      { source: 'inventory-override' },
+    );
+    expect(isMirrorRowWritable(blackout)).toBe(true);
   });
 });

@@ -8,9 +8,15 @@
  * the dual-read gate — that's a later step comparing a mirror-backed reservation
  * against the computed one at the consumer level.
  *
- * Expected non-zero cases, reported separately rather than as mismatches:
- *  - `cleaningStatus` is derived from today's date, so a mirror written on an
+ * ARCHIVE SEMANTICS: the mirror is upsert-only and deliberately outlives the Redis
+ * cache, so "in Postgres but not in the cache" is the FEATURE, not drift — those
+ * rows are counted as `archivedBeyondCache`. Only the opposite direction (in the
+ * cache but missing from Postgres) and genuine field differences are failures.
+ *
+ * Other expected non-zero cases, reported separately rather than as mismatches:
+ *  - `cleaningStatus` is derived from today's date, so a row written on an
  *    earlier day legitimately differs (reported as `staleCleaningStatus`).
+ *  - `raw` / `firstSeenAt` are archive bookkeeping, not projected data.
  *  - `inventory-override` rows come from a 5-min-TTL cache, so they're only
  *    compared when that cache is present.
  */
@@ -84,7 +90,6 @@ async function main() {
   const grouped = mergeGroupedBookings(raw.filter((b) => !isCancelledStatus(b)));
   const byRef = reviewsRaw?.byRef ?? {};
   const cancelledRaw = raw.filter(isCancelledStatus);
-  const syncedAt = new Date(); // not compared — the mirror's own write timestamp
 
   const expected = new Map<string, BookingsMirrorInsert>();
   for (const b of grouped) {
@@ -96,7 +101,6 @@ async function main() {
       toBookingsMirrorRow(r, {
         source: 'beds24-booking',
         apiReference: b.apiReference ? String(b.apiReference) : null,
-        syncedAt,
       }),
     );
   }
@@ -107,7 +111,6 @@ async function main() {
       toBookingsMirrorRow(r, {
         source: 'beds24-booking',
         apiReference: b.apiReference ? String(b.apiReference) : null,
-        syncedAt,
       }),
     );
   }
@@ -115,7 +118,7 @@ async function main() {
   const haveBlackoutCache = Array.isArray(blackoutsRaw);
   if (haveBlackoutCache) {
     for (const r of blackoutsRaw!) {
-      expected.set(r.reservationNumber, toBookingsMirrorRow(r, { source: 'inventory-override', syncedAt }));
+      expected.set(r.reservationNumber, toBookingsMirrorRow(r, { source: 'inventory-override' }));
     }
   }
 
@@ -126,7 +129,10 @@ async function main() {
   const mismatches: { reservationNumber: string; field: string; expected: unknown; actual: unknown }[] = [];
   const staleCleaningStatus: string[] = [];
   const missingInPg: string[] = [];
-  const extraInPg: string[] = [];
+  const archivedBeyondCache: string[] = [];
+
+  // Archive bookkeeping, not projected data — excluded from the field diff.
+  const SKIP_FIELDS = new Set<keyof BookingsMirrorInsert>(['syncedAt', 'firstSeenAt', 'raw']);
 
   for (const [rn, exp] of expected) {
     const act = actual.get(rn);
@@ -135,7 +141,7 @@ async function main() {
       continue;
     }
     for (const field of Object.keys(exp) as (keyof BookingsMirrorInsert)[]) {
-      if (field === 'syncedAt') continue; // write timestamp, not projected data
+      if (SKIP_FIELDS.has(field)) continue;
       if (same(exp[field], (act as Record<string, unknown>)[field])) continue;
       if (field === 'cleaningStatus') {
         staleCleaningStatus.push(rn);
@@ -146,13 +152,15 @@ async function main() {
   }
 
   for (const rn of actual.keys()) {
-    // Blackout rows are only comparable when their short-TTL cache is present.
+    // Rows the cache no longer holds are the archive doing its job. Blackout rows
+    // are only comparable at all when their short-TTL cache is present.
     if (!expected.has(rn) && (haveBlackoutCache || actual.get(rn)!.source !== 'inventory-override')) {
-      extraInPg.push(rn);
+      archivedBeyondCache.push(rn);
     }
   }
 
-  const ok = mismatches.length === 0 && missingInPg.length === 0 && extraInPg.length === 0;
+  // `archivedBeyondCache` is expected under archive semantics and never a failure.
+  const ok = mismatches.length === 0 && missingInPg.length === 0;
   console.log(
     JSON.stringify(
       {
@@ -161,7 +169,7 @@ async function main() {
         blackoutCachePresent: haveBlackoutCache,
         mismatches: mismatches.length,
         missingInPg: missingInPg.length,
-        extraInPg: extraInPg.length,
+        archivedBeyondCache: archivedBeyondCache.length,
         staleCleaningStatus: staleCleaningStatus.length,
         // Which columns drifted — a bare count can hide a single field failing
         // across every row (e.g. a comparator bug) behind a scary total.
@@ -171,7 +179,7 @@ async function main() {
         }, {}),
         sampleMismatches: mismatches.slice(0, 10),
         sampleMissing: missingInPg.slice(0, 10),
-        sampleExtra: extraInPg.slice(0, 10),
+        sampleArchived: archivedBeyondCache.slice(0, 10),
         verdict: ok ? '✅ parity' : '❌ drift',
       },
       null,

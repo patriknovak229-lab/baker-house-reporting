@@ -1,0 +1,1 @@
+ALTER TABLE "bookings_mirror" ALTER COLUMN "synced_at" SET DEFAULT now();

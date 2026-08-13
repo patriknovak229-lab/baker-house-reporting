@@ -29,6 +29,14 @@ import type { Channel, CleaningStatus, PaymentStatus, RateType, GuestRating } fr
  *
  * Money → unbounded numeric (see the Wave-2 precision lesson). Dates/timestamps
  * are nullable because the normalizer emits "" for absent Beds24 values.
+ *
+ * ARCHIVE SEMANTICS (2026-08-12, operator's call): the app is meant to hold the
+ * entire history of the business, and the Redis cache actively drops it — a full
+ * sync wipes the cache and refetches only arrival ±1 year. So the booking scope
+ * here is written UPSERT-ONLY and NEVER deleted by the app: whatever a sync saw
+ * is kept forever, and a lost/emptied Redis cannot propagate deletions into it.
+ * The inventory-override scope is different — see replaceBookingsMirror… in
+ * data-access/bookingsMirror.ts for why blackouts are windowed instead.
  */
 export type BookingsMirrorSource =
   /** Derived from a Beds24 /bookings record (reservation_number `BH-<id>`). */
@@ -78,8 +86,40 @@ export const bookingsMirror = pgTable(
     blackoutCreatedBy: text('blackout_created_by'),
     blackoutReason: text('blackout_reason'),
     syncedRating: jsonb('synced_rating').$type<GuestRating>(),
-    /** When this row was last written by a sync — the mirror's freshness signal. */
-    syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'date' }).notNull(),
+    /**
+     * The (possibly group-merged) Beds24 booking this row was projected FROM.
+     *
+     * Load-bearing for an archive that outlives the Redis cache: once the cache
+     * has pruned a booking and Beds24's own fetch window has rolled past it,
+     * this is the only remaining copy of the source data. Keeping it means the
+     * whole archive can be re-projected with `mapToReservation` after a
+     * normalizer change — without it, historical rows would be frozen in
+     * whatever shape the code had when they were written.
+     *
+     * Caveat: this is the booking AFTER `mergeGroupedBookings` collapsed any
+     * sub-bookings into it, so re-projection can re-run `mapToReservation` but
+     * not re-decide the grouping. Null for inventory-override rows, which are
+     * synthesized from calendar ranges rather than projected from a booking.
+     *
+     * NEVER write this value back into `baker:beds24-bookings-cache`. The merge
+     * mutates its master in place — Booking.com multi-unit prices/deposits are
+     * already summed across sub-bookings and `_linkedRooms` is injected — so
+     * re-feeding it through `mergeGroupedBookings` would sum again and double the
+     * price on every cycle. It is a re-projection input only.
+     */
+    raw: jsonb('raw'),
+    /** First time this reservation was ever mirrored. Never overwritten. */
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+    /**
+     * Last time a sync saw this reservation — i.e. the row's freshness, and the
+     * only signal that distinguishes "still in Beds24's window" from "aged out
+     * of it" (nothing is ever hard-deleted from the booking scope).
+     *
+     * Written by the DATABASE clock (column default on insert, `now()` on
+     * update), never by the caller: a CLI script or serverless box with a skewed
+     * clock would otherwise poison the one signal a staleness alarm depends on.
+     */
+    syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (t) => [
     // Occupancy / performance scan by stay window; `source` for the scoped replace.

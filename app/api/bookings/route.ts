@@ -453,12 +453,17 @@ export async function GET(req: NextRequest) {
     });
     const reservations = [...activeWithReviews, ...cancelledMapped];
 
-    // Channel reference per reservation — the mirror keeps it so a future reader
-    // can re-join reviews without re-deriving the grouping. Same index-parallel
-    // relationship `activeWithReviews` above relies on; cancelled rows map 1:1.
+    // Per-reservation inputs the archive keeps alongside the projection:
+    //  - apiReference so a reader can re-join reviews without re-deriving grouping;
+    //  - the group-MERGED Beds24 booking each reservation was projected from, so the
+    //    archive can be re-projected after a normalizer change even once the Redis
+    //    cache and Beds24's own fetch window have moved past it.
+    // Same index-parallel relationship `activeWithReviews` relies on; cancelled 1:1.
     const apiReferenceByReservation: Record<string, string> = {};
+    const rawByReservation: Record<string, Beds24Booking> = {};
     for (const b of [...grouped, ...raw.filter(isCancelledStatus)]) {
       if (b.apiReference) apiReferenceByReservation[`BH-${b.id}`] = String(b.apiReference);
+      rawByReservation[`BH-${b.id}`] = b;
     }
 
     const withStripeFees = await aggregateStripeFees(reservations);
@@ -475,26 +480,39 @@ export async function GET(req: NextRequest) {
     // (POST /inventory/rooms/calendar with override="blackout"); they are
     // invisible to GET /bookings. Fetch them here and merge as synthetic
     // Reservation rows so the calendar + reservation list see them too.
-    let overrideBlackoutsOk = true;
-    const overrideBlackouts = await fetchOverrideBlackouts(token).catch((err) => {
+    const blackouts = await fetchOverrideBlackouts(token).catch((err) => {
       console.error('[bookings] inventory-override fetch failed:', err);
-      overrideBlackoutsOk = false;
-      return [] as Reservation[];
+      return null;
     });
+    const overrideBlackouts = blackouts?.rows ?? [];
 
-    // ── Bookings mirror (derived read-model, write-only for now) ──
-    // Publishes the normalized set to Postgres so Performance/Commission can
-    // eventually SELECT instead of each re-running this sync. Nothing reads it
-    // yet, it's off unless WRITE_BOOKINGS_MIRROR=true, and — like the rate-type
-    // map above — a failure is logged and never affects this response.
-    // `reservations` (pre-overlay) is mirrored deliberately: overrides, the
+    // ── Bookings mirror (durable archive, write-only for now) ──
+    // Publishes the normalized set to Postgres as the long-term record: bookings
+    // are upsert-only there and never deleted, so the ±1-year cache wipe (and any
+    // Redis loss) can't take history with it. Nothing reads it yet, it's off
+    // unless WRITE_BOOKINGS_MIRROR=true, and — like the rate-type map above — a
+    // failure is logged and never affects this response.
+    // `reservations` (pre-overlay) is archived deliberately: overrides, the
     // Stripe-fee roll-up and overlap flags stay read-time concerns.
     if (bookingsMirrorWriteEnabled()) {
       await publishBookingsMirror({
         reservations,
         apiReferenceByReservation,
-        // null = the calendar fetch failed, so keep the blackouts already mirrored.
-        overrideBlackouts: overrideBlackoutsOk ? overrideBlackouts : null,
+        rawByReservation,
+        // Blackout pruning demands COMPLETE, fresh evidence: only a live fetch in
+        // which every room's calendar call succeeded may delete rows, and only
+        // inside the window it covered. A cache hit, a total failure, or even one
+        // room's 429 downgrades this to upsert-only (or nothing), because an
+        // absent blackout would otherwise be read as a deleted one.
+        overrideBlackouts: !blackouts
+          ? null
+          : {
+              rows: blackouts.rows,
+              window:
+                !blackouts.fromCache && blackouts.failedRoomIds.length === 0
+                  ? blackouts.window
+                  : null,
+            },
       }).catch((err) => console.error('[bookings] mirror publish failed:', err));
     }
 
@@ -604,24 +622,51 @@ function nextDay(yyyymmdd: string): string {
 const OVERRIDE_BLACKOUTS_CACHE_KEY = 'baker:override-blackouts-cache';
 const OVERRIDE_BLACKOUTS_TTL_SECONDS = 5 * 60;
 
-async function fetchOverrideBlackouts(token: string): Promise<Reservation[]> {
-  // ── Redis cache lookup ──
-  const redis = getRedis();
-  if (redis) {
-    const cached = await redis.get<Reservation[]>(OVERRIDE_BLACKOUTS_CACHE_KEY);
-    if (cached) return cached;
-  }
-
-  // Match the bookings cache window — 1 year back, 1 year forward — so
-  // historical overrides for performance/occupancy stats stay visible.
+/**
+ * The date range the inventory-calendar fetch covers — 1 year back, 1 year
+ * forward, matching the bookings cache window so historical overrides for
+ * performance/occupancy stats stay visible.
+ *
+ * Returned to callers because the bookings mirror needs to know exactly which
+ * window a result is evidence for: it may only prune blackout rows inside it.
+ */
+function overrideBlackoutWindow(): { from: string; to: string } {
   const from = new Date();
   from.setFullYear(from.getFullYear() - 1);
   const to = new Date();
   to.setFullYear(to.getFullYear() + 1);
-  const startDate = from.toISOString().slice(0, 10);
-  const endDate = to.toISOString().slice(0, 10);
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
+type OverrideBlackoutsResult = {
+  rows: Reservation[];
+  window: { from: string; to: string };
+  /** True when served from the 5-minute Redis cache rather than freshly fetched. */
+  fromCache: boolean;
+  /**
+   * Rooms whose calendar call failed this fetch (e.g. a Beds24 429). Their
+   * blackouts are simply absent from `rows` — historically that just meant the UI
+   * showed fewer blackouts for a few minutes, but the bookings mirror treats a
+   * fresh result as evidence for pruning, so a partial result must NOT be
+   * mistaken for "these blackouts are gone".
+   */
+  failedRoomIds: number[];
+};
+
+async function fetchOverrideBlackouts(token: string): Promise<OverrideBlackoutsResult> {
+  const window = overrideBlackoutWindow();
+
+  // ── Redis cache lookup ──
+  const redis = getRedis();
+  if (redis) {
+    const cached = await redis.get<Reservation[]>(OVERRIDE_BLACKOUTS_CACHE_KEY);
+    if (cached) return { rows: cached, window, fromCache: true, failedRoomIds: [] };
+  }
+
+  const { from: startDate, to: endDate } = window;
 
   const results: Reservation[] = [];
+  const failedRoomIds: number[] = [];
   // One request per room — Beds24's calendar GET doesn't accept multiple
   // roomIds in a single query (per Swagger). Run in parallel.
   await Promise.all(PHYSICAL_ROOM_IDS.map(async (roomId) => {
@@ -638,6 +683,7 @@ async function fetchOverrideBlackouts(token: string): Promise<Reservation[]> {
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       console.error(`[bookings] calendar(${roomId}) ${res.status}: ${text.slice(0, 200)}`);
+      failedRoomIds.push(roomId);
       return;
     }
     const json = await res.json().catch(() => null);
@@ -688,5 +734,5 @@ async function fetchOverrideBlackouts(token: string): Promise<Reservation[]> {
       ex: OVERRIDE_BLACKOUTS_TTL_SECONDS,
     });
   }
-  return results;
+  return { rows: results, window, fromCache: false, failedRoomIds };
 }
