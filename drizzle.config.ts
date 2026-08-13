@@ -20,6 +20,14 @@ export default defineConfig({
   out: './drizzle',
   dialect: 'postgresql',
   dbCredentials: { url },
+
+  // This database is SHARED with baker-house-cleaning, which owns the
+  // `cleaning.*` schema. Pinning drizzle-kit to `public` keeps it from
+  // introspecting — or emitting DDL against — the cleaning app's tables.
+  // (Their drizzle.config.ts has the mirror-image `schemaFilter: ['cleaning']`.)
+  // Never widen this, and never remove it.
+  schemaFilter: ['public'],
+
   strict: true,
   verbose: true,
 });
