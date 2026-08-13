@@ -34,6 +34,11 @@ import { buildReservationSet } from '@/utils/beds24Reservations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { sendInvoiceEmail } from '@/utils/invoiceSend';
 import { sendTelegram } from '@/utils/telegram';
+import {
+  checkBookingsMirrorHealth,
+  bookingsMirrorAlert,
+  type BookingsMirrorHealth,
+} from '@/utils/bookingsMirrorHealth';
 
 export const maxDuration = 60;
 
@@ -177,6 +182,25 @@ export async function POST(req: NextRequest) {
     ).catch(() => {});
   }
 
+  // ── Bookings-archive heartbeat ──
+  // Piggybacks on this daily run rather than adding a cron (Vercel's cron slots
+  // are finite, and this job already fires at 09:00 and already has Telegram).
+  // The archive is written as a side effect of the dashboard sync, so it can stop
+  // silently — without this nothing would ever tell us. Entirely independent of
+  // the invoice work above: it never affects `sent`, and its own failure is
+  // swallowed so a health-check bug can't break invoice sending.
+  let mirrorHealth: BookingsMirrorHealth | { error: string };
+  try {
+    mirrorHealth = await checkBookingsMirrorHealth({ persist: true });
+    const alert = bookingsMirrorAlert(mirrorHealth);
+    if (alert) await sendTelegram(alert).catch(() => {});
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'unknown error';
+    console.error('[cron] bookings archive health check failed:', err);
+    mirrorHealth = { error: reason };
+    await sendTelegram(`⚠️ Bookings archive health check could not run: ${reason}`).catch(() => {});
+  }
+
   return NextResponse.json({
     today,
     sent,
@@ -186,5 +210,6 @@ export async function POST(req: NextRequest) {
     skippedStale,
     failed,
     errors: errors.length > 0 ? errors : undefined,
+    mirrorHealth,
   });
 }
