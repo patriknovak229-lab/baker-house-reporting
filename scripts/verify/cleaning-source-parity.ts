@@ -79,10 +79,36 @@ export function diff(a: unknown, b: unknown, path = ''): string[] {
   diffs.slice(0, 25).forEach((d) => console.log(`  ${d}`));
   if (diffs.length > 25) console.log(`  … and ${diffs.length - 25} more`);
 
+  // What a difference MEANS depends on whether the cleaning app has cut over.
+  //
+  // PRE-CUTOVER (cleaning app on `dual`): both stores get every write, so the
+  // two sources must agree. Any difference is a bug and blocks the switch.
+  //
+  // POST-CUTOVER (cleaning app on `postgres`): its Redis keys are frozen, so
+  // the redis-sourced column is a fossil. Differences are EXPECTED, and their
+  // size is precisely how wrong this app's P&L would be if it were still
+  // reading Redis — i.e. the cost of a misconfiguration, not a defect.
+  const postCutover =
+    process.env.CLEANING_APP_CUT_OVER?.trim().toLowerCase() === 'true' ||
+    process.argv.indexOf('--post-cutover') !== -1;
+
+  if (postCutover) {
+    console.log(
+      diffs.length === 0
+        ? '\n✓ Post-cutover: no cleaning-app writes since the freeze yet.'
+        : `\n✓ Post-cutover: ${diffs.length} difference(s). Postgres is authoritative and is what` +
+          `\n  production serves. The redis column is the frozen fossil — this is exactly how wrong` +
+          `\n  the P&L would be if READ_CLEANING_DATA were reverted to redis. Do NOT revert it.`,
+    );
+    return;
+  }
+
   console.log(
     diffs.length === 0
       ? '\n✓ IDENTICAL — the P&L is unchanged by the source switch. Safe to set READ_CLEANING_DATA=postgres.'
-      : '\n✗ DIFFERENCES — do NOT switch the source until these are explained.',
+      : '\n✗ DIFFERENCES — do NOT switch the source until these are explained.' +
+        '\n  (If the cleaning app has already cut over to `postgres`, its Redis keys are frozen and' +
+        '\n   these differences are expected — re-run with --post-cutover.)',
   );
   if (diffs.length > 0) process.exitCode = 1;
 })();
