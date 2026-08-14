@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
+import {
+  readCleaningAssignmentsPg,
+  readLaundryAssignmentsPg,
+  readConsumableEntriesPg,
+} from '@/utils/cleaningDataPg';
 
 // Bypass Next.js's static route-handler cache — must read live Redis state
 // on every request, otherwise newly logged consumable / assignment / pickup
@@ -233,11 +238,33 @@ function getRedis(): Redis | null {
   return new Redis({ url, token });
 }
 
+/**
+ * Where the CLEANING APP's three migrated domains are read from.
+ * `READ_CLEANING_DATA=postgres` switches cleaning assignments, laundry
+ * assignments and consumable entries to `cleaning.*` in the shared Neon
+ * database; anything else keeps the legacy Redis keys. Defaults to redis, so
+ * deploying this changes nothing.
+ *
+ * MUST be flipped to `postgres` BEFORE the cleaning app moves those domains
+ * from `dual` to `postgres`. The moment it does, its Redis writes stop and
+ * these keys freeze — reading them after that silently produces stale costs.
+ * While the cleaning app is on `dual` both stores are identical, so either
+ * value is correct and the switch can be verified at leisure.
+ */
+function readsCleaningFromPostgres(): boolean {
+  return process.env.READ_CLEANING_DATA?.trim().toLowerCase() === 'postgres';
+}
+
 export async function GET() {
   const redis = getRedis();
   if (!redis) {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
   }
+
+  // The three cleaning-app domains that have moved to Postgres. Everything
+  // else on this route is still Redis-only (cleaner/laundry config, manual
+  // events, subscriptions, wear&tear, misc, no-laundry, dismissed, adjustments).
+  const fromPg = readsCleaningFromPostgres();
 
   // Fetch all keys in parallel — schedule snapshot lets us validate that
   // a laundry assignment still has an underlying cleaning event (skip
@@ -259,13 +286,13 @@ export async function GET() {
     cleaningAdjustmentsRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
-    redis.get(KEY_CLEANING_ASSIGNMENTS),
+    fromPg ? readCleaningAssignmentsPg() : redis.get(KEY_CLEANING_ASSIGNMENTS),
     redis.get(KEY_MANUAL_CLEANING_EVENTS),
     redis.get(KEY_LAUNDRY_CONFIG),
-    redis.get(KEY_LAUNDRY_ASSIGNMENTS),
+    fromPg ? readLaundryAssignmentsPg() : redis.get(KEY_LAUNDRY_ASSIGNMENTS),
     redis.get('baker:laundry-sets'),
     redis.get('baker:manual-laundry-events'),
-    redis.get(KEY_CONSUMABLE_ENTRIES),
+    fromPg ? readConsumableEntriesPg() : redis.get(KEY_CONSUMABLE_ENTRIES),
     redis.get(KEY_FIXED_COSTS_CONFIG),
     redis.get(KEY_WEAR_TEAR_EVENTS),
     redis.get(KEY_MISC_EVENTS),
