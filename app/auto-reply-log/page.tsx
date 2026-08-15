@@ -49,6 +49,21 @@ interface LogResponse {
 // Categories that can't be flipped to auto-send from the UI.
 const NON_AUTOSENDABLE = new Set(['other', 'invoice-request']);
 
+// All defined detector categories — for the reassign dropdown + the filter.
+const CATEGORIES = [
+  'parking',
+  'wifi',
+  'minibar',
+  'early-checkin',
+  'late-checkout',
+  'invoice-request',
+  'acknowledgement',
+  'air-conditioning',
+  'bathroom',
+  'checkout',
+  'other',
+] as const;
+
 /**
  * /auto-reply-log
  *
@@ -69,6 +84,9 @@ export default function AutoReplyLogPage() {
   // Categories flipped to auto-send. Synced from the server; toggled optimistically.
   const [autoSend, setAutoSend] = useState<string[]>([]);
   const [savingCat, setSavingCat] = useState<string | null>(null);
+  // Recent-actions category filter (server-side: latest 100 of the category).
+  const [categoryFilter, setCategoryFilter] = useState<string>('');
+  const [recategorizing, setRecategorizing] = useState<number | null>(null);
 
   const toggleAutoSend = useCallback(
     async (category: string, enable: boolean) => {
@@ -104,7 +122,10 @@ export default function AutoReplyLogPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/auto-reply-log');
+      const url = categoryFilter
+        ? `/api/auto-reply-log?category=${encodeURIComponent(categoryFilter)}`
+        : '/api/auto-reply-log';
+      const res = await fetch(url);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.error ?? `HTTP ${res.status}`);
@@ -117,7 +138,30 @@ export default function AutoReplyLogPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [categoryFilter]);
+
+  const recategorize = useCallback(
+    async (beds24MessageId: number, category: string) => {
+      setRecategorizing(beds24MessageId);
+      try {
+        const res = await fetch('/api/auto-reply-log/recategorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ beds24MessageId, category }),
+        });
+        if (!res.ok) {
+          const b = await res.json().catch(() => ({}));
+          throw new Error(b?.error ?? `HTTP ${res.status}`);
+        }
+        await load(); // refresh stats + the (possibly filtered) list
+      } catch (e) {
+        alert(e instanceof Error ? e.message : 'Failed to reassign category');
+      } finally {
+        setRecategorizing(null);
+      }
+    },
+    [load],
+  );
 
   useEffect(() => {
     load();
@@ -301,9 +345,32 @@ export default function AutoReplyLogPage() {
 
         {/* Audit log */}
         <section>
-          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
-            Recent actions ({data?.log.length ?? 0} of {data?.logTotal ?? 0} total)
-          </h2>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+              Recent actions ({data?.log.length ?? 0}
+              {data?.logTotal != null ? ` of ${data.logTotal} total` : ''})
+              {categoryFilter && (
+                <span className="ml-2 normal-case font-normal text-gray-500">
+                  · latest 100 of <b className="text-gray-700">{categoryFilter}</b>
+                </span>
+              )}
+            </h2>
+            <label className="text-xs text-gray-600 flex items-center gap-1.5">
+              Filter category
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
+              >
+                <option value="">All</option>
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <table className="min-w-full text-sm">
               <thead className="bg-gray-50 text-gray-700">
@@ -331,9 +398,19 @@ export default function AutoReplyLogPage() {
                       <td className="px-3 py-2 text-xs text-gray-600 whitespace-nowrap">{formatTs(e.decidedAt)}</td>
                       <td className="px-3 py-2 font-mono text-xs">{e.reservationNumber}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${categoryClass(e.category)}`}>
-                          {e.category}
-                        </span>
+                        <select
+                          value={e.category}
+                          disabled={recategorizing === e.beds24MessageId}
+                          onChange={(ev) => recategorize(e.beds24MessageId, ev.target.value)}
+                          title="Reassign category — updates the readiness stats for this message"
+                          className={`text-xs font-medium rounded px-1.5 py-0.5 border-0 cursor-pointer disabled:opacity-50 ${categoryClass(e.category)}`}
+                        >
+                          {CATEGORIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
                       </td>
                       <td className="px-3 py-2 text-xs font-mono">
                         {e.confidence != null ? e.confidence.toFixed(2) : '—'}

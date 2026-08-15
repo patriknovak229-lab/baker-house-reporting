@@ -7,7 +7,7 @@
  * deciding. Admin/super only.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { readAllAutoReplyLog, readAllAutoReplyEditLog } from '@/utils/autoReplyLogStore';
@@ -234,9 +234,14 @@ function computeCategoryStats(
   return stats;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
+
+  // Optional ?category=X → the returned action list shows the latest 100 of
+  // THAT category (from the full retained log). Stats are always computed over
+  // the full log, unaffected by the filter.
+  const categoryFilter = req.nextUrl.searchParams.get('category')?.trim() || null;
 
   const redis = getRedis();
   if (!redis) {
@@ -255,9 +260,10 @@ export async function GET() {
   // 100-row UI slice) so the graduation call is based on all decisions we have.
   const categoryStats = computeCategoryStats(log, editLog);
 
-  // Newest first; cap to last 100 for the UI
+  // Newest first, optionally filtered to one category; cap to last 100 for the UI.
   const sortedLog = [...log]
     .sort((a, b) => new Date(b.decidedAt).getTime() - new Date(a.decidedAt).getTime())
+    .filter((e) => !categoryFilter || e.category === categoryFilter)
     .slice(0, 100);
 
   // Highlight invoice requests that are awaiting-info (most actionable
@@ -269,6 +275,8 @@ export async function GET() {
   return NextResponse.json({
     lastPollAt: lastPoll ? new Date(lastPoll).toISOString() : null,
     logTotal: log.length,
+    // The category filter applied to `log` (null = all). Stats are unfiltered.
+    category: categoryFilter,
     log: sortedLog,
     categoryStats,
     // How many log rows the stats were computed over (the retained window).
