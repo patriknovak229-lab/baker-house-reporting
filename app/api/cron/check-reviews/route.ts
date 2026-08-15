@@ -4,7 +4,7 @@ import { requireRole } from "@/utils/authGuard";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { fetchReviews, reviewsFromDate, mergeReviews } from "@/utils/beds24Reviews";
 import { notifyNewReviews } from "@/utils/reviewAlerts";
-import { PHYSICAL_ROOM_IDS, REVIEWS_PROPERTY_ID } from "@/utils/rooms";
+import { AIRBNB_REVIEW_ROOM_IDS, REVIEWS_PROPERTY_ID } from "@/utils/rooms";
 import type { GuestRating } from "@/types/reservation";
 
 // Beds24 review pagination (Booking.com) + one Airbnb call per physical room can
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
 
   const byRef = await fetchReviews(token, {
     propertyId: REVIEWS_PROPERTY_ID,
-    roomIds: PHYSICAL_ROOM_IDS,
+    roomIds: AIRBNB_REVIEW_ROOM_IDS,
     from: reviewsFromDate(),
   });
 

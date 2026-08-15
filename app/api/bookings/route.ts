@@ -8,6 +8,7 @@ import { autoRatePerks, effectiveRatePerks } from "@/utils/ratePerks";
 import type { PerkOverrides, RatePerks } from "@/utils/ratePerks";
 import { fetchReviews, fetchRawReviews, reviewsFromDate, mergeReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
 import { notifyNewReviews } from "@/utils/reviewAlerts";
+import { AIRBNB_REVIEW_ROOM_IDS } from "@/utils/rooms";
 import type { GuestRating } from "@/types/reservation";
 import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, attachNonArrivalOverlay, mapChannel, mapRoom, infoItemsText, BEDS24_API_BASE, APP_PHONE_MARKER, type Beds24Booking } from "@/utils/beds24Reservations";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
@@ -29,7 +30,7 @@ type ReviewsCache = { fetchedAt: number; byRef: Record<string, GuestRating> };
 function reviewFetchOptions(): ReviewFetchOptions {
   return {
     propertyId: REVIEWS_PROPERTY_ID,
-    roomIds: PHYSICAL_ROOM_IDS,
+    roomIds: AIRBNB_REVIEW_ROOM_IDS,
     from: reviewsFromDate(),
   };
 }

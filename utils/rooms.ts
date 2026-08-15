@@ -38,6 +38,23 @@ export const PHYSICAL_ROOM_IDS: number[] = [
   679705, // K.106
 ];
 
+/**
+ * RoomIds to query for Airbnb reviews. Beds24's `channels/airbnb/reviews?roomId=`
+ * returns each Airbnb LISTING's reviews under the roomId that listing is mapped to
+ * — which is NOT always a physical room. The 2BR apartments list per physical room
+ * (656437 K.201, 674672 O.308), but the 1KK studios list under their virtual
+ * room-type ids (648816 Deluxe 1KK, 679714 Urban 1KK). Sweeping only physical
+ * rooms therefore misses EVERY 1KK-studio Airbnb review. Union both so all listing
+ * reviews surface; reviews still match bookings by reservation_confirmation_code
+ * (=== apiReference), so the fetch roomId doesn't affect attribution. Empty rooms
+ * just return 0 rows.
+ */
+export const AIRBNB_REVIEW_ROOM_IDS: number[] = [
+  ...PHYSICAL_ROOM_IDS,
+  648816, // 1KK Deluxe Studios (VR listing)
+  679714, // 1KK Urban Studios (VR listing)
+];
+
 /** Beds24 property id (single-property account) — Booking.com review fetch. */
 export const REVIEWS_PROPERTY_ID = 311322;
 
