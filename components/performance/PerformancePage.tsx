@@ -13,7 +13,7 @@ import ChannelMixView from "./ChannelMixView";
 import GBVAdrView from "./GBVAdrView";
 import NetSalesBridgeView from "./NetSalesBridgeView";
 import GrossProfitBridgeView from "./GrossProfitBridgeView";
-import type { VariableCostsLookup, VariableCostsResponse } from "@/app/api/variable-costs/route";
+import type { VariableCostsLookup, VariableCostsResponse } from "@/utils/variableCostsShared";
 import { expandLinkedReservations } from "@/utils/expandReservations";
 import ShareSnapshotModal from "./ShareSnapshotModal";
 

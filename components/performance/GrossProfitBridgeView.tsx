@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import type { Reservation, Room } from "@/types/reservation";
 import type { DateRange } from "@/utils/periodUtils";
-import type { VariableCostEntry, VariableCostsLookup, SubscriptionItem } from "@/app/api/variable-costs/route";
+import type { VariableCostEntry, VariableCostsLookup, SubscriptionItem } from "@/utils/variableCostsShared";
 import { computeGrossProfit } from "@/utils/grossProfit";
 
 interface Props {

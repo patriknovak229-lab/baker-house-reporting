@@ -19,8 +19,8 @@ import type {
   VariableCostEntry,
   VariableCostsLookup,
   SubscriptionItem,
-} from '@/app/api/variable-costs/route';
-import { ROOM_TO_BEDS24_ID } from '@/app/api/variable-costs/route';
+} from '@/utils/variableCostsShared';
+import { ROOM_TO_BEDS24_ID } from '@/utils/variableCostsShared';
 
 /** Count distinct calendar months in inclusive [from, to] that overlap
  *  with a subscription's active window. Mirrors cleaning-types.ts. */

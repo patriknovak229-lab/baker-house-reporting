@@ -6,7 +6,7 @@ import type { CommissionSettlement } from '@/types/commissionSettlement';
 import type {
   VariableCostsResponse,
   VariableCostsLookup,
-} from '@/app/api/variable-costs/route';
+} from '@/utils/variableCostsShared';
 import { COMMISSION_UNITS, COMMISSION_RATE, getCommissionUnit } from '@/utils/commissionConfig';
 import { computeSettlement, cleaningEventsForUnit, negativePayableWarning, type VariableCostBundle, type ComputedSettlement } from '@/utils/commissionCalc';
 import { formatCurrency } from '@/utils/formatters';

@@ -10,7 +10,7 @@ import type {
   VariableCostEntry,
   VariableCostsLookup,
   SubscriptionItem,
-} from '@/app/api/variable-costs/route';
+} from '@/utils/variableCostsShared';
 import type { DateRange } from '@/utils/periodUtils';
 import { isReservationInPeriod } from '@/utils/periodUtils';
 import { expandLinkedReservations } from '@/utils/expandReservations';
@@ -21,7 +21,7 @@ import {
   URBAN_POOL_DIVISOR,
   type CommissionUnit,
 } from '@/utils/commissionConfig';
-import { ROOM_TO_BEDS24_ID, BEDS24_ID_TO_ROOM } from '@/app/api/variable-costs/route';
+import { ROOM_TO_BEDS24_ID, BEDS24_ID_TO_ROOM } from '@/utils/variableCostsShared';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 
 /**
