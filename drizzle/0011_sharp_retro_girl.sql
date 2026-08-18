@@ -1,0 +1,1 @@
+ALTER TABLE "market_horizon" ADD COLUMN "comp_set_listings" integer;

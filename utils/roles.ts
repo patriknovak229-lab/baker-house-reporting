@@ -13,6 +13,24 @@ const TAB_ACCESS: Record<Tab, Role[]> = {
   pricing: ['admin', 'super'],
 };
 
+/**
+ * Roles that may open /analytics.
+ *
+ * Same set as the Performance tab plus `accountant`, who owns the cost and
+ * commission questions the section answers. The stakeholder `occupancy` role is
+ * excluded: it exists to see a PII-free availability grid, not portfolio
+ * economics.
+ *
+ * Analytics is a standalone ROUTE, not an AppShell tab, so it is deliberately not
+ * in `TAB_ACCESS` — that map drives which tab AppShell renders, and analytics is a
+ * navigation away from AppShell entirely.
+ */
+export const ANALYTICS_ROLES: Role[] = ['admin', 'super', 'viewer', 'accountant'];
+
+export function canAccessAnalytics(role: Role): boolean {
+  return ANALYTICS_ROLES.includes(role);
+}
+
 export function getRoleForEmail(email: string): Role | null {
   const check = (envVar: string) =>
     (process.env[envVar] ?? '')

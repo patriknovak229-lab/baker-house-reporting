@@ -1,7 +1,8 @@
 'use client';
+import Link from 'next/link';
 import { useSession, signOut } from 'next-auth/react';
 import type { Role, Tab } from '@/utils/roles';
-import { canAccessTab } from '@/utils/roles';
+import { canAccessAnalytics, canAccessTab } from '@/utils/roles';
 
 interface NavProps {
   activeTab: Tab;
@@ -50,6 +51,22 @@ export default function Nav({ activeTab, onTabChange }: NavProps) {
               {tab.label}
             </button>
           ))}
+
+          {/*
+            Analytics is a LINK, not a tab: it lives at its own route rather than
+            inside AppShell, so its (heavy) code never enters this bundle and a
+            section can be linked to directly. Styled like an inactive tab so it
+            reads as a peer, and never highlighted — this Nav only renders on the
+            dashboard, so we are never on /analytics while it is on screen.
+          */}
+          {(!role || canAccessAnalytics(role)) && (
+            <Link
+              href="/analytics"
+              className="px-3 sm:px-4 py-2 text-sm rounded-md font-medium transition-colors whitespace-nowrap shrink-0 text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+            >
+              Analytics
+            </Link>
+          )}
         </nav>
 
         {/* User + sign out — sign-out becomes an icon-only chip on mobile so
