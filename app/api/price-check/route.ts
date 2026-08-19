@@ -1,23 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { requireRole } from '@/utils/authGuard';
-
-const BEDS24_API_BASE = 'https://beds24.com/api/v2';
-const PROPERTY_ID = 311322; // All Baker House rooms (Deluxe + Urban) live here
+// Beds24 price plumbing is shared with /api/stay-request/quote — one place for
+// the offers-vs-calendar distinction and the undocumented response shapes.
+import {
+  extractPrice,
+  fetchRoomCalendar,
+  fetchOffers,
+  offersForRoom,
+} from '@/utils/beds24Pricing';
 
 // Sellable Beds24 room IDs (what the offers endpoint returns prices for)
 const SELL_ROOM_2KK   = 656437; // K.201 — 2KK Deluxe (physical = sellable, same ID)
 const SELL_ROOM_1KK   = 648816; // Virtual 1KK Deluxe (qty=2, maps to K.202 + K.203)
 const SELL_ROOM_2BR   = 674672; // O.308 — 2 Bedroom Apartment (physical = sellable, same ID)
 const SELL_ROOM_URBAN = 679714; // Virtual 1KK Urban Studios (qty=3, maps to K.102 + K.103 + K.106)
-
-function extractPrice(roomOffers: unknown): number | null {
-  if (!Array.isArray(roomOffers) || roomOffers.length === 0) return null;
-  const first = roomOffers[0] as { totalPrice?: unknown; price?: unknown };
-  const raw = first.totalPrice ?? first.price ?? null;
-  const n = typeof raw === 'string' ? parseFloat(raw.replace(',', '.')) : Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
-}
 
 export type PriceCheckOffer = {
   /** Beds24 sellable room ID — used by the manual booking form to match
@@ -28,102 +25,11 @@ export type PriceCheckOffer = {
   price: number | null;
 };
 
-/** Subtract one day from a YYYY-MM-DD string (departure → last night). */
-function previousDay(yyyymmdd: string): string {
-  const d = new Date(yyyymmdd + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
 /** Count nights between two YYYY-MM-DD strings (departure exclusive). */
 function nightsBetween(arrival: string, departure: string): number {
   const a = new Date(arrival + 'T00:00:00Z').getTime();
   const b = new Date(departure + 'T00:00:00Z').getTime();
   return Math.max(0, Math.round((b - a) / 86_400_000));
-}
-
-/**
- * Walk an arbitrary value tree and sum daily price1 entries that fall inside [arrival, departure).
- * The Beds24 V2 calendar response shape is undocumented in the consumer SDK and varies by version,
- * so this is intentionally permissive: any object that looks like a calendar day (has a price1
- * field plus either { from, to } or { date }) is included.
- */
-function sumCalendarPrice(value: unknown, arrival: string, departure: string): number | null {
-  const startMs = new Date(arrival + 'T00:00:00Z').getTime();
-  const endMs = new Date(departure + 'T00:00:00Z').getTime(); // exclusive
-  let total = 0;
-  let coveredNights = 0;
-
-  function visit(node: unknown) {
-    if (node === null || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item);
-      return;
-    }
-    const obj = node as Record<string, unknown>;
-
-    // Heuristic: a calendar day entry has price1 + a date field
-    const hasPrice = 'price1' in obj || 'price' in obj;
-    const fromStr = typeof obj.from === 'string' ? obj.from
-      : typeof obj.date === 'string' ? obj.date : null;
-    const toStr = typeof obj.to === 'string' ? obj.to : fromStr;
-
-    if (hasPrice && fromStr && toStr && /^\d{4}-\d{2}-\d{2}$/.test(fromStr)) {
-      const rawPrice = obj.price1 ?? obj.price;
-      const price = typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(',', '.')) : Number(rawPrice);
-      if (Number.isFinite(price) && price > 0) {
-        const entryStart = new Date(fromStr + 'T00:00:00Z').getTime();
-        const entryEnd = new Date(toStr + 'T00:00:00Z').getTime();
-        for (let t = entryStart; t <= entryEnd; t += 86_400_000) {
-          if (t >= startMs && t < endMs) {
-            total += price;
-            coveredNights += 1;
-          }
-        }
-      }
-    }
-
-    // Recurse into child objects/arrays — handles nested { calendar: [...] } shapes
-    for (const key of Object.keys(obj)) visit(obj[key]);
-  }
-
-  visit(value);
-  return coveredNights > 0 ? Math.round(total * 100) / 100 : null;
-}
-
-/**
- * Fetch the calendar for a single roomId.
- * Returns { price, raw } — raw is the parsed JSON response (used by debug mode).
- */
-async function fetchRoomCalendar(
-  token: string,
-  roomId: number,
-  arrival: string,
-  departure: string,
-): Promise<{ price: number | null; raw: unknown }> {
-  const endDateInclusive = previousDay(departure);
-  // Per Beds24 V2 spec: calendar returns nothing unless at least one includeX flag is set.
-  // includePrices=true is what we need; we don't care about availability/restrictions here.
-  const params = new URLSearchParams({
-    startDate: arrival,
-    endDate: endDateInclusive,
-    roomId: String(roomId),
-    includePrices: 'true',
-  });
-
-  const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/calendar?${params.toString()}`, {
-    headers: { token },
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Beds24 calendar (room ${roomId}) returned ${res.status}: ${text}`);
-  }
-
-  const raw = await res.json();
-  const price = sumCalendarPrice(raw, arrival, departure);
-  return { price, raw };
 }
 
 /**
@@ -200,37 +106,11 @@ export async function GET(req: NextRequest) {
       rawByRoom = result.rawByRoom;
     } else {
       const wantedIds = [SELL_ROOM_2KK, SELL_ROOM_1KK, SELL_ROOM_2BR, SELL_ROOM_URBAN];
-      const params = new URLSearchParams({
-        propertyId: String(PROPERTY_ID),
-        arrival,
-        departure,
-        numAdults: adults,
-        numChildren: children,
-      });
-
-      const res = await fetch(`${BEDS24_API_BASE}/inventory/rooms/offers?${params.toString()}`, {
-        headers: { token },
-        cache: 'no-store',
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        return NextResponse.json(
-          { error: `Beds24 returned ${res.status}`, detail: text },
-          { status: 502 },
-        );
-      }
-
-      const data = await res.json();
-      const rows: unknown[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const data = await fetchOffers(token, arrival, departure, Number(adults), Number(children));
 
       priceMap = {};
-      for (const row of rows) {
-        if (row === null || typeof row !== 'object') continue;
-        const rid = Number((row as { roomId?: unknown }).roomId);
-        if (wantedIds.includes(rid)) {
-          priceMap[rid] = extractPrice((row as { offers?: unknown }).offers);
-        }
+      for (const rid of wantedIds) {
+        priceMap[rid] = extractPrice(offersForRoom(data, rid));
       }
 
       // Capture raw response for debug=1 so we can see what Beds24 returned
@@ -275,6 +155,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ offers, ignoreAvailability });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // An upstream Beds24 failure stays a 502 (as before the shared helpers
+    // started throwing it); anything else is ours and stays a 500.
+    const status = /^Beds24 (offers|calendar)/.test(message) ? 502 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
