@@ -15,6 +15,7 @@ import { formatDate, formatCurrency } from "@/utils/formatters";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
 import { computeParking, getFreeSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
 import { PHYSICAL_ROOMS } from "@/utils/roomAllocation";
+import { occupiersByRoom, unallocatedOverlapping } from "@/utils/moveTargets";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
 import {
   rateChipClasses,
@@ -1930,22 +1931,28 @@ export default function ReservationDrawer({
   const [moveSubmitting, setMoveSubmitting] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveDone, setMoveDone] = useState(false);
+  /** Operator override: offer occupied units too (see the modal's own note). */
+  const [moveIgnoreOccupied, setMoveIgnoreOccupied] = useState(false);
 
-  /** Rooms occupied by some OTHER booking (incl. blackouts/packages) during
-   *  this reservation's nights — those can't be picked as a move target. */
-  const occupiedDuringStay = useMemo(() => {
-    const occ = new Set<string>();
-    if (!reservation) return occ;
-    for (const r of allReservations) {
-      if (r.reservationNumber === reservation.reservationNumber) continue;
-      const overlap =
-        r.checkInDate < reservation.checkOutDate && reservation.checkInDate < r.checkOutDate;
-      if (!overlap) continue;
-      const rooms = r.linkedRooms && r.linkedRooms.length > 0 ? r.linkedRooms : [r.room];
-      for (const rm of rooms) occ.add(rm);
-    }
-    return occ;
-  }, [reservation, allReservations]);
+  /**
+   * Who holds each unit during this stay, and which overlapping bookings are
+   * still unallocated. Both live in `utils/moveTargets` (with tests) — the
+   * cancelled-booking exclusion in there is what makes this picker usable at
+   * all; see that module's notes.
+   */
+  const occupiersDuringStay = useMemo(
+    () => (reservation ? occupiersByRoom(reservation, allReservations) : new Map<string, Reservation[]>()),
+    [reservation, allReservations],
+  );
+  const unallocatedDuringStay = useMemo(
+    () => (reservation ? unallocatedOverlapping(reservation, allReservations) : []),
+    [reservation, allReservations],
+  );
+
+  const occupierLabel = (r: Reservation): string => {
+    const who = r.isBlackout ? "Blackout" : `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.reservationNumber;
+    return `${who} · ${formatDate(r.checkInDate)}→${formatDate(r.checkOutDate)}`;
+  };
 
   async function handleMoveRoom() {
     if (!reservation || !moveTargetRoom) return;
@@ -1958,12 +1965,15 @@ export default function ReservationDrawer({
         body: JSON.stringify({
           reservationNumber: reservation.reservationNumber,
           toRoom: moveTargetRoom,
+          allowOccupied: moveIgnoreOccupied,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
       setMoveDone(true);
-      onPaymentCreated?.(); // re-sync bookings from Beds24 so the new room shows
+      // Re-syncs bookings from Beds24 so the new room shows — and picks up the
+      // fresh move notice, which is what the alert bar renders.
+      onPaymentCreated?.();
       setTimeout(() => {
         setShowMoveModal(false);
         setMoveDone(false);
@@ -2751,6 +2761,7 @@ export default function ReservationDrawer({
                   setMoveTargetRoom("");
                   setMoveError(null);
                   setMoveDone(false);
+                  setMoveIgnoreOccupied(false);
                   setShowMoveModal(true);
                 }}
                 className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
@@ -3420,12 +3431,14 @@ export default function ReservationDrawer({
           )}
 
           {/* Move-to-another-room confirmation modal — maintenance / ad-hoc.
-              Allows any room incl. cross-type and in-house guests, but only
-              into a unit free for the stay (occupied targets disabled). */}
+              Allows any room incl. cross-type and in-house guests. Occupied
+              targets are disabled unless the operator ticks "Ignore occupied",
+              which is how a multi-step swap/rotation gets its first leg done. */}
           {showMoveModal && reservation && (() => {
-            const todayStr = new Date().toLocaleDateString("sv-SE");
+            const todayStr = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Prague" });
             const inHouse =
               reservation.checkInDate <= todayStr && reservation.checkOutDate > todayStr;
+            const targetOccupiers = occupiersDuringStay.get(moveTargetRoom) ?? [];
             return (
               <div
                 className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
@@ -3453,14 +3466,74 @@ export default function ReservationDrawer({
                   >
                     <option value="">Select a room…</option>
                     {PHYSICAL_ROOMS.filter((u) => u.room !== reservation.room).map((u) => {
-                      const occ = occupiedDuringStay.has(u.room);
+                      const occupiers = occupiersDuringStay.get(u.room) ?? [];
+                      const occ = occupiers.length > 0;
+                      // One holder → name it; several → just the count, since a
+                      // native <option> has no room for two of them.
+                      const detail = !occ
+                        ? " — free"
+                        : occupiers.length === 1
+                          ? ` — occupied · ${occupierLabel(occupiers[0])}`
+                          : ` — occupied · ${occupiers.length} bookings`;
                       return (
-                        <option key={u.room} value={u.room} disabled={occ}>
-                          {u.room}{occ ? " — occupied" : ""}
+                        <option key={u.room} value={u.room} disabled={occ && !moveIgnoreOccupied}>
+                          {u.room}{detail}
                         </option>
                       );
                     })}
                   </select>
+
+                  {/* The override. Deliberately unchecked on every open: forcing
+                      a double-booking is a per-move decision, not a preference. */}
+                  <label className="mt-2 flex items-start gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={moveIgnoreOccupied}
+                      disabled={moveSubmitting || moveDone}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setMoveIgnoreOccupied(on);
+                        setMoveError(null);
+                        // Turning it back OFF must not leave an occupied room
+                        // selected — the Move button would then just 409.
+                        if (!on && (occupiersDuringStay.get(moveTargetRoom)?.length ?? 0) > 0) {
+                          setMoveTargetRoom("");
+                        }
+                      }}
+                      className="mt-0.5 w-3.5 h-3.5 accent-rose-600 disabled:opacity-50"
+                    />
+                    <span className="text-[11px] leading-snug text-gray-600">
+                      <span className="font-medium text-gray-800">Ignore occupied</span> — allow moving into
+                      a unit that is already booked. For multi-step swaps and rotations, where every leg but
+                      the last lands on a taken room.
+                    </span>
+                  </label>
+
+                  {moveIgnoreOccupied && targetOccupiers.length > 0 && (
+                    <div className="mt-2 text-[11px] text-rose-800 bg-rose-50 border border-rose-300 rounded px-2 py-1.5">
+                      <p className="font-semibold">
+                        This creates a real double-booking in {moveTargetRoom}.
+                      </p>
+                      <ul className="mt-1 space-y-0.5">
+                        {targetOccupiers.map((o) => (
+                          <li key={o.reservationNumber}>
+                            · {o.reservationNumber} — {occupierLabel(o)}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1">Finish the remaining moves — Transactions will flag the clash until you do.</p>
+                    </div>
+                  )}
+
+                  {unallocatedDuringStay.length > 0 && (
+                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      {unallocatedDuringStay.length}{" "}
+                      {unallocatedDuringStay.length === 1 ? "booking" : "bookings"} overlapping this stay
+                      {unallocatedDuringStay.length === 1 ? " is" : " are"} still unallocated (
+                      {unallocatedDuringStay.map((r) => r.room).join(", ")}) — a unit shown as free may be
+                      claimed once Beds24 assigns {unallocatedDuringStay.length === 1 ? "it" : "them"}.
+                    </p>
+                  )}
 
                   {inHouse && (
                     <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
@@ -3474,7 +3547,8 @@ export default function ReservationDrawer({
                   )}
                   {moveDone && (
                     <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
-                      ✓ Moved to {moveTargetRoom}. Syncing…
+                      ✓ Moved to {moveTargetRoom}. Syncing… A move notice now sits in the alert bar
+                      until you dismiss it.
                     </p>
                   )}
 
@@ -3489,9 +3563,17 @@ export default function ReservationDrawer({
                     <button
                       onClick={handleMoveRoom}
                       disabled={moveSubmitting || moveDone || !moveTargetRoom}
-                      className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
+                        targetOccupiers.length > 0
+                          ? "bg-rose-600 hover:bg-rose-700"
+                          : "bg-indigo-600 hover:bg-indigo-700"
+                      }`}
                     >
-                      {moveSubmitting ? "Moving…" : `Move to ${moveTargetRoom || "…"}`}
+                      {moveSubmitting
+                        ? "Moving…"
+                        : targetOccupiers.length > 0
+                          ? `Force into ${moveTargetRoom}`
+                          : `Move to ${moveTargetRoom || "…"}`}
                     </button>
                   </div>
                 </div>

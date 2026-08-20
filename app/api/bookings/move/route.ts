@@ -28,6 +28,7 @@ import {
   type AllocationGroup,
 } from "@/utils/roomAllocation";
 import { pragueToday } from "@/utils/periodUtils";
+import { recordRoomMoves, roomMoveId } from "@/data-access/roomMoves";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -37,6 +38,8 @@ interface Beds24Booking {
   arrival: string; // YYYY-MM-DD
   departure: string; // YYYY-MM-DD (exclusive)
   status: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 interface MoveInput {
@@ -225,6 +228,35 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Beds24 move failed" }, { status: 502 });
   }
+
+  // Operator-facing notices — one per leg of the reshuffle. A resolver run can
+  // move guests who never asked to be moved, so each leg gets its own notice
+  // that stays up until someone acknowledges it.
+  const stamp = Date.now();
+  await recordRoomMoves(
+    parsed.map((p) => {
+      const b = movedById.get(p.bookingId)!;
+      const guestName = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
+      return {
+        id: roomMoveId(String(p.bookingId), stamp),
+        reservationNumber: `BH-${p.bookingId}`,
+        guestName: guestName || null,
+        // Unallocated placements come off the virtual room, which has no unit name.
+        fromRoom: roomIdToName.get(b.roomId) ?? group.typeLabel,
+        toRoom: p.toRoom,
+        checkInDate: b.arrival,
+        checkOutDate: b.departure,
+        movedBy: guard.email,
+        source: "resolver" as const,
+        // The resolver refuses to move an in-house guest, so this is always false —
+        // set from the same data anyway rather than hard-coding the invariant.
+        inHouse: b.arrival <= today && b.departure > today,
+        forced: false,
+        conflicts: null,
+        reason: body.reason?.trim() || null,
+      };
+    }),
+  );
 
   const summary = parsed.map((p) => `#${p.bookingId} → ${p.toRoom}`).join(", ");
   await sendTelegram(

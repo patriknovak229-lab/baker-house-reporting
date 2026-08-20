@@ -6,6 +6,7 @@ import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
+import type { RoomMoveNotice } from "@/types/roomMove";
 import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
 import type { PendingDraft, PendingOther } from "@/app/api/webhook/beds24-message/route";
 import FilterPanel, { makeInitialFilters } from "./FilterPanel";
@@ -128,6 +129,10 @@ async function persistOverride(reservationNumber: string, fields: LocalFields): 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
+// Move notices only change when an operator moves something, and whoever does
+// that refetches immediately — this poll exists purely so a SECOND operator's
+// move shows up without a reload, so it can be lazy.
+const ROOM_MOVES_POLL_INTERVAL_MS = 120_000;
 
 /** Czech translation state for one entry in the approval panel. */
 type PanelTxState = 'loading' | 'error' | { text: string; lang: string };
@@ -192,6 +197,11 @@ export default function TransactionsPage() {
   // Drives the "X unread messages" pill panel near the top of the page.
   const [unreadBookings, setUnreadBookings] = useState<UnreadBookingSummary[]>([]);
   const [unreadPanelOpen, setUnreadPanelOpen] = useState(false);
+  // Room-move notices — server-persisted, so they survive reloads and are
+  // visible to every operator until one of them dismisses.
+  const [roomMoves, setRoomMoves] = useState<RoomMoveNotice[]>([]);
+  const [roomMovesPanelOpen, setRoomMovesPanelOpen] = useState(false);
+  const [dismissingMoves, setDismissingMoves] = useState<Set<string>>(new Set());
   // Pending operator-approval drafts (Section A in the panel) and queued
   // `other`-category messages (Section B). Both arrive from the same
   // /api/messages/unread poll. Edit state is per-messageId so the
@@ -354,6 +364,55 @@ export default function TransactionsPage() {
   useEffect(() => {
     fetchReservations();
   }, [fetchReservations]);
+
+  // ── Room-move notices ──
+  const fetchRoomMoves = useCallback(async () => {
+    try {
+      const res = await fetch('/api/bookings/room-moves');
+      if (!res.ok) return;
+      const body: { moves?: RoomMoveNotice[] } = await res.json();
+      setRoomMoves(body.moves ?? []);
+    } catch {
+      // Fail silently — a missing notice must never block the page. The next
+      // poll picks it up.
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRoomMoves();
+    const id = setInterval(fetchRoomMoves, ROOM_MOVES_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [fetchRoomMoves]);
+
+  /** Acknowledge notices. `all` clears every open one. */
+  const dismissRoomMoves = useCallback(
+    async (ids: string[], all = false) => {
+      const target = all ? roomMoves.map((m) => m.id) : ids;
+      if (target.length === 0) return;
+      setDismissingMoves((prev) => new Set([...prev, ...target]));
+      try {
+        const res = await fetch('/api/bookings/room-moves', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(all ? { all: true } : { ids }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // Drop locally so the pill updates instantly; the poll reconciles.
+        setRoomMoves((prev) => prev.filter((m) => !target.includes(m.id)));
+      } catch {
+        // Leave the notice in place on failure — silently hiding an
+        // undismissed notice is the one outcome worse than a stale one.
+        fetchRoomMoves();
+      } finally {
+        setDismissingMoves((prev) => {
+          const next = new Set(prev);
+          for (const id of target) next.delete(id);
+          return next;
+        });
+      }
+    },
+    [roomMoves, fetchRoomMoves],
+  );
 
   // Poll for unread guest messages every 30s — drives both the table-level
   // blinking badge AND the new "unread messages" pill panel.
@@ -681,7 +740,7 @@ export default function TransactionsPage() {
           console.error("[reallocation] move applied but follow-up task creation failed", taskErr);
         }
 
-        await fetchReservations();
+        await Promise.all([fetchReservations(), fetchRoomMoves()]);
       } catch (e) {
         setResolveError((prev) => ({
           ...prev,
@@ -691,7 +750,7 @@ export default function TransactionsPage() {
         setResolveBusy(null);
       }
     },
-    [unallocatedPlans, fetchReservations, reservations],
+    [unallocatedPlans, fetchReservations, fetchRoomMoves, reservations],
   );
 
   /**
@@ -1222,6 +1281,7 @@ export default function TransactionsPage() {
         || turnoverClashes.length > 0
         || unallocatedReservations.length > 0
         || activeBlackouts.length > 0
+        || roomMoves.length > 0
         || postStayChanges.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row */}
@@ -1275,6 +1335,45 @@ export default function TransactionsPage() {
                 </svg>
               </button>
             )}
+            {roomMoves.length > 0 && (() => {
+              const forcedCount = roomMoves.filter((m) => m.forced).length;
+              return (
+                <button
+                  onClick={() => setRoomMovesPanelOpen((o) => !o)}
+                  // Red when any notice is a forced move: that means a real
+                  // double-booking is still standing in Beds24, which is not a
+                  // heads-up, it's an unfinished job.
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    forcedCount > 0
+                      ? 'bg-red-50 border border-red-300 text-red-700 hover:bg-red-100'
+                      : 'bg-sky-50 border border-sky-200 text-sky-800 hover:bg-sky-100'
+                  }`}
+                >
+                  <svg
+                    className={`w-3.5 h-3.5 shrink-0 ${forcedCount > 0 ? 'text-red-500' : 'text-sky-600'}`}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  {roomMoves.length} room {roomMoves.length === 1 ? 'move' : 'moves'}
+                  {forcedCount > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wide">
+                      {forcedCount} forced
+                    </span>
+                  )}
+                  <span className={`font-normal ${forcedCount > 0 ? 'text-red-500' : 'text-sky-600'}`}>
+                    · dismiss when handled
+                  </span>
+                  <svg
+                    className={`w-3.5 h-3.5 transition-transform ${roomMovesPanelOpen ? 'rotate-180' : ''}`}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              );
+            })()}
             {postStayChanges.length > 0 && (
               <button
                 onClick={() => setPostStayPanelOpen((o) => !o)}
@@ -1697,6 +1796,94 @@ export default function TransactionsPage() {
           {/* Unallocated VR panel — each booking shows the fewest-move plan to
               give it a physical unit within its room type. Operator approves +
               executes in-app, or opens the drawer to handle manually. */}
+          {/* Room-move notices panel. Persisted server-side, so this is a
+              hand-off list rather than a toast: a move has consequences the app
+              can't carry out (door code, cleaner's sheet, and for a forced move
+              the rest of the reshuffle), and the notice is the reminder that
+              they're outstanding. Dismissing is the operator saying "handled". */}
+          {roomMoves.length > 0 && roomMovesPanelOpen && (
+            <div className="rounded-lg border border-sky-300 bg-sky-50 overflow-hidden">
+              <div className="px-4 py-2 bg-sky-100/60 border-b border-sky-300 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-sky-900">
+                  Rooms reassigned
+                </span>
+                <span className="text-[11px] text-sky-700">
+                  Check door codes, the cleaning schedule and whether the guest needs telling
+                </span>
+                <button
+                  onClick={() => dismissRoomMoves([], true)}
+                  className="ml-auto text-[11px] text-sky-700 hover:text-sky-900 underline shrink-0"
+                >
+                  Dismiss all
+                </button>
+              </div>
+              <div className="divide-y divide-sky-200">
+                {roomMoves.map((m) => {
+                  const busy = dismissingMoves.has(m.id);
+                  const res = reservations.find((r) => r.reservationNumber === m.reservationNumber);
+                  return (
+                    <div
+                      key={m.id}
+                      className={`px-4 py-3 flex items-start justify-between gap-3 ${m.forced ? 'bg-red-50/60' : ''}`}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-sky-900">
+                          {m.guestName || m.reservationNumber}
+                          <span className="mx-2 font-mono text-xs text-sky-700">
+                            {m.fromRoom} → {m.toRoom}
+                          </span>
+                          {m.inHouse && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold uppercase tracking-wide">
+                              in-house
+                            </span>
+                          )}
+                          {m.source === 'resolver' && (
+                            <span className="ml-1 px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 text-[10px] font-semibold uppercase tracking-wide">
+                              reshuffle
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-sky-700 mt-0.5">
+                          {m.checkInDate} → {m.checkOutDate} ·{' '}
+                          <span className="font-mono">{m.reservationNumber}</span> · by {m.movedBy} ·{' '}
+                          {new Date(m.movedAt).toLocaleString('cs-CZ', { timeZone: 'Europe/Prague' })}
+                        </p>
+                        {m.reason && <p className="text-[11px] text-sky-600 mt-0.5 italic">{m.reason}</p>}
+                        {m.forced && (
+                          <p className="mt-1.5 text-[11px] text-red-800 bg-red-50 border border-red-300 rounded px-2 py-1">
+                            <span className="font-semibold">Forced onto an occupied unit.</span>{' '}
+                            {m.toRoom} was still held by{' '}
+                            {(m.conflicts ?? [])
+                              .map((c) => `${c.reservationNumber} (${c.arrival}→${c.departure})`)
+                              .join(', ') || 'another booking'}
+                            . Finish the remaining moves before dismissing.
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {res && (
+                          <button
+                            onClick={() => { setSelectedReservation(res); setRoomMovesPanelOpen(false); }}
+                            className="text-[11px] text-sky-700 hover:text-sky-900 underline"
+                          >
+                            Open
+                          </button>
+                        )}
+                        <button
+                          onClick={() => dismissRoomMoves([m.id])}
+                          disabled={busy}
+                          className="text-xs px-2.5 py-1 rounded border border-sky-300 bg-white text-sky-800 font-medium hover:bg-sky-100 disabled:opacity-50"
+                        >
+                          {busy ? 'Dismissing…' : 'Dismiss'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {unallocatedReservations.length > 0 && unallocatedPanelOpen && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 overflow-hidden">
               <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-300 flex items-center gap-2">
@@ -2312,7 +2499,9 @@ export default function TransactionsPage() {
         unreadBookingIds={unreadBookingIds}
         onClose={() => setSelectedReservation(null)}
         onUpdate={handleUpdate}
-        onPaymentCreated={fetchReservations}
+        // Also the drawer's post-room-move refresh, so a new move notice shows
+        // in the alert bar without waiting for the poll.
+        onPaymentCreated={() => { fetchReservations(); fetchRoomMoves(); }}
         saveStatus={saveStatus}
       />
 
