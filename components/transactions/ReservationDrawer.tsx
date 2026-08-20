@@ -46,6 +46,23 @@ import {
 } from "@/utils/ratePerks";
 import type { PerkOverrides } from "@/utils/ratePerks";
 
+/**
+ * Best guest address to bill to. Mirrors `sanitizeInvoiceEmail` in
+ * utils/invoiceFieldExtractor (can't be imported here — that module top-level
+ * imports the Anthropic SDK): channel-conduit aliases forward to the guest but
+ * are not real addresses, so they never belong on an invoice.
+ * Returns "" when there's nothing usable, leaving the field blank as before.
+ */
+function guestBillingEmail(res: Reservation): string {
+  const usable = (v: string | undefined | null): string => {
+    const e = (v ?? "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return "";
+    if (/@(?:guest\.booking\.com|guest\.airbnb\.com|stayforlong\.com)$/i.test(e)) return "";
+    return e;
+  };
+  return usable(res.additionalEmail) || usable(res.email);
+}
+
 function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): PaymentQRInfo {
   const invoiceNum = generateInvoiceNumber(reservationNumber);
   const vs = invoiceNum.replace(/\D/g, "");
@@ -1916,6 +1933,13 @@ export default function ReservationDrawer({
   const [isMounted, setIsMounted] = useState(false);
   const [isSendingInvoice, setIsSendingInvoice] = useState(false);
   const [sendInvoiceError, setSendInvoiceError] = useState<string | null>(null);
+  /** Raw SMTP deferral — the mail server took the message but didn't confirm it. */
+  const [sendInvoiceDeferral, setSendInvoiceDeferral] = useState<string | null>(null);
+  /** Which modified version is mid-send / mid-Drive-save (one row at a time). */
+  const [sendingModId, setSendingModId] = useState<string | null>(null);
+  const [savingModDriveId, setSavingModDriveId] = useState<string | null>(null);
+  const [modDriveResults, setModDriveResults] = useState<Record<string, { url: string; name: string }>>({});
+  const [modDriveErrors, setModDriveErrors] = useState<Record<string, string>>({});
   const [isSavingToDrive, setIsSavingToDrive] = useState(false);
   const [driveSaveResult, setDriveSaveResult] = useState<{ url: string; name: string } | null>(null);
   const [driveSaveError, setDriveSaveError] = useState<string | null>(null);
@@ -2057,13 +2081,30 @@ export default function ReservationDrawer({
       setModifyGuestName("");
       setModifyLineDescription("");
       setModifyAmount("");
+      // Billing email defaults to the guest's own address so the operator
+      // doesn't retype it — a stored billingEmail always wins, and the field
+      // stays editable either way.
+      const guestEmail = guestBillingEmail(reservation);
       if (reservation.invoiceData) {
-        setInvoiceForm({ ...reservation.invoiceData });
+        setInvoiceForm({
+          ...reservation.invoiceData,
+          billingEmail: reservation.invoiceData.billingEmail || guestEmail,
+        });
       } else {
-        setInvoiceForm({ companyName: "", companyAddress: "", ico: "", vatNumber: "", billingEmail: "" });
+        setInvoiceForm({ companyName: "", companyAddress: "", ico: "", vatNumber: "", billingEmail: guestEmail });
       }
     }
   }, [reservation]);
+
+  // Send / Drive feedback belongs to the booking, not to a single save — keyed
+  // on the reservation number so the onUpdate that follows a send (which
+  // replaces the reservation object) doesn't wipe the notice it just produced.
+  useEffect(() => {
+    setSendInvoiceError(null);
+    setSendInvoiceDeferral(null);
+    setModDriveResults({});
+    setModDriveErrors({});
+  }, [reservation?.reservationNumber]);
 
   useEffect(() => {
     if (reservation) {
@@ -2183,32 +2224,84 @@ export default function ReservationDrawer({
 
   async function handlePrintModified(mod: InvoiceModification) {
     if (reservation!.invoiceData) {
-      await printInvoice(reservation!, reservation!.invoiceData, undefined, mod);
+      // Honour the "Include Payment QR" toggle here too — the QR asks for this
+      // version's total, which may be an override of the booking price.
+      const qrInfo = includePaymentQR
+        ? buildPaymentQRInfo(reservation!.reservationNumber, mod.amount ?? reservation!.price)
+        : undefined;
+      await printInvoice(reservation!, reservation!.invoiceData, qrInfo, mod);
     }
   }
 
+  /**
+   * Send a modified version. Treated exactly like a normal invoice send:
+   * respects the payment-QR toggle, marks the reservation Sent, and stamps
+   * sentAt/sentTo on THIS version so the list shows what went where.
+   */
   async function handleSendModified(mod: InvoiceModification) {
     setSendInvoiceError(null);
+    setSendInvoiceDeferral(null);
     setIsSendingInvoice(true);
+    setSendingModId(mod.id);
     try {
       const res = await fetch('/api/send-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reservation: reservation!, includeQR: false, modification: mod }),
+        body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR, modification: mod }),
       });
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
+      if (json.outcome === 'deferred') setSendInvoiceDeferral(json.deferral ?? 'Mail server deferred the message');
+      const sentTo: string = json.sentTo ?? reservation!.invoiceData?.billingEmail ?? '';
+      const updated = {
+        ...reservation!,
+        invoiceStatus: 'Sent' as const,
+        invoiceModifications: (reservation!.invoiceModifications ?? []).map((m) =>
+          m.id === mod.id ? { ...m, sentAt: new Date().toISOString(), sentTo } : m,
+        ),
+      };
+      onUpdate(updated);
+      upsertRevenueInvoice(updated, mod.amount);
     } catch (err) {
       setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send');
     } finally {
       setIsSendingInvoice(false);
+      setSendingModId(null);
     }
   }
 
-  /** Upsert a revenue invoice for a QR-enabled issued invoice */
-  async function upsertRevenueInvoice(res: typeof reservation) {
+  /** Same Drive archive as a normal invoice, rendering this version's PDF. */
+  async function handleSaveModifiedToDrive(mod: InvoiceModification) {
+    setModDriveErrors((prev) => { const next = { ...prev }; delete next[mod.id]; return next; });
+    setSavingModDriveId(mod.id);
+    try {
+      const res = await fetch('/api/transactions/invoice-to-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR, modification: mod }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { driveUrl: string; driveFileName: string };
+      setModDriveResults((prev) => ({ ...prev, [mod.id]: { url: data.driveUrl, name: data.driveFileName } }));
+    } catch (err) {
+      setModDriveErrors((prev) => ({
+        ...prev,
+        [mod.id]: err instanceof Error ? err.message : 'Failed to save to Drive',
+      }));
+    } finally {
+      setSavingModDriveId(null);
+    }
+  }
+
+  /** Upsert a revenue invoice for a QR-enabled issued invoice.
+   *  `amountCZK` overrides the booking price when a modified version with its
+   *  own total is the invoice that was actually issued. */
+  async function upsertRevenueInvoice(res: typeof reservation, amountCZK?: number) {
     if (!res || !res.includeQR) return;
     try {
       // Deterministic id: one revenue invoice per reservation
@@ -2223,7 +2316,7 @@ export default function ReservationDrawer({
           category: 'accommodation_direct',
           invoiceNumber,
           invoiceDate: new Date().toISOString().slice(0, 10),
-          amountCZK: res.price,
+          amountCZK: amountCZK ?? res.price,
           reservationNumber: res.reservationNumber,
           guestName: `${res.firstName} ${res.lastName}`.trim(),
         }),
@@ -2243,6 +2336,7 @@ export default function ReservationDrawer({
 
   async function handleSendInvoice() {
     setSendInvoiceError(null);
+    setSendInvoiceDeferral(null);
     setIsSendingInvoice(true);
     try {
       const res = await fetch('/api/send-invoice', {
@@ -2250,10 +2344,14 @@ export default function ReservationDrawer({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR }),
       });
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
         throw new Error(json.error ?? `HTTP ${res.status}`);
       }
+      // outcome 'deferred' = the mail server took the message but deferred its
+      // acknowledgement. It is NOT a failure (and must not be re-sent blindly),
+      // so the invoice is marked Sent and the operator gets a warning instead.
+      if (json.outcome === 'deferred') setSendInvoiceDeferral(json.deferral ?? 'Mail server deferred the message');
       const updated = { ...reservation!, invoiceStatus: "Sent" as const };
       onUpdate(updated);
       upsertRevenueInvoice(updated);
@@ -4248,6 +4346,14 @@ export default function ReservationDrawer({
                     {sendInvoiceError}
                   </p>
                 )}
+                {sendInvoiceDeferral && (
+                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+                    <span className="font-semibold">Sent — delivery deferred.</span> The mail server accepted the
+                    message but deferred its confirmation, which it normally still delivers. Check the Sent folder
+                    before sending again so the guest doesn&apos;t get two copies.
+                    <span className="block mt-0.5 font-mono text-[10px] text-amber-700 break-all">{sendInvoiceDeferral}</span>
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={handleDownloadPDF}
@@ -4530,7 +4636,15 @@ export default function ReservationDrawer({
                                   title={!reservation.invoiceData?.billingEmail ? "No billing email set" : "Send this version by email"}
                                   className="px-2 py-0.5 text-[11px] font-medium bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                                 >
-                                  Send
+                                  {sendingModId === mod.id ? "Sending…" : "Send"}
+                                </button>
+                                <button
+                                  onClick={() => handleSaveModifiedToDrive(mod)}
+                                  disabled={savingModDriveId !== null}
+                                  title="Save this version to Drive"
+                                  className="px-2 py-0.5 text-[11px] font-medium border border-gray-200 text-gray-600 rounded hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  {savingModDriveId === mod.id ? "Saving…" : "Drive"}
                                 </button>
                                 <button
                                   onClick={() => deleteModification(mod.id)}
@@ -4550,6 +4664,34 @@ export default function ReservationDrawer({
                               <p className="text-[11px] font-medium text-amber-700 leading-snug">
                                 Amount: {formatCurrency(mod.amount)} <span className="font-normal text-gray-400">(booking price {formatCurrency(reservation.price)})</span>
                               </p>
+                            )}
+                            {/* Sent record — persisted on the modification itself. */}
+                            {mod.sentAt && (
+                              <p className="text-[11px] text-green-700 leading-snug flex items-start gap-1">
+                                <svg className="w-3 h-3 mt-[2px] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>
+                                  Sent {new Date(mod.sentAt).toLocaleString("en-GB", {
+                                    day: "numeric", month: "short", year: "numeric",
+                                    hour: "2-digit", minute: "2-digit",
+                                  })}
+                                  {mod.sentTo ? ` to ${mod.sentTo}` : ""}
+                                </span>
+                              </p>
+                            )}
+                            {modDriveErrors[mod.id] && (
+                              <p className="text-[11px] text-red-600 leading-snug">{modDriveErrors[mod.id]}</p>
+                            )}
+                            {modDriveResults[mod.id] && (
+                              <a
+                                href={modDriveResults[mod.id].url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[11px] text-green-700 hover:underline truncate block"
+                              >
+                                Saved to Drive — {modDriveResults[mod.id].name}
+                              </a>
                             )}
                           </div>
                         );

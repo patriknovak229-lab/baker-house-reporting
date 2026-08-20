@@ -117,6 +117,10 @@ export interface InvoiceModification {
    */
   amount?: number;
   createdAt: string; // ISO timestamp
+  /** ISO timestamp of the last successful email send of THIS version. */
+  sentAt?: string;
+  /** Address the last successful send went to. */
+  sentTo?: string;
 }
 
 /**

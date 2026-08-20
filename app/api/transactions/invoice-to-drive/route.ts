@@ -6,8 +6,14 @@
  * RevenueInvoice in Redis so it shows up (unreconciled) in the
  * Accounting → Revenue tab.
  *
- * Body: { reservation: Reservation; includeQR?: boolean }
+ * Body: { reservation: Reservation; includeQR?: boolean; modification?: InvoiceModification }
  * Returns: { driveUrl, driveFileId, driveFileName, invoice: RevenueInvoice }
+ *
+ * A `modification` renders that "Modified Versions" variant instead of the
+ * plain invoice. It keeps the reservation's invoice number (modified versions
+ * re-issue under the same number) and therefore updates the SAME RevenueInvoice
+ * record — with the variant's total, which is the amount the guest was actually
+ * invoiced. Reconciliation state on an existing record is preserved.
  */
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
@@ -21,7 +27,7 @@ import {
   generateInvoiceNumber,
   PAYMENT_IBAN,
 } from '@/utils/invoiceUtils';
-import type { Reservation } from '@/types/reservation';
+import type { InvoiceModification, Reservation } from '@/types/reservation';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
@@ -76,7 +82,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No refresh token. Please sign out and sign in again.' }, { status: 401 });
   }
 
-  const { reservation, includeQR }: { reservation: Reservation; includeQR?: boolean } = await request.json();
+  const { reservation, includeQR, modification }: {
+    reservation: Reservation;
+    includeQR?: boolean;
+    modification?: InvoiceModification;
+  } = await request.json();
 
   if (!reservation.invoiceData) {
     return NextResponse.json({ error: 'No invoice data on reservation' }, { status: 400 });
@@ -84,16 +94,19 @@ export async function POST(request: Request) {
 
   const invoiceNum = generateInvoiceNumber(reservation.reservationNumber);
   const vs         = invoiceNum.replace(/\D/g, '');
+  // A modification may override the invoice total — the QR, the filename and
+  // the RevenueInvoice must all follow what the invoice actually shows.
+  const invoiceTotal = modification?.amount ?? reservation.price;
 
   // Build QR payload if requested
   let payment: { qrDataUrl: string; info: { spdString: string; vs: string; amountCZK: number } } | undefined;
   if (includeQR) {
-    const spdString = buildSPDString(PAYMENT_IBAN, reservation.price, vs);
+    const spdString = buildSPDString(PAYMENT_IBAN, invoiceTotal, vs);
     const qrDataUrl = await QRCodeLib.toDataURL(spdString, { width: 200, margin: 1, errorCorrectionLevel: 'M' });
-    payment = { qrDataUrl, info: { spdString, vs, amountCZK: reservation.price } };
+    payment = { qrDataUrl, info: { spdString, vs, amountCZK: invoiceTotal } };
   }
 
-  const html      = buildInvoiceHTML(reservation, reservation.invoiceData, invoiceNum, payment, true);
+  const html      = buildInvoiceHTML(reservation, reservation.invoiceData, invoiceNum, payment, true, modification);
   const pdfBuffer = await generatePDF(html);
 
   // ── Upload to Drive ──────────────────────────────────────────────────────
@@ -110,7 +123,7 @@ export async function POST(request: Request) {
 
   const guestName  = `${reservation.firstName}_${reservation.lastName}`;
   const today      = new Date().toISOString().slice(0, 10);
-  const fileName   = `${today}_${safe(guestName)}_${safe(invoiceNum)}_${Math.round(reservation.price)}CZK.pdf`;
+  const fileName   = `${today}_${safe(guestName)}_${safe(invoiceNum)}_${Math.round(invoiceTotal)}CZK.pdf`;
 
   const { Readable } = await import('stream');
   const driveRes = await drive.files.create({
@@ -136,7 +149,7 @@ export async function POST(request: Request) {
     status:            existing >= 0 ? invoices[existing].status : 'pending',
     invoiceNumber:     invoiceNum,
     invoiceDate:       today,
-    amountCZK:         reservation.price,
+    amountCZK:         invoiceTotal,
     reservationNumber: reservation.reservationNumber,
     guestName:         `${reservation.firstName} ${reservation.lastName}`.trim(),
     bankTransactionId: existing >= 0 ? invoices[existing].bankTransactionId : undefined,

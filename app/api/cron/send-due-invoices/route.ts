@@ -92,12 +92,14 @@ export async function POST(req: NextRequest) {
   const byNumber = new Map(reservations.map((r) => [r.reservationNumber, r]));
 
   let sent = 0;
+  let deferred = 0;
   let alreadySent = 0;
   let skippedManual = 0;
   let skippedIncomplete = 0;
   let skippedStale = 0;
   let failed = 0;
   const errors: { reservation: string; reason: string }[] = [];
+  const deferrals: { reservation: string; reason: string }[] = [];
   let dirty = false;
 
   const isOpenInvoiceTask = (i: Issue) => i.category === 'invoice' && !i.resolved;
@@ -143,10 +145,18 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      await sendInvoiceEmail(
+      // A transient deferral comes back as outcome:'deferred' rather than
+      // throwing — the mail server already has the message, so we mark it Sent
+      // and resolve the task exactly as for a confirmed send. Re-sending
+      // tomorrow is the one thing that could duplicate the invoice.
+      const result = await sendInvoiceEmail(
         { ...reservation, invoiceData: ov.invoiceData, invoiceStatus: 'Not Issued' },
         { includeQR: false },
       );
+      if (result.outcome === 'deferred') {
+        deferred += 1;
+        deferrals.push({ reservation: resNum, reason: result.deferral ?? 'deferred' });
+      }
       ov.invoiceStatus = 'Sent';
       ov.issues = resolveInvoiceTasks(issues);
       dirty = true;
@@ -173,6 +183,13 @@ export async function POST(req: NextRequest) {
       ).catch(() => {});
       return NextResponse.json({ error: `Persist failed after sending ${sent}: ${reason}`, sent }, { status: 500 });
     }
+  }
+
+  if (deferred > 0) {
+    await sendTelegram(
+      `ℹ️ Invoice auto-send: ${deferred} invoice(s) deferred by the mail server (handed over, delivery unconfirmed — check the Sent folder):\n` +
+        deferrals.map((d) => `• ${d.reservation}: ${d.reason}`).join('\n'),
+    ).catch(() => {});
   }
 
   if (failed > 0) {
@@ -204,6 +221,8 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     today,
     sent,
+    deferred,
+    deferrals: deferrals.length > 0 ? deferrals : undefined,
     alreadySent,
     skippedManual,
     skippedIncomplete,
