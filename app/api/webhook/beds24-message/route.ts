@@ -250,6 +250,9 @@ interface CachedBooking {
   apiSource?: string;
   status?: string;
   bookingTime?: string;
+  /** ISO timestamp Beds24 sets when a booking is cancelled — freshness signal
+   *  for the cancellation notification (analogous to bookingTime for new). */
+  cancelTime?: string;
 }
 
 interface AutoReplyLogEntry {
@@ -336,6 +339,14 @@ export async function POST(req: NextRequest) {
       await pollAndNotifyNewBookings(redis);
     } catch (err) {
       console.error('[beds24 webhook] new-booking poll failed:', err);
+    }
+    // Cancellation notifications ride the SAME debounced pass (a cancellation
+    // frees inventory → fires SYNC_ROOM, just like a new booking). Own
+    // try/catch so neither poll can suppress the other.
+    try {
+      await pollAndNotifyCancellations(redis);
+    } catch (err) {
+      console.error('[beds24 webhook] cancellation poll failed:', err);
     }
   });
 
@@ -2154,6 +2165,143 @@ async function maybeNotifyNewBooking(
   // dedupe lock is already set, so retries skip too). A 1-3s wait here
   // is well under our 60s maxDuration, so the original concern about
   // stretching the function isn't worth the silent-drop risk.
+  await sendTelegram(text);
+}
+
+// ─── Cancellation Telegram notification ──────────────────────────────────────
+
+/**
+ * Fetch recently-modified CANCELLED bookings from Beds24 and fire a Telegram
+ * for genuine guest cancellations. Mirrors pollAndNotifyNewBookings but keys
+ * freshness off `cancelTime` (a booking made months ago can be cancelled today,
+ * so bookingTime is irrelevant here). Beds24's default response excludes
+ * cancelled bookings, so status=cancelled must be requested explicitly.
+ */
+async function pollAndNotifyCancellations(redis: Redis | null): Promise<void> {
+  if (!redis) return;
+
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    console.error('[cancellation poll] Beds24 token fetch failed:', err);
+    return;
+  }
+
+  const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const params = new URLSearchParams();
+  params.set('modifiedFrom', since);
+  params.append('status', 'cancelled');
+
+  let fetched: CachedBooking[];
+  try {
+    const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, {
+      headers: { token },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error(`[cancellation poll] Beds24 ${res.status}: ${text.slice(0, 200)}`);
+      return;
+    }
+    const json = await res.json();
+    fetched = Array.isArray(json) ? json : (json.data ?? []);
+  } catch (err) {
+    console.error('[cancellation poll] Beds24 fetch failed:', err);
+    return;
+  }
+
+  if (fetched.length === 0) return;
+
+  // Operator "non-arrival" resell cancellations (guest still booked on the OTA)
+  // are flagged in overrides — read once and exclude them below.
+  let overrides: Record<string, { nonArrival?: unknown }> = {};
+  try {
+    overrides = await readAllReservationOverrides<{ nonArrival?: unknown }>();
+  } catch (err) {
+    console.error('[cancellation poll] overrides read failed:', err);
+  }
+
+  const now = Date.now();
+  for (const b of fetched) {
+    // Freshness gate: only announce cancellations that happened just now. An old
+    // cancelled booking re-touched by a channel sync has a stale cancelTime and
+    // is skipped, so we never re-announce historical cancellations.
+    if (b.cancelTime) {
+      const age = now - new Date(b.cancelTime).getTime();
+      if (age > NEW_BOOKING_WINDOW_MS || age < 0) continue;
+    }
+    try {
+      await maybeNotifyCancellation(b, overrides, redis);
+    } catch (err) {
+      console.error(`[cancellation poll] notify failed for booking ${b.id}:`, err);
+    }
+  }
+}
+
+/**
+ * Telegram a single guest cancellation, using the SAME details as new bookings.
+ * Skips: sub-bookings (price=0, master is notified), virtual/unmapped rooms, and
+ * operator non-arrival cancellations (the guest did NOT cancel). Dedupes per
+ * booking id so Beds24 retries / overlapping polls don't double-send.
+ */
+async function maybeNotifyCancellation(
+  booking: CachedBooking,
+  overrides: Record<string, { nonArrival?: unknown }>,
+  redis: Redis | null,
+): Promise<void> {
+  if (booking.status !== 'cancelled' && booking.status !== 'canceled') return;
+
+  // Sub-bookings of a virtual master carry price=0; the master holds the real
+  // price and is notified separately (mirrors the new-booking rule).
+  if (Number(booking.price ?? 0) === 0) return;
+
+  const roomKey = String(booking.roomId ?? '');
+  const room = ROOM_LABEL_MAP[roomKey];
+  if (!room) return; // virtual or unmapped room
+
+  const bookingId = String(booking.id ?? '');
+  if (!bookingId) return;
+
+  // Operator "non-arrival": we cancelled in Beds24 to resell the nights, but the
+  // guest is still booked on the OTA — NOT a guest cancellation, so don't alert.
+  if (overrides[`BH-${bookingId}`]?.nonArrival) return;
+
+  // Dedupe: one Telegram per cancelled booking. Set BEFORE sending so parallel
+  // webhook fires can't race (same rationale as the new-booking path).
+  if (redis) {
+    const redisKey = `notified:cancel:${bookingId}`;
+    const already = await redis.get(redisKey);
+    if (already) return;
+    await redis.set(redisKey, '1', { ex: NOTIFIED_TTL_SECONDS });
+  }
+
+  const firstName = booking.firstName ?? '';
+  const lastName = booking.lastName ?? '';
+  const guests =
+    (Number(booking.numAdult ?? 0) + Number(booking.numChild ?? 0)) || '—';
+  const nights =
+    booking.arrival && booking.departure
+      ? Math.round(
+          (new Date(booking.departure).getTime() -
+            new Date(booking.arrival).getTime()) /
+            86_400_000,
+        )
+      : '—';
+  const channel = booking.apiSource || 'Direct';
+  const price = booking.price
+    ? `${Number(booking.price).toLocaleString('cs-CZ')} Kč`
+    : '—';
+
+  const text = [
+    `❌ <b>Booking Cancelled — ${room}</b>`,
+    `👤 ${firstName} ${lastName}`.trim() || '👤 —',
+    `📅 ${formatDate(booking.arrival ?? '')} → ${formatDate(booking.departure ?? '')} (${nights} nights)`,
+    `👥 ${guests} guests`,
+    `📣 ${channel}`,
+    `💰 ${price}`,
+  ].join('\n');
+
   await sendTelegram(text);
 }
 
