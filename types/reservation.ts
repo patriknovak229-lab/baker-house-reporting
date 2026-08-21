@@ -39,7 +39,8 @@ export interface GuestRating {
 /**
  * Rate plan a booking was made under. Booking.com offers all five; Airbnb only
  * has Non-Refundable / Standard (its length-of-stay discounts are applied to
- * the Standard rate, not separate plans). Direct bookings carry no channel rate
+ * the Standard rate, not separate plans). Direct-Web and Direct-Phone both sell
+ * the single direct rate and are always Standard; legacy Direct carries no rate
  * plan. Detection is best-effort from Beds24 signals — see utils/rateType.ts.
  */
 export type RateType =

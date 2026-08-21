@@ -55,14 +55,18 @@ export function rateChipClasses(rt: RateType): string {
 
 /**
  * Channels whose bookings carry a rate plan we track. Booking.com/Airbnb via the
- * channel; Direct-Web via our own booking site (currently a single "Standard"
- * web rate). Direct-Phone and legacy Direct have no tracked rate.
+ * channel; Direct-Web via our own booking site and Direct-Phone via the operator
+ * taking the booking by phone — both sell the same single "Standard" direct rate,
+ * so a phone booking is treated exactly like a web one (rate chip AND the
+ * Standard perk). Only legacy Direct (Beds24 UI entries of unknown origin) has
+ * no tracked rate.
  */
 export function channelHasRatePlan(channel: Channel): boolean {
   return (
     channel === "Booking.com" ||
     channel === "Airbnb" ||
-    channel === "Direct-Web"
+    channel === "Direct-Web" ||
+    channel === "Direct-Phone"
   );
 }
 
@@ -129,11 +133,11 @@ export function detectRateType(input: {
 }): RateType | null {
   if (!channelHasRatePlan(input.channel)) return null;
 
-  // Direct-Web (our booking site): only one rate is sold online → always
-  // Standard. There's no channel rate text to parse, so return before the
-  // signal check. (Follows the Standard perk policy like any Standard rate —
-  // see autoRatePerks / STANDARD_PERK_CHANGE_DATE.)
-  if (input.channel === "Direct-Web") return "Standard";
+  // Direct channels (our booking site + phone bookings taken by the operator):
+  // only one rate is sold direct → always Standard. There's no channel rate text
+  // to parse, so return before the signal check. (Follows the Standard perk
+  // policy like any Standard rate — see autoRatePerks / STANDARD_PERK_CHANGE_DATE.)
+  if (input.channel === "Direct-Web" || input.channel === "Direct-Phone") return "Standard";
 
   const hay = input.signals
     .filter((s): s is string => typeof s === "string" && s.length > 0)

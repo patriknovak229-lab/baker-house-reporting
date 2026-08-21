@@ -224,6 +224,74 @@ function IssueBadge({ category, texts }: { category: IssueCategory; texts: strin
 }
 
 /**
+ * Saved-note badge. Notes aren't alerts, so unlike IssueBadge this one doesn't
+ * pulse and uses a neutral slate chip rather than one of the issue colours —
+ * but it borrows the same hover tooltip so the operator can read the note
+ * without opening the drawer.
+ */
+function NoteBadge({ text }: { text: string }) {
+  return (
+    <span className="relative group/note inline-flex">
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full text-white bg-slate-700">
+        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+            d="M9 12h6m-6 4h4m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      </span>
+      {/* Tooltip */}
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/note:flex flex-col gap-0.5 z-30 min-w-[160px] max-w-[280px]">
+        <span className="bg-gray-900 text-white text-[11px] rounded px-2.5 py-1.5 shadow-lg whitespace-pre-wrap break-words text-left">
+          <span className="block font-semibold">Note</span>
+          <span className="block text-gray-200 mt-1">{text}</span>
+        </span>
+        <span className="self-center border-4 border-transparent border-t-gray-900 w-0 h-0" />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Copy-to-clipboard affordance for the reservation number, so the operator can
+ * lift it straight from the overview instead of opening the drawer. Stops the
+ * click bubbling to the row (which would open the drawer) and flips to a tick
+ * briefly — confirmation without a toast.
+ */
+function CopyResNumber({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(value).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          },
+          () => {},
+        );
+      }}
+      title={copied ? "Copied" : `Copy ${value}`}
+      aria-label={`Copy reservation number ${value}`}
+      className={`shrink-0 p-0.5 rounded transition-colors ${
+        copied ? "text-emerald-600" : "text-gray-300 hover:text-indigo-600 hover:bg-indigo-50"
+      }`}
+    >
+      {copied ? (
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+        </svg>
+      ) : (
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/**
  * Compact rate-perk tags (early check-in / late checkout / special treatment)
  * derived from the reservation's effective rate + operator overrides. Read-only
  * here — the operator toggles them in the drawer's Perks section.
@@ -339,7 +407,10 @@ function ReservationCard({
             Blackout
           </span>
           <span className={roomChipClasses(res.room)}>{res.room}</span>
-          <span className="ml-auto font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
+          <span className="ml-auto flex items-center gap-0.5">
+            <span className="font-mono text-[11px] text-gray-400">{res.reservationNumber}</span>
+            <CopyResNumber value={res.reservationNumber} />
+          </span>
         </div>
         <div className="text-xs text-gray-600 mb-1">
           {formatDate(res.checkInDate)} → {formatDate(res.checkOutDate)} ·{' '}
@@ -415,6 +486,7 @@ function ReservationCard({
                   .map((i) => i.text)}
               />
             ))}
+          {res.notes?.trim() && <NoteBadge text={res.notes.trim()} />}
           {hasUnread && (
             <span
               className="relative inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white"
@@ -445,7 +517,10 @@ function ReservationCard({
           </span>
         )}
         <Badge variant={channelBadgeVariant(res.channel)} size="xs">{res.channel}</Badge>
-        <span className={`ml-auto font-mono text-[11px] text-gray-400 ${res.isCancelled ? 'line-through' : ''}`}>{res.reservationNumber}</span>
+        <span className="ml-auto flex items-center gap-0.5">
+          <span className={`font-mono text-[11px] text-gray-400 ${res.isCancelled ? 'line-through' : ''}`}>{res.reservationNumber}</span>
+          <CopyResNumber value={res.reservationNumber} />
+        </span>
       </div>
 
       {/* Row 3: Dates */}
@@ -693,7 +768,10 @@ export default function ReservationTable({
                       className="bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors text-gray-500 italic"
                     >
                       <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">
-                        <span className="text-gray-400">{res.reservationNumber}</span>
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-gray-400">{res.reservationNumber}</span>
+                          <CopyResNumber value={res.reservationNumber} />
+                        </div>
                       </td>
                       <td colSpan={2} className="px-3 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
@@ -741,6 +819,7 @@ export default function ReservationTable({
                     <td className="px-3 py-3 font-mono text-xs whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         <span className={`text-gray-500 ${res.isCancelled ? 'line-through text-gray-400' : ''}`}>{res.reservationNumber}</span>
+                        <CopyResNumber value={res.reservationNumber} />
                         {res.bookingTimestamp &&
                           Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000 && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">
@@ -862,6 +941,7 @@ export default function ReservationTable({
                             />
                           );
                         })}
+                        {res.notes?.trim() && <NoteBadge text={res.notes.trim()} />}
                         {stayStatuses.map((status) => {
                           if (status === "checking-in") return (
                             <Badge key={status} variant="amber-filled" size="xs">Checking in</Badge>

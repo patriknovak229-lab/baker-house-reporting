@@ -52,11 +52,15 @@ const RATE_FILL: Record<string, Palette> = {
 };
 const RATE_NONE: Palette = { f: '#D3D1C7', b: '#888780', t: '#2C2C2A', a: '#5F5E5A' };
 
+// Both direct channels are green — they're the same business (no OTA commission);
+// Direct-Phone just runs a deeper shade so operator-taken phone bookings can be
+// told apart from pure web ones at a glance. Legacy Direct (unknown Beds24-UI
+// origin) stays violet — it isn't a confirmed direct sale.
 const CHANNEL_FILL: Record<string, Palette> = {
   "Booking.com":  { f: '#B5D4F4', b: '#378ADD', t: '#042C53', a: '#003B95' },
   "Airbnb":       { f: '#F7C1C1', b: '#E24B4A', t: '#501313', a: '#FF5A5F' },
   "Direct":       { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#534AB7' },
-  "Direct-Phone": { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#7F77DD' },
+  "Direct-Phone": { f: '#7FB558', b: '#3F6E14', t: '#0F2603', a: '#2C5009' },
   "Direct-Web":   { f: '#C0DD97', b: '#639922', t: '#173404', a: '#3B6D11' },
 };
 const CHANNEL_NONE: Palette = RATE_NONE;
@@ -82,22 +86,49 @@ function getTodayStr(): string {
   return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD, local time
 }
 
+// Day arithmetic runs in UTC on plain YYYY-MM-DD strings. Parsing as local
+// midnight and then reading the result back with toISOString() silently shifts
+// the answer a day earlier at any positive offset (CET/CEST) — which used to
+// start the window on yesterday and stop bar end-caps from ever rendering.
+function ymdToUtc(dateStr: string): Date {
+  return new Date(dateStr + "T00:00:00Z");
+}
+
 function nextDay(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + 1);
+  const d = ymdToUtc(dateStr);
+  d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
 }
 
 function get30DaysFrom(baseStr: string, offset: number): string[] {
   const days: string[] = [];
-  const base = new Date(baseStr + "T00:00:00");
-  base.setDate(base.getDate() + offset);
+  const base = ymdToUtc(baseStr);
+  base.setUTCDate(base.getUTCDate() + offset);
   for (let i = 0; i < 30; i++) {
     const d = new Date(base);
-    d.setDate(base.getDate() + i);
+    d.setUTCDate(base.getUTCDate() + i);
     days.push(d.toISOString().slice(0, 10));
   }
   return days;
+}
+
+/** Every day of one calendar month: "2026-09" → ["2026-09-01" … "2026-09-30"]. */
+function getMonthDays(monthStr: string): string[] {
+  const [y, m] = monthStr.split("-").map(Number);
+  if (!y || !m) return [];
+  const days: string[] = [];
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  while (d.getUTCMonth() === m - 1) {
+    days.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return days;
+}
+
+/** Step a "YYYY-MM" picker value by whole months. */
+function shiftMonth(monthStr: string, delta: number): string {
+  const [y, m] = monthStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1 + delta, 1)).toISOString().slice(0, 7);
 }
 
 function formatDateRange(days: string[]): string {
@@ -265,6 +296,10 @@ function formatRoomForTooltip(room: string): string {
 export default function OccupancyCalendar({ reservations, onReservationClick }: Props) {
   const todayStr = getTodayStr();
   const [startOffset, setStartOffset] = useState(0);
+  // Month picker — idle ("") by default so the calendar keeps its rolling
+  // 30-day window. Set to "YYYY-MM" it pins the grid to that whole calendar
+  // month and the ‹ › arrows step month-by-month instead of week-by-week.
+  const [monthFilter, setMonthFilter] = useState("");
   const [showParking, setShowParking] = useState(false);
   const [colorBy, setColorBy] = useState<ColorBy>('occupancy');
   const [collapsed, setCollapsed] = useState<Record<RoomCategory, boolean>>({
@@ -276,9 +311,13 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
   // its window ENDS at today+offset; every other view starts at today+offset.
   const isBookings = colorBy === 'bookings';
   const days = useMemo(
-    () => get30DaysFrom(todayStr, isBookings ? startOffset - 29 : startOffset),
-    [todayStr, startOffset, isBookings],
+    () =>
+      monthFilter
+        ? getMonthDays(monthFilter)
+        : get30DaysFrom(todayStr, isBookings ? startOffset - 29 : startOffset),
+    [todayStr, startOffset, isBookings, monthFilter],
   );
+  const currentMonth = todayStr.slice(0, 7);
   const parkingResult = useMemo(() => computeParking(reservations), [reservations]);
   const categoryGroups = useMemo(() => groupRoomsByCategory(), []);
 
@@ -415,6 +454,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
       ? [
           { label: "Booking", pal: CHANNEL_FILL["Booking.com"] },
           { label: "Airbnb", pal: CHANNEL_FILL.Airbnb },
+          { label: "Web", pal: CHANNEL_FILL["Direct-Web"] },
+          { label: "Phone", pal: CHANNEL_FILL["Direct-Phone"] },
           { label: "Direct", pal: CHANNEL_FILL.Direct },
         ]
       : colorBy === 'occupancy'
@@ -665,6 +706,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                 // (forward for stay views, look-back for bookings).
                 setColorBy(e.target.value as ColorBy);
                 setStartOffset(0);
+                setMonthFilter("");
               }}
               className="border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
@@ -675,13 +717,44 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             </select>
           </label>
 
-          {/* Navigation */}
+          {/* Month picker — idle by default; picking a month pins the grid to it */}
+          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className="hidden sm:inline">Month</span>
+            <input
+              type="month"
+              value={monthFilter}
+              max={isBookings ? currentMonth : undefined}
+              onChange={(e) => {
+                setMonthFilter(e.target.value);
+                setStartOffset(0);
+              }}
+              className="border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              title="Show one whole month — clear it (or hit Today) to go back to the rolling 30 days"
+            />
+            {monthFilter && (
+              <button
+                onClick={() => setMonthFilter("")}
+                className="p-0.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                title="Clear month — back to the rolling 30 days"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </label>
+
+          {/* Navigation — steps whole months while a month is pinned, weeks otherwise */}
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setStartOffset((o) => Math.max(o - 7, isBookings ? -168 : -14))}
-              disabled={startOffset <= (isBookings ? -168 : -14)}
+              onClick={() =>
+                monthFilter
+                  ? setMonthFilter((m) => shiftMonth(m, -1))
+                  : setStartOffset((o) => Math.max(o - 7, isBookings ? -168 : -14))
+              }
+              disabled={!monthFilter && startOffset <= (isBookings ? -168 : -14)}
               className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              title="Previous week"
+              title={monthFilter ? "Previous month" : "Previous week"}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -689,8 +762,11 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             </button>
 
             <button
-              onClick={() => setStartOffset(0)}
-              disabled={startOffset === 0}
+              onClick={() => {
+                setMonthFilter("");
+                setStartOffset(0);
+              }}
+              disabled={!monthFilter && startOffset === 0}
               className="px-2 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent"
               title="Jump to today"
             >
@@ -698,10 +774,14 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
             </button>
 
             <button
-              onClick={() => setStartOffset((o) => (isBookings ? Math.min(o + 7, 0) : o + 7))}
-              disabled={isBookings && startOffset >= 0}
+              onClick={() =>
+                monthFilter
+                  ? setMonthFilter((m) => shiftMonth(m, 1))
+                  : setStartOffset((o) => (isBookings ? Math.min(o + 7, 0) : o + 7))
+              }
+              disabled={isBookings && (monthFilter ? monthFilter >= currentMonth : startOffset >= 0)}
               className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              title="Next week"
+              title={monthFilter ? "Next month" : "Next week"}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
