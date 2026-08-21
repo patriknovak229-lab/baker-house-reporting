@@ -2252,9 +2252,12 @@ async function maybeNotifyCancellation(
 ): Promise<void> {
   if (booking.status !== 'cancelled' && booking.status !== 'canceled') return;
 
-  // Sub-bookings of a virtual master carry price=0; the master holds the real
-  // price and is notified separately (mirrors the new-booking rule).
-  if (Number(booking.price ?? 0) === 0) return;
+  // Skip sub-bookings of a virtual/package master (they carry a non-null
+  // masterId); the master row is notified instead. NOTE: unlike the new-booking
+  // path we must NOT skip on price=0 here — a channel (e.g. Booking.com) zeroes
+  // out a booking's price when it's cancelled, so price=0 is the NORMAL case for
+  // a cancellation and is not a sub-booking signal. masterId is the reliable one.
+  if (booking.masterId != null) return;
 
   const roomKey = String(booking.roomId ?? '');
   const room = ROOM_LABEL_MAP[roomKey];
