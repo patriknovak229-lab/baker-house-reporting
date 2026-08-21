@@ -218,6 +218,15 @@ export interface Reservation {
    */
   rateType?: RateType | null;
   /**
+   * Cancellation policy for THIS booking (read-only, server-derived). Answers
+   * "when does the guest lose the right to cancel free of charge" — the free
+   * window and the penalty after it. Parsed per booking, not per rate plan:
+   * live data shows the same Booking.com plan name carrying different policies,
+   * so `rateType` is not a safe proxy. See utils/cancellationPolicy.ts.
+   * null/undefined = no policy data (older arrival, or a channel that sends none).
+   */
+  cancellationPolicy?: import("@/utils/cancellationPolicy").CancellationPolicy | null;
+  /**
    * Beds24 booking status, passed through so the UI can tell cancellations
    * apart. Typical values: 'confirmed' | 'new' | 'request' | 'cancelled' | 'black'.
    */

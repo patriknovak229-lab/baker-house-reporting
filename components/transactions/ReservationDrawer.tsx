@@ -12,6 +12,15 @@ import CreateVoucherModal from "./CreateVoucherModal";
 import EmailGuestModal from "./EmailGuestModal";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
+import { pragueToday } from "@/utils/periodUtils";
+import {
+  freeCancelDaysLeft,
+  cancellationTone,
+  cancellationChipClasses,
+  cancellationShortLabel,
+  cancellationSummary,
+  bookingGraceStatus,
+} from "@/utils/cancellationPolicy";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
 import { computeParking, getFreeSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
 import { PHYSICAL_ROOMS } from "@/utils/roomAllocation";
@@ -1053,6 +1062,88 @@ function PaymentStatusControl({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Cancellation policy — read-only, straight from the channel. The point of this
+ * block is to answer "when can this guest still walk away for free?" without
+ * the operator opening the Booking.com extranet or the Airbnb dashboard.
+ *
+ * Deliberately not overridable: the policy is a contract the channel already
+ * made with the guest, so a local override could only ever be wrong. The raw
+ * channel wording is shown verbatim underneath so the operator can verify —
+ * and spot a rate plan configured differently from what they intended.
+ */
+function CancellationPolicyPanel({ reservation }: { reservation: Reservation }) {
+  const policy = reservation.cancellationPolicy;
+  const today = pragueToday();
+  const daysLeft = freeCancelDaysLeft(policy, today);
+  const tone = cancellationTone(policy, daysLeft, {
+    stayFinished: reservation.checkOutDate < today,
+  });
+
+  if (!policy) {
+    return (
+      <div>
+        <p className="text-[11px] text-gray-400 mb-1">Cancellation policy</p>
+        <p className="text-xs text-gray-500">
+          Not available — {reservation.channel} didn&apos;t send one for this booking
+          {reservation.isCancelled ? " (cancelled bookings lose it)" : ""}. Check the channel
+          extranet.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 mb-1">Cancellation policy</p>
+      <div className="flex items-center gap-2 flex-wrap mb-1.5">
+        <span className={cancellationChipClasses(tone)}>
+          {cancellationShortLabel(tone, daysLeft)}
+        </span>
+        {policy.freeUntilDate && (
+          <span className="text-xs text-gray-700">
+            Free until <span className="font-medium">{formatDate(policy.freeUntilDate)}</span>
+            <span className="text-gray-400"> ({policy.freeDays}d before arrival)</span>
+          </span>
+        )}
+        <span
+          className="text-[10px] text-gray-400"
+          title={
+            policy.source === "House policy"
+              ? "Our own published policy — configured in utils/cancellationPolicy.ts, not sent by a channel"
+              : `Read from the ${policy.source} booking data`
+          }
+        >
+          {policy.source === "House policy" ? "house policy" : `from ${policy.source}`}
+        </span>
+      </div>
+      <p className="text-xs text-gray-600">{cancellationSummary(policy, daysLeft, tone)}</p>
+      {/* Airbnb's 24 h post-booking window applies to every stay under 28
+          nights, non-refundable included — so a just-made booking is not yet
+          locked in whatever the chip says. Only shown while it's still open. */}
+      {(() => {
+        const grace = bookingGraceStatus(policy, reservation.bookingTimestamp);
+        if (!grace?.active) return null;
+        return (
+          <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+            Still inside {policy.source}&apos;s {policy.graceHoursAfterBooking} h post-booking
+            cancellation period — the guest can cancel free of charge until{" "}
+            <span className="font-medium">
+              {grace.endsAt.toLocaleString("cs-CZ", { timeZone: "Europe/Prague", dateStyle: "short", timeStyle: "short" })}
+            </span>
+            , regardless of the policy above.
+          </p>
+        );
+      })()}
+      {policy.sourceText && (
+        <p className="mt-1.5 text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 leading-relaxed">
+          {policy.sourceText}
+        </p>
+      )}
     </div>
   );
 }
@@ -3156,6 +3247,7 @@ export default function ReservationDrawer({
                     onOverride={(v) => onUpdate({ ...reservation, perkOverrides: v })}
                   />
                 )}
+                <CancellationPolicyPanel reservation={reservation} />
                 <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2.5 py-1.5">
                   Paid through {reservation.channel} — collected by channel.
                 </p>
@@ -3181,6 +3273,7 @@ export default function ReservationDrawer({
                     onOverride={(v) => onUpdate({ ...reservation, rateTypeOverride: v })}
                   />
                 )}
+                <CancellationPolicyPanel reservation={reservation} />
                 {reservation.paymentStatus === "Partially Paid" && (
                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
                     Outstanding balance: {formatCurrency(reservation.price - reservation.amountPaid)}

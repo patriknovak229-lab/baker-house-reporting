@@ -4,6 +4,7 @@ import { readAllAdditionalPayments } from "@/utils/additionalPaymentsStore";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
+import { deriveCancellationPolicy, freeCancelDaysLeft } from "@/utils/cancellationPolicy";
 import { autoRatePerks, effectiveRatePerks } from "@/utils/ratePerks";
 import type { PerkOverrides, RatePerks } from "@/utils/ratePerks";
 import { fetchReviews, fetchRawReviews, reviewsFromDate, mergeReviews, type ReviewFetchOptions } from "@/utils/beds24Reviews";
@@ -428,6 +429,57 @@ export async function GET(req: NextRequest) {
           infoItems: b.infoItems ?? null,
         }));
       return NextResponse.json({ count: rows.length, today, rows });
+    }
+
+    // ?debugCancellation=true → dump the cancellation-policy source fields and
+    // what we parsed out of them, for current+future active bookings. Use this
+    // to re-calibrate utils/cancellationPolicy.ts when a channel changes its
+    // wording (Booking.com sends the clause in the PROPERTY's language, so a
+    // language switch in the extranet changes the text), and to spot rate plans
+    // configured with a different penalty than intended.
+    if (req.nextUrl.searchParams.get("debugCancellation") === "true") {
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = mergeGroupedBookings(
+        raw.filter((b) => b.status !== "cancelled" && b.status !== "canceled" && b.status !== "black"),
+      )
+        .filter((b) => (b.departure ?? "") >= today)
+        .map((b) => {
+          const channel = mapChannel(b.apiSource, b.referer, b.comments ?? "");
+          const policy = deriveCancellationPolicy({
+            channel,
+            arrivalDate: b.arrival ?? "",
+            apiMessage: b.apiMessage,
+            rateDescription: b.rateDescription,
+            nights: Math.round(
+              (Date.parse(`${b.departure}T00:00:00Z`) - Date.parse(`${b.arrival}T00:00:00Z`)) / 86_400_000,
+            ),
+          });
+          return {
+            reservationNumber: `BH-${b.id}`,
+            channel,
+            checkIn: b.arrival,
+            ratePlan: (b.rateDescription ?? "").match(/\(\d+\s+([^)]+)\)/)?.[1]?.trim() ?? null,
+            parsed: policy && {
+              kind: policy.kind,
+              freeDays: policy.freeDays,
+              freeUntilDate: policy.freeUntilDate,
+              penaltyPercent: policy.penaltyPercent,
+              source: policy.source,
+            },
+            daysLeft: freeCancelDaysLeft(policy, today),
+            sourceText: policy?.sourceText ?? null,
+            // Raw fields, so an unparsed clause can be read in full.
+            apiMessage: b.apiMessage ?? null,
+            rateDescription: b.rateDescription ?? null,
+          };
+        });
+      const unparsed = rows.filter((r) => !r.parsed || r.parsed.kind === "unknown");
+      return NextResponse.json({
+        count: rows.length,
+        unparsedCount: unparsed.length,
+        today,
+        rows,
+      });
     }
 
     // Active bookings keep the existing grouping (VR ↔ physical, Booking.com

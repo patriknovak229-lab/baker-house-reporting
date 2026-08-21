@@ -9,6 +9,14 @@ import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 import { roomChipClasses } from "@/utils/roomVisuals";
 import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
+import {
+  freeCancelDaysLeft,
+  cancellationTone,
+  cancellationChipClasses,
+  cancellationShortLabel,
+  cancellationSummary,
+} from "@/utils/cancellationPolicy";
+import { pragueToday } from "@/utils/periodUtils";
 import { autoRatePerks, effectiveRatePerks, hasAnyPerk, EARLY_CHECKIN_TIME, LATE_CHECKOUT_TIME } from "@/utils/ratePerks";
 import { ratingSmiley, effectiveRating, formatRating } from "@/utils/rating";
 
@@ -27,7 +35,8 @@ type SortField =
       | "paymentStatus"
       | "rateType"
     >
-  | "stayStatus";
+  | "stayStatus"
+  | "freeCancel";
 
 const STAY_STATUS_PRIORITY: Record<string, number> = {
   "checking-in": 0,
@@ -238,6 +247,40 @@ function PerkBadges({ res }: { res: Reservation }) {
   );
 }
 
+/**
+ * "Free cancel" chip — how many days the guest still has to cancel free of
+ * charge. Days rather than a date, per operator preference: the actionable
+ * question is "how long until this revenue is locked in", and a countdown
+ * answers it without mental date arithmetic. The exact deadline, the penalty
+ * and the channel's own wording live in the drawer.
+ */
+function FreeCancelChip({ res, today }: { res: Reservation; today: string }) {
+  const policy = res.cancellationPolicy;
+  const daysLeft = freeCancelDaysLeft(policy, today);
+  const tone = cancellationTone(policy, daysLeft, { stayFinished: res.checkOutDate < today });
+  if (tone === "unknown") {
+    return <span className="text-gray-300" title="No cancellation policy available for this booking.">—</span>;
+  }
+  return (
+    <span className={cancellationChipClasses(tone)} title={cancellationSummary(policy, daysLeft, tone)}>
+      {cancellationShortLabel(tone, daysLeft)}
+    </span>
+  );
+}
+
+/**
+ * Sort key for the Free-cancel column: fewest days left first, so whatever is
+ * about to lock in floats to the top. Non-refundable sorts as "already locked"
+ * and bookings without policy data sort last, never interleaved with real
+ * countdowns.
+ */
+function freeCancelSortKey(res: Reservation, today: string): number {
+  const policy = res.cancellationPolicy;
+  if (!policy || policy.kind === "unknown") return Number.MAX_SAFE_INTEGER;
+  if (policy.kind === "non-refundable") return -Infinity;
+  return freeCancelDaysLeft(policy, today) ?? Number.MAX_SAFE_INTEGER;
+}
+
 // Renders a dollar-sign badge with hover tooltip for additional payments.
 // Blinks amber when any are unpaid, otherwise muted green when all paid.
 function AdditionalPaymentBadge({ payments }: { payments: AdditionalPayment[] }) {
@@ -427,6 +470,7 @@ function ReservationCard({
           const rt = effectiveRateType(res);
           return rt ? <span className={rateChipClasses(rt)}>{RATE_TYPE_SHORT[rt]}</span> : null;
         })()}
+        {res.cancellationPolicy && <FreeCancelChip res={res} today={pragueToday()} />}
         <PerkBadges res={res} />
       </div>
 
@@ -507,11 +551,17 @@ export default function ReservationTable({
     setPage(1);
   }
 
+  // One "today" for every countdown in the table, in the property's timezone —
+  // so a row can't disagree with its neighbour across a midnight boundary.
+  const today = pragueToday();
+
   const sorted = useMemo(() => {
     return [...reservations].sort((a, b) => {
       let cmp: number;
       if (sortField === "stayStatus") {
         cmp = stayStatusPriority(a, allReservations) - stayStatusPriority(b, allReservations);
+      } else if (sortField === "freeCancel") {
+        cmp = freeCancelSortKey(a, today) - freeCancelSortKey(b, today);
       } else if (sortField === "rateType") {
         // Sort by the effective rate (manual override wins); missing rates last.
         cmp = (effectiveRateType(a) ?? "~").localeCompare(effectiveRateType(b) ?? "~");
@@ -522,7 +572,7 @@ export default function ReservationTable({
       }
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [reservations, sortField, sortDir, allReservations]);
+  }, [reservations, sortField, sortDir, allReservations, today]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -539,6 +589,7 @@ export default function ReservationTable({
     { key: "price", label: "Price", align: "right" },
     { key: "paymentStatus", label: "Payment" },
     { key: "rateType", label: "Rate" },
+    { key: "freeCancel", label: "Free cancel" },
   ];
 
   return (
@@ -564,6 +615,7 @@ export default function ReservationTable({
             <option value="price:desc">Price (highest first)</option>
             <option value="price:asc">Price (lowest first)</option>
             <option value="stayStatus:asc">Status (most active first)</option>
+            <option value="freeCancel:asc">Free cancellation (ending soonest)</option>
           </select>
         </div>
         {paginated.length === 0 ? (
@@ -781,6 +833,10 @@ export default function ReservationTable({
                         );
                       })()}
                       <div className="mt-1"><PerkBadges res={res} /></div>
+                    </td>
+                    {/* Free-cancellation countdown */}
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <FreeCancelChip res={res} today={today} />
                     </td>
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">

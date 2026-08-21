@@ -10,6 +10,7 @@ import { Redis } from "@upstash/redis";
 import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
+import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 
@@ -171,8 +172,9 @@ export interface Beds24Booking {
   price: number;          // total in CZK
   deposit: number;        // amount received/recorded in Beds24 (bank transfer, etc.)
   commission: number;     // total channel fees in CZK (OTA commission + payment charge combined)
-  rateDescription: string; // human-readable rate breakdown; contains fee split for Booking.com/Airbnb
+  rateDescription: string; // human-readable rate breakdown; contains fee split for Booking.com/Airbnb; Airbnb's "Cancel policy <code>" line
   apiReference?: string;   // channel's own reference; may carry the rate-plan name (rate detection signal)
+  apiMessage?: string;     // channel's own booking blurb; Booking.com puts the cancellation-policy clause here
   infoItems?: Array<Record<string, unknown>>; // channel key/value extras (rate plan, meal plan, …) — requires includeInfoItems=true
   firstName: string;
   lastName: string;
@@ -553,6 +555,22 @@ export function mapToReservation(b: Beds24Booking): Reservation {
   // Rate plan — only for current+future OTA stays (no backfill). Blackouts skip.
   const rateType = isBlackout ? undefined : deriveRateType(b, channel);
 
+  // Cancellation policy. Skipped for blackouts (no guest, nothing to cancel)
+  // and for cancelled bookings — Beds24 overwrites Booking.com's apiMessage
+  // with a "commissionamount=0…" payload on cancel, so any policy we derived
+  // would be missing anyway, and a deadline on an already-cancelled booking is
+  // noise. Non-arrivals keep their policy: the guest is still being charged.
+  const cancellationPolicy =
+    isBlackout || isCancelled
+      ? null
+      : deriveCancellationPolicy({
+          channel,
+          arrivalDate: b.arrival ?? "",
+          apiMessage: b.apiMessage,
+          rateDescription: b.rateDescription,
+          nights,
+        });
+
   return {
     reservationNumber: `BH-${b.id}`,
     ...(isBlackout ? { isBlackout: true } : {}),
@@ -592,6 +610,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     commissionAmount,
     paymentChargeAmount,
     ...(rateType ? { rateType } : {}),
+    ...(cancellationPolicy ? { cancellationPolicy } : {}),
     ...(b.status ? { status: b.status } : {}),
     ...(isCancelled ? { isCancelled: true } : {}),
     // Locally managed — Redis will layer these in Phase 3
