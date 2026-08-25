@@ -162,6 +162,7 @@ async function readKpis(scope: AnalyticsScope): Promise<CoreKpis> {
     paymentFees,
     netSales,
     netRevpar: ratio(netSales, availableNights),
+    netAdr: ratio(netSales, soldNights),
     takeRate: ratio(otaCommission + paymentFees, gbv),
     bookings: n(r?.bookings),
     avgLengthOfStay: n(r?.avg_los),

@@ -79,7 +79,7 @@ export interface CoreKpis {
   gbv: number;
   /** GBV ÷ soldNights. */
   adr: number;
-  /** GBV ÷ availableNights — the headline number. */
+  /** GBV ÷ availableNights — the gross headline. */
   revpar: number;
   /** OTA / channel commission allocated to the window. */
   otaCommission: number;
@@ -87,8 +87,16 @@ export interface CoreKpis {
   paymentFees: number;
   /** GBV − commission − fees. */
   netSales: number;
-  /** netSales ÷ availableNights. */
+  /** netSales ÷ availableNights — the headline the business is actually run on. */
   netRevpar: number;
+  /**
+   * netSales ÷ soldNights — what the business keeps per night sold.
+   *
+   * The companion to `adr`, and the one that decides a channel argument. Gross ADR
+   * is what the guest paid; this is what survived the commission. A channel can
+   * lose on `adr` and win on `netAdr`, which is exactly what direct booking does.
+   */
+  netAdr: number;
   /** (commission + fees) ÷ GBV — the all-in distribution take rate. 0–1. */
   takeRate: number;
   /** Distinct bookings with at least one night in the window. */

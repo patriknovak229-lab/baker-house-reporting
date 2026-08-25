@@ -113,13 +113,20 @@ function HeadlineTiles({ data, market }: { data: OverviewResponse; market: Marke
 
   return (
     <>
+      {/* WHAT WE KEEP comes first, deliberately.
+
+          Gross RevPAR and gross ADR are what the guest paid; both are inflated by
+          however much of the book came through an OTA. A direct booking at a lower
+          headline price can be worth MORE than an OTA booking at a higher one, so
+          leading on gross would reward exactly the wrong shift in channel mix. The
+          gross figures are kept one row down, as context for the net ones. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Tile
-          label="RevPAR"
+          label="Net RevPAR"
           tone="indigo"
-          value={czk(k.revpar)}
-          hint="Revenue per available night — occupancy × ADR"
-          delta={<Delta current={k.revpar} previous={comparable?.revpar} />}
+          value={czk(k.netRevpar)}
+          hint={`What we keep per available night, after ${pct(k.takeRate, 1)} distribution cost`}
+          delta={<Delta current={k.netRevpar} previous={comparable?.netRevpar} />}
         />
         <Tile
           label="Occupancy"
@@ -131,22 +138,34 @@ function HeadlineTiles({ data, market }: { data: OverviewResponse; market: Marke
           }
         />
         <Tile
-          label="ADR"
+          label="Net ADR"
           tone="sky"
-          value={czk(k.adr)}
-          hint="Average price per sold night"
-          delta={<Delta current={k.adr} previous={comparable?.adr} />}
+          value={czk(k.netAdr)}
+          hint={`What we keep per night sold · ${czk(k.adr)} gross`}
+          delta={<Delta current={k.netAdr} previous={comparable?.netAdr} />}
         />
         <Tile
-          label="Net RevPAR"
+          label="Net sales"
           tone="violet"
-          value={czk(k.netRevpar)}
-          hint={`After ${pct(k.takeRate, 1)} distribution cost`}
-          delta={<Delta current={k.netRevpar} previous={comparable?.netRevpar} />}
+          value={czk(k.netSales)}
+          hint={`−${czk(k.otaCommission + k.paymentFees)} to platforms`}
+          delta={<Delta current={k.netSales} previous={comparable?.netSales} />}
         />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Tile
+          label="RevPAR (gross)"
+          value={czk(k.revpar)}
+          hint="Before commission — occupancy × gross ADR"
+          delta={<Delta current={k.revpar} previous={comparable?.revpar} />}
+        />
+        <Tile
+          label="ADR (gross)"
+          value={czk(k.adr)}
+          hint="What the guest paid per night"
+          delta={<Delta current={k.adr} previous={comparable?.adr} />}
+        />
         <Tile
           label="Gross booking value"
           value={czk(k.gbv)}
@@ -154,23 +173,17 @@ function HeadlineTiles({ data, market }: { data: OverviewResponse; market: Marke
           delta={<Delta current={k.gbv} previous={comparable?.gbv} />}
         />
         <Tile
-          label="Net sales"
-          value={czk(k.netSales)}
-          hint={`−${czk(k.otaCommission + k.paymentFees)} to platforms`}
-          delta={<Delta current={k.netSales} previous={comparable?.netSales} />}
-        />
-        <Tile
-          label="Avg stay · party"
-          value={`${num(k.avgLengthOfStay, 1)} n · ${num(k.avgPartySize, 1)} p`}
-          hint="Nights per booking · guests per booking"
-        />
-        <Tile
-          label="Guest score"
-          value={k.avgReviewScore == null ? '—' : `${num(k.avgReviewScore, 2)} / 10`}
-          hint={
-            k.reviewCount > 0
-              ? `${num(k.reviewCount)} reviews, normalised across channels`
-              : 'No reviews synced for this window'
+          label="Distribution take rate"
+          tone={k.takeRate > 0.18 ? 'amber' : 'slate'}
+          value={pct(k.takeRate, 1)}
+          hint="Commission + payment fees ÷ gross"
+          delta={
+            <Delta
+              current={k.takeRate}
+              previous={comparable?.takeRate}
+              format="points"
+              higherIsBetter={false}
+            />
           }
         />
       </div>
@@ -206,24 +219,27 @@ function HeadlineTiles({ data, market }: { data: OverviewResponse; market: Marke
           }
         />
         <Tile
-          label="Distribution take rate"
-          tone={k.takeRate > 0.18 ? 'amber' : 'slate'}
-          value={pct(k.takeRate, 1)}
-          hint="Commission + payment fees ÷ gross"
-          delta={
-            <Delta
-              current={k.takeRate}
-              previous={comparable?.takeRate}
-              format="points"
-              higherIsBetter={false}
-            />
-          }
+          label="Avg stay · party"
+          value={`${num(k.avgLengthOfStay, 1)} n · ${num(k.avgPartySize, 1)} p`}
+          hint="Nights per booking · guests per booking"
         />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Tile
           label="Nights sold"
           value={num(k.soldNights)}
           hint={`Across ${num(k.availableNights)} available`}
           delta={<Delta current={k.soldNights} previous={comparable?.soldNights} />}
+        />
+        <Tile
+          label="Guest score"
+          value={k.avgReviewScore == null ? '—' : `${num(k.avgReviewScore, 2)} / 10`}
+          hint={
+            k.reviewCount > 0
+              ? `${num(k.reviewCount)} reviews, normalised across channels`
+              : 'No reviews synced for this window'
+          }
         />
       </div>
     </>
@@ -236,8 +252,8 @@ function RevparDecomposition({ data }: { data: OverviewResponse }) {
   const chartData = data.monthly.map((m) => ({
     month: monthShort(m.month),
     fullMonth: m.month,
-    RevPAR: Math.round(m.revpar),
     'Net RevPAR': Math.round(m.netRevpar),
+    'RevPAR (gross)': Math.round(m.revpar),
     Occupancy: Math.round(m.occupancy * 100),
     ADR: Math.round(m.adr),
     partial: m.partial,
@@ -247,8 +263,8 @@ function RevparDecomposition({ data }: { data: OverviewResponse }) {
 
   return (
     <Card
-      title="RevPAR, and what drove it"
-      subtitle="Bars are revenue per available night; lines are the two factors behind it. When RevPAR moves and ADR does not, the move came from occupancy — and vice versa. Hatched bars are months that have not finished."
+      title="Revenue per available night, and what drove it"
+      subtitle="Solid bars are NET revenue per available night — what the business kept; pale bars are gross, before commission. The gap between them is the distribution cost, so a month where the gap widens lost margin to channel mix even if gross held up. Lines are the two factors behind gross: when RevPAR moves and ADR does not, the move came from occupancy. Faded bars are months that have not finished."
     >
       <div style={{ height: 300 }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -281,8 +297,10 @@ function RevparDecomposition({ data }: { data: OverviewResponse }) {
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {/* Explicit fill so the legend swatch is indigo rather than the default
-                black — the per-bar <Cell> below still overrides the actual bars. */}
-            <Bar yAxisId="money" dataKey="RevPAR" fill="#6366F1" radius={[5, 5, 0, 0]} maxBarSize={44}>
+                black — the per-bar <Cell> below still overrides the actual bars.
+                Net is the solid, foreground series; gross sits beside it in a pale
+                tint so the distribution cost reads as the gap between them. */}
+            <Bar yAxisId="money" dataKey="Net RevPAR" fill="#6366F1" radius={[5, 5, 0, 0]} maxBarSize={26}>
               {chartData.map((d) => (
                 <Cell
                   key={d.fullMonth}
@@ -291,6 +309,17 @@ function RevparDecomposition({ data }: { data: OverviewResponse }) {
                   stroke={d.partial ? '#6366F1' : undefined}
                   strokeDasharray={d.partial ? '3 2' : undefined}
                 />
+              ))}
+            </Bar>
+            <Bar
+              yAxisId="money"
+              dataKey="RevPAR (gross)"
+              fill="#C7D2FE"
+              radius={[5, 5, 0, 0]}
+              maxBarSize={26}
+            >
+              {chartData.map((d) => (
+                <Cell key={d.fullMonth} fill="#C7D2FE" fillOpacity={d.partial ? 0.45 : 1} />
               ))}
             </Bar>
             <Line
@@ -315,7 +344,16 @@ function RevparDecomposition({ data }: { data: OverviewResponse }) {
 
       <div className="border-t border-gray-100 pt-4 mt-4">
         <Table
-          columns={['Month', 'Occupancy', 'ADR', 'RevPAR', 'Net RevPAR', 'Nights', 'GBV', 'Bookings']}
+          columns={[
+            'Month',
+            'Occupancy',
+            'Net RevPAR',
+            'Net sales',
+            'RevPAR (gross)',
+            'ADR (gross)',
+            'Nights',
+            'Bookings',
+          ]}
         >
           {data.monthly.map((m) => (
             <tr key={m.month} className="hover:bg-gray-50">
@@ -325,14 +363,14 @@ function RevparDecomposition({ data }: { data: OverviewResponse }) {
                 {m.partial && <Provisional />}
               </Td>
               <Td>{pct(m.occupancy, 1)}</Td>
-              <Td>{czk(m.adr)}</Td>
-              <Td bold>{czk(m.revpar)}</Td>
-              <Td>{czk(m.netRevpar)}</Td>
+              <Td bold>{czk(m.netRevpar)}</Td>
+              <Td>{czk(m.netSales)}</Td>
+              <Td muted>{czk(m.revpar)}</Td>
+              <Td muted>{czk(m.adr)}</Td>
               <Td>
                 {num(m.soldNights)}
                 <span className="text-gray-300"> / {num(m.availableNights)}</span>
               </Td>
-              <Td>{czk(m.gbv)}</Td>
               <Td>{num(m.bookings)}</Td>
             </tr>
           ))}
@@ -561,6 +599,8 @@ function ChannelEconomics({ data }: { data: OverviewResponse }) {
         </>
       }
     >
+      <ChannelBreakEven channels={channels} />
+
       <div style={{ height: 220 }} className="mb-5">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} barCategoryGap="30%" margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -814,6 +854,115 @@ function ForwardBook({ data }: { data: OverviewResponse }) {
         ))}
       </Table>
     </Card>
+  );
+}
+
+/**
+ * The break-even discount: how much cheaper a direct rate can be and still keep
+ * the same money.
+ *
+ * This is the decision rule the channel table implies but does not state. Net
+ * equality between two channels is
+ *
+ *     P_direct x (1 - t_direct) = P_ota x (1 - t_ota)
+ *
+ * so the direct price can sit at (1 - t_ota) / (1 - t_direct) of the OTA price.
+ * With the take rates this property actually pays that is a double-digit discount
+ * — which means a direct booking that looks worse on every gross metric can be
+ * worth more than the OTA booking it replaced.
+ *
+ * Both rates are MEASURED, not assumed: they come from what Beds24 reported per
+ * booking, so the number moves when the real commission does rather than when
+ * somebody remembers to update a constant.
+ */
+function ChannelBreakEven({ channels }: { channels: OverviewResponse['channels'] }) {
+  // The reference is the biggest commission-charging channel — the one a direct
+  // booking realistically displaces. 5% separates an OTA from a card fee.
+  const otas = channels.filter((c) => c.effectiveCommissionRate > 0.05 && c.soldNights > 0);
+  const reference = otas.length > 0 ? otas.reduce((a, b) => (b.soldNights > a.soldNights ? b : a)) : null;
+  if (!reference) return null;
+
+  const lowCost = channels
+    .filter((c) => c.soldNights > 0 && c.effectiveCommissionRate < reference.effectiveCommissionRate - 0.02)
+    .sort((a, b) => b.soldNights - a.soldNights);
+  if (lowCost.length === 0) return null;
+
+  const primary = lowCost[0];
+  const priceRatio =
+    (1 - reference.effectiveCommissionRate) / (1 - primary.effectiveCommissionRate);
+  const breakEvenDiscount = 1 - priceRatio;
+  if (!Number.isFinite(breakEvenDiscount) || breakEvenDiscount <= 0) return null;
+
+  // What actually happened on this book, which is the part worth reading twice.
+  const grossGap = reference.adr > 0 ? primary.adr / reference.adr - 1 : null;
+  const netGap = reference.netAdr > 0 ? primary.netAdr / reference.netAdr - 1 : null;
+  const flipped = grossGap !== null && netGap !== null && grossGap < 0 && netGap > 0;
+
+  const example = 4000;
+
+  return (
+    <div className="mb-6 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Tile
+          label={`${primary.channel} break-even discount`}
+          tone="emerald"
+          value={`−${num(breakEvenDiscount * 100, 1)} %`}
+          hint={`vs ${reference.channel}. Price a direct stay up to this much cheaper and the same money still lands.`}
+        />
+        <Tile
+          label="Take rate gap"
+          tone="amber"
+          value={`${num((reference.effectiveCommissionRate - primary.effectiveCommissionRate) * 100, 1)} pp`}
+          hint={`${reference.channel} ${pct(reference.effectiveCommissionRate, 1)} · ${primary.channel} ${pct(primary.effectiveCommissionRate, 1)} — both measured, not assumed`}
+        />
+        <Tile
+          label="Worked example"
+          tone="sky"
+          value={`${czk(example * priceRatio)}`}
+          hint={`A ${czk(example)} ${reference.channel} booking nets ${czk(example * (1 - reference.effectiveCommissionRate))} — the same as this direct rate.`}
+        />
+      </div>
+
+      {flipped && (
+        <Callout
+          tone="sky"
+          title={`${primary.channel} is ${num(Math.abs(grossGap!) * 100, 0)} % cheaper than ${reference.channel} on gross ADR — and ${num(netGap! * 100, 0)} % better on net`}
+        >
+          This is the case for direct, already visible in the book rather than
+          hypothetical: {primary.channel} shows a <em>lower</em> gross ADR ({czk(primary.adr)} against{' '}
+          {czk(reference.adr)}) and a <em>higher</em> net ADR ({czk(primary.netAdr)} against{' '}
+          {czk(reference.netAdr)}). Any target set on gross ADR or gross RevPAR would score this
+          the wrong way round, which is why the tiles at the top of this page lead on net.
+        </Callout>
+      )}
+
+      {!flipped && netGap !== null && (
+        <Callout tone="slate" title={`Net comparison: ${primary.channel} vs ${reference.channel}`}>
+          {primary.channel} nets {czk(primary.netAdr)} per night against {reference.channel} at{' '}
+          {czk(reference.netAdr)} — {netGap >= 0 ? 'ahead by' : 'behind by'}{' '}
+          {num(Math.abs(netGap) * 100, 0)} %. It can be discounted up to{' '}
+          {num(breakEvenDiscount * 100, 1)} % below the {reference.channel} rate before the two are
+          worth the same.
+        </Callout>
+      )}
+
+      <p className="text-[11px] text-gray-400 leading-relaxed">
+        Break-even is on net sales only — commission and payment fees. Two things it does not
+        control for. Turnover cost (cleaning, laundry, consumables) is charged per checkout, so a
+        channel with longer stays spreads it thinner; the Costs tab carries that fuller figure as
+        contribution per night. And a channel&apos;s gross ADR is itself shaped by its stay-length
+        and date mix, so where the two channels differ on average stay
+        {primary.avgLengthOfStay > 0 && reference.avgLengthOfStay > 0 && (
+          <>
+            {' '}
+            — {primary.channel} {num(primary.avgLengthOfStay, 1)} nights against{' '}
+            {reference.channel} {num(reference.avgLengthOfStay, 1)}
+          </>
+        )}
+        , part of the gross gap is mix rather than a posted discount. Net ADR is the cleaner of the
+        two comparisons; contribution per night is the more complete one.
+      </p>
+    </div>
   );
 }
 
