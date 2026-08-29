@@ -74,6 +74,25 @@ export const marketDaily = pgTable(
     recommendedPrice: numeric('recommended_price'),
     /** What is actually live on Beds24 for this night (null when unavailable). */
     livePrice: numeric('live_price'),
+    /**
+     * PriceLabs' per-date demand classification, verbatim: 'Low Demand' |
+     * 'Normal Demand' | 'Good Demand' | 'High Demand' | 'Unavailable'. This is
+     * the same signal that colors their pricing calendar, and it comes free in
+     * the listing_prices payload the refresh already downloads. 'Unavailable'
+     * means OUR calendar is closed/booked that night — it says nothing about
+     * market demand, so demand analysis must treat it as null, not as a level.
+     */
+    demandDesc: text('demand_desc'),
+    /** Their calendar hex for the same classification — pass-through for UI. */
+    demandColor: text('demand_color'),
+    /** Min stay in force on Beds24 for this night, per PriceLabs. */
+    minStay: integer('min_stay'),
+    /**
+     * Comp-set bookings observed for this stay night ('N_Bookings' in the
+     * neighborhood percentile block) — a raw demand signal to complement the
+     * classification above.
+     */
+    nBookings: numeric('n_bookings'),
     capturedAt: timestamp('captured_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (t) => [

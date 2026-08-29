@@ -255,7 +255,10 @@ export interface ListingPriceDay {
   booked_date?: string;
   unbookable?: number;
   occupancy?: number;
+  /** 'Low Demand' | 'Normal Demand' | 'Good Demand' | 'High Demand' | 'Unavailable'. */
   demand_desc?: string;
+  /** Hex color for the same classification — what their calendar paints. */
+  demand_color?: string;
 }
 
 export interface ListingPrices {

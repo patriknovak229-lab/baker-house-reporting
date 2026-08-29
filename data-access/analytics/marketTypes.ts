@@ -36,4 +36,8 @@ export interface MarketDailyDraft {
   medianBookedPrice?: number | null;
   recommendedPrice?: number | null;
   livePrice?: number | null;
+  demandDesc?: string | null;
+  demandColor?: string | null;
+  minStay?: number | null;
+  nBookings?: number | null;
 }

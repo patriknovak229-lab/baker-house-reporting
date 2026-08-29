@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import type { PricingResult, Offer } from '@/utils/platformScraper';
+import RadarView from './RadarView';
 
 // ─────────────────────────────────────────────
 // Formatting helpers
@@ -415,10 +416,10 @@ function PricingTable({ result }: { result: PricingResult }) {
 }
 
 // ─────────────────────────────────────────────
-// Main page
+// Parity view (scrape-based; being rebuilt on the local-runner pipeline)
 // ─────────────────────────────────────────────
 
-export default function PricingPage() {
+function ParityLegacyView() {
   const [scheduled, setScheduled] = useState<(PricingResult & { status?: string }) | null>(null);
   const [custom, setCustom] = useState<PricingResult | null>(null);
 
@@ -511,14 +512,11 @@ export default function PricingPage() {
   const isRunning = scheduled?.status === 'running';
 
   return (
-    <div className="max-w-screen-2xl mx-auto px-6 py-8 space-y-10">
+    <div className="space-y-10">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Platform Pricing</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Compares guest-facing prices across Web, Airbnb, and Booking.com. Use the toggle below to view by room or date range.
-          </p>
-        </div>
+        <p className="text-sm text-gray-500">
+          Compares guest-facing prices across Web, Airbnb, and Booking.com for sampled stays.
+        </p>
         <button
           onClick={handleFullRun}
           disabled={runningFull || isRunning}
@@ -620,6 +618,45 @@ export default function PricingPage() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// Page shell — Radar (market/demand, no scraping) + Parity (channel scrapes)
+// ─────────────────────────────────────────────
+
+export default function PricingPage() {
+  const [view, setView] = useState<'radar' | 'parity'>('radar');
+
+  return (
+    <div className="max-w-screen-2xl mx-auto px-6 py-8 space-y-6">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Pricing</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Demand radar from PriceLabs market data, and channel parity checks from the local price scraper.
+          </p>
+        </div>
+        <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 text-sm font-medium">
+          {[
+            { id: 'radar' as const, label: 'Radar' },
+            { id: 'parity' as const, label: 'Parity check' },
+          ].map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setView(opt.id)}
+              className={`px-4 py-1.5 rounded-md transition-colors ${
+                view === opt.id ? 'bg-gray-800 text-white' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {view === 'radar' ? <RadarView /> : <ParityLegacyView />}
     </div>
   );
 }

@@ -197,6 +197,7 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
         const p75 = series(priceCat, labels, '75th Percentile');
         const p90 = series(priceCat, labels, '90th Percentile');
         const booked = series(priceCat, labels, 'Median Booked Price');
+        const nBookings = series(priceCat, labels, 'N_Bookings');
         priceCat.X_values.forEach((date, i) => {
           const row = put(date);
           row.p25 = p25[i] ?? null;
@@ -204,6 +205,7 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
           row.p75 = p75[i] ?? null;
           row.p90 = p90[i] ?? null;
           row.medianBookedPrice = booked[i] ?? null;
+          row.nBookings = nBookings[i] ?? null;
         });
       }
 
@@ -213,6 +215,13 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
         // user_price is -1 when the night is already sold or closed, which is not
         // the same as "priced at zero" — plNumber maps their sentinel to null.
         row.livePrice = plNumber(day.user_price);
+        // Demand classification. 'Unavailable' describes OUR calendar, not the
+        // market — store it verbatim (the radar needs to distinguish "hot date
+        // we can't sell" from "hot date we can"), but nothing downstream may
+        // average over it as if it were a demand level.
+        row.demandDesc = day.demand_desc ?? null;
+        row.demandColor = day.demand_color ?? null;
+        row.minStay = plNumber(day.min_stay) === null ? null : Math.round(plNumber(day.min_stay)!);
       }
 
       const dailyRows = [...draft.values()].map((d) => ({
@@ -231,6 +240,10 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
         medianBookedPrice: str(d.medianBookedPrice),
         recommendedPrice: str(d.recommendedPrice),
         livePrice: str(d.livePrice),
+        demandDesc: d.demandDesc ?? null,
+        demandColor: d.demandColor ?? null,
+        minStay: d.minStay ?? null,
+        nBookings: str(d.nBookings),
         capturedAt: new Date(),
       }));
 
@@ -254,6 +267,10 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
               medianBookedPrice: sql`excluded.median_booked_price`,
               recommendedPrice: sql`excluded.recommended_price`,
               livePrice: sql`excluded.live_price`,
+              demandDesc: sql`excluded.demand_desc`,
+              demandColor: sql`excluded.demand_color`,
+              minStay: sql`excluded.min_stay`,
+              nBookings: sql`excluded.n_bookings`,
               capturedAt: sql`excluded.captured_at`,
             },
           }),

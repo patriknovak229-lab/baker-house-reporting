@@ -18,6 +18,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import { pragueToday } from '@/utils/periodUtils';
 import { refreshMarketSnapshot } from '@/data-access/analytics/marketRefresh';
+import { buildRadarDigest } from '@/data-access/pricing/radar';
+import { sendTelegram } from '@/utils/telegram';
 
 // Four listings × three calls each, one of which returns ~540 KB. Comfortably
 // inside Vercel Pro's ceiling, nowhere near a default 10s budget.
@@ -42,6 +44,20 @@ async function run(req: NextRequest) {
     // A partial failure is reported, not swallowed: the listings that succeeded
     // have fresh rows and the ones that failed kept their previous vintage.
     const failed = result.listings.filter((l) => l.error);
+
+    // Monday radar digest: pricing flags over the fresh snapshot, pushed to the
+    // ops group. Weekly, not daily — the flags move slowly and a daily ping
+    // would train everyone to ignore it. `?digest=1` forces one for testing.
+    const isMonday = new Date(`${pragueToday()}T00:00:00Z`).getUTCDay() === 1;
+    if (isMonday || req.nextUrl.searchParams.get('digest') === '1') {
+      try {
+        const digest = await buildRadarDigest(120);
+        if (digest) await sendTelegram(digest);
+      } catch (err) {
+        console.error('[market-refresh] radar digest failed', err);
+      }
+    }
+
     return NextResponse.json(result, { status: failed.length === result.listings.length ? 502 : 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
