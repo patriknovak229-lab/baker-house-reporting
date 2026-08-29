@@ -20,6 +20,16 @@
  * settlement. They carry `commissionRate: 0` (see ANNUAL_UNITS), so commission
  * and payable come out as a structural 0 rather than being hidden.
  *
+ * ── Reliable months, totals and averages ────────────────────────────────────
+ * Not every month of every apartment can be trusted: the Deluxe K-block was
+ * wired into the reporting app (or launched) part-way through 2026, and the
+ * Urban pool is only settled for the months an owner statement was issued. Each
+ * apartment therefore carries a `reliability` rule (see commissionConfig), and
+ * **annual totals and averages count reliable months only** — otherwise a half
+ * of a year of partial data would quietly drag the yearly figures down.
+ * Unreliable months still SHOW their value, greyed, so the operator can see
+ * what is there and knows what still needs backfilling.
+ *
  * ── Coverage ────────────────────────────────────────────────────────────────
  * Live figures only exist for the Beds24 sync window (±1 year). A month outside
  * it with no issued settlement yields a `null` cell — rendered "—", excluded
@@ -64,6 +74,9 @@ export interface AnnualCell extends AnnualFigures {
   month: string; // 'YYYY-MM'
   /** 'issued' = frozen settlement snapshot; 'computed' = live recomputation. */
   source: 'issued' | 'computed';
+  /** Trustworthy enough to count towards the year — drives the ✓ marker, and
+   *  gates whether this month feeds the row's total and average. */
+  reliable: boolean;
 }
 
 export interface AnnualRow {
@@ -80,10 +93,13 @@ export interface AnnualRow {
   isAggregate: boolean;
   /** 12 entries, Jan…Dec. `null` = no data available for that month. */
   cells: (AnnualCell | null)[];
+  /** Summed over RELIABLE months only. */
   total: AnnualFigures;
-  /** total ÷ activeMonths — the same divisor for every row, so the room
-   *  averages still add up to the business average. */
+  /** `total ÷ reliableCount` — one uniform rule for every row, so the average
+   *  can always be checked against the ✓ months on screen. */
   average: AnnualFigures;
+  /** How many of the 12 months count towards `total` / `average`. */
+  reliableCount: number;
   /** How many of this row's cells came from an issued settlement. */
   issuedCount: number;
 }
@@ -98,7 +114,7 @@ export interface AnnualOverview {
   total: AnnualRow;
   /** Every subscription label seen in the year, in cleaning-app config order. */
   subscriptionLabels: string[];
-  /** Months with any activity — the divisor behind every `average`. */
+  /** Reliable months on the whole-business row. */
   activeMonths: number;
   /** Span of loaded booking + cost data, for the coverage note. */
   coverage: { from: string; to: string } | null;
@@ -149,6 +165,16 @@ function mergeBreakdown(target: AnnualFigures, lines: SubscriptionLine[]): void 
     const existing = target.subscriptionBreakdown.find((l) => l.id === line.id);
     if (existing) existing.amount += line.amount;
     else target.subscriptionBreakdown.push({ ...line });
+  }
+}
+
+/** Register subscription items without adding their money — keeps the itemised
+ *  rows present for months that are shown but excluded from the year. */
+function declareBreakdownKeys(target: AnnualFigures, lines: SubscriptionLine[]): void {
+  for (const line of lines) {
+    if (!target.subscriptionBreakdown.some((l) => l.id === line.id)) {
+      target.subscriptionBreakdown.push({ ...line, amount: 0 });
+    }
   }
 }
 
@@ -277,14 +303,33 @@ function makeRow(
   base: Pick<AnnualRow, 'key' | 'room' | 'ownerName' | 'typeLabel' | 'mode' | 'commissionRate' | 'commissionable' | 'isAggregate'>,
   cells: (AnnualCell | null)[],
 ): AnnualRow {
+  // Only reliable months are summed. An unreliable month keeps its cell (the
+  // table still shows it, greyed) but must not move the year's figures.
   const total = emptyFigures();
   let issuedCount = 0;
+  let reliableCount = 0;
   for (const cell of cells) {
     if (!cell) continue;
-    addInto(total, cell);
     if (cell.source === 'issued') issuedCount += 1;
+    if (!cell.reliable) {
+      // Its money is excluded, but the operator can still see this month on
+      // screen — so its subscription items must exist as (zero) lines, or
+      // expanding Subscriptions would show a greyed total with nothing under it.
+      declareBreakdownKeys(total, cell.subscriptionBreakdown);
+      continue;
+    }
+    addInto(total, cell);
+    reliableCount += 1;
   }
-  return { ...base, cells, total: withUnitemisedRemainder(total), average: emptyFigures(), issuedCount };
+  const summed = withUnitemisedRemainder(total);
+  return {
+    ...base,
+    cells,
+    total: summed,
+    average: reliableCount > 0 ? scaleFigures(summed, 1 / reliableCount) : emptyFigures(),
+    reliableCount,
+    issuedCount,
+  };
 }
 
 /**
@@ -321,19 +366,26 @@ export function buildAnnualOverview(
 
   const unallocated = buildUnallocatedRow(months, expanded, covered);
 
+  // The business row sums only the RELIABLE room cells for each month. That is
+  // what keeps its Total column equal to the sum of the room Totals below it —
+  // the property the whole table is read for. The cost is that a month's total
+  // can be less than the (greyed) room values printed above it, which is why
+  // unreliable cells are visibly greyed rather than silently dropped.
   const totalCells: (AnnualCell | null)[] = months.map((month, i) => {
-    const sources = [...rows, ...(unallocated ? [unallocated] : [])]
+    const present = [...rows, ...(unallocated ? [unallocated] : [])]
       .map((r) => r.cells[i])
       .filter((c): c is AnnualCell => c !== null);
-    if (sources.length === 0) return null;
+    if (present.length === 0) return null;
+    const contributing = present.filter((c) => c.reliable);
     const figures = emptyFigures();
-    for (const c of sources) addInto(figures, c);
+    for (const c of contributing.length ? contributing : present) addInto(figures, c);
     return {
       ...figures,
       month,
       // The business row is only as authoritative as its weakest cell: if any
-      // room in the month is still provisional, so is the total.
-      source: sources.every((c) => c.source === 'issued') ? 'issued' : 'computed',
+      // contributing room is still provisional, so is the total.
+      source: contributing.length && contributing.every((c) => c.source === 'issued') ? 'issued' : 'computed',
+      reliable: contributing.length > 0,
     };
   });
 
@@ -351,12 +403,6 @@ export function buildAnnualOverview(
     totalCells,
   );
 
-  const activeMonths = totalCells.filter((c) => c !== null && !isEmptyFigures(c)).length;
-  const divide = (f: AnnualFigures) => (activeMonths > 0 ? scaleFigures(f, 1 / activeMonths) : emptyFigures());
-  for (const r of [...rows, ...(unallocated ? [unallocated] : []), total]) {
-    r.average = divide(r.total);
-  }
-
   const uncoveredMonths = months.filter((m, i) => totalCells[i] === null);
 
   return {
@@ -366,7 +412,7 @@ export function buildAnnualOverview(
     unallocated,
     total,
     subscriptionLabels: total.total.subscriptionBreakdown.map((l) => l.label),
-    activeMonths,
+    activeMonths: total.reliableCount,
     coverage,
     uncoveredMonths,
   };
@@ -380,12 +426,13 @@ function buildUnitRow(
   byId: Map<string, CommissionSettlement>,
   covered: (month: string) => boolean,
 ): AnnualRow {
+  const reliable = (month: string) => isReliableMonth(unit, month, byId);
   const cells = months.map((month): AnnualCell | null => {
     const issued = byId.get(`${unit.id}|${month}`);
-    if (issued) return { ...figuresFromSettlement(issued), month, source: 'issued' };
+    if (issued) return { ...figuresFromSettlement(issued), month, source: 'issued', reliable: reliable(month) };
     if (!covered(month)) return null;
     const computed = computeSettlement(unit, month, expanded, costs);
-    return { ...figuresFromSettlement(computed), month, source: 'computed' };
+    return { ...figuresFromSettlement(computed), month, source: 'computed', reliable: reliable(month) };
   });
 
   return makeRow(
@@ -401,6 +448,25 @@ function buildUnitRow(
     },
     cells,
   );
+}
+
+/**
+ * Can this apartment's figures for this month be trusted?
+ *
+ * `issued` rules ask whether a settlement exists — for K.103, which is BHA-owned
+ * and so never settles, `follows` redirects the question to its Urban pool
+ * sibling. `from` rules are a simple start month. A unit with no rule stated is
+ * treated as reliable throughout rather than silently dropped from the year.
+ */
+export function isReliableMonth(
+  unit: CommissionUnit,
+  month: string,
+  settlementsById: Map<string, CommissionSettlement>,
+): boolean {
+  const rule = unit.reliability;
+  if (!rule) return true;
+  if (rule.kind === 'from') return month >= rule.month;
+  return settlementsById.has(`${rule.follows ?? unit.id}|${month}`);
 }
 
 /**
@@ -434,6 +500,9 @@ function buildUnallocatedRow(
       grossProfit: t.grossProfit,
       month,
       source: 'computed',
+      // No launch date and no settlement to wait for — this is live revenue on
+      // bookings that exist, so it counts wherever it appears.
+      reliable: true,
     };
   });
 
@@ -470,12 +539,16 @@ function buildUnallocatedRow(
 // Management commission is deliberately absent — the annual view is a trading
 // overview; the commission split belongs to the monthly settlement statement.
 
+// Kinds map 1:1 onto the Performance tab's palette so a figure keeps its colour
+// across tabs: gross/net revenue indigo, anything that is a cost rose, the
+// profit result emerald (amber when negative). See PALETTE in the view.
 export type AnnualLineKind =
-  | 'revenue'    // gross booking value
-  | 'deduction'  // a cost / channel deduction
-  | 'sub-item'   // one subscription line item, nested under Subscriptions
-  | 'subtotal'   // net sales, operational costs
-  | 'result';    // gross profit
+  | 'revenue'     // gross booking value — indigo
+  | 'net'         // net sales — indigo band
+  | 'deduction'   // a channel or operating cost — rose
+  | 'sub-item'    // one subscription line item, nested under Subscriptions
+  | 'cost-total'  // operational costs — rose band
+  | 'result';     // gross profit — emerald band
 
 export interface AnnualLineNode {
   key: string;
@@ -540,7 +613,7 @@ export function annualLineTree(row: AnnualRow): AnnualLineNode[] {
       line(row, 'otaCommission', 'OTA / channel commission', 'deduction'),
       line(row, 'paymentFees', 'Payment / processing fees', 'deduction'),
     ]),
-    line(row, 'netSales', 'Net Sales', 'subtotal', [
+    line(row, 'netSales', 'Net Sales', 'net', [
       line(row, 'cleaning', 'Cleaning', 'deduction'),
       line(row, 'laundry', 'Laundry', 'deduction'),
       line(row, 'consumables', 'Consumables', 'deduction'),
@@ -548,7 +621,7 @@ export function annualLineTree(row: AnnualRow): AnnualLineNode[] {
       line(row, 'wearTear', 'Wear & Tear', 'deduction'),
       line(row, 'misc', 'Misc / Damages', 'deduction'),
     ]),
-    line(row, 'operationalCosts', 'Operational costs', 'subtotal'),
+    line(row, 'operationalCosts', 'Operational costs', 'cost-total'),
     line(row, 'grossProfit', 'Gross Profit', 'result'),
   ];
 }

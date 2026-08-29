@@ -33,14 +33,26 @@ function kc(n: number): string {
   return rounded.toLocaleString('cs-CZ').replace(/-/, '−');
 }
 
-/** Row styling per line kind. Costs read red, results read as results. */
-const KIND_STYLE: Record<AnnualLineNode['kind'], string> = {
-  revenue: 'text-gray-900 font-medium',
-  deduction: 'text-rose-600',
-  'sub-item': 'text-rose-400',
-  subtotal: 'text-gray-900 font-semibold bg-gray-50',
-  result: 'text-indigo-700 font-semibold bg-indigo-50',
+/**
+ * Palette lifted from the Performance tab (NetSalesBridgeView /
+ * GrossProfitBridgeView KPI tiles) so a figure keeps its colour across tabs:
+ * gross + net revenue indigo, every cost rose, the profit result emerald —
+ * amber when it goes negative, exactly as the Performance bridge does.
+ *
+ * `text` is the row's own colouring; `bg` must be an OPAQUE class because the
+ * label column is sticky and translucent tints let months scroll through it.
+ */
+const KIND_STYLE: Record<AnnualLineNode['kind'], { text: string; bg: string }> = {
+  revenue:      { text: 'text-indigo-700 font-semibold', bg: 'bg-white' },
+  net:          { text: 'text-indigo-700 font-semibold', bg: 'bg-indigo-50' },
+  deduction:    { text: 'text-rose-600',                 bg: 'bg-white' },
+  'sub-item':   { text: 'text-rose-400',                 bg: 'bg-white' },
+  'cost-total': { text: 'text-rose-700 font-semibold',   bg: 'bg-rose-50' },
+  result:       { text: 'text-emerald-700 font-semibold', bg: 'bg-emerald-50' },
 };
+
+/** Gross profit turns amber when negative — same signal as the Performance bridge. */
+const LOSS_STYLE = { text: 'text-amber-700 font-semibold', bg: 'bg-amber-50' };
 
 export default function AnnualCommissionTable({
   reservations,
@@ -119,8 +131,7 @@ export default function AnnualCommissionTable({
         <div>
           <h3 className="text-base font-semibold text-gray-900">Annual overview</h3>
           <p className="text-xs text-gray-500 mt-0.5">
-            Gross profit per apartment, month by month · expand a row for the full P&amp;L · averages over{' '}
-            {overview.activeMonths} active month{overview.activeMonths === 1 ? '' : 's'}
+            Gross profit per apartment, month by month · expand a row for the full P&amp;L
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -151,16 +162,19 @@ export default function AnnualCommissionTable({
         </div>
       </div>
 
-      {/* Provenance + coverage */}
+      {/* What counts towards the year */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-2.5 border-b border-gray-100 text-[11px] text-gray-500">
         <span className="inline-flex items-center gap-1">
-          <span className="text-indigo-600 font-semibold">✓</span> issued settlement (frozen)
+          <span className="text-emerald-600 font-semibold">✓</span>
+          reliable month — <b className="font-semibold">Total and Avg / mo count these only</b>
         </span>
-        <span>unmarked months are computed live — provisional</span>
+        <span className="text-gray-400">
+          greyed months are shown but excluded: awaiting backfill, or not yet settled
+        </span>
         {overview.uncoveredMonths.length > 0 && (
           <span className="text-amber-700">
             ⚠ {overview.uncoveredMonths.map((m) => MONTH_ABBR[Number(m.slice(5, 7)) - 1]).join(', ')} outside the
-            loaded booking window — shown as “—” and excluded from totals
+            loaded booking window — shown as “—”
           </span>
         )}
       </div>
@@ -176,10 +190,12 @@ export default function AnnualCommissionTable({
               {MONTH_ABBR.map((m) => (
                 <th key={m} className="text-right font-medium px-2 py-2 min-w-[68px]">{m}</th>
               ))}
-              <th className="text-right font-semibold px-3 py-2 min-w-[86px] border-l border-gray-200 text-gray-700">
-                Total
+              <th className="text-right font-semibold px-3 py-2 min-w-[92px] border-l border-gray-200 text-gray-700">
+                Total <span className="text-emerald-600">✓</span>
               </th>
-              <th className="text-right font-medium px-3 py-2 min-w-[80px] text-gray-600">Avg / mo</th>
+              <th className="text-right font-medium px-3 py-2 min-w-[86px] text-gray-600">
+                Avg / mo <span className="text-emerald-600">✓</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -213,7 +229,9 @@ function RoomRows({
 }) {
   const open = expanded.has(row.key);
   const tree = useMemo(() => annualLineTree(row), [row]);
+  const reliableMask = useMemo(() => row.cells.map((c) => !!c?.reliable), [row]);
   const bg = highlight ? 'bg-slate-100' : 'bg-white';
+  const partial = row.reliableCount < row.cells.filter(Boolean).length;
 
   return (
     <>
@@ -237,27 +255,35 @@ function RoomRows({
                 BHA
               </span>
             )}
-            {row.issuedCount > 0 && (
-              <span className="text-[10px] font-semibold px-1.5 py-px rounded-full bg-indigo-100 text-indigo-700">
-                {row.issuedCount}✓
-              </span>
-            )}
+            <span
+              title={`Total and Avg / mo cover ${row.reliableCount} reliable month${row.reliableCount === 1 ? '' : 's'}; greyed months are excluded pending backfill`}
+              className={`text-[10px] font-semibold px-1.5 py-px rounded-full ${
+                partial ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+              }`}
+            >
+              {row.reliableCount}/12 ✓
+            </span>
           </span>
         </th>
         {row.cells.map((cell, i) => (
-          <td key={i} className="px-2 py-2 text-right tabular-nums font-medium text-gray-800">
+          <td
+            key={i}
+            className={`px-2 py-2 text-right tabular-nums font-medium ${
+              !cell?.reliable ? 'text-gray-300' : cell.grossProfit < 0 ? 'text-amber-700' : 'text-emerald-700'
+            }`}
+          >
             {cell === null ? <span className="text-gray-300">—</span> : kc(cell.grossProfit)}
-            {cell?.source === 'issued' && <span className="text-indigo-500 ml-0.5">✓</span>}
+            {cell?.reliable && <span className="text-emerald-500 ml-0.5">✓</span>}
           </td>
         ))}
-        <td className="px-3 py-2 text-right tabular-nums font-bold text-gray-900 border-l border-gray-200">
+        <td className={`px-3 py-2 text-right tabular-nums font-bold border-l border-gray-200 ${row.total.grossProfit < 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
           {kc(row.total.grossProfit)}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums text-gray-600">{kc(row.average.grossProfit)}</td>
+        <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{kc(row.average.grossProfit)}</td>
       </tr>
 
       {open && tree.map((node) => (
-        <LineRows key={node.key} node={node} rowKey={row.key} depth={0} expanded={expanded} onToggle={onToggle} />
+        <LineRows key={node.key} node={node} rowKey={row.key} depth={0} reliable={reliableMask} expanded={expanded} onToggle={onToggle} />
       ))}
     </>
   );
@@ -268,38 +294,40 @@ function LineRows({
   node,
   rowKey,
   depth,
+  reliable,
   expanded,
   onToggle,
 }: {
   node: AnnualLineNode;
   rowKey: string;
   depth: number;
+  /** Per-month: does this month count towards the row's total and average? */
+  reliable: boolean[];
   expanded: Set<string>;
   onToggle: (id: string) => void;
 }) {
   const id = `${rowKey}|${node.key}`;
   const hasChildren = !!node.children?.length;
   const open = expanded.has(id);
-  const style = KIND_STYLE[node.kind];
-  // The sticky label cell needs an opaque background of its own, or the month
-  // columns scroll underneath it.
-  const stickyBg =
-    node.kind === 'subtotal' ? 'bg-gray-50' : node.kind === 'result' ? 'bg-indigo-50' : 'bg-white';
+  const style = node.kind === 'result' && node.total < 0 ? LOSS_STYLE : KIND_STYLE[node.kind];
 
   return (
     <>
       <tr
         onClick={hasChildren ? () => onToggle(id) : undefined}
-        className={`border-t border-gray-50 ${style} ${hasChildren ? 'cursor-pointer hover:bg-indigo-50/40' : ''}`}
+        className={`border-t border-gray-50 ${style.text} ${style.bg} ${hasChildren ? 'cursor-pointer' : ''}`}
       >
-        <td className={`px-4 py-1.5 sticky left-0 z-10 ${stickyBg}`}>
+        <td className={`px-4 py-1.5 sticky left-0 z-10 ${style.bg}`}>
           <span className="flex items-center gap-1.5" style={{ paddingLeft: `${depth * 14 + 16}px` }}>
             <span className="text-gray-400 w-3 shrink-0">{hasChildren ? (open ? '▾' : '▸') : ''}</span>
             <span>{node.label}</span>
           </span>
         </td>
         {node.values.map((v, i) => (
-          <td key={i} className="px-2 py-1.5 text-right tabular-nums">
+          <td
+            key={i}
+            className={`px-2 py-1.5 text-right tabular-nums ${reliable[i] ? '' : 'text-gray-300'}`}
+          >
             {v === null ? <span className="text-gray-300">—</span> : kc(v)}
           </td>
         ))}
@@ -310,7 +338,7 @@ function LineRows({
       </tr>
 
       {open && node.children!.map((child) => (
-        <LineRows key={child.key} node={child} rowKey={rowKey} depth={depth + 1} expanded={expanded} onToggle={onToggle} />
+        <LineRows key={child.key} node={child} rowKey={rowKey} depth={depth + 1} reliable={reliable} expanded={expanded} onToggle={onToggle} />
       ))}
     </>
   );

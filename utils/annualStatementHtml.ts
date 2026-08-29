@@ -29,8 +29,10 @@ function esc(v: string): string {
   return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function lineRow(node: AnnualLineNode, depth: number): string {
-  const months = node.values.map((v) => `<td class="num">${cell(v)}</td>`).join('');
+function lineRow(node: AnnualLineNode, depth: number, reliable: boolean[]): string {
+  const months = node.values
+    .map((v, i) => `<td class="num${reliable[i] ? '' : ' off'}">${cell(v)}</td>`)
+    .join('');
   return `<tr class="k-${node.kind}">
     <td class="lbl" style="padding-left:${8 + depth * 11}px">${esc(node.label)}</td>
     ${months}
@@ -44,11 +46,12 @@ function roomGroup(row: AnnualRow): string {
   const tags = [
     row.mode === 'urban-pool' ? '<span class="pill pool">pool ÷3</span>' : '',
     !row.commissionable && !row.isAggregate ? '<span class="pill own">BHA-owned</span>' : '',
-    row.issuedCount > 0 ? `<span class="pill iss2">${row.issuedCount} issued</span>` : '',
+    `<span class="pill rel">${row.reliableCount}/12 ✓</span>`,
   ].filter(Boolean).join(' ');
   const owner = row.ownerName === '—' ? '' : ` · ${esc(row.ownerName)}`;
+  const reliable = row.cells.map((c) => !!c?.reliable);
   const months = row.cells
-    .map((c) => `<td class="num">${c === null ? '<span class="na">—</span>' : kc(c.grossProfit)}${c?.source === 'issued' ? '<span class="iss">✓</span>' : ''}</td>`)
+    .map((c, i) => `<td class="num${reliable[i] ? '' : ' off'}">${c === null ? '<span class="na">—</span>' : kc(c.grossProfit)}${c?.reliable ? '<span class="iss">✓</span>' : ''}</td>`)
     .join('');
 
   return `<tr class="room${row.isAggregate ? ' agg' : ''}">
@@ -57,7 +60,7 @@ function roomGroup(row: AnnualRow): string {
       <td class="num tot">${kc(row.total.grossProfit)}</td>
       <td class="num avg">${kc(row.average.grossProfit)}</td>
     </tr>
-    ${flattenLineTree(annualLineTree(row)).map(({ node, depth }) => lineRow(node, depth)).join('')}`;
+    ${flattenLineTree(annualLineTree(row)).map(({ node, depth }) => lineRow(node, depth, reliable)).join('')}`;
 }
 
 export function buildAnnualOverviewHTML(overview: AnnualOverview): string {
@@ -74,8 +77,8 @@ export function buildAnnualOverviewHTML(overview: AnnualOverview): string {
   const head = `<tr>
       <th class="lbl">${overview.year}</th>
       ${MONTH_ABBR.map((m) => `<th class="num">${m}</th>`).join('')}
-      <th class="num tot">Total</th>
-      <th class="num avg">Avg / mo</th>
+      <th class="num tot">Total ✓</th>
+      <th class="num avg">Avg / mo ✓</th>
     </tr>`;
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
@@ -98,26 +101,35 @@ export function buildAnnualOverviewHTML(overview: AnnualOverview): string {
   td.tot, th.tot { border-left: 1px solid #CBD5E1; font-weight: 700; }
   td.avg, th.avg { color: #475569; }
   .na { color: #CBD5E1; }
-  .iss { color: #4F46E5; font-size: 6.5px; margin-left: 1px; }
+  .iss { color: #059669; font-size: 6.5px; margin-left: 1px; }
   .sub { color: #94A3B8; font-size: 6.8px; font-weight: 400; }
   .pill { font-size: 6.2px; font-weight: 700; padding: 0 4px; border-radius: 999px;
           text-transform: uppercase; letter-spacing: .03em; }
   .pill.own  { background: #F1F5F9; color: #64748B; }
   .pill.pool { background: #CCFBF1; color: #0F766E; }
-  .pill.iss2 { background: #E0E7FF; color: #4338CA; }
+  .pill.rel  { background: #D1FAE5; color: #047857; }
 
   /* An apartment banner: its own row, carrying gross profit like on screen. */
   tr.room td { background: #E2E8F0; font-size: 8.4px; font-weight: 700; padding: 3px;
                border-top: 2px solid #94A3B8; border-bottom: 1px solid #94A3B8; }
+  tr.room td.num { color: #047857; }
   tr.room.agg td { background: #CBD5E1; }
   tr.room { page-break-inside: avoid; page-break-after: avoid; }
 
-  tr.k-revenue td { font-weight: 700; }
+  /* Same roles as the Performance tab: gross + net revenue indigo, every cost
+     rose, the profit result emerald. */
+  tr.k-revenue td { color: #4338CA; font-weight: 700; }
+  tr.k-net td { background: #EEF2FF; color: #4338CA; font-weight: 700; }
   tr.k-deduction td.num { color: #E11D48; }
   tr.k-sub-item td { color: #64748B; font-size: 7px; }
   tr.k-sub-item td.num { color: #FB7185; }
-  tr.k-subtotal td { background: #F1F5F9; font-weight: 700; }
-  tr.k-result td { background: #EEF2FF; color: #4338CA; font-weight: 700; }
+  tr.k-cost-total td { background: #FFF1F2; color: #BE123C; font-weight: 700; }
+  tr.k-result td { background: #ECFDF5; color: #047857; font-weight: 700; }
+  /* A month that does not count towards the year's total / average. Needs to
+     out-specify the tr.room td.num rule below, which would otherwise paint an
+     excluded
+     month on an apartment banner the same emerald as a counted one. */
+  td.num.off, tr.room td.num.off { color: #CBD5E1; }
 
   .legend { margin-top: 10px; padding-top: 6px; border-top: 1px solid #E5E7EB;
             color: #6B7280; font-size: 7.5px; line-height: 1.5; }
@@ -144,8 +156,11 @@ export function buildAnnualOverviewHTML(overview: AnnualOverview): string {
       pooled across K.102 / K.103 / K.106 and divided equally by 3, so a figure does not depend on which
       physical unit a reservation was allocated to. The apartment banner row carries that apartment's
       gross profit. Management commission is not shown here — see the monthly owner settlement statement.
-      <br/><b>✓</b> next to a month = figures taken from the settlement issued for that month (frozen at
-      issue time). Months without the mark are computed live and remain provisional.
+      <br/><b>✓ Total and Avg / mo count reliable months only.</b> A month is reliable when its owner
+      settlement was issued (Urban pool, O.308) or when it falls after the apartment was wired into the
+      reporting app — K.202 / K.203 from March 2026, K.201 from April 2026. Greyed months are shown for
+      information but excluded from the year until they are backfilled. The <b>n/12 ✓</b> badge on each
+      apartment says how many months its Total and Average are built from.
       <br/>reporting.bakerhouseapartments.cz
     </div>
   </body></html>`;

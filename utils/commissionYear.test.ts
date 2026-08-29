@@ -120,6 +120,90 @@ describe('commission rate per unit', () => {
   });
 });
 
+/** A minimal issued settlement — enough to make a month "reliable". */
+function issuedFor(unitId: string, month: string, over: Partial<CommissionSettlement> = {}): CommissionSettlement {
+  return {
+    id: `settle-${unitId}-${month}`, unitId, room: unitId, ownerName: 'Owner',
+    mode: unitId === 'O.308' ? 'standalone' : 'urban-pool', month,
+    periodStart: `${month}-01`, periodEnd: `${month}-28`,
+    gbv: 0, otaCommission: 0, paymentFees: 0, netSales: 0,
+    cleaning: 0, laundry: 0, consumables: 0, subscriptions: 3516 / 3, wearTear: 0, misc: 0,
+    operationalCosts: 3516 / 3, grossProfit: 0, commissionRate: 0.25, commissionAmount: 0,
+    payableToOwner: 0, reconciles: true, status: 'issued', createdAt: '', createdBy: '',
+    ...over,
+  };
+}
+
+describe('reliable months', () => {
+  const reservations = [
+    res({ room: 'K.102', checkInDate: '2026-08-05', checkOutDate: '2026-08-10', price: 30_000 }),
+    // K.201 earns in an excluded month (Jan) and a counted one (May), so the
+    // total can actually differ from the naive twelve-month sum.
+    res({ room: 'K.201', checkInDate: '2026-01-06', checkOutDate: '2026-01-11', price: 40_000 }),
+    res({ room: 'K.201', checkInDate: '2026-05-06', checkOutDate: '2026-05-11', price: 60_000 }),
+  ];
+  // Cost cells at both ends of the year so every month is inside coverage.
+  const costs = bundle({
+    byDateRoom: {
+      [`2026-01-04|${K102}`]: { cleaning: 900, laundry: 0, consumables: 0, wearTear: 0, misc: 0 },
+      [`2026-12-28|${K102}`]: { cleaning: 900, laundry: 0, consumables: 0, wearTear: 0, misc: 0 },
+    },
+  });
+  const marks = (o: ReturnType<typeof buildAnnualOverview>, room: string) =>
+    o.rows.find((r) => r.room === room)!.cells.map((c) => (c ? c.reliable : null));
+
+  it('trusts the Urban pool only where a settlement was issued', () => {
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06'), issuedFor('K.106', '2026-06')]);
+    expect(marks(o, 'K.102')).toEqual([false, false, false, false, false, true, false, false, false, false, false, false]);
+    expect(o.rows.find((r) => r.room === 'K.102')!.reliableCount).toBe(1);
+  });
+
+  it('lets K.103 inherit its pool sibling\u2019s settlements, having none of its own', () => {
+    // K.103 is BHA-owned so never settles, but it shares the Urban pool with
+    // K.102 — it is trustworthy exactly when K.102 is.
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06')]);
+    expect(marks(o, 'K.103')).toEqual(marks(o, 'K.102'));
+    expect(o.rows.find((r) => r.room === 'K.103')!.reliableCount).toBe(1);
+  });
+
+  it('trusts K.202 / K.203 from March and K.201 from April', () => {
+    const o = buildAnnualOverview(2026, reservations, costs, []);
+    const fromMonth = (room: string, idx: number) =>
+      expect(marks(o, room)).toEqual(Array.from({ length: 12 }, (_, i) => i >= idx));
+    fromMonth('K.202', 2); // March
+    fromMonth('K.203', 2);
+    fromMonth('K.201', 3); // April — launched mid-March
+    expect(o.rows.find((r) => r.room === 'K.201')!.reliableCount).toBe(9);
+    expect(o.rows.find((r) => r.room === 'K.202')!.reliableCount).toBe(10);
+  });
+
+  it('counts only reliable months in the total, and divides the average by them', () => {
+    const o = buildAnnualOverview(2026, reservations, costs, []);
+    const k201 = o.rows.find((r) => r.room === 'K.201')!;
+    const reliableSum = k201.cells.reduce((sum, c) => sum + (c?.reliable ? c.grossProfit : 0), 0);
+    const everyMonth = k201.cells.reduce((sum, c) => sum + (c?.grossProfit ?? 0), 0);
+    expect(k201.total.grossProfit).toBeCloseTo(reliableSum, 6);
+    expect(k201.total.grossProfit).not.toBeCloseTo(everyMonth, 6); // Jan–Mar really are excluded
+    expect(k201.average.grossProfit).toBeCloseTo(reliableSum / 9, 6);
+  });
+
+  it('keeps the business Total equal to the sum of the apartment Totals', () => {
+    // The property the table is read for: whatever each room excludes, the
+    // roll-up must exclude the same money.
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06'), issuedFor('K.106', '2026-06')]);
+    const sumOfRooms = [...o.rows, ...(o.unallocated ? [o.unallocated] : [])]
+      .reduce((sum, r) => sum + r.total.grossProfit, 0);
+    expect(o.total.total.grossProfit).toBeCloseTo(sumOfRooms, 6);
+  });
+
+  it('still shows an excluded month\u2019s figures rather than hiding them', () => {
+    const o = buildAnnualOverview(2026, reservations, costs, []);
+    const jan = o.rows.find((r) => r.room === 'K.201')!.cells[0]!;
+    expect(jan).not.toBeNull();      // rendered, greyed
+    expect(jan.reliable).toBe(false); // but not counted
+  });
+});
+
 describe('buildAnnualOverview', () => {
   const reservations = [
     res({ room: 'K.102', checkInDate: '2026-08-05', checkOutDate: '2026-08-10', price: 30_000 }),
@@ -256,7 +340,21 @@ describe('annualLineTree', () => {
     // Parking starts 2026-08: nothing before, then every month, pool-split ÷3.
     expect(parking.values[6]).toBe(0);
     expect(parking.values[7]).toBeCloseTo(3025 / 3, 6);
-    expect(parking.total).toBeCloseTo((3025 / 3) * 5, 6); // Aug–Dec
+    // K.102 is an "issued" room and nothing is issued here, so no month counts
+    // towards the year — the monthly figures still show, the total stays empty.
+    expect(parking.total).toBe(0);
+  });
+
+  it('totals the itemised lines over reliable months once settlements exist', () => {
+    const o = buildAnnualOverview(2026, reservations, yearOfCosts, [
+      issuedFor('K.102', '2026-08'), issuedFor('K.102', '2026-09'),
+    ]);
+    const tree = annualLineTree(o.rows.find((r) => r.room === 'K.102')!);
+    // The issued snapshots carry no itemisation, so their subscriptions land on
+    // the remainder line — but Parking must still be listed, at zero, because
+    // the greyed Aug–Dec months on screen do show a Parking figure.
+    expect(findByLabel(tree, 'Parking')).toBeDefined();
+    expect(findLine(tree, 'subscriptions')!.total).toBeCloseTo(2 * 3516 / 3, 6);
   });
 
   it('nests each line one level below its parent when flattened for the PDF', () => {

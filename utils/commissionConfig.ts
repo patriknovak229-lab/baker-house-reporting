@@ -41,7 +41,29 @@ export interface CommissionUnit {
    * flag rather than a rate of zero.
    */
   bhaOwned?: boolean;
+  /**
+   * When this apartment's monthly figures can be trusted. Data exists before
+   * that point but is known to be partial, so it is shown greyed and left out
+   * of annual totals and averages — see `isReliableMonth`.
+   */
+  reliability?: Reliability;
 }
+
+/**
+ * Which months of an apartment's year carry trustworthy figures.
+ *
+ * - `issued`   — only months with an issued owner settlement. The figures were
+ *                checked at issue time and frozen; anything else is provisional.
+ *                `follows` points at a pool sibling that holds the settlements
+ *                (K.103 is BHA-owned so never has its own, but it shares the
+ *                Urban pool with K.102 and is trustworthy exactly when it is).
+ * - `from`     — reliable from this month onward. Used for apartments that were
+ *                wired into the reporting app, or launched, part-way through the
+ *                year; earlier months await a manual backfill.
+ */
+export type Reliability =
+  | { kind: 'issued'; follows?: string }
+  | { kind: 'from'; month: string };
 
 /** The rooms that make up the Urban pool (in canonical order). */
 export const URBAN_POOL_ROOMS: Room[] = ['K.102', 'K.103', 'K.106'];
@@ -70,13 +92,19 @@ export const COMMISSION_UNITS: CommissionUnit[] = [
  * surfaces in the annual overview's "Unallocated" row rather than being split.
  */
 export const ANNUAL_UNITS: CommissionUnit[] = [
-  COMMISSION_UNITS[0],                                                    // K.102
-  { id: 'K.103', room: 'K.103', ownerName: 'Baker House Apartments', mode: 'urban-pool', typeLabel: '1KK Urban Studio', bhaOwned: true },
-  COMMISSION_UNITS[1],                                                    // K.106
-  { id: 'K.201', room: 'K.201', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '2KK Deluxe',       bhaOwned: true },
-  { id: 'K.202', room: 'K.202', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '1KK Deluxe Studio', bhaOwned: true },
-  { id: 'K.203', room: 'K.203', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '1KK Deluxe Studio', bhaOwned: true },
-  COMMISSION_UNITS[2],                                                    // O.308
+  { ...COMMISSION_UNITS[0], reliability: { kind: 'issued' } },            // K.102
+  { id: 'K.103', room: 'K.103', ownerName: 'Baker House Apartments', mode: 'urban-pool', typeLabel: '1KK Urban Studio', bhaOwned: true,
+    reliability: { kind: 'issued', follows: 'K.102' } },
+  { ...COMMISSION_UNITS[1], reliability: { kind: 'issued' } },            // K.106
+  // Launched mid-March 2026, so April is the first whole month worth trusting.
+  { id: 'K.201', room: 'K.201', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '2KK Deluxe',       bhaOwned: true,
+    reliability: { kind: 'from', month: '2026-04' } },
+  // Wired into the reporting app in March 2026; Jan–Feb need a manual backfill.
+  { id: 'K.202', room: 'K.202', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '1KK Deluxe Studio', bhaOwned: true,
+    reliability: { kind: 'from', month: '2026-03' } },
+  { id: 'K.203', room: 'K.203', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '1KK Deluxe Studio', bhaOwned: true,
+    reliability: { kind: 'from', month: '2026-03' } },
+  { ...COMMISSION_UNITS[2], reliability: { kind: 'issued' } },            // O.308
 ];
 
 /** The commission actually charged on a unit's gross profit. */
