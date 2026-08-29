@@ -7,10 +7,21 @@ import { computeGrossProfit } from './grossProfit';
 import { ANNUAL_UNITS, COMMISSION_UNITS, unitCommissionRate } from './commissionConfig';
 import {
   buildAnnualOverview,
-  annualLineSpecs,
+  annualLineTree,
+  flattenLineTree,
   availableYears,
   UNITEMISED_SUBSCRIPTION_ID,
+  type AnnualLineNode,
 } from './commissionYear';
+
+/** Depth-first lookup by key, so a test can name a line without knowing where
+ *  in the tree it currently sits. */
+function findLine(nodes: AnnualLineNode[], key: string): AnnualLineNode | undefined {
+  return flattenLineTree(nodes).find(({ node }) => node.key === key)?.node;
+}
+function findByLabel(nodes: AnnualLineNode[], label: string): AnnualLineNode | undefined {
+  return flattenLineTree(nodes).find(({ node }) => node.label === label)?.node;
+}
 
 // Beds24 roomIds: K.102=679703, K.103=679704, K.106=679705, O.308=674672.
 const K102 = '679703';
@@ -130,19 +141,37 @@ describe('buildAnnualOverview', () => {
     expect(o.rows.filter((r) => !r.commissionable).map((r) => r.room)).toEqual(['K.103', 'K.201', 'K.202', 'K.203']);
   });
 
-  it('labels the business total neutrally rather than as one unit\u2019s arrangement', () => {
-    // The roll-up mixes 25% units with BHA-owned ones, so it must not claim
-    // either — earlier it inherited "(none)" while carrying real commission.
+  it('collapses to four P&L lines, deepest detail reachable by expanding', () => {
+    // The operator's default view: Gross Booking Value, Net Sales, Operational
+    // costs, Gross Profit — everything else hangs off one of them.
     const o = buildAnnualOverview(2026, reservations, bundle(), []);
-    expect(o.total.isAggregate).toBe(true);
-    const specs = annualLineSpecs(o.total);
-    expect(specs.find((s) => s.key === 'commissionAmount')!.label).toBe('BHA management commission');
-    expect(specs.find((s) => s.key === 'payableToOwner')!.label).toBe('Payable to owners');
-    // A real unit still states its own terms.
-    const k102 = annualLineSpecs(o.rows.find((r) => r.room === 'K.102')!);
-    expect(k102.find((s) => s.key === 'commissionAmount')!.label).toBe('BHA management commission (25%)');
-    const k103 = annualLineSpecs(o.rows.find((r) => r.room === 'K.103')!);
-    expect(k103.find((s) => s.key === 'payableToOwner')!.label).toBe('Payable to owner (BHA-owned)');
+    const tree = annualLineTree(o.rows.find((r) => r.room === 'K.102')!);
+    expect(tree.map((n) => n.key)).toEqual(['gbv', 'netSales', 'operationalCosts', 'grossProfit']);
+    expect(tree.map((n) => n.label)).toEqual([
+      'Gross Booking Value', 'Net Sales', 'Operational costs', 'Gross Profit',
+    ]);
+    // Gross Booking Value owns the channel deductions between it and Net Sales.
+    expect(tree[0].children?.map((n) => n.key)).toEqual(['otaCommission', 'paymentFees']);
+    // Net Sales owns the operating costs between it and Operational costs.
+    expect(tree[1].children?.map((n) => n.key)).toEqual([
+      'cleaning', 'laundry', 'consumables', 'subscriptions', 'wearTear', 'misc',
+    ]);
+    // Subscriptions nests one level deeper still.
+    expect(findLine(tree, 'subscriptions')?.children?.map((n) => n.label)).toEqual(['Internet + TV', 'Parking']);
+    // The two summary lines carry no children of their own.
+    expect(tree[2].children).toBeUndefined();
+    expect(tree[3].children).toBeUndefined();
+  });
+
+  it('leaves management commission out of the annual view', () => {
+    // Deliberate: this is a trading overview. The commission split belongs to
+    // the monthly settlement statement, which still shows it.
+    const o = buildAnnualOverview(2026, reservations, bundle(), []);
+    for (const row of [o.total, ...o.rows]) {
+      const keys = flattenLineTree(annualLineTree(row)).map(({ node }) => node.key);
+      expect(keys).not.toContain('commissionAmount');
+      expect(keys).not.toContain('payableToOwner');
+    }
   });
 
   it('prefers an issued settlement over the live recomputation, and says so', () => {
@@ -205,7 +234,7 @@ describe('buildAnnualOverview', () => {
   });
 });
 
-describe('annualLineSpecs', () => {
+describe('annualLineTree', () => {
   const reservations = [res({ room: 'K.102', checkInDate: '2026-08-05', checkOutDate: '2026-08-10', price: 30_000 })];
 
   // Cost cells widen the coverage window, so the whole year is in scope here.
@@ -216,17 +245,28 @@ describe('annualLineSpecs', () => {
     },
   });
 
-  it('runs gross booking value down to the owner payout, with parking on its own line', () => {
+  it('runs gross booking value down to gross profit, with parking on its own line', () => {
     const o = buildAnnualOverview(2026, reservations, yearOfCosts, []);
-    const specs = annualLineSpecs(o.rows.find((r) => r.room === 'K.102')!);
-    expect(specs[0].key).toBe('gbv');
-    expect(specs[specs.length - 1].key).toBe('payableToOwner');
-    const parking = specs.find((s) => s.label === 'Parking')!;
+    const tree = annualLineTree(o.rows.find((r) => r.room === 'K.102')!);
+    const flat = flattenLineTree(tree);
+    expect(flat[0].node.key).toBe('gbv');
+    expect(flat[flat.length - 1].node.key).toBe('grossProfit');
+    const parking = findByLabel(tree, 'Parking')!;
     expect(parking.kind).toBe('sub-item');
     // Parking starts 2026-08: nothing before, then every month, pool-split ÷3.
     expect(parking.values[6]).toBe(0);
     expect(parking.values[7]).toBeCloseTo(3025 / 3, 6);
     expect(parking.total).toBeCloseTo((3025 / 3) * 5, 6); // Aug–Dec
+  });
+
+  it('nests each line one level below its parent when flattened for the PDF', () => {
+    const o = buildAnnualOverview(2026, reservations, yearOfCosts, []);
+    const flat = flattenLineTree(annualLineTree(o.rows.find((r) => r.room === 'K.102')!));
+    const depthOf = (key: string) => flat.find(({ node }) => node.key === key)!.depth;
+    expect(depthOf('gbv')).toBe(0);
+    expect(depthOf('otaCommission')).toBe(1);
+    expect(depthOf('subscriptions')).toBe(1);
+    expect(flat.find(({ node }) => node.label === 'Parking')!.depth).toBe(2);
   });
 
   it('keeps showing a quiet month\u2019s costs instead of blanking it as "no data"', () => {
@@ -241,10 +281,8 @@ describe('annualLineSpecs', () => {
 
   it('keeps the itemised lines summing to the Subscriptions row', () => {
     const o = buildAnnualOverview(2026, reservations, yearOfCosts, []);
-    const specs = annualLineSpecs(o.total);
-    const subs = specs.find((s) => s.key === 'subscriptions')!;
-    const items = specs.filter((s) => s.kind === 'sub-item');
-    expect(items.reduce((s, l) => s + l.total, 0)).toBeCloseTo(subs.total, 6);
+    const subs = findLine(annualLineTree(o.total), 'subscriptions')!;
+    expect(subs.children!.reduce((sum, l) => sum + l.total, 0)).toBeCloseTo(subs.total, 6);
   });
 
   it('books an old settlement’s un-itemised subscriptions to a remainder line', () => {
@@ -259,13 +297,11 @@ describe('annualLineSpecs', () => {
       reconciles: true, status: 'issued', createdAt: '', createdBy: '',
     };
     const o = buildAnnualOverview(2026, reservations, yearOfCosts, [legacy]);
-    const row = o.rows.find((r) => r.room === 'K.102')!;
-    const specs = annualLineSpecs(row);
-    const remainder = specs.find((s) => s.key === `sub:${UNITEMISED_SUBSCRIPTION_ID}`)!;
+    const subs = findLine(annualLineTree(o.rows.find((r) => r.room === 'K.102')!), 'subscriptions')!;
+    const remainder = subs.children!.find((n) => n.key === `sub:${UNITEMISED_SUBSCRIPTION_ID}`)!;
     expect(remainder.values[5]).toBeCloseTo(491, 6); // June, the issued month
     expect(remainder.values[7]).toBe(0);             // August is itemised, nothing left over
-    const subs = specs.find((s) => s.key === 'subscriptions')!;
-    expect(specs.filter((s) => s.kind === 'sub-item').reduce((s, l) => s + l.total, 0)).toBeCloseTo(subs.total, 6);
+    expect(subs.children!.reduce((sum, l) => sum + l.total, 0)).toBeCloseTo(subs.total, 6);
   });
 });
 

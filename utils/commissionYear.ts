@@ -454,18 +454,30 @@ function buildUnallocatedRow(
 }
 
 // ── Table shape ──────────────────────────────────────────────────────────────
-// The waterfall's row order and labelling live here, not in the view, so the
-// on-screen table and the exported PDF are guaranteed to show the same lines.
+// The waterfall's row order, labelling and nesting live here, not in the view,
+// so the on-screen table and the exported PDF cannot show different lines.
+//
+// It is a disclosure TREE, not a flat list: each summary line owns the detail
+// lines that sit between it and the next summary line, so a collapsed room
+// reads as four numbers rather than fourteen.
+//
+//   Gross Booking Value          ▸ OTA commission, payment fees
+//   Net Sales                    ▸ cleaning, laundry, consumables,
+//                                  subscriptions ▸ (per item), wear & tear, misc
+//   Operational costs
+//   Gross Profit
+//
+// Management commission is deliberately absent — the annual view is a trading
+// overview; the commission split belongs to the monthly settlement statement.
 
 export type AnnualLineKind =
   | 'revenue'    // gross booking value
-  | 'deduction'  // a cost line
-  | 'sub-item'   // one subscription line item, indented under Subscriptions
-  | 'subtotal'   // net sales / operational costs
-  | 'result'     // gross profit
-  | 'payout';    // amount payable to owner
+  | 'deduction'  // a cost / channel deduction
+  | 'sub-item'   // one subscription line item, nested under Subscriptions
+  | 'subtotal'   // net sales, operational costs
+  | 'result';    // gross profit
 
-export interface AnnualLineSpec {
+export interface AnnualLineNode {
   key: string;
   label: string;
   kind: AnnualLineKind;
@@ -473,11 +485,13 @@ export interface AnnualLineSpec {
   values: (number | null)[];
   total: number;
   average: number;
+  /** Detail lines revealed when this one is expanded. */
+  children?: AnnualLineNode[];
 }
 
 type FigureKey = Exclude<keyof AnnualFigures, 'subscriptionBreakdown'>;
 
-function pick(row: AnnualRow, key: FigureKey): Pick<AnnualLineSpec, 'values' | 'total' | 'average'> {
+function pick(row: AnnualRow, key: FigureKey): Pick<AnnualLineNode, 'values' | 'total' | 'average'> {
   return {
     values: row.cells.map((c) => (c ? c[key] : null)),
     total: row.total[key],
@@ -485,63 +499,68 @@ function pick(row: AnnualRow, key: FigureKey): Pick<AnnualLineSpec, 'values' | '
   };
 }
 
-function subscriptionLine(row: AnnualRow, line: SubscriptionLine): Pick<AnnualLineSpec, 'values' | 'total' | 'average'> {
+function line(row: AnnualRow, key: FigureKey, label: string, kind: AnnualLineKind, children?: AnnualLineNode[]): AnnualLineNode {
+  return { key, label, kind, ...pick(row, key), ...(children?.length ? { children } : {}) };
+}
+
+/** One subscription item as its own line, month by month. */
+function subscriptionNode(row: AnnualRow, item: SubscriptionLine): AnnualLineNode {
   const amountIn = (c: AnnualCell | null): number | null => {
     if (!c) return null;
-    const match = c.subscriptionBreakdown.find((l) => l.id === line.id);
+    const match = c.subscriptionBreakdown.find((l) => l.id === item.id);
     if (match) return match.amount;
     // An issued snapshot with no itemisation contributes to the remainder line
     // instead; anywhere else, absent genuinely means zero for this item.
-    if (line.id === UNITEMISED_SUBSCRIPTION_ID) {
+    if (item.id === UNITEMISED_SUBSCRIPTION_ID) {
       const itemised = c.subscriptionBreakdown.reduce((sum, l) => sum + l.amount, 0);
       return c.subscriptions - itemised;
     }
     return 0;
   };
-  const values = row.cells.map(amountIn);
-  return { values, total: line.amount, average: row.average.subscriptionBreakdown.find((l) => l.id === line.id)?.amount ?? 0 };
+  return {
+    key: `sub:${item.id}`,
+    label: item.label,
+    kind: 'sub-item',
+    values: row.cells.map(amountIn),
+    total: item.amount,
+    average: row.average.subscriptionBreakdown.find((l) => l.id === item.id)?.amount ?? 0,
+  };
 }
 
-/** Every line of one room's (or the business's) annual waterfall, in order. */
-export function annualLineSpecs(row: AnnualRow): AnnualLineSpec[] {
-  const rate = Math.round(row.commissionRate * 100);
-  const commissionLabel = row.isAggregate
-    ? 'BHA management commission'
-    : row.commissionable
-    ? `BHA management commission (${rate}%)`
-    : 'BHA management commission (none)';
-  const payoutLabel = row.isAggregate
-    ? 'Payable to owners'
-    : row.commissionable
-    ? 'Payable to owner'
-    : 'Payable to owner (BHA-owned)';
-  const specs: AnnualLineSpec[] = [
-    { key: 'gbv', label: 'Gross Booking Value', kind: 'revenue', ...pick(row, 'gbv') },
-    { key: 'otaCommission', label: 'OTA / channel commission', kind: 'deduction', ...pick(row, 'otaCommission') },
-    { key: 'paymentFees', label: 'Payment / processing fees', kind: 'deduction', ...pick(row, 'paymentFees') },
-    { key: 'netSales', label: 'Net Sales', kind: 'subtotal', ...pick(row, 'netSales') },
-    { key: 'cleaning', label: 'Cleaning', kind: 'deduction', ...pick(row, 'cleaning') },
-    { key: 'laundry', label: 'Laundry', kind: 'deduction', ...pick(row, 'laundry') },
-    { key: 'consumables', label: 'Consumables', kind: 'deduction', ...pick(row, 'consumables') },
-    { key: 'subscriptions', label: 'Subscriptions', kind: 'deduction', ...pick(row, 'subscriptions') },
+/** The four top-level P&L lines for one room (or the business), each carrying
+ *  its own detail. This is what a collapsed row expands into. */
+export function annualLineTree(row: AnnualRow): AnnualLineNode[] {
+  // One child per recurring item this room actually pays — what makes Parking
+  // visible instead of buried inside "Subscriptions".
+  const subscriptions = line(row, 'subscriptions', 'Subscriptions', 'deduction',
+    row.total.subscriptionBreakdown.map((item) => subscriptionNode(row, item)));
+
+  return [
+    line(row, 'gbv', 'Gross Booking Value', 'revenue', [
+      line(row, 'otaCommission', 'OTA / channel commission', 'deduction'),
+      line(row, 'paymentFees', 'Payment / processing fees', 'deduction'),
+    ]),
+    line(row, 'netSales', 'Net Sales', 'subtotal', [
+      line(row, 'cleaning', 'Cleaning', 'deduction'),
+      line(row, 'laundry', 'Laundry', 'deduction'),
+      line(row, 'consumables', 'Consumables', 'deduction'),
+      subscriptions,
+      line(row, 'wearTear', 'Wear & Tear', 'deduction'),
+      line(row, 'misc', 'Misc / Damages', 'deduction'),
+    ]),
+    line(row, 'operationalCosts', 'Operational costs', 'subtotal'),
+    line(row, 'grossProfit', 'Gross Profit', 'result'),
   ];
-  // One line per recurring item this room actually pays — this is what makes
-  // Parking visible instead of buried inside "Subscriptions".
-  for (const line of row.total.subscriptionBreakdown) {
-    specs.push({
-      key: `sub:${line.id}`,
-      label: line.label,
-      kind: 'sub-item',
-      ...subscriptionLine(row, line),
-    });
-  }
-  specs.push(
-    { key: 'wearTear', label: 'Wear & Tear', kind: 'deduction', ...pick(row, 'wearTear') },
-    { key: 'misc', label: 'Misc / Damages', kind: 'deduction', ...pick(row, 'misc') },
-    { key: 'operationalCosts', label: 'Operational costs', kind: 'subtotal', ...pick(row, 'operationalCosts') },
-    { key: 'grossProfit', label: 'Gross Profit', kind: 'result', ...pick(row, 'grossProfit') },
-    { key: 'commissionAmount', label: commissionLabel, kind: 'deduction', ...pick(row, 'commissionAmount') },
-    { key: 'payableToOwner', label: payoutLabel, kind: 'payout', ...pick(row, 'payableToOwner') },
-  );
-  return specs;
+}
+
+/** The tree walked depth-first into rows, with a nesting depth on each. Used by
+ *  the PDF, which has no disclosure and therefore shows everything. */
+export function flattenLineTree(
+  nodes: AnnualLineNode[],
+  depth = 0,
+): { node: AnnualLineNode; depth: number }[] {
+  return nodes.flatMap((node) => [
+    { node, depth },
+    ...flattenLineTree(node.children ?? [], depth + 1),
+  ]);
 }
