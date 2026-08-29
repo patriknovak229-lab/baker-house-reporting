@@ -1,4 +1,5 @@
 import type { SettlementMode } from '@/utils/commissionConfig';
+import type { SubscriptionLine } from '@/utils/variableCostsShared';
 
 export type CommissionSettlementStatus = 'issued' | 'reconciled';
 
@@ -30,6 +31,11 @@ export interface CommissionSettlement {
   laundry: number;
   consumables: number;
   subscriptions: number;
+  /** `subscriptions` itemised per cleaning-app line item (Internet + TV,
+   *  Parking, …), already divided by the pool divisor so it sums to
+   *  `subscriptions`. Optional: snapshots issued before itemisation existed
+   *  carry only the lump total, and statements fall back to showing that. */
+  subscriptionBreakdown?: SubscriptionLine[];
   wearTear: number;
   misc: number;
   operationalCosts: number;

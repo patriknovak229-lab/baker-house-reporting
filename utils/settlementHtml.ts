@@ -9,6 +9,39 @@
  */
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 
+/**
+ * Subscription rows for the statement: one line per cleaning-app item
+ * (Internet + TV, Parking, …) so the owner sees what the recurring cost is
+ * actually for, not a single "Subscriptions" figure.
+ *
+ * `scale` maps the stored unit share up to the pool level for the Step-1 table.
+ * Snapshots issued before itemisation existed have no breakdown — those fall
+ * back to the lump line, and any rounding gap between the itemised lines and
+ * the stored total is shown as "Other subscriptions" so the column still adds
+ * up to the Gross Profit below it.
+ */
+function subscriptionRows(s: CommissionSettlement, scale: number): Row[] {
+  const lines = s.subscriptionBreakdown ?? [];
+  if (lines.length === 0) {
+    return [{ label: 'Less: Subscriptions', amount: s.subscriptions * scale, deduction: true }];
+  }
+  const rows: Row[] = lines.map((l) => ({
+    label: `Less: ${escapeHtml(l.label)}`,
+    amount: l.amount * scale,
+    deduction: true,
+    detail: 'subscription',
+  }));
+  const remainder = s.subscriptions - lines.reduce((sum, l) => sum + l.amount, 0);
+  if (Math.round(remainder) !== 0) {
+    rows.push({ label: 'Less: Other subscriptions', amount: remainder * scale, deduction: true });
+  }
+  return rows;
+}
+
+function escapeHtml(v: string): string {
+  return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
@@ -73,7 +106,7 @@ export function buildSettlementHTML(s: CommissionSettlement): string {
       { label: 'Less: Cleaning', amount: pool(s.cleaning), deduction: true },
       { label: 'Less: Laundry', amount: pool(s.laundry), deduction: true },
       { label: 'Less: Consumables', amount: pool(s.consumables), deduction: true },
-      { label: 'Less: Subscriptions (internet / TV)', amount: pool(s.subscriptions), deduction: true },
+      ...subscriptionRows(s, div),
       { label: 'Less: Wear &amp; Tear', amount: pool(s.wearTear), deduction: true },
       { label: 'Less: Misc / Damages', amount: pool(s.misc), deduction: true },
       { label: 'Gross Profit — pool', amount: pool(s.grossProfit), total: 'indigo' },
@@ -93,7 +126,7 @@ export function buildSettlementHTML(s: CommissionSettlement): string {
       { label: 'Less: Cleaning', amount: s.cleaning, deduction: true },
       { label: 'Less: Laundry', amount: s.laundry, deduction: true },
       { label: 'Less: Consumables', amount: s.consumables, deduction: true },
-      { label: 'Less: Subscriptions', amount: s.subscriptions, deduction: true },
+      ...subscriptionRows(s, 1),
       { label: 'Less: Wear &amp; Tear', amount: s.wearTear, deduction: true },
       { label: 'Less: Misc / Damages', amount: s.misc, deduction: true },
       { label: `Gross Profit — ${s.unitId}`, amount: s.grossProfit, total: 'indigo' },
@@ -162,7 +195,7 @@ export function buildSettlementHTML(s: CommissionSettlement): string {
       <b>Method.</b> Gross Profit = Net Sales − operational costs, where Net Sales = Gross Booking Value
       − OTA commission − payment fees. Revenue is live Beds24 data; operational costs (cleaning, laundry,
       consumables, subscriptions, wear &amp; tear) come from the Baker House cleaning app on a checkout-date
-      basis. ${isUrban ? `Urban gross profit is pooled across ${(s.poolRooms ?? []).join(' / ')} and divided equally by ${div}, so the result does not depend on which physical unit a reservation was allocated to. ` : ''}The manager retains ${Math.round(s.commissionRate * 100)}% of gross profit as its management commission; the remaining ${100 - Math.round(s.commissionRate * 100)}% is payable to the owner.
+      basis, with each recurring subscription on its own line. ${isUrban ? `Urban gross profit is pooled across ${(s.poolRooms ?? []).join(' / ')} and divided equally by ${div}, so the result does not depend on which physical unit a reservation was allocated to. ` : ''}The manager retains ${Math.round(s.commissionRate * 100)}% of gross profit as its management commission; the remaining ${100 - Math.round(s.commissionRate * 100)}% is payable to the owner.
       <br/>Generated ${new Date().toLocaleDateString('en-GB')} · reporting.bakerhouseapartments.cz
     </div>
   </body></html>`;

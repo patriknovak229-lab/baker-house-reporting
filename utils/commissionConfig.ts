@@ -33,6 +33,14 @@ export interface CommissionUnit {
   mode: SettlementMode;
   /** Human label for the apartment type. */
   typeLabel: string;
+  /**
+   * True for apartments BHA owns itself. They appear in the annual overview
+   * with real revenue and real costs, but there is no external owner: no
+   * commission is charged AND nothing is payable out. Note this is not the same
+   * as a 0% management fee, which would mean the owner keeps 100% — hence a
+   * flag rather than a rate of zero.
+   */
+  bhaOwned?: boolean;
 }
 
 /** The rooms that make up the Urban pool (in canonical order). */
@@ -45,6 +53,36 @@ export const COMMISSION_UNITS: CommissionUnit[] = [
   { id: 'K.106', room: 'K.106', ownerName: 'Stanislav Komanec', mode: 'urban-pool', typeLabel: '1KK Urban Studio' },
   { id: 'O.308', room: 'O.308', ownerName: 'Stanislav Stefanic', mode: 'standalone', typeLabel: '2 Bedroom Deluxe' },
 ];
+
+/**
+ * Every physical room, including the BHA-owned ones that never settle.
+ *
+ * Drives the annual overview only — the monthly settlement cards stay on
+ * COMMISSION_UNITS, so nothing here can accidentally issue a statement for a
+ * room that has no owner. The BHA-owned rooms are flagged `bhaOwned`: their
+ * revenue and costs are real and belong in a whole-business view, but the
+ * commission and payable lines are structurally zero.
+ *
+ * K.202 / K.203 sell under one Beds24 room type (the "1KK Deluxe Studios" VR)
+ * yet are listed standalone here on purpose: both are BHA-owned, so nothing is
+ * settled on them and per-room figures may as well follow the actual physical
+ * allocation. A booking still sitting on the VR itself belongs to no room and
+ * surfaces in the annual overview's "Unallocated" row rather than being split.
+ */
+export const ANNUAL_UNITS: CommissionUnit[] = [
+  COMMISSION_UNITS[0],                                                    // K.102
+  { id: 'K.103', room: 'K.103', ownerName: 'Baker House Apartments', mode: 'urban-pool', typeLabel: '1KK Urban Studio', bhaOwned: true },
+  COMMISSION_UNITS[1],                                                    // K.106
+  { id: 'K.201', room: 'K.201', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '2KK Deluxe',       bhaOwned: true },
+  { id: 'K.202', room: 'K.202', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '1KK Deluxe Studio', bhaOwned: true },
+  { id: 'K.203', room: 'K.203', ownerName: 'Baker House Apartments', mode: 'standalone', typeLabel: '1KK Deluxe Studio', bhaOwned: true },
+  COMMISSION_UNITS[2],                                                    // O.308
+];
+
+/** The commission actually charged on a unit's gross profit. */
+export function unitCommissionRate(unit: CommissionUnit): number {
+  return unit.bhaOwned ? 0 : COMMISSION_RATE;
+}
 
 export function getCommissionUnit(id: string): CommissionUnit | undefined {
   return COMMISSION_UNITS.find((u) => u.id === id);

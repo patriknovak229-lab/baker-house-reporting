@@ -10,6 +10,9 @@
  * Net Sales   = Σ (price − OTA commission − payment fees) × fraction-of-stay-in-period
  * Gross Profit = Net Sales − (cleaning + laundry + consumables + subscriptions
  *                             + wear&tear + misc)
+ *
+ * Subscriptions are also returned itemised (`subscriptionBreakdown`) so owner
+ * statements can name each recurring cost rather than showing one lump sum.
  */
 import type { Reservation, Room } from '@/types/reservation';
 import { getNightsInPeriod } from '@/utils/periodUtils';
@@ -19,6 +22,7 @@ import type {
   VariableCostEntry,
   VariableCostsLookup,
   SubscriptionItem,
+  SubscriptionLine,
 } from '@/utils/variableCostsShared';
 import { ROOM_TO_BEDS24_ID } from '@/utils/variableCostsShared';
 
@@ -58,6 +62,10 @@ export interface GrossProfitTotals {
   laundry: number;
   consumables: number;
   subscriptions: number;
+  /** `subscriptions` split per cleaning-app line item (Internet + TV, Parking, …),
+   *  in config order, so a statement can itemise instead of showing one lump.
+   *  Only items that actually contributed in the period appear. */
+  subscriptionBreakdown: SubscriptionLine[];
   wearTear: number;
   misc: number;
   totalVariableCosts: number;
@@ -209,19 +217,22 @@ export function computeGrossProfit(
 
   // ── Subscriptions: per-item per-room months-active-in-range × monthlyAmount
   let subscriptions = 0;
-  const activeSubscriptionItems = new Set<string>();
+  const subscriptionBreakdown: SubscriptionLine[] = [];
   for (const item of subscriptionItems) {
     const monthsActive = subscriptionMonthsInRange(item, dateRange.start, dateRange.end);
     if (monthsActive <= 0) continue;
+    let itemTotal = 0;
     for (const [roomId, cfg] of Object.entries(item.rooms ?? {})) {
       if (!cfg?.enabled) continue;
       if (!cfg.monthlyAmount || cfg.monthlyAmount <= 0) continue;
       if (!roomInScope(roomId)) continue;
-      subscriptions += cfg.monthlyAmount * monthsActive;
-      activeSubscriptionItems.add(item.id);
+      itemTotal += cfg.monthlyAmount * monthsActive;
     }
+    if (itemTotal <= 0) continue;
+    subscriptions += itemTotal;
+    subscriptionBreakdown.push({ id: item.id, label: item.label, amount: itemTotal });
   }
-  const subscriptionCount = activeSubscriptionItems.size;
+  const subscriptionCount = subscriptionBreakdown.length;
 
   const totalVariableCosts = cleaning + laundry + consumables + subscriptions + wearTear + misc;
   const grossProfit = netSales - totalVariableCosts;
@@ -234,6 +245,7 @@ export function computeGrossProfit(
     laundry,
     consumables,
     subscriptions,
+    subscriptionBreakdown,
     wearTear,
     misc,
     totalVariableCosts,

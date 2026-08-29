@@ -10,6 +10,7 @@ import type {
 import { COMMISSION_UNITS, COMMISSION_RATE, getCommissionUnit } from '@/utils/commissionConfig';
 import { computeSettlement, cleaningEventsForUnit, negativePayableWarning, type VariableCostBundle, type ComputedSettlement } from '@/utils/commissionCalc';
 import { formatCurrency } from '@/utils/formatters';
+import AnnualCommissionTable from '@/components/accounting/AnnualCommissionTable';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -330,6 +331,15 @@ export default function CommissionPage() {
                     <Row small label="Laundry" value={`−${formatCurrency(c.laundry)}`} />
                     <Row small label="Consumables" value={`−${formatCurrency(c.consumables)}`} />
                     <Row small label="Subscriptions" value={`−${formatCurrency(c.subscriptions)}`} />
+                    {(c.subscriptionBreakdown ?? []).map((line) => (
+                      <Row
+                        key={line.id}
+                        small
+                        label={`· ${line.label}`}
+                        value={`−${formatCurrency(line.amount)}`}
+                        className="text-gray-400 pl-3"
+                      />
+                    ))}
                     <Row small label="Wear & Tear" value={`−${formatCurrency(c.wearTear)}`} />
                     <Row small label="Misc" value={`−${formatCurrency(c.misc)}`} />
                   </div>
@@ -388,6 +398,9 @@ export default function CommissionPage() {
           );
         })}
       </div>
+
+      {/* Whole-year view — every apartment, month by month */}
+      <AnnualCommissionTable reservations={reservations} costs={costs} settlements={settlements} />
 
       {/* History */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">

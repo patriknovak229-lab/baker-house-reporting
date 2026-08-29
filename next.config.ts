@@ -25,6 +25,7 @@ export const CHROMIUM_ROUTES = [
   "/api/cron/send-due-invoices",
   "/api/transactions/invoice-to-drive",
   "/api/commission/pdf",
+  "/api/commission/annual-pdf",
   "/api/commission/email",
   "/api/platform-prices",
 ];

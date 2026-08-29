@@ -16,9 +16,9 @@ import { isReservationInPeriod } from '@/utils/periodUtils';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import { computeGrossProfit } from '@/utils/grossProfit';
 import {
-  COMMISSION_RATE,
   URBAN_POOL_ROOMS,
   URBAN_POOL_DIVISOR,
+  unitCommissionRate,
   type CommissionUnit,
 } from '@/utils/commissionConfig';
 import { ROOM_TO_BEDS24_ID, BEDS24_ID_TO_ROOM } from '@/utils/variableCostsShared';
@@ -156,9 +156,12 @@ export function computeSettlement(
 
   const share = (v: number) => v / divisor;
 
+  const commissionRate = unitCommissionRate(unit);
   const grossProfit = share(t.grossProfit);
-  const commissionAmount = grossProfit * COMMISSION_RATE;
-  const payableToOwner = grossProfit - commissionAmount;
+  const commissionAmount = grossProfit * commissionRate;
+  // A BHA-owned apartment has no external owner, so its gross profit simply
+  // stays in the business — the payout line is 0, not "the owner keeps 100%".
+  const payableToOwner = unit.bhaOwned ? 0 : grossProfit - commissionAmount;
 
   // Cleaning-app reconciliation (pool-level): does the number of billed
   // cleanings match what the reservations imply?
@@ -193,12 +196,13 @@ export function computeSettlement(
     laundry: share(t.laundry),
     consumables: share(t.consumables),
     subscriptions: share(t.subscriptions),
+    subscriptionBreakdown: t.subscriptionBreakdown.map((l) => ({ ...l, amount: share(l.amount) })),
     wearTear: share(t.wearTear),
     misc: share(t.misc),
     operationalCosts: share(t.totalVariableCosts),
 
     grossProfit,
-    commissionRate: COMMISSION_RATE,
+    commissionRate,
     commissionAmount,
     payableToOwner,
 

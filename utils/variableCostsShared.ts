@@ -44,6 +44,15 @@ export interface SubscriptionItem {
   endDate?: string;
 }
 
+/** One subscription line item's cost contribution for a period/scope.
+ *  Carries the item's own label so a statement can show "Parking" and
+ *  "Internet + TV" separately instead of one opaque "Subscriptions" total. */
+export interface SubscriptionLine {
+  id: string;
+  label: string;
+  amount: number;
+}
+
 export interface VariableCostEntry {
   cleaning: number;
   laundry: number;
