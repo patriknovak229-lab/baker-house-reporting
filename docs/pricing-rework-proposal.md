@@ -1,5 +1,14 @@
 # Pricing section — review & rework proposal
 
+> **Implementation status (2026-08-29):** BUILT the same day the proposal was
+> approved, local-runner variant. Product A (Radar) and Product B (parity
+> pipeline: `price_snapshots`, ingest API, local runner, new Parity view,
+> Telegram alerts) are in main; the Vercel scraper, its cron and
+> `utils/platformScraper.ts` are deleted. Operational setup lives in
+> `docs/pricing-runner.md`. Remaining manual steps: `PRICING_INGEST_SECRET`
+> on Vercel, `launchctl load` of the runner plist, and calibrating
+> `PARITY_ECONOMICS` markups to arm expected-price drift alerts.
+
 Reviewed 2026-08-29 against the live system: code, production Redis snapshot,
 live probes of Booking.com (plain HTTP + real browser) and the PriceLabs API.
 Nothing was changed; this is analysis and a build plan.

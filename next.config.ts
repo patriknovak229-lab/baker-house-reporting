@@ -27,7 +27,6 @@ export const CHROMIUM_ROUTES = [
   "/api/commission/pdf",
   "/api/commission/annual-pdf",
   "/api/commission/email",
-  "/api/platform-prices",
 ];
 
 const CHROMIUM_FILES = ["./node_modules/@sparticuz/chromium/bin/**/*"];

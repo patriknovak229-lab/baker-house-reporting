@@ -21,4 +21,5 @@ export * from './bankTransactions';
 export * from './reservationOverrides';
 export * from './bookingsMirror';
 export * from './marketSnapshots';
+export * from './priceSnapshots';
 export * from './roomMoves';
