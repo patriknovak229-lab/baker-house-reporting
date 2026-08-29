@@ -38,5 +38,8 @@ export default auth((req) => {
 export const config = {
   // Skip Next.js internals, static files, auth routes, Stripe webhook, public voucher endpoints, and public pages
   // (`share` = public occupancy snapshot pages, `api/public` = their read API).
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public).*)'],
+  // `api/pricing/ingest` is exempt because its caller is the headless parity
+  // runner on the operator's Mac — no session cookie, authenticated inside the
+  // route by the PRICING_INGEST_SECRET header instead.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest).*)'],
 };
