@@ -169,7 +169,7 @@ export default function AnnualCommissionTable({
           reliable month — <b className="font-semibold">Total and Avg / mo count these only</b>
         </span>
         <span className="text-gray-400">
-          greyed months are shown but excluded: awaiting backfill, or not yet settled
+          greyed months are shown but excluded: not yet finished, awaiting backfill, or not yet settled
         </span>
         {overview.uncoveredMonths.length > 0 && (
           <span className="text-amber-700">

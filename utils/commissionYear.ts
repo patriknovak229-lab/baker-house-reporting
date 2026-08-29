@@ -26,7 +26,9 @@
  * Urban pool is only settled for the months an owner statement was issued. Each
  * apartment therefore carries a `reliability` rule (see commissionConfig), and
  * **annual totals and averages count reliable months only** — otherwise a half
- * of a year of partial data would quietly drag the yearly figures down.
+ * of a year of partial data would quietly drag the yearly figures down. Only
+ * FINISHED calendar months qualify: the month in progress is always part-empty,
+ * and counting it (or the rest of the year) would flatter the average.
  * Unreliable months still SHOW their value, greyed, so the operator can see
  * what is there and knows what still needs backfilling.
  *
@@ -246,6 +248,19 @@ function figuresFromSettlement(
   };
 }
 
+/**
+ * The last calendar month that has actually finished — '2026-07' any time in
+ * August 2026. A `from` reliability rule otherwise runs to December, which
+ * would count the month in progress and the rest of the year as trustworthy
+ * and quietly flatter the annual average.
+ *
+ * Local time, matching how the rest of the Commission tab picks a month.
+ */
+export function lastCompletedMonth(now: Date = new Date()): string {
+  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export function monthsOfYear(year: number): string[] {
   return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
 }
@@ -343,6 +358,9 @@ export function buildAnnualOverview(
   reservations: Reservation[],
   costs: VariableCostBundle,
   settlements: CommissionSettlement[],
+  /** Last month that counts as finished. Injectable so the result is
+   *  deterministic in tests; defaults to the real calendar. */
+  throughMonth: string = lastCompletedMonth(),
 ): AnnualOverview {
   const months = monthsOfYear(year);
   const coverage = dataCoverage(reservations, costs);
@@ -362,9 +380,9 @@ export function buildAnnualOverview(
     return start <= coverage.to && end >= coverage.from;
   };
 
-  const rows = ANNUAL_UNITS.map((unit) => buildUnitRow(unit, months, expanded, costs, byId, covered));
+  const rows = ANNUAL_UNITS.map((unit) => buildUnitRow(unit, months, expanded, costs, byId, covered, throughMonth));
 
-  const unallocated = buildUnallocatedRow(months, expanded, covered);
+  const unallocated = buildUnallocatedRow(months, expanded, covered, throughMonth);
 
   // The business row sums only the RELIABLE room cells for each month. That is
   // what keeps its Total column equal to the sum of the room Totals below it —
@@ -425,8 +443,9 @@ function buildUnitRow(
   costs: VariableCostBundle,
   byId: Map<string, CommissionSettlement>,
   covered: (month: string) => boolean,
+  throughMonth: string,
 ): AnnualRow {
-  const reliable = (month: string) => isReliableMonth(unit, month, byId);
+  const reliable = (month: string) => isReliableMonth(unit, month, byId, throughMonth);
   const cells = months.map((month): AnnualCell | null => {
     const issued = byId.get(`${unit.id}|${month}`);
     if (issued) return { ...figuresFromSettlement(issued), month, source: 'issued', reliable: reliable(month) };
@@ -455,17 +474,23 @@ function buildUnitRow(
  *
  * `issued` rules ask whether a settlement exists — for K.103, which is BHA-owned
  * and so never settles, `follows` redirects the question to its Urban pool
- * sibling. `from` rules are a simple start month. A unit with no rule stated is
- * treated as reliable throughout rather than silently dropped from the year.
+ * sibling. `from` rules are a start month, closed off at `throughMonth` so a
+ * month still in progress (or one that has not happened at all) never counts.
+ *
+ * The cap deliberately does NOT apply to `issued` rules: issuing a settlement is
+ * a decision the operator makes and freezes, so if they signed off the current
+ * month early it stands. A unit with no rule stated is reliable throughout
+ * rather than silently dropped from the year.
  */
 export function isReliableMonth(
   unit: CommissionUnit,
   month: string,
   settlementsById: Map<string, CommissionSettlement>,
+  throughMonth: string,
 ): boolean {
   const rule = unit.reliability;
-  if (!rule) return true;
-  if (rule.kind === 'from') return month >= rule.month;
+  if (!rule) return month <= throughMonth;
+  if (rule.kind === 'from') return month >= rule.month && month <= throughMonth;
   return settlementsById.has(`${rule.follows ?? unit.id}|${month}`);
 }
 
@@ -481,6 +506,7 @@ function buildUnallocatedRow(
   months: string[],
   expanded: Reservation[],
   covered: (month: string) => boolean,
+  throughMonth: string,
 ): AnnualRow | null {
   const knownRooms = new Set(ANNUAL_UNITS.map((u) => u.room));
   const orphans = expanded.filter((r) => !r.isBlackout && !knownRooms.has(r.room));
@@ -501,8 +527,8 @@ function buildUnallocatedRow(
       month,
       source: 'computed',
       // No launch date and no settlement to wait for — this is live revenue on
-      // bookings that exist, so it counts wherever it appears.
-      reliable: true,
+      // bookings that exist. It still has to be a finished month, though.
+      reliable: month <= throughMonth,
     };
   });
 
@@ -519,7 +545,10 @@ function buildUnallocatedRow(
     },
     cells,
   );
-  return isEmptyFigures(row.total) ? null : row;
+  // Keep the row whenever ANY month has revenue, not just a countable one.
+  // Its whole job is to stop stray revenue vanishing — dropping it because the
+  // only booking sits in an unfinished month would recreate exactly that.
+  return cells.some((c) => c && !isEmptyFigures(c)) ? row : null;
 }
 
 // ── Table shape ──────────────────────────────────────────────────────────────

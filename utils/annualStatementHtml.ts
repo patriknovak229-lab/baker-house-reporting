@@ -140,7 +140,7 @@ export function buildAnnualOverviewHTML(overview: AnnualOverview): string {
     <div class="meta">
       <b>Period</b> January – December ${overview.year} &nbsp;·&nbsp;
       <b>Manager</b> Truthseeker s.r.o. (BHA) &nbsp;·&nbsp;
-      <b>Averages</b> over ${overview.activeMonths} month${overview.activeMonths === 1 ? '' : 's'} with activity &nbsp;·&nbsp;
+      <b>Averages</b> over ${overview.activeMonths} reliable month${overview.activeMonths === 1 ? '' : 's'} &nbsp;·&nbsp;
       <b>Generated</b> ${new Date().toLocaleDateString('en-GB')}
     </div>
     ${coverageNote}
@@ -158,8 +158,9 @@ export function buildAnnualOverviewHTML(overview: AnnualOverview): string {
       gross profit. Management commission is not shown here — see the monthly owner settlement statement.
       <br/><b>✓ Total and Avg / mo count reliable months only.</b> A month is reliable when its owner
       settlement was issued (Urban pool, O.308) or when it falls after the apartment was wired into the
-      reporting app — K.202 / K.203 from March 2026, K.201 from April 2026. Greyed months are shown for
-      information but excluded from the year until they are backfilled. The <b>n/12 ✓</b> badge on each
+      reporting app — K.202 / K.203 from March 2026, K.201 from April 2026 — and only once that month has
+      finished, so the month in progress never counts. Greyed months are shown for information but excluded
+      from the year until they are backfilled. The <b>n/12 ✓</b> badge on each
       apartment says how many months its Total and Average are built from.
       <br/>reporting.bakerhouseapartments.cz
     </div>

@@ -7,6 +7,8 @@ import { computeGrossProfit } from './grossProfit';
 import { ANNUAL_UNITS, COMMISSION_UNITS, unitCommissionRate } from './commissionConfig';
 import {
   buildAnnualOverview,
+  lastCompletedMonth,
+  isReliableMonth,
   annualLineTree,
   flattenLineTree,
   availableYears,
@@ -135,6 +137,10 @@ function issuedFor(unitId: string, month: string, over: Partial<CommissionSettle
 }
 
 describe('reliable months', () => {
+  // Pin "today" so the cap on finished months can't make these tests drift with
+  // the calendar. Standing in late August 2026, July is the last month done.
+  const THROUGH = '2026-07';
+
   const reservations = [
     res({ room: 'K.102', checkInDate: '2026-08-05', checkOutDate: '2026-08-10', price: 30_000 }),
     // K.201 earns in an excluded month (Jan) and a counted one (May), so the
@@ -153,7 +159,7 @@ describe('reliable months', () => {
     o.rows.find((r) => r.room === room)!.cells.map((c) => (c ? c.reliable : null));
 
   it('trusts the Urban pool only where a settlement was issued', () => {
-    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06'), issuedFor('K.106', '2026-06')]);
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06'), issuedFor('K.106', '2026-06')], THROUGH);
     expect(marks(o, 'K.102')).toEqual([false, false, false, false, false, true, false, false, false, false, false, false]);
     expect(o.rows.find((r) => r.room === 'K.102')!.reliableCount).toBe(1);
   });
@@ -161,43 +167,71 @@ describe('reliable months', () => {
   it('lets K.103 inherit its pool sibling\u2019s settlements, having none of its own', () => {
     // K.103 is BHA-owned so never settles, but it shares the Urban pool with
     // K.102 — it is trustworthy exactly when K.102 is.
-    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06')]);
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06')], THROUGH);
     expect(marks(o, 'K.103')).toEqual(marks(o, 'K.102'));
     expect(o.rows.find((r) => r.room === 'K.103')!.reliableCount).toBe(1);
   });
 
-  it('trusts K.202 / K.203 from March and K.201 from April', () => {
-    const o = buildAnnualOverview(2026, reservations, costs, []);
-    const fromMonth = (room: string, idx: number) =>
-      expect(marks(o, room)).toEqual(Array.from({ length: 12 }, (_, i) => i >= idx));
-    fromMonth('K.202', 2); // March
-    fromMonth('K.203', 2);
-    fromMonth('K.201', 3); // April — launched mid-March
-    expect(o.rows.find((r) => r.room === 'K.201')!.reliableCount).toBe(9);
-    expect(o.rows.find((r) => r.room === 'K.202')!.reliableCount).toBe(10);
+  it('trusts K.202 / K.203 from March and K.201 from April, up to the last finished month', () => {
+    const o = buildAnnualOverview(2026, reservations, costs, [], THROUGH);
+    const window = (room: string, first: number, last: number) =>
+      expect(marks(o, room)).toEqual(Array.from({ length: 12 }, (_, i) => i >= first && i <= last));
+    window('K.202', 2, 6); // March–July
+    window('K.203', 2, 6);
+    window('K.201', 3, 6); // April (launched mid-March) – July
+    expect(o.rows.find((r) => r.room === 'K.201')!.reliableCount).toBe(4);
+    expect(o.rows.find((r) => r.room === 'K.202')!.reliableCount).toBe(5);
+  });
+
+  it('never counts the month in progress or anything after it', () => {
+    // The month in progress is part-empty by definition, and later months are
+    // pure forecast — counting either would flatter the yearly average.
+    const o = buildAnnualOverview(2026, reservations, costs, [], THROUGH);
+    for (const room of ['K.201', 'K.202', 'K.203']) {
+      const cells = o.rows.find((r) => r.room === room)!.cells;
+      expect(cells.slice(7).every((c) => c === null || !c.reliable)).toBe(true); // Aug onward
+      expect(cells[6]!.reliable).toBe(true);                                      // July still counts
+    }
+  });
+
+  it('lets an issued settlement count even in a month that has not finished', () => {
+    // Issuing is a deliberate, frozen decision by the operator — the cap on
+    // finished months must not overrule it.
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-08')], THROUGH);
+    expect(o.rows.find((r) => r.room === 'K.102')!.cells[7]!.reliable).toBe(true);
+  });
+
+  it('bounds a `from` rule at both ends', () => {
+    const k202 = ANNUAL_UNITS.find((u) => u.id === 'K.202')!; // from 2026-03
+    expect(isReliableMonth(k202, '2026-02', new Map(), THROUGH)).toBe(false); // before it was connected
+    expect(isReliableMonth(k202, '2026-05', new Map(), THROUGH)).toBe(true);  // finished, in window
+    expect(isReliableMonth(k202, '2026-07', new Map(), THROUGH)).toBe(true);  // the cap month itself
+    expect(isReliableMonth(k202, '2026-08', new Map(), THROUGH)).toBe(false); // still running
+    expect(isReliableMonth(k202, '2026-11', new Map(), THROUGH)).toBe(false); // hasn't happened
   });
 
   it('counts only reliable months in the total, and divides the average by them', () => {
-    const o = buildAnnualOverview(2026, reservations, costs, []);
+    const o = buildAnnualOverview(2026, reservations, costs, [], THROUGH);
     const k201 = o.rows.find((r) => r.room === 'K.201')!;
     const reliableSum = k201.cells.reduce((sum, c) => sum + (c?.reliable ? c.grossProfit : 0), 0);
     const everyMonth = k201.cells.reduce((sum, c) => sum + (c?.grossProfit ?? 0), 0);
+    expect(k201.reliableCount).toBe(4); // Apr–Jul
     expect(k201.total.grossProfit).toBeCloseTo(reliableSum, 6);
-    expect(k201.total.grossProfit).not.toBeCloseTo(everyMonth, 6); // Jan–Mar really are excluded
-    expect(k201.average.grossProfit).toBeCloseTo(reliableSum / 9, 6);
+    expect(k201.total.grossProfit).not.toBeCloseTo(everyMonth, 6); // Jan–Mar and Aug+ really are excluded
+    expect(k201.average.grossProfit).toBeCloseTo(reliableSum / k201.reliableCount, 6);
   });
 
   it('keeps the business Total equal to the sum of the apartment Totals', () => {
     // The property the table is read for: whatever each room excludes, the
     // roll-up must exclude the same money.
-    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06'), issuedFor('K.106', '2026-06')]);
+    const o = buildAnnualOverview(2026, reservations, costs, [issuedFor('K.102', '2026-06'), issuedFor('K.106', '2026-06')], THROUGH);
     const sumOfRooms = [...o.rows, ...(o.unallocated ? [o.unallocated] : [])]
       .reduce((sum, r) => sum + r.total.grossProfit, 0);
     expect(o.total.total.grossProfit).toBeCloseTo(sumOfRooms, 6);
   });
 
   it('still shows an excluded month\u2019s figures rather than hiding them', () => {
-    const o = buildAnnualOverview(2026, reservations, costs, []);
+    const o = buildAnnualOverview(2026, reservations, costs, [], THROUGH);
     const jan = o.rows.find((r) => r.room === 'K.201')!.cells[0]!;
     expect(jan).not.toBeNull();      // rendered, greyed
     expect(jan.reliable).toBe(false); // but not counted
@@ -303,14 +337,24 @@ describe('buildAnnualOverview', () => {
   it('catches revenue on bookings not yet allocated to a physical unit', () => {
     // A booking still sitting on the virtual room type belongs to no room row —
     // without the catch-all it would silently vanish from the business total.
-    const withVr = [...reservations, res({ room: '1KK Urban Studios', checkInDate: '2026-09-01', checkOutDate: '2026-09-04', price: 9_000 })];
-    const o = buildAnnualOverview(2026, withVr, bundle(), []);
+    const withVr = [...reservations, res({ room: '1KK Urban Studios', checkInDate: '2026-06-01', checkOutDate: '2026-06-04', price: 9_000 })];
+    const o = buildAnnualOverview(2026, withVr, bundle(), [], '2026-07');
     expect(o.unallocated).not.toBeNull();
     expect(o.unallocated!.total.netSales).toBeCloseTo(9_000, 6);
     expect(o.total.total.netSales).toBeCloseTo(
       o.rows.reduce((s, r) => s + r.total.netSales, 0) + 9_000,
       6,
     );
+  });
+
+  it('keeps the catch-all row visible even when its revenue is in an unfinished month', () => {
+    // The row exists so stray revenue can't disappear. A September booking does
+    // not count towards the year yet, but it must still be on screen.
+    const withVr = [...reservations, res({ room: '1KK Urban Studios', checkInDate: '2026-09-01', checkOutDate: '2026-09-04', price: 9_000 })];
+    const o = buildAnnualOverview(2026, withVr, bundle(), [], '2026-07');
+    expect(o.unallocated).not.toBeNull();
+    expect(o.unallocated!.cells[8]!.netSales).toBeCloseTo(9_000, 6); // shown, greyed
+    expect(o.unallocated!.total.netSales).toBe(0);                    // but not counted
   });
 
   it('leaves the catch-all row out entirely when every booking is allocated', () => {
@@ -400,6 +444,17 @@ describe('annualLineTree', () => {
     expect(remainder.values[5]).toBeCloseTo(491, 6); // June, the issued month
     expect(remainder.values[7]).toBe(0);             // August is itemised, nothing left over
     expect(subs.children!.reduce((sum, l) => sum + l.total, 0)).toBeCloseTo(subs.total, 6);
+  });
+});
+
+describe('lastCompletedMonth', () => {
+  it('is the month before the one we are standing in', () => {
+    expect(lastCompletedMonth(new Date(2026, 7, 29))).toBe('2026-07'); // 29 Aug 2026
+    expect(lastCompletedMonth(new Date(2026, 7, 1))).toBe('2026-07');  // 1 Aug, August not done
+  });
+
+  it('rolls back across the year boundary', () => {
+    expect(lastCompletedMonth(new Date(2026, 0, 3))).toBe('2025-12');
   });
 });
 
