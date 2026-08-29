@@ -25,6 +25,7 @@ import { sendTelegram } from '@/utils/telegram';
 import {
   BOOKING_OVER_AIRBNB_BAND,
   EXPECTED_DRIFT_ALERT_PCT,
+  PARITY_CONFIG_VERSION,
   PARITY_ECONOMICS,
   PARITY_UNITS,
 } from '@/data/parityConfig';
@@ -101,6 +102,7 @@ export async function GET(req: NextRequest) {
 
   const order: ParityWorkOrder = {
     today,
+    configVersion: PARITY_CONFIG_VERSION,
     lastGridDate,
     gridDue: lastGridDate === null || lastGridDate < today,
     pendingRequests: pending.map((r) => ({ id: r.id, checkIn: r.checkIn, nights: r.nights })),

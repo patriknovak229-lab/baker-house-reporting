@@ -54,6 +54,8 @@ export interface ParityIngestPayload {
 export interface ParityWorkOrder {
   /** Prague calendar date on the server. */
   today: string;
+  /** PARITY_CONFIG_VERSION the server was deployed with. */
+  configVersion?: number;
   /** Date of the newest grid run, or null if none yet. */
   lastGridDate: string | null;
   /** True when the server wants a full grid run from the runner. */

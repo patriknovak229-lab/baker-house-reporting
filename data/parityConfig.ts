@@ -15,8 +15,12 @@ export interface ParityUnitConfig {
   /**
    * Booking.com identity: the property page plus this unit's room_type id on
    * it (the numeric suffix of `room_type_id_*` anchors in the room table).
-   * Room ids verified live 2026-08-29: 45 m² 1BR = 1541267401, 55 m² 2BR with
-   * sofa-bed second room = K.201, 65 m² 2BR with two real bedrooms = O.308.
+   *
+   * Identity was established EMPIRICALLY (2026-08-29) by matching each room
+   * type's availability against Beds24's per-room calendar on discriminating
+   * dates — e.g. a night where only O.308 was free in Beds24 and Booking sold
+   * exactly one room type. Do NOT re-derive these from m²/bed descriptions on
+   * the Booking page; that reasoning produced a swapped mapping once already.
    */
   booking: { pagePath: string; roomTypeId: string } | null;
   /** Airbnb listing id, when the unit has its own listing. */
@@ -25,6 +29,13 @@ export interface ParityUnitConfig {
 
 export const BOOKING_PAGE_MAIN =
   '/hotel/cz/baker-house-apartments-brno-mesto.en-gb.html';
+
+/**
+ * Bump on any change to unit↔channel identities or the grid. Echoed in the
+ * ingest work order so it is observable which config a deployment carries —
+ * and so a runner log can be read against the mapping that produced it.
+ */
+export const PARITY_CONFIG_VERSION = 2;
 
 export const PARITY_UNITS: ParityUnitConfig[] = [
   {
@@ -38,18 +49,15 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     id: 'k201',
     label: '2KK Deluxe (K.201)',
     beds24RoomId: 656437,
-    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267405' },
+    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267403' },
     airbnb: { listingId: '1635011413648373253' },
   },
   {
     id: 'o308',
     label: '2BR Deluxe (O.308)',
     beds24RoomId: 674672,
-    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267403' },
-    // O.308 has no standalone Airbnb listing wired here yet. PriceLabs'
-    // channel_listing_details is empty for the Beds24 PMS, so this needs the
-    // listing id (if one exists) added by hand.
-    airbnb: null,
+    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267405' },
+    airbnb: { listingId: '1703448722265968124' },
   },
   {
     id: 'urban-1kk',
