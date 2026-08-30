@@ -15,7 +15,7 @@
  * browser has no business POSTing observations.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, ne } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { priceCheckRequests, priceSnapshots } from '@/lib/db/schema';
 import { getAccessToken } from '@/utils/beds24Auth';
@@ -165,6 +165,10 @@ export async function POST(req: NextRequest) {
 
   const rows: (typeof priceSnapshots.$inferInsert)[] = [];
   const alerts: string[] = [];
+  // Gap violations carry a stable key so recurring ones (the same undercut
+  // persists for days) can be reported as a count instead of re-pinging the
+  // ops group with an identical list every morning.
+  const gapAlerts: { key: string; line: string }[] = [];
 
   for (const slot of payload.slots) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(slot.checkIn ?? '') || !Number.isInteger(slot.nights)) {
@@ -255,13 +259,15 @@ export async function POST(req: NextRequest) {
       if (a !== null && b !== null && a > 0) {
         const gapPct = ((b - a) / a) * 100;
         if (gapPct <= BOOKING_OVER_AIRBNB_BAND.min) {
-          alerts.push(
-            `🔻 ${unit.label} ${slot.checkIn} (${slot.nights}n): Booking ${b} Kč ≤ Airbnb ${a} Kč — Booking is undercutting`,
-          );
+          gapAlerts.push({
+            key: `undercut:${unit.id}:${slot.checkIn}:${slot.nights}`,
+            line: `🔻 ${unit.label} ${slot.checkIn} (${slot.nights}n): Booking ${b} Kč ≤ Airbnb ${a} Kč — Booking is undercutting`,
+          });
         } else if (gapPct > BOOKING_OVER_AIRBNB_BAND.max) {
-          alerts.push(
-            `📈 ${unit.label} ${slot.checkIn} (${slot.nights}n): Booking ${b} Kč is ${gapPct.toFixed(0)}% over Airbnb ${a} Kč`,
-          );
+          gapAlerts.push({
+            key: `over:${unit.id}:${slot.checkIn}:${slot.nights}`,
+            line: `📈 ${unit.label} ${slot.checkIn} (${slot.nights}n): Booking ${b} Kč is ${gapPct.toFixed(0)}% over Airbnb ${a} Kč`,
+          });
         }
       }
     }
@@ -374,14 +380,67 @@ export async function POST(req: NextRequest) {
 
   // Alerts only for the scheduled grid — a custom check is interactive and its
   // result is already on the operator's screen; pinging the group would be noise.
-  if (payload.source === 'grid' && alerts.length > 0) {
-    const MAX_LINES = 10;
-    const message = [
-      `⚖️ <b>Price parity — grid run</b> (${payload.slots.length} stays)`,
-      ...alerts.slice(0, MAX_LINES),
-      ...(alerts.length > MAX_LINES ? [`… and ${alerts.length - MAX_LINES} more`] : []),
-    ].join('\n');
-    await sendTelegram(message);
+  //
+  // Gap violations persist for days (an undercut stays until someone moves a
+  // rate), so the message lists only NEW ones — everything already flagged in
+  // the previous grid run collapses into a count. Otherwise the group gets an
+  // identical 15-line wall every morning and learns to ignore it.
+  if (payload.source === 'grid' && (alerts.length > 0 || gapAlerts.length > 0)) {
+    const prevKeys = new Set<string>();
+    try {
+      const [prev] = await db
+        .select({ runId: priceSnapshots.runId })
+        .from(priceSnapshots)
+        .where(and(eq(priceSnapshots.source, 'grid'), ne(priceSnapshots.runId, payload.runId)))
+        .orderBy(desc(priceSnapshots.capturedAt))
+        .limit(1);
+      if (prev) {
+        const prevRows = await db
+          .select()
+          .from(priceSnapshots)
+          .where(
+            and(
+              eq(priceSnapshots.runId, prev.runId),
+              inArray(priceSnapshots.channel, ['airbnb', 'booking']),
+            ),
+          );
+        const byKey = new Map<string, { a?: number | null; b?: number | null }>();
+        for (const r of prevRows) {
+          const k = `${r.unitId}:${r.checkIn}:${r.nights}`;
+          const entry = byKey.get(k) ?? {};
+          const price = r.price === null ? null : Number(r.price);
+          if (r.channel === 'airbnb') entry.a = price;
+          if (r.channel === 'booking') entry.b = price;
+          byKey.set(k, entry);
+        }
+        for (const [k, { a, b }] of byKey) {
+          if (a != null && b != null && a > 0) {
+            const gap = ((b - a) / a) * 100;
+            if (gap <= BOOKING_OVER_AIRBNB_BAND.min) prevKeys.add(`undercut:${k}`);
+            else if (gap > BOOKING_OVER_AIRBNB_BAND.max) prevKeys.add(`over:${k}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[parity-ingest] previous-run alert diff failed', err);
+    }
+
+    const fresh = gapAlerts.filter((g) => !prevKeys.has(g.key));
+    const ongoing = gapAlerts.length - fresh.length;
+
+    if (alerts.length > 0 || fresh.length > 0) {
+      const MAX_LINES = 10;
+      const lines = [...alerts, ...fresh.map((g) => g.line)];
+      const message = [
+        `⚖️ <b>Price parity — grid run</b> (${payload.slots.length} stays)`,
+        ...lines.slice(0, MAX_LINES),
+        ...(lines.length > MAX_LINES ? [`… and ${lines.length - MAX_LINES} more`] : []),
+        ...(ongoing > 0
+          ? [`↺ ${ongoing} known violation${ongoing === 1 ? '' : 's'} still in effect — see the Pricing board`]
+          : []),
+      ].join('\n');
+      await sendTelegram(message);
+    }
   }
 
   return NextResponse.json({ inserted: rows.length, alerts: alerts.length });
