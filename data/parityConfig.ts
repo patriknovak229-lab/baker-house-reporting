@@ -35,7 +35,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 8;
+export const PARITY_CONFIG_VERSION = 9;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -196,9 +196,13 @@ export const EXPECTED_DRIFT_ALERT_PCT = 2;
 /**
  * PARITY RULES — Booking.com is the baseline (the biggest channel).
  *
- * 1. Airbnb should equal Booking or sit slightly above it: alert when the
- *    anonymous Airbnb price deviates from Booking by more than this, in
- *    either direction.
+ * 1. Airbnb vs Booking is compared at Booking's EFFECTIVE price — the derived
+ *    Genius/app floor (anonymous × member discounts), NOT the anonymous
+ *    price. Booking's anonymous price is inflated by ~19% relative to what a
+ *    Genius app customer actually pays, while Airbnb shows one price to
+ *    everyone; comparing anonymous-to-anonymous flagged every date (operator
+ *    decision 2026-08-30: apples to apples). Alert when Airbnb deviates from
+ *    the floor by more than this, either direction.
  * 2. The direct site must never be the expensive option: alert when the Web
  *    price exceeds the anonymous Booking OR Airbnb price.
  */
@@ -251,6 +255,7 @@ const MOBILE_BLOCKING_DEALS = ['Getaway Deal', 'Limited-time Deal', 'Smart Deal'
 export const KNOWN_DEAL_PERCENTAGES: Record<string, number> = {
   'Getaway Deal': 30,
   'Early Booker Deal': 20,
+  'Last-minute Deal': 15,
 };
 
 /** What a Genius app customer pays, given the anonymous price and its deal labels. */

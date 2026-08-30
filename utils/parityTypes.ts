@@ -27,7 +27,11 @@ export interface ParityOffer {
   discountBreakdown?: DiscountLine[];
   /** A discount exists but the channel would not itemise it. */
   unparsedDiscount?: boolean;
-  availability: 'available' | 'not_available' | 'error';
+  /**
+   * 'restricted' (web rows only): every night of the stay is open, but a
+   * min-stay rule blocks this stay length — open calendar, not a booked room.
+   */
+  availability: 'available' | 'not_available' | 'restricted' | 'error';
 }
 
 /** One sampled stay, as scraped by the runner (web is added server-side). */

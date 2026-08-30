@@ -35,6 +35,26 @@ interface RawRateRow {
   maxPersons: number | null;
   pctOff: number | null;
   dealNames: string[];
+  /** Per-deal CZK amounts from the structured data-deals payload. */
+  dealAmounts: { name: string; amountKc: number | null }[];
+}
+
+/**
+ * Booking renders most deal badges as a bare "20% off" — the deal NAME only
+ * exists in the row's `data-deals` JSON (b_copy / b_subtype / b_rule_name).
+ * Canonicalise whatever field we got to the names the config keys on.
+ */
+function canonicalDealName(raw: string): string {
+  const n = raw.trim();
+  if (/booking\.com pays|^bsd$/i.test(n)) return 'Booking.com pays';
+  if (/early.*book/i.test(n)) return 'Early Booker Deal';
+  if (/getaway/i.test(n)) return 'Getaway Deal';
+  if (/last.?minute/i.test(n)) return 'Last-minute Deal';
+  if (/limited.?time/i.test(n)) return 'Limited-time Deal';
+  if (/smart.?deal/i.test(n)) return 'Smart Deal';
+  if (/mobile/i.test(n)) return 'Mobile-only';
+  if (/genius/i.test(n)) return 'Genius';
+  return n;
 }
 
 async function newBookingPage(browser: Browser): Promise<Page> {
@@ -106,10 +126,13 @@ async function loadRateRows(
 
       // Deal names are matched inside ONE rate row only. Bare "Genius" is
       // included: within a row it is the programme badge, not help copy.
+      // These visible-text patterns are the FALLBACK — the primary source is
+      // the row's data-deals JSON, harvested below (Booking's current UI shows
+      // only a generic "20% off" badge; the name never reaches innerText).
       const DEAL_PATTERNS: [string, RegExp][] = [
         ['Early Booker Deal', /Early\s*(?:\d{4}\s*)?Booker?\s*Deal|Early\s*Booker/i],
         ['Getaway Deal', /Getaway\s*Deal/i],
-        ['Last Minute Deal', /Last[- ]?Minute\s*Deal/i],
+        ['Last-minute Deal', /Last[- ]?Minute\s*Deal/i],
         ['Smart Deal', /Smart\s*Deal/i],
         ['Weekly rate', /Weekly\s*(?:rate|deal|discount)/i],
         ['Monthly rate', /Monthly\s*(?:rate|deal|discount)/i],
@@ -131,6 +154,7 @@ async function loadRateRows(
         maxPersons: number | null;
         pctOff: number | null;
         dealNames: string[];
+        dealAmounts: { name: string; amountKc: number | null }[];
       }[] = [];
 
       let currentRoomId = '';
@@ -168,17 +192,47 @@ async function loadRateRows(
 
         const rowText = (tr as HTMLElement).innerText ?? '';
         const pctM = rowText.match(/(\d{1,2})\s*%\s*off/i);
-        const dealNames: string[] = [];
-        for (const [label, re] of DEAL_PATTERNS) {
-          if (re.test(rowText) && !dealNames.includes(label)) dealNames.push(label);
+
+        // PRIMARY: the structured data-deals JSON Booking ships on the row's
+        // deal container. Each entry names the deal (b_copy for display,
+        // b_subtype/b_rule_name internally — BSD = "Booking.com pays") and
+        // carries its CZK value. The visible badge is just "N% off".
+        const dealAmounts: { name: string; amountKc: number | null }[] = [];
+        const dealEls = [tr as HTMLElement, ...Array.from(tr.querySelectorAll<HTMLElement>('[data-deals]'))];
+        for (const el of dealEls) {
+          const raw = el.getAttribute('data-deals');
+          if (!raw) continue;
+          try {
+            const arr = JSON.parse(raw) as Record<string, unknown>[];
+            if (!Array.isArray(arr)) continue;
+            for (const d of arr) {
+              const name =
+                (typeof d.b_copy === 'string' && d.b_copy) ||
+                (typeof d.b_subtype === 'string' && d.b_subtype) ||
+                (typeof d.b_rule_name === 'string' && d.b_rule_name) ||
+                null;
+              if (!name) continue;
+              const rawAmount =
+                typeof d.b_raw_value_user_currency === 'number'
+                  ? d.b_raw_value_user_currency
+                  : typeof d.b_raw_value_user_currency_rounded === 'number'
+                    ? d.b_raw_value_user_currency_rounded
+                    : null;
+              dealAmounts.push({ name, amountKc: rawAmount === null ? null : Math.round(rawAmount) });
+            }
+          } catch {
+            /* malformed attribute — the text fallback below still runs */
+          }
         }
-        // "Booking.com pays" often lives in the row's hidden breakdown markup
-        // rather than its visible text — check outerHTML for this one label
-        // only (the phrase is too specific to false-positive on class names).
-        if (
-          !dealNames.includes('Booking.com pays') &&
-          /Booking\.com pays/i.test((tr as HTMLElement).outerHTML ?? '')
-        ) {
+
+        // FALLBACK: visible row text, then the outerHTML check for
+        // "Booking.com pays" (lives in hidden breakdown markup; the phrase is
+        // too specific to false-positive on class names).
+        const dealNames: string[] = dealAmounts.map((d) => d.name);
+        for (const [label, re] of DEAL_PATTERNS) {
+          if (re.test(rowText)) dealNames.push(label);
+        }
+        if (/Booking\.com pays/i.test((tr as HTMLElement).outerHTML ?? '')) {
           dealNames.push('Booking.com pays');
         }
 
@@ -189,6 +243,7 @@ async function loadRateRows(
           maxPersons,
           pctOff: pctM ? parseInt(pctM[1], 10) : null,
           dealNames,
+          dealAmounts,
         });
       }
       return out;
@@ -211,8 +266,18 @@ function pickBest(rows: RawRateRow[]): RawRateRow | null {
 }
 
 function toOffer(best: RawRateRow): ParityOffer {
-  const labels = [...best.dealNames];
+  const labels = [...new Set(best.dealNames.map(canonicalDealName))];
   if (best.pctOff !== null && labels.length === 0) labels.push(`${best.pctOff}% off`);
+
+  // Per-deal CZK amounts (structured payload) — dedupe by canonical name,
+  // preferring the entry that actually carries an amount.
+  const breakdown = new Map<string, number | null>();
+  for (const d of best.dealAmounts) {
+    const name = canonicalDealName(d.name);
+    if (!breakdown.has(name) || (breakdown.get(name) === null && d.amountKc !== null)) {
+      breakdown.set(name, d.amountKc);
+    }
+  }
 
   // Derive "Booking.com pays" when the page hides it: if every named deal on
   // the row has a KNOWN percentage and the observed price is meaningfully
@@ -226,7 +291,7 @@ function toOffer(best: RawRateRow): ParityOffer {
     best.originalPrice !== null &&
     best.originalPrice > best.price
   ) {
-    const hostDeals = best.dealNames.filter((d) => d !== 'Genius' && d !== 'Mobile-only');
+    const hostDeals = labels.filter((d) => d !== 'Genius' && d !== 'Mobile-only');
     const allKnown = hostDeals.every((d) => KNOWN_DEAL_PERCENTAGES[d] !== undefined);
     if (allKnown && hostDeals.length > 0) {
       const expected = hostDeals.reduce(
@@ -241,6 +306,13 @@ function toOffer(best: RawRateRow): ParityOffer {
     price: best.price,
     originalPrice: best.originalPrice,
     labels,
+    discountBreakdown:
+      breakdown.size > 0
+        ? [...breakdown.entries()].map(([name, amountKc]) => ({
+            name,
+            ...(amountKc !== null ? { amountKc } : {}),
+          }))
+        : undefined,
     availability: 'available',
   };
 }

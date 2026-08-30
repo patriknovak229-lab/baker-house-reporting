@@ -40,7 +40,11 @@ launchd (every 5 min)
 
 Most invocations exit in ~1 s with "nothing to do". A grid run takes
 ~10–15 min (roughly 40 Booking + 60 Airbnb page loads). `PARITY_FORCE_GRID=1
-npm run parity:run` re-runs today's grid by hand.
+npm run parity:run` re-runs today's grid by hand. `PARITY_FULL_SWEEP=1
+npm run parity:run` is the one-off backfill: it scrapes EVERY sellable
+2-night check-in in the 60-day window instead of the daily 1-in-3 far-zone
+rotation (~30 min) — use it after config/identity changes so the calendar
+doesn't wait days for the rotation to refill.
 
 ## Setup (once per Mac)
 

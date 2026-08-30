@@ -31,16 +31,15 @@ function dayOfYear(iso: string): number {
   return Math.floor((d.getTime() - start) / 86_400_000);
 }
 
-interface NightInfo {
+export interface NightInfo {
   sellable: boolean;
   minStay: number;
 }
 
-export async function planSweepSlots(todayIso: string): Promise<PlannedSlot[]> {
-  const cfg = PARITY_SWEEP;
-  const from = addDays(todayIso, cfg.minLeadDays);
-  const to = addDays(todayIso, cfg.windowDays + 7); // 7-night tails past the window
+/** unitId → stay date → night info, from the PriceLabs snapshot. */
+export type NightMap = Map<string, Map<string, NightInfo>>;
 
+export async function loadNightMap(fromIso: string, toIso: string): Promise<NightMap> {
   const listingIds = PARITY_UNITS.map((u) => `311322___${u.beds24RoomId}`);
 
   const rows = await db
@@ -54,13 +53,12 @@ export async function planSweepSlots(todayIso: string): Promise<PlannedSlot[]> {
     .where(
       and(
         inArray(marketDaily.listingId, listingIds),
-        gte(marketDaily.stayDate, from),
-        lte(marketDaily.stayDate, to),
+        gte(marketDaily.stayDate, fromIso),
+        lte(marketDaily.stayDate, toIso),
       ),
     );
 
-  // unitId → date → night info
-  const nights = new Map<string, Map<string, NightInfo>>();
+  const nights: NightMap = new Map();
   const unitByListing = new Map(PARITY_UNITS.map((u) => [`311322___${u.beds24RoomId}`, u.id]));
   for (const r of rows) {
     const unitId = unitByListing.get(r.listingId);
@@ -72,6 +70,45 @@ export async function planSweepSlots(todayIso: string): Promise<PlannedSlot[]> {
     }
     m.set(r.stayDate, { sellable: r.livePrice !== null, minStay: r.minStay ?? 1 });
   }
+  return nights;
+}
+
+/**
+ * Why a stay produced no web offer: 'restricted' = every night is OPEN but the
+ * check-in's min-stay exceeds the stay length (K.201 carries min-stay 3 for
+ * whole months — that is a rate rule, not an occupied room and the calendar
+ * must not paint it as booked); 'not_available' = at least one night is
+ * genuinely closed/booked (or we have no snapshot data to say otherwise).
+ */
+export function classifyUnsoldStay(
+  map: NightMap,
+  unitId: string,
+  checkIn: string,
+  stayNights: number,
+): 'restricted' | 'not_available' {
+  const m = map.get(unitId);
+  if (!m) return 'not_available';
+  for (let n = 0; n < stayNights; n++) {
+    const night = m.get(addDays(checkIn, n));
+    if (!night || !night.sellable) return 'not_available';
+  }
+  return (m.get(checkIn)?.minStay ?? 1) > stayNights ? 'restricted' : 'not_available';
+}
+
+export function minStayAt(map: NightMap, unitId: string, checkIn: string): number | null {
+  return map.get(unitId)?.get(checkIn)?.minStay ?? null;
+}
+
+export async function planSweepSlots(
+  todayIso: string,
+  opts?: { full?: boolean },
+): Promise<PlannedSlot[]> {
+  const cfg = PARITY_SWEEP;
+  const full = opts?.full === true;
+  const nights = await loadNightMap(
+    addDays(todayIso, cfg.minLeadDays),
+    addDays(todayIso, cfg.windowDays + 7), // 7-night tails past the window
+  );
 
   /** Units that could sell a stay: every night open and check-in min-stay ≤ nights. */
   const sellableUnits = (checkIn: string, stayNights: number): string[] => {
@@ -101,11 +138,13 @@ export async function planSweepSlots(todayIso: string): Promise<PlannedSlot[]> {
   for (let lead = cfg.minLeadDays; lead <= cfg.windowDays; lead++) {
     const checkIn = addDays(todayIso, lead);
 
-    // 2-night: dense zone daily, far zone on rotation.
+    // 2-night: dense zone daily, far zone on rotation. A full sweep
+    // (?plan=1&full=1 — one-off backfills) scrapes every sellable 2-night
+    // check-in in the window; the maxSlots cap never trims the dense list.
     const farDue = lead > cfg.denseDays && lead % cfg.farStride === rotation % cfg.farStride;
-    if (lead <= cfg.denseDays || farDue) {
+    if (full || lead <= cfg.denseDays || farDue) {
       const units = sellableUnits(checkIn, 2);
-      if (units.length > 0) (lead <= cfg.denseDays ? dense : far).push({ checkIn, nights: 2, units });
+      if (units.length > 0) (full || lead <= cfg.denseDays ? dense : far).push({ checkIn, nights: 2, units });
     }
 
     // 7-night: rotating stride across the whole window.

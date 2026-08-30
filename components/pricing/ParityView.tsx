@@ -115,7 +115,7 @@ function categorizeDiscount(name: string): DiscountCategoryKey {
   return 'generic';
 }
 
-function DiscountBadge({ name, pp }: { name: string; pp?: number }) {
+function DiscountBadge({ name, pp, amountKc }: { name: string; pp?: number; amountKc?: number }) {
   const key = categorizeDiscount(name);
   const cat = DISCOUNT_CATEGORY[key];
   const isBkPays = key === 'bkPays';
@@ -134,6 +134,7 @@ function DiscountBadge({ name, pp }: { name: string; pp?: number }) {
       {cat.deviceLogin && <span aria-hidden className="mr-0.5">🔒</span>}
       {label}
       {pp != null && <span className="font-bold"> −{pp}pp</span>}
+      {pp == null && amountKc != null && <span className="font-bold"> −{fmt(amountKc)}</span>}
     </span>
   );
 }
@@ -144,6 +145,10 @@ const COL_PX = 17;
 
 const SEVERITY_STYLE: Record<StayAssessment['severity'], string> = {
   booked: 'bg-gray-200/80 hover:bg-gray-300',
+  // Open calendar but a min-stay rule blocks this stay length — hatched so it
+  // reads as "not sellable BY RULE", never as an occupied room.
+  restricted:
+    'bg-[repeating-linear-gradient(45deg,#e5e7eb_0px,#e5e7eb_3px,#ffffff_3px,#ffffff_6px)] border border-gray-200 hover:border-gray-400',
   nodata: 'bg-white border border-dashed border-gray-300 hover:border-gray-400',
   ok: 'bg-emerald-100 hover:bg-emerald-200 border border-emerald-200/60',
   minor: 'bg-amber-300 hover:bg-amber-400 border border-amber-400/50',
@@ -289,7 +294,11 @@ function ChannelDetail({
         <div className="text-sm text-gray-400 italic mt-1">no observation yet</div>
       ) : obs.price === null ? (
         <div className="text-sm text-gray-400 italic mt-1">
-          {obs.availability === 'error' ? 'scrape error' : 'not bookable'}
+          {obs.availability === 'error'
+            ? 'scrape error'
+            : obs.availability === 'restricted'
+              ? `open, but ${obs.labels.find((l) => /^Min stay/.test(l))?.toLowerCase() ?? 'a min-stay rule'} blocks this stay length`
+              : 'not bookable'}
         </div>
       ) : (
         <>
@@ -307,13 +316,14 @@ function ChannelDetail({
           {(obs.discountBreakdown?.length || obs.labels.length > 0) && (
             <div className="mt-2 flex flex-wrap gap-1">
               {(obs.discountBreakdown ?? []).map((d, i) => (
-                <DiscountBadge key={`b${i}`} name={d.name} pp={d.pp} />
+                <DiscountBadge key={`b${i}`} name={d.name} pp={d.pp} amountKc={d.amountKc} />
               ))}
               {obs.labels
                 .filter((l) => {
+                  // A breakdown badge (with its Kč amount) beats the bare label.
                   const seen = new Set((obs.discountBreakdown ?? []).map((d) => categorizeDiscount(d.name)));
                   const cat = categorizeDiscount(l);
-                  return !(seen.has(cat) && cat !== 'generic' && cat !== 'bkPays');
+                  return !(seen.has(cat) && cat !== 'generic');
                 })
                 .map((l, i) => (
                   <DiscountBadge key={`l${i}`} name={l} />
@@ -335,8 +345,9 @@ function ChannelDetail({
 function DetailPanel({ selection, onClose }: { selection: Selection; onClose: () => void }) {
   const { row, cell, assessment } = selection;
   const a = cell.airbnb?.price ?? null;
-  const b = cell.booking?.price ?? null;
-  const abGap = a !== null && b !== null && b > 0 ? Math.round(((a - b) / b) * 100) : null;
+  const floor = assessment.memberFloor;
+  const abGap = a !== null && floor !== null && floor > 0 ? Math.round(((a - floor) / floor) * 100) : null;
+  const minStayLabel = cell.web?.labels.find((l) => /^Min stay \d+$/.test(l)) ?? null;
 
   return (
     <aside className="fixed inset-y-0 right-0 w-full sm:w-[430px] bg-white border-l border-gray-200 shadow-2xl z-50 overflow-y-auto">
@@ -356,7 +367,15 @@ function DetailPanel({ selection, onClose }: { selection: Selection; onClose: ()
       <div className="px-5 py-4 space-y-4">
         {assessment.severity === 'booked' && (
           <div className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
-            Not sellable online (booked, blocked or min-stay) per Beds24.
+            Not sellable online (booked or blocked) per Beds24.
+          </div>
+        )}
+        {assessment.severity === 'restricted' && (
+          <div className="rounded-lg bg-gray-50 border border-gray-300 px-3 py-2 text-sm text-gray-600">
+            The calendar is <strong>open</strong> for these dates, but a{' '}
+            <strong>{minStayLabel ? minStayLabel.toLowerCase() : 'min-stay'} rule</strong> blocks a{' '}
+            {row.nights}-night stay — no channel will sell it. Not a booking; if this restriction is
+            unintended, change it in PriceLabs/Beds24.
           </div>
         )}
         {assessment.severity === 'nodata' && (
@@ -389,7 +408,8 @@ function DetailPanel({ selection, onClose }: { selection: Selection; onClose: ()
 
         {abGap !== null && (
           <div className="text-xs text-gray-500">
-            Airbnb vs Booking (baseline): <span className={Math.abs(abGap) > 5 ? 'text-rose-700 font-semibold' : 'text-emerald-700 font-semibold'}>{abGap > 0 ? '+' : ''}{abGap}%</span> · tolerance ±5%
+            Airbnb vs Booking&apos;s Genius/app price ({fmt(floor)}):{' '}
+            <span className={Math.abs(abGap) > 5 ? 'text-rose-700 font-semibold' : 'text-emerald-700 font-semibold'}>{abGap > 0 ? '+' : ''}{abGap}%</span> · tolerance ±5%
           </div>
         )}
         {assessment.bookingFunded && (
@@ -431,7 +451,7 @@ function OfferCell({ offer, nights }: { offer: ParityOffer | null; nights: numbe
       {(offer.discountBreakdown?.length || offer.labels.length > 0) && (
         <div className="mt-1.5 flex flex-wrap gap-1 justify-end max-w-[240px] ml-auto">
           {(offer.discountBreakdown ?? []).map((d, i) => (
-            <DiscountBadge key={`b${i}`} name={d.name} pp={d.pp} />
+            <DiscountBadge key={`b${i}`} name={d.name} pp={d.pp} amountKc={d.amountKc} />
           ))}
           {offer.labels.slice(0, 3).map((l, i) => (
             <DiscountBadge key={`l${i}`} name={l} />
@@ -620,9 +640,10 @@ export default function ParityView() {
 
       <div className="flex items-center gap-4 flex-wrap text-xs text-gray-600">
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-gray-200" /> booked</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] border border-gray-200 bg-[repeating-linear-gradient(45deg,#e5e7eb_0px,#e5e7eb_3px,#ffffff_3px,#ffffff_6px)]" /> open, but min-stay blocks this length</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-emerald-100 border border-emerald-200" /> checked, fine</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-amber-300" /> minor — Genius/app price on Booking below our site</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — Airbnb off Booking &gt;±5% or our site above a channel</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — Airbnb off Booking&apos;s Genius/app price &gt;±5% or our site above a channel</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-white border border-dashed border-gray-300" /> not scraped yet</span>
         <span className="text-gray-400">· click any block for details</span>
       </div>

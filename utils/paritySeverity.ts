@@ -12,7 +12,7 @@ import {
 } from '@/data/parityConfig';
 import type { BoardUnitCell } from '@/utils/parityTypes';
 
-export type StaySeverity = 'booked' | 'nodata' | 'ok' | 'minor' | 'major';
+export type StaySeverity = 'booked' | 'restricted' | 'nodata' | 'ok' | 'minor' | 'major';
 
 export interface StayIssue {
   severity: 'minor' | 'major';
@@ -38,19 +38,29 @@ export function assessStay(cell: BoardUnitCell): StayAssessment {
   const bookingFunded = bookingLabels.some((l) => l.startsWith('Booking.com pays'));
   const memberFloor = b !== null ? bookingMemberFloor(b, bookingLabels) : null;
 
+  // Open calendar, but a min-stay rule refuses this stay length — visually
+  // distinct from booked (the room is NOT occupied; the rate setup is why
+  // nothing sells). Channel prices should not exist here either; whatever was
+  // captured still shows in the drawer.
+  if (cell.web?.availability === 'restricted') {
+    return { severity: 'restricted', issues: [], memberFloor, bookingFunded };
+  }
   if (cell.sellable === false) {
     return { severity: 'booked', issues: [], memberFloor, bookingFunded };
   }
 
   const issues: StayIssue[] = [];
 
-  // MAJOR — same rules as the Telegram alerts.
-  if (a !== null && b !== null && b > 0) {
-    const gap = ((a - b) / b) * 100;
+  // MAJOR — same rules as the Telegram alerts. Airbnb is judged against
+  // Booking's EFFECTIVE price (the derived Genius/app floor): Booking's
+  // anonymous price runs ~19% above what its customers actually pay, while
+  // Airbnb shows one price to everyone.
+  if (a !== null && memberFloor !== null && memberFloor > 0) {
+    const gap = ((a - memberFloor) / memberFloor) * 100;
     if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) {
       issues.push({
         severity: 'major',
-        text: `Airbnb ${kc(a)} is ${Math.abs(gap).toFixed(0)}% ${gap < 0 ? 'below' : 'above'} Booking ${kc(b)} (tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
+        text: `Airbnb ${kc(a)} is ${Math.abs(gap).toFixed(0)}% ${gap < 0 ? 'below' : 'above'} Booking's Genius/app price ${kc(memberFloor)} (anonymous ${kc(b!)}; tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
       });
     }
   }

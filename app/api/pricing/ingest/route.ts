@@ -24,6 +24,7 @@ import { pragueToday } from '@/utils/periodUtils';
 import { pricingChatId, sendTelegram } from '@/utils/telegram';
 import {
   AIRBNB_VS_BOOKING_TOLERANCE_PCT,
+  bookingMemberFloor,
   COMPETITORS,
   EXPECTED_DRIFT_ALERT_PCT,
   PARITY_CONFIG_VERSION,
@@ -31,7 +32,13 @@ import {
   PARITY_SWEEP,
   PARITY_UNITS,
 } from '@/data/parityConfig';
-import { planSweepSlots } from '@/data-access/pricing/planSlots';
+import {
+  classifyUnsoldStay,
+  loadNightMap,
+  minStayAt,
+  planSweepSlots,
+  type NightMap,
+} from '@/data-access/pricing/planSlots';
 import type {
   ParityChannel,
   ParityIngestPayload,
@@ -40,8 +47,9 @@ import type {
 } from '@/utils/parityTypes';
 
 export const dynamic = 'force-dynamic';
-// Grid ingests make ~1 Beds24 offers call per swept check-in (window + slots ≈
-// 100 sequential calls at a few hundred ms each) before the batch insert.
+// Grid ingests make ~1 Beds24 offers call per swept check-in and stay length
+// (2n + 7n window sweeps + slots ≈ 160 sequential calls at a few hundred ms
+// each) before the batch insert.
 export const maxDuration = 300;
 
 function checkSecret(req: NextRequest): NextResponse | null {
@@ -109,14 +117,17 @@ export async function GET(req: NextRequest) {
 
   // The concrete scrape plan. Also sent when the caller forces a plan
   // (?plan=1) — used by manual runner invocations that re-run a day.
+  // ?full=1 plans EVERY sellable 2-night check-in instead of the rotation —
+  // a one-off backfill mode (PARITY_FULL_SWEEP=1 on the runner).
   const wantPlan = gridDue || req.nextUrl.searchParams.get('plan') === '1';
+  const full = req.nextUrl.searchParams.get('full') === '1';
 
   const order: ParityWorkOrder = {
     today,
     configVersion: PARITY_CONFIG_VERSION,
     lastGridDate,
     gridDue,
-    slots: wantPlan ? await planSweepSlots(today) : undefined,
+    slots: wantPlan ? await planSweepSlots(today, { full }) : undefined,
     pendingRequests: pending.map((r) => ({ id: r.id, checkIn: r.checkIn, nights: r.nights })),
   };
   return NextResponse.json(order);
@@ -163,6 +174,29 @@ export async function POST(req: NextRequest) {
     console.error('[parity-ingest] Beds24 token unavailable — Web column will be empty', err);
   }
 
+  // Night-level open/min-stay data (PriceLabs snapshot) so a no-offer web row
+  // can say WHY: 'restricted' (open, min-stay blocks the length — K.201 runs
+  // min-stay 3 for whole months) vs 'not_available' (a night is booked).
+  let nightMap: NightMap = new Map();
+  try {
+    nightMap = await loadNightMap(today, addDays(today, PARITY_SWEEP.windowDays + 7));
+  } catch (err) {
+    console.error('[parity-ingest] night map unavailable — min-stay attribution off', err);
+  }
+  const webOffer = (unitId: string, checkIn: string, nights: number, price: number | null): ParityOffer => {
+    if (price !== null) {
+      return { price, originalPrice: null, labels: [], availability: 'available' };
+    }
+    const availability = classifyUnsoldStay(nightMap, unitId, checkIn, nights);
+    const minStay = availability === 'restricted' ? minStayAt(nightMap, unitId, checkIn) : null;
+    return {
+      price: null,
+      originalPrice: null,
+      labels: minStay !== null ? [`Min stay ${minStay}`] : [],
+      availability,
+    };
+  };
+
   const rows: (typeof priceSnapshots.$inferInsert)[] = [];
   const alerts: string[] = [];
   // Gap violations carry a stable key so recurring ones (the same undercut
@@ -192,12 +226,7 @@ export async function POST(req: NextRequest) {
     for (const unit of PARITY_UNITS) {
       const scraped = slot.offers?.[unit.id] ?? {};
       const webPrice = webBySell[unit.beds24RoomId] ?? null;
-      const web: ParityOffer = {
-        price: webPrice,
-        originalPrice: null,
-        labels: [],
-        availability: webPrice !== null ? 'available' : 'not_available',
-      };
+      const web = webOffer(unit.id, slot.checkIn, slot.nights, webPrice);
 
       const channels: [ParityChannel, ParityOffer | null][] = [
         ['web', web],
@@ -259,14 +288,17 @@ export async function POST(req: NextRequest) {
       const w = webPrice;
       const stay = `${slot.checkIn} (${slot.nights}n)`;
 
-      // 1. Airbnb should equal Booking or sit slightly above — ±tolerance.
-      if (a !== null && b !== null && b > 0) {
-        const gapPct = ((a - b) / b) * 100;
+      // 1. Airbnb vs Booking's EFFECTIVE price — the derived Genius/app floor,
+      // not the anonymous price (which runs ~19% hot; anonymous-to-anonymous
+      // flagged nearly every stay). Airbnb shows one price to everyone.
+      const bFloor = b !== null ? bookingMemberFloor(b, scraped.booking?.labels ?? []) : null;
+      if (a !== null && bFloor !== null && bFloor > 0) {
+        const gapPct = ((a - bFloor) / bFloor) * 100;
         if (Math.abs(gapPct) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) {
           const dir = gapPct < 0 ? 'below' : 'above';
           gapAlerts.push({
             key: `ab:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${Math.abs(gapPct).toFixed(0)}% ${dir} Booking ${b} Kč (tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
+            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${Math.abs(gapPct).toFixed(0)}% ${dir} Booking's Genius/app price ${bFloor} Kč (anonymous ${b} Kč; tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
           });
         }
       }
@@ -332,42 +364,47 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Full-window availability + Web sweep (grid runs only): every 2-night
-  // check-in in the window gets a fresh Web row daily whether or not it was
-  // scraped — one Beds24 offers call per date. This is what keeps the
-  // occupancy board complete while the channel scrapes rotate through the far
-  // zone, and it costs no page loads at all.
+  // Full-window availability + Web sweep (grid runs only): every 2-night AND
+  // 7-night check-in in the window gets a fresh Web row daily whether or not
+  // it was scraped — one Beds24 offers call per date per stay length. This is
+  // what keeps both occupancy boards complete while the channel scrapes
+  // rotate, and it costs no page loads at all. (The 7-night rows matter for
+  // min-stay-3 units: their 2-night lane is all 'restricted', so the 7-night
+  // lane is the only one that can show the unit as actually open.)
   if (payload.source === 'grid' && beds24Token) {
-    const covered = new Set(
-      payload.slots.filter((s) => s.nights === 2).map((s) => s.checkIn),
-    );
-    for (let lead = PARITY_SWEEP.minLeadDays; lead <= PARITY_SWEEP.windowDays; lead++) {
-      const checkIn = addDays(today, lead);
-      if (covered.has(checkIn)) continue;
-      try {
-        const offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, 2), 2, 0);
-        for (const unit of PARITY_UNITS) {
-          const price = extractPrice(offersForRoom(offers, unit.beds24RoomId));
-          rows.push({
-            runId: payload.runId,
-            source: payload.source,
-            unitId: unit.id,
-            channel: 'web',
-            checkIn,
-            nights: 2,
-            leadDays: lead,
-            price: price === null ? null : String(price),
-            originalPrice: null,
-            discountPct: null,
-            discounts: null,
-            labels: null,
-            availability: price !== null ? 'available' : 'not_available',
-            expectedPrice: null,
-            capturedAt,
-          });
+    for (const nights of [2, 7] as const) {
+      const covered = new Set(
+        payload.slots.filter((s) => s.nights === nights).map((s) => s.checkIn),
+      );
+      for (let lead = PARITY_SWEEP.minLeadDays; lead <= PARITY_SWEEP.windowDays; lead++) {
+        const checkIn = addDays(today, lead);
+        if (covered.has(checkIn)) continue;
+        try {
+          const offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, nights), 2, 0);
+          for (const unit of PARITY_UNITS) {
+            const price = extractPrice(offersForRoom(offers, unit.beds24RoomId));
+            const offer = webOffer(unit.id, checkIn, nights, price);
+            rows.push({
+              runId: payload.runId,
+              source: payload.source,
+              unitId: unit.id,
+              channel: 'web',
+              checkIn,
+              nights,
+              leadDays: lead,
+              price: price === null ? null : String(price),
+              originalPrice: null,
+              discountPct: null,
+              discounts: null,
+              labels: offer.labels.length > 0 ? offer.labels : null,
+              availability: offer.availability,
+              expectedPrice: null,
+              capturedAt,
+            });
+          }
+        } catch (err) {
+          console.error(`[parity-ingest] web sweep failed for ${checkIn} (${nights}n)`, err);
         }
-      } catch (err) {
-        console.error(`[parity-ingest] web sweep failed for ${checkIn}`, err);
       }
     }
   }
@@ -424,20 +461,27 @@ export async function POST(req: NextRequest) {
               inArray(priceSnapshots.channel, ['web', 'airbnb', 'booking']),
             ),
           );
-        const byKey = new Map<string, { a?: number | null; b?: number | null; w?: number | null }>();
+        const byKey = new Map<
+          string,
+          { a?: number | null; b?: number | null; w?: number | null; bLabels?: string[] }
+        >();
         for (const r of prevRows) {
           if (r.unitId.startsWith('comp:')) continue;
           const k = `${r.unitId}:${r.checkIn}:${r.nights}`;
           const entry = byKey.get(k) ?? {};
           const price = r.price === null ? null : Number(r.price);
           if (r.channel === 'airbnb') entry.a = price;
-          if (r.channel === 'booking') entry.b = price;
+          if (r.channel === 'booking') {
+            entry.b = price;
+            entry.bLabels = Array.isArray(r.labels) ? (r.labels as string[]) : [];
+          }
           if (r.channel === 'web') entry.w = price;
           byKey.set(k, entry);
         }
-        for (const [k, { a, b, w }] of byKey) {
+        for (const [k, { a, b, w, bLabels }] of byKey) {
           if (a != null && b != null && b > 0) {
-            const gap = ((a - b) / b) * 100;
+            const floor = bookingMemberFloor(b, bLabels ?? []);
+            const gap = floor > 0 ? ((a - floor) / floor) * 100 : 0;
             if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) prevKeys.add(`ab:${k}`);
           }
           if (w != null && ((b != null && w > b * 1.01) || (a != null && w > a * 1.01))) {

@@ -20,7 +20,9 @@
  * Requires in .env.local: PRICING_INGEST_SECRET, CHROME_EXECUTABLE_PATH.
  * Optional: PARITY_INGEST_URL (defaults to production), RUNNER_HEADFUL=1 to
  * watch the browser work, PARITY_GRID_AFTER=HH:MM Prague gate for the daily
- * grid run (default 08:00), PARITY_FORCE_GRID=1 to re-run today's grid.
+ * grid run (default 08:00), PARITY_FORCE_GRID=1 to re-run today's grid,
+ * PARITY_FULL_SWEEP=1 for a one-off backfill that scrapes EVERY sellable
+ * 2-night check-in in the window instead of the daily rotation (~30 min).
  */
 import '../_loadEnv';
 import puppeteer, { type Browser } from 'puppeteer-core';
@@ -39,7 +41,8 @@ const RUNNER_VERSION = 'parity-runner/2.0';
 const BASE_URL = (process.env.PARITY_INGEST_URL ?? 'https://reporting.bakerhouseapartments.cz').replace(/\/$/, '');
 const SECRET = process.env.PRICING_INGEST_SECRET ?? '';
 const CHROME = process.env.CHROME_EXECUTABLE_PATH ?? '';
-const FORCE_GRID = process.env.PARITY_FORCE_GRID === '1';
+const FULL_SWEEP = process.env.PARITY_FULL_SWEEP === '1';
+const FORCE_GRID = process.env.PARITY_FORCE_GRID === '1' || FULL_SWEEP;
 
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -80,7 +83,9 @@ async function main() {
   if (!SECRET) throw new Error('PRICING_INGEST_SECRET is not set in .env.local');
   if (!CHROME) throw new Error('CHROME_EXECUTABLE_PATH is not set in .env.local');
 
-  const order = await api<ParityWorkOrder>(`/api/pricing/ingest${FORCE_GRID ? '?plan=1' : ''}`);
+  const order = await api<ParityWorkOrder>(
+    `/api/pricing/ingest${FORCE_GRID ? `?plan=1${FULL_SWEEP ? '&full=1' : ''}` : ''}`,
+  );
 
   // The daily grid waits for a civilised hour so the sample time is stable —
   // comparing a 03:00 scrape to yesterday's 09:00 scrape adds noise for free.
