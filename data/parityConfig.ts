@@ -35,7 +35,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 6;
+export const PARITY_CONFIG_VERSION = 7;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -46,9 +46,10 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     // Sold on the main Booking page as "Apartment with Terrace" (40 m²,
     // "We have 3 left" = the 3-unit VR; operator-confirmed 2026-08-30). The
     // earlier "not on the page" note came from a date it was sold out on —
-    // sold-out room types vanish from the table entirely.
+    // sold-out room types vanish from the table entirely. Airbnb: "Premium
+    // Studio | Patio & Garage Parking" (id from the operator, 2026-08-30).
     booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267404' },
-    airbnb: null,
+    airbnb: { listingId: '1688617325775375446' },
   },
   {
     id: 'deluxe-1kk',
