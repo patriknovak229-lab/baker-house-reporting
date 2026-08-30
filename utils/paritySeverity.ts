@@ -45,6 +45,11 @@ export function assessStay(cell: BoardUnitCell): StayAssessment {
   if (cell.web?.availability === 'restricted') {
     return { severity: 'restricted', issues: [], memberFloor, bookingFunded };
   }
+  // A failed web lookup is UNKNOWN, not booked — fall through to no-data
+  // rather than painting an occupied room.
+  if (cell.web?.availability === 'error') {
+    return { severity: 'nodata', issues: [], memberFloor, bookingFunded };
+  }
   if (cell.sellable === false) {
     return { severity: 'booked', issues: [], memberFloor, bookingFunded };
   }

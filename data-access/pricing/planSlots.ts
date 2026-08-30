@@ -99,6 +99,22 @@ export function minStayAt(map: NightMap, unitId: string, checkIn: string): numbe
   return map.get(unitId)?.get(checkIn)?.minStay ?? null;
 }
 
+/** True when the snapshot says the unit could sell this stay (all nights open, min-stay OK). */
+export function staySellablePerMarket(
+  map: NightMap,
+  unitId: string,
+  checkIn: string,
+  stayNights: number,
+): boolean {
+  const m = map.get(unitId);
+  if (!m) return false;
+  for (let n = 0; n < stayNights; n++) {
+    const night = m.get(addDays(checkIn, n));
+    if (!night || !night.sellable) return false;
+  }
+  return (m.get(checkIn)?.minStay ?? 1) <= stayNights;
+}
+
 export async function planSweepSlots(
   todayIso: string,
   opts?: { full?: boolean },

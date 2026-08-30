@@ -37,6 +37,7 @@ import {
   loadNightMap,
   minStayAt,
   planSweepSlots,
+  staySellablePerMarket,
   type NightMap,
 } from '@/data-access/pricing/planSlots';
 import type {
@@ -183,9 +184,23 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('[parity-ingest] night map unavailable — min-stay attribution off', err);
   }
-  const webOffer = (unitId: string, checkIn: string, nights: number, price: number | null): ParityOffer => {
+  const webOffer = (
+    unitId: string,
+    checkIn: string,
+    nights: number,
+    price: number | null,
+    fetchOk = true,
+  ): ParityOffer => {
     if (price !== null) {
       return { price, originalPrice: null, labels: [], availability: 'available' };
+    }
+    // A failed Beds24 call on a stay the market snapshot says IS sellable must
+    // not masquerade as "not bookable" — record it as an error (renders like
+    // no-data, never like a booked room). When the snapshot corroborates that
+    // nothing sells, the no-offer answer is trustworthy even on a failed call
+    // (Beds24 answers a property-wide zero-offer span with a non-OK status).
+    if (!fetchOk && staySellablePerMarket(nightMap, unitId, checkIn, nights)) {
+      return { price: null, originalPrice: null, labels: [], availability: 'error' };
     }
     const availability = classifyUnsoldStay(nightMap, unitId, checkIn, nights);
     const minStay = availability === 'restricted' ? minStayAt(nightMap, unitId, checkIn) : null;
@@ -212,6 +227,7 @@ export async function POST(req: NextRequest) {
     const leadDays = diffDays(today, slot.checkIn);
 
     let webBySell: Record<number, number | null> = {};
+    let webFetchOk = beds24Token !== null;
     if (beds24Token) {
       try {
         const offers = await fetchOffers(beds24Token, slot.checkIn, checkOut, 2, 0);
@@ -219,6 +235,7 @@ export async function POST(req: NextRequest) {
           PARITY_UNITS.map((u) => [u.beds24RoomId, extractPrice(offersForRoom(offers, u.beds24RoomId))]),
         );
       } catch (err) {
+        webFetchOk = false;
         console.error(`[parity-ingest] Beds24 offers failed for ${slot.checkIn}`, err);
       }
     }
@@ -226,7 +243,7 @@ export async function POST(req: NextRequest) {
     for (const unit of PARITY_UNITS) {
       const scraped = slot.offers?.[unit.id] ?? {};
       const webPrice = webBySell[unit.beds24RoomId] ?? null;
-      const web = webOffer(unit.id, slot.checkIn, slot.nights, webPrice);
+      const web = webOffer(unit.id, slot.checkIn, slot.nights, webPrice, webFetchOk);
 
       const channels: [ParityChannel, ParityOffer | null][] = [
         ['web', web],
@@ -400,31 +417,38 @@ export async function POST(req: NextRequest) {
       for (let lead = sweep.fromLead; lead <= sweep.toLead; lead++) {
         const checkIn = addDays(today, lead);
         if (covered.has(checkIn)) continue;
+        // A span NO room in the property can host comes back as a non-OK
+        // status, not an empty list — rows are still written (grey/hatched
+        // per the market snapshot, 'error' where the snapshot disagrees), so
+        // fully-booked dates never show as "not scraped yet".
+        let offers: unknown = null;
+        let fetchOk = true;
         try {
-          const offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, sweep.nights), 2, 0);
-          for (const unit of sweep.units) {
-            const price = extractPrice(offersForRoom(offers, unit.beds24RoomId));
-            const offer = webOffer(unit.id, checkIn, sweep.nights, price);
-            rows.push({
-              runId: payload.runId,
-              source: payload.source,
-              unitId: unit.id,
-              channel: 'web',
-              checkIn,
-              nights: sweep.nights,
-              leadDays: lead,
-              price: price === null ? null : String(price),
-              originalPrice: null,
-              discountPct: null,
-              discounts: null,
-              labels: offer.labels.length > 0 ? offer.labels : null,
-              availability: offer.availability,
-              expectedPrice: null,
-              capturedAt,
-            });
-          }
+          offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, sweep.nights), 2, 0);
         } catch (err) {
+          fetchOk = false;
           console.error(`[parity-ingest] web sweep failed for ${checkIn} (${sweep.nights}n)`, err);
+        }
+        for (const unit of sweep.units) {
+          const price = fetchOk ? extractPrice(offersForRoom(offers, unit.beds24RoomId)) : null;
+          const offer = webOffer(unit.id, checkIn, sweep.nights, price, fetchOk);
+          rows.push({
+            runId: payload.runId,
+            source: payload.source,
+            unitId: unit.id,
+            channel: 'web',
+            checkIn,
+            nights: sweep.nights,
+            leadDays: lead,
+            price: price === null ? null : String(price),
+            originalPrice: null,
+            discountPct: null,
+            discounts: null,
+            labels: offer.labels.length > 0 ? offer.labels : null,
+            availability: offer.availability,
+            expectedPrice: null,
+            capturedAt,
+          });
         }
       }
     }
