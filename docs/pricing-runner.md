@@ -9,23 +9,27 @@ iCloud invoice import: the Mac is the trusted local half of the pipeline.
 ## How it works
 
 ```
-launchd (every 5 min)
+launchd (every 15 min, skipping 00–07 Prague — see PARITY_QUIET_HOURS)
   └─ scripts/parity-runner/run.ts
        1. GET  /api/pricing/ingest      ── work order (secret header)
           · gridDue? → the server sends today's SLOT PLAN: an
-            availability-aware sweep of the next 60 days (2-night stays daily
-            for ~3 weeks out + a 1-in-3 rotation beyond; 7-night stays on a
-            1-in-7 rotation), planned from the PriceLabs availability
-            snapshot so unsellable stays are never scraped. Once per day
-            after 08:00 Prague. PARITY_SWEEP in data/parityConfig tunes it.
+            availability-aware sweep planned from the PriceLabs snapshot so
+            unsellable stays are never scraped. Cadence (operator spec):
+            1-night stays for all units daily over the next 14 days (only
+            where min-stay 1 actually sells); short stays — 2-night for the
+            studios, 3-night for the 2BR units (seasonal min-stay 3) — daily
+            for the next 30 days and on a 1-in-7 rotation for days 30–60;
+            7-night stays for all units on a 1-in-7 rotation. Beyond 60 days:
+            custom checks only. Once per day after 08:00 Prague. PARITY_SWEEP
+            in data/parityConfig tunes it.
           · pendingRequests → custom checks queued in the UI
        2. Scrape Booking.com (structured .hprt-table parse, all room types)
           + Airbnb (Reserve-panel logic, per configured listing, only for
           units the plan says can sell the stay) + competitor listings from
           data/parityConfig COMPETITORS (grid runs only)
        3. POST /api/pricing/ingest      ── observations
-          · server adds the Web column from Beds24 offers for EVERY 2-night
-            check-in in the window (the occupancy board), scraped or not
+          · server adds the Web column from Beds24 offers for EVERY check-in
+            in each board's window (the occupancy boards), scraped or not
           · computes expected prices from data/parityConfig economics
           · appends to price_snapshots (history), closes custom requests
           · Telegram alerts (Booking.com is the baseline): Airbnb off Booking
@@ -38,13 +42,14 @@ launchd (every 5 min)
             to every Booking observation.
 ```
 
-Most invocations exit in ~1 s with "nothing to do". A grid run takes
-~10–15 min (roughly 40 Booking + 60 Airbnb page loads). `PARITY_FORCE_GRID=1
-npm run parity:run` re-runs today's grid by hand. `PARITY_FULL_SWEEP=1
-npm run parity:run` is the one-off backfill: it scrapes EVERY sellable
-2-night check-in in the 60-day window instead of the daily 1-in-3 far-zone
-rotation (~30 min) — use it after config/identity changes so the calendar
-doesn't wait days for the rotation to refill.
+Most invocations exit in ~1 s with "nothing to do" (or instantly during
+Prague quiet hours, without touching the API — every poll wakes the Neon
+compute, which is billed by the hour it is awake). A grid run takes
+~15–25 min. `PARITY_FORCE_GRID=1 npm run parity:run` re-runs today's grid by
+hand (also bypasses quiet hours). `PARITY_FULL_SWEEP=1 npm run parity:run` is
+the one-off backfill: it scrapes EVERY sellable short-stay check-in in the
+60-day window instead of the far-zone rotation — use it after config/identity
+changes so the calendar doesn't wait days for the rotation to refill.
 
 ## Setup (once per Mac)
 

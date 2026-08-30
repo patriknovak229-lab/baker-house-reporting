@@ -48,8 +48,8 @@ import type {
 
 export const dynamic = 'force-dynamic';
 // Grid ingests make ~1 Beds24 offers call per swept check-in and stay length
-// (2n + 7n window sweeps + slots ≈ 160 sequential calls at a few hundred ms
-// each) before the batch insert.
+// (1n/2n/3n/7n window sweeps + slots ≈ 190 sequential calls at a few hundred
+// ms each) before the batch insert.
 export const maxDuration = 300;
 
 function checkSecret(req: NextRequest): NextResponse | null {
@@ -370,33 +370,48 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Full-window availability + Web sweep (grid runs only): every 2-night AND
-  // 7-night check-in in the window gets a fresh Web row daily whether or not
-  // it was scraped — one Beds24 offers call per date per stay length. This is
-  // what keeps both occupancy boards complete while the channel scrapes
-  // rotate, and it costs no page loads at all. (The 7-night rows matter for
-  // min-stay-3 units: their 2-night lane is all 'restricted', so the 7-night
-  // lane is the only one that can show the unit as actually open.)
+  // Full-window availability + Web sweep (grid runs only): every check-in in
+  // each board's window gets a fresh Web row daily whether or not it was
+  // scraped — one Beds24 offers call per date per stay length. This is what
+  // keeps the occupancy boards complete while the channel scrapes rotate, and
+  // it costs no page loads at all. Rows are written only for the units whose
+  // board uses that stay length (2n = studios, 3n = 2BRs, 1n/7n = all).
   if (payload.source === 'grid' && beds24Token) {
-    for (const nights of [2, 7] as const) {
+    const sweeps: { nights: number; fromLead: number; toLead: number; units: typeof PARITY_UNITS }[] = [
+      { nights: 1, fromLead: 1, toLead: PARITY_SWEEP.oneNightDays, units: PARITY_UNITS },
+      {
+        nights: 2,
+        fromLead: PARITY_SWEEP.minLeadDays,
+        toLead: PARITY_SWEEP.windowDays,
+        units: PARITY_UNITS.filter((u) => u.shortStayNights === 2),
+      },
+      {
+        nights: 3,
+        fromLead: PARITY_SWEEP.minLeadDays,
+        toLead: PARITY_SWEEP.windowDays,
+        units: PARITY_UNITS.filter((u) => u.shortStayNights === 3),
+      },
+      { nights: 7, fromLead: PARITY_SWEEP.minLeadDays, toLead: PARITY_SWEEP.windowDays, units: PARITY_UNITS },
+    ];
+    for (const sweep of sweeps) {
       const covered = new Set(
-        payload.slots.filter((s) => s.nights === nights).map((s) => s.checkIn),
+        payload.slots.filter((s) => s.nights === sweep.nights).map((s) => s.checkIn),
       );
-      for (let lead = PARITY_SWEEP.minLeadDays; lead <= PARITY_SWEEP.windowDays; lead++) {
+      for (let lead = sweep.fromLead; lead <= sweep.toLead; lead++) {
         const checkIn = addDays(today, lead);
         if (covered.has(checkIn)) continue;
         try {
-          const offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, nights), 2, 0);
-          for (const unit of PARITY_UNITS) {
+          const offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, sweep.nights), 2, 0);
+          for (const unit of sweep.units) {
             const price = extractPrice(offersForRoom(offers, unit.beds24RoomId));
-            const offer = webOffer(unit.id, checkIn, nights, price);
+            const offer = webOffer(unit.id, checkIn, sweep.nights, price);
             rows.push({
               runId: payload.runId,
               source: payload.source,
               unitId: unit.id,
               channel: 'web',
               checkIn,
-              nights,
+              nights: sweep.nights,
               leadDays: lead,
               price: price === null ? null : String(price),
               originalPrice: null,
@@ -409,7 +424,7 @@ export async function POST(req: NextRequest) {
             });
           }
         } catch (err) {
-          console.error(`[parity-ingest] web sweep failed for ${checkIn} (${nights}n)`, err);
+          console.error(`[parity-ingest] web sweep failed for ${checkIn} (${sweep.nights}n)`, err);
         }
       }
     }

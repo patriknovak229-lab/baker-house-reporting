@@ -1,8 +1,8 @@
 /**
  * Parity runner — the local half of the price parity monitor.
  *
- * Runs on the operator's Mac (launchd, every 5 minutes — see
- * docs/pricing-runner.md). Each invocation:
+ * Runs on the operator's Mac (launchd, every 15 minutes, skipping Prague
+ * night hours — see docs/pricing-runner.md). Each invocation:
  *
  *   1. Asks the reporting app for a work order (GET /api/pricing/ingest):
  *      is today's grid run still due (server sends the concrete slot plan —
@@ -82,6 +82,23 @@ interface WorkSlot {
 async function main() {
   if (!SECRET) throw new Error('PRICING_INGEST_SECRET is not set in .env.local');
   if (!CHROME) throw new Error('CHROME_EXECUTABLE_PATH is not set in .env.local');
+
+  // Quiet hours: exit BEFORE calling the API — the work-order poll itself
+  // queries Postgres, and Neon bills compute time whenever the database is
+  // awake (it auto-suspends after ~5 idle minutes). Nothing scrapes at night
+  // anyway (grid gates on PARITY_GRID_AFTER). Override: PARITY_QUIET_HOURS
+  // ("start-end" in Prague hours, default 0-7, "off" disables); manual
+  // force/full runs skip the gate.
+  const quiet = process.env.PARITY_QUIET_HOURS ?? '0-7';
+  if (!FORCE_GRID && quiet !== 'off') {
+    const [qStart, qEnd] = quiet.split('-').map((n) => parseInt(n, 10));
+    const hour = parseInt(
+      new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Prague', hour: '2-digit', hour12: false }).format(new Date()),
+      10,
+    );
+    const inQuiet = qStart <= qEnd ? hour >= qStart && hour < qEnd : hour >= qStart || hour < qEnd;
+    if (Number.isFinite(qStart) && Number.isFinite(qEnd) && inQuiet) return;
+  }
 
   const order = await api<ParityWorkOrder>(
     `/api/pricing/ingest${FORCE_GRID ? `?plan=1${FULL_SWEEP ? '&full=1' : ''}` : ''}`,

@@ -13,6 +13,13 @@ export interface ParityUnitConfig {
   /** Beds24 sellable room id — the offers API key for the Web column. */
   beds24RoomId: number;
   /**
+   * Stay length this unit's short-stay board uses. The studios monitor
+   * 2-night stays; the two-bedroom units run min-stay 3 for whole seasons, so
+   * their board samples 3-night stays instead (operator decision 2026-08-30 —
+   * "a 3-day stay tells the same story as a 2-day stay").
+   */
+  shortStayNights: 2 | 3;
+  /**
    * Booking.com identity: the property page plus this unit's room_type id on
    * it (the numeric suffix of `room_type_id_*` anchors in the room table).
    *
@@ -35,7 +42,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 9;
+export const PARITY_CONFIG_VERSION = 10;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -50,6 +57,7 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     // Studio | Patio & Garage Parking" (id from the operator, 2026-08-30).
     booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267404' },
     airbnb: { listingId: '1688617325775375446' },
+    shortStayNights: 2,
   },
   {
     id: 'deluxe-1kk',
@@ -57,6 +65,7 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     beds24RoomId: 648816,
     booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267401' },
     airbnb: { listingId: '1560149310755564258' },
+    shortStayNights: 2,
   },
   {
     id: 'o308',
@@ -64,6 +73,7 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     beds24RoomId: 674672,
     booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267405' },
     airbnb: { listingId: '1703448722265968124' },
+    shortStayNights: 3,
   },
   {
     id: 'k201',
@@ -71,37 +81,46 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     beds24RoomId: 656437,
     booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267403' },
     airbnb: { listingId: '1635011413648373253' },
+    shortStayNights: 3,
   },
 ];
 
+/** Units on the 2-night short-stay board / the 3-night one. */
+export const UNITS_2N = PARITY_UNITS.filter((u) => u.shortStayNights === 2);
+export const UNITS_3N = PARITY_UNITS.filter((u) => u.shortStayNights === 3);
+
 /**
- * The daily sweep — focused on the next ~60 days, where most bookings happen.
+ * The daily sweep — operator cadence (2026-08-30): next 30 days daily, 30–60
+ * days weekly, beyond 60 days custom checks only.
  *
- * Three intensity zones per run (the server plans concrete slots from the
- * PriceLabs availability snapshot; the runner just executes):
+ * Zones per run (the server plans concrete slots from the PriceLabs
+ * availability snapshot; the runner just executes):
  *
- *  · Web + availability: EVERY 2-night check-in for the whole window, every
- *    day, straight from the Beds24 offers API at ingest time — no scraping,
- *    so it is effectively free and keeps the occupancy board complete.
- *  · Channel scrapes, 2 nights: every check-in inside DENSE_DAYS daily, then
- *    a rotating 1-in-FAR_STRIDE beyond it — every far date is re-scraped once
- *    per FAR_STRIDE days without tripling the run time.
- *  · Channel scrapes, 7 nights: rotating 1-in-WEEKLY_STRIDE across the whole
- *    window — full coverage once per week, matching how fast weekly rates move.
+ *  · Web + availability: EVERY check-in in each board's window, every day,
+ *    straight from the Beds24 offers API at ingest time — no scraping, so it
+ *    is effectively free and keeps the occupancy boards complete.
+ *  · Short stays (2-night for the studios, 3-night for the 2BRs): every
+ *    check-in inside DENSE_DAYS daily, then a rotating 1-in-FAR_STRIDE beyond
+ *    it — every far date is re-scraped once per FAR_STRIDE days.
+ *  · 1-night stays, all units: daily, but only the next ONE_NIGHT_DAYS and
+ *    only where a 1-night stay is actually sellable (min-stay 1 gap fillers).
+ *  · 7-night stays: rotating 1-in-WEEKLY_STRIDE across the whole window.
  */
 export const PARITY_SWEEP = {
   /** How far ahead the sweep looks, in days. */
   windowDays: 60,
-  /** Check-ins closer than this get scraped every single day (2-night). */
-  denseDays: 21,
+  /** Check-ins closer than this get scraped every single day (short stays). */
+  denseDays: 30,
   /** Beyond denseDays, scrape every Nth date, rotating daily. */
-  farStride: 3,
+  farStride: 7,
   /** 7-night check-ins: every Nth date, rotating daily. */
   weeklyStride: 7,
+  /** 1-night stays: daily sweep of the next N days (from tomorrow). */
+  oneNightDays: 14,
   /** Earliest check-in worth sampling (tomorrow is lead 1). */
   minLeadDays: 2,
   /** Hard cap on scrape slots per run — planner degrades stride, never blows this. */
-  maxSlots: 60,
+  maxSlots: 100,
 } as const;
 
 /**

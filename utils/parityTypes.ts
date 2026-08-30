@@ -160,9 +160,13 @@ export interface CompetitorObservation {
 }
 
 export interface ParityResponse {
-  /** Every 2-night check-in in the window, freshest observation per channel. */
+  /** 1-night stays, all units, next 14 days (daily; gap-filler pricing). */
+  board1n: BoardRow[];
+  /** 2-night stays — the studio units (urban + deluxe 1KK). */
   board2n: BoardRow[];
-  /** Same for 7-night stays (scraped on a weekly rotation). */
+  /** 3-night stays — the 2BR units (O.308 + K.201, seasonal min-stay 3). */
+  board3n: BoardRow[];
+  /** 7-night stays, all units (scraped on a weekly rotation). */
   board7n: BoardRow[];
   competitors: CompetitorObservation[];
   requests: ParityRequestView[];

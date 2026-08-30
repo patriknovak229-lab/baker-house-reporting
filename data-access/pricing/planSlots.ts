@@ -135,19 +135,35 @@ export async function planSweepSlots(
   const dense: PlannedSlot[] = [];
   const far: PlannedSlot[] = [];
 
+  // 1-night stays, all units: daily, near window only, and only where a
+  // 1-night stay actually sells (min-stay 1 gap fillers) — from TOMORROW,
+  // because that is where gap-filler pricing matters most.
+  for (let lead = 1; lead <= cfg.oneNightDays; lead++) {
+    const checkIn = addDays(todayIso, lead);
+    const units = sellableUnits(checkIn, 1);
+    if (units.length > 0) dense.push({ checkIn, nights: 1, units });
+  }
+
   for (let lead = cfg.minLeadDays; lead <= cfg.windowDays; lead++) {
     const checkIn = addDays(todayIso, lead);
 
-    // 2-night: dense zone daily, far zone on rotation. A full sweep
-    // (?plan=1&full=1 — one-off backfills) scrapes every sellable 2-night
-    // check-in in the window; the maxSlots cap never trims the dense list.
+    // Short stays — 2-night for the studios, 3-night for the 2BR units (their
+    // seasonal min-stay 3 makes 2-night stays unsellable for whole months).
+    // Dense zone daily, far zone on rotation. A full sweep (?plan=1&full=1 —
+    // one-off backfills) scrapes every sellable check-in in the window; the
+    // maxSlots cap never trims the dense list.
     const farDue = lead > cfg.denseDays && lead % cfg.farStride === rotation % cfg.farStride;
     if (full || lead <= cfg.denseDays || farDue) {
-      const units = sellableUnits(checkIn, 2);
-      if (units.length > 0) (full || lead <= cfg.denseDays ? dense : far).push({ checkIn, nights: 2, units });
+      for (const stayNights of [2, 3] as const) {
+        const groupIds = PARITY_UNITS.filter((u) => u.shortStayNights === stayNights).map((u) => u.id);
+        const units = sellableUnits(checkIn, stayNights).filter((id) => groupIds.includes(id));
+        if (units.length > 0) {
+          (full || lead <= cfg.denseDays ? dense : far).push({ checkIn, nights: stayNights, units });
+        }
+      }
     }
 
-    // 7-night: rotating stride across the whole window.
+    // 7-night: rotating stride across the whole window, all units.
     if (lead % cfg.weeklyStride === rotation % cfg.weeklyStride) {
       const units = sellableUnits(checkIn, 7);
       if (units.length > 0) far.push({ checkIn, nights: 7, units });
@@ -155,6 +171,8 @@ export async function planSweepSlots(
   }
 
   // Cap: the dense zone is the value core and always survives; rotation
-  // slots are trimmed from the far end first.
-  return [...dense, ...far].slice(0, Math.max(dense.length, cfg.maxSlots));
+  // slots are trimmed from the far end first. A full sweep is a deliberate
+  // one-off backfill — nothing is trimmed.
+  const cap = full ? dense.length + far.length : Math.max(dense.length, cfg.maxSlots);
+  return [...dense, ...far].slice(0, cap);
 }

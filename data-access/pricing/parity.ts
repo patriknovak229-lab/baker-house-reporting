@@ -199,10 +199,12 @@ export async function readParity(): Promise<ParityResponse> {
     .from(priceSnapshots)
     .where(eq(priceSnapshots.source, 'grid'));
 
-  // 2-night cells go stale after ~4 days (far-zone stride is 3); 7-night
-  // rotates weekly, so allow 9.
-  const [board2n, board7n, competitors] = await Promise.all([
-    readBoard(2, today, 4),
+  // 1-night sweeps daily (allow 3 days of runner outage); short stays rotate
+  // weekly in the far zone and 7-night rotates weekly, so those allow 9.
+  const [board1n, board2n, board3n, board7n, competitors] = await Promise.all([
+    readBoard(1, today, 3),
+    readBoard(2, today, 9),
+    readBoard(3, today, 9),
     readBoard(7, today, 9),
     readCompetitors(today),
   ]);
@@ -234,7 +236,9 @@ export async function readParity(): Promise<ParityResponse> {
   }));
 
   return {
+    board1n,
     board2n,
+    board3n,
     board7n,
     competitors,
     requests: requestViews,

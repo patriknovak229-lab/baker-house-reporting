@@ -17,7 +17,7 @@
  * collisions: same-lane neighbours are exactly `nights` days apart.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PARITY_UNITS } from '@/data/parityConfig';
+import { PARITY_UNITS, UNITS_2N, UNITS_3N, type ParityUnitConfig } from '@/data/parityConfig';
 import { assessStay, type StayAssessment } from '@/utils/paritySeverity';
 import type {
   BoardObservation,
@@ -200,6 +200,7 @@ function StayCalendar({
   subtitle,
   rows,
   nights,
+  units,
   windowStart,
   totalDays,
   onSelect,
@@ -209,6 +210,7 @@ function StayCalendar({
   subtitle: string;
   rows: BoardRow[];
   nights: number;
+  units: ParityUnitConfig[];
   windowStart: string;
   totalDays: number;
   onSelect: (s: Selection) => void;
@@ -228,7 +230,7 @@ function StayCalendar({
         <div className="overflow-x-auto rounded-lg border border-gray-200 p-3 bg-white">
           <div style={{ width: totalDays * COL_PX + 1 }}>
             <DateAxis windowStart={windowStart} totalDays={totalDays} />
-            {PARITY_UNITS.map((unit) => (
+            {units.map((unit) => (
               <div key={unit.id} className="mt-2">
                 <div className="text-[11px] font-medium text-gray-600 mb-1">{unit.label}</div>
                 <div
@@ -608,17 +610,20 @@ export default function ParityView() {
     }
   }
 
+  const allBoards = useMemo(
+    () => [...(data?.board1n ?? []), ...(data?.board2n ?? []), ...(data?.board3n ?? []), ...(data?.board7n ?? [])],
+    [data],
+  );
+
   const windowStart = useMemo(() => {
-    const starts = [...(data?.board2n ?? []), ...(data?.board7n ?? [])].map((r) => r.checkIn);
+    const starts = allBoards.map((r) => r.checkIn);
     return starts.length > 0 ? starts.sort()[0] : new Date().toISOString().slice(0, 10);
-  }, [data]);
+  }, [allBoards]);
 
   const totalDays = useMemo(() => {
-    const ends = [...(data?.board2n ?? []), ...(data?.board7n ?? [])].map((r) =>
-      diffDays(windowStart, r.checkOut),
-    );
+    const ends = allBoards.map((r) => diffDays(windowStart, r.checkOut));
     return Math.max(10, ...ends);
-  }, [data, windowStart]);
+  }, [allBoards, windowStart]);
 
   if (loading) {
     return (
@@ -654,10 +659,35 @@ export default function ParityView() {
       </div>
 
       <StayCalendar
-        title="2-night stays — next 60 days"
-        subtitle="Each block is one 2-night stay, spanning its dates (staggered rows keep overlapping stays apart)."
+        title="1-night stays — next 14 days"
+        subtitle="All units, checked daily. Most dates are min-stay blocked by design — the interesting blocks are the gap fillers where a single night actually sells."
+        rows={data?.board1n ?? []}
+        nights={1}
+        units={PARITY_UNITS}
+        windowStart={windowStart}
+        totalDays={totalDays}
+        onSelect={setSelection}
+        selected={selection}
+      />
+
+      <StayCalendar
+        title="2-night stays — studios"
+        subtitle="1KK Urban + 1KK Deluxe. Checked daily for the next 30 days, weekly for days 30–60; beyond that use a custom check."
         rows={data?.board2n ?? []}
         nights={2}
+        units={UNITS_2N}
+        windowStart={windowStart}
+        totalDays={totalDays}
+        onSelect={setSelection}
+        selected={selection}
+      />
+
+      <StayCalendar
+        title="3-night stays — two-bedroom units"
+        subtitle="O.308 + K.201 sampled as 3-night stays (their seasonal min-stay 3 blocks 2-night bookings). Same cadence: daily to 30 days, weekly to 60."
+        rows={data?.board3n ?? []}
+        nights={3}
+        units={UNITS_3N}
         windowStart={windowStart}
         totalDays={totalDays}
         onSelect={setSelection}
@@ -666,9 +696,10 @@ export default function ParityView() {
 
       <StayCalendar
         title="7-night stays"
-        subtitle="Each block is one 7-night stay; coverage fills over the weekly scrape rotation."
+        subtitle="All units; coverage fills over the weekly scrape rotation."
         rows={data?.board7n ?? []}
         nights={7}
+        units={PARITY_UNITS}
         windowStart={windowStart}
         totalDays={totalDays}
         onSelect={setSelection}
@@ -680,7 +711,8 @@ export default function ParityView() {
       <section className="border-t border-gray-200 pt-8">
         <h2 className="text-lg font-semibold text-gray-900 mb-1">Custom date check</h2>
         <p className="text-xs text-gray-500 mb-4">
-          Queued for the Mac runner — results appear here within ~5 minutes while the Mac is awake.
+          Queued for the Mac runner — results appear here within ~15 minutes while the Mac is awake. Use this for
+          any date beyond the 60-day boards.
         </p>
         <div className="flex flex-wrap items-end gap-4">
           <div>
