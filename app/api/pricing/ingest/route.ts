@@ -21,9 +21,9 @@ import { priceCheckRequests, priceSnapshots } from '@/lib/db/schema';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { extractPrice, fetchOffers, offersForRoom } from '@/utils/beds24Pricing';
 import { pragueToday } from '@/utils/periodUtils';
-import { sendTelegram } from '@/utils/telegram';
+import { pricingChatId, sendTelegram } from '@/utils/telegram';
 import {
-  BOOKING_OVER_AIRBNB_BAND,
+  AIRBNB_VS_BOOKING_TOLERANCE_PCT,
   COMPETITORS,
   EXPECTED_DRIFT_ALERT_PCT,
   PARITY_CONFIG_VERSION,
@@ -253,20 +253,34 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Booking-vs-Airbnb band check, same rule as the UI traffic light.
+      // Parity rules — Booking.com is the baseline channel.
       const a = unit.airbnb ? (scraped.airbnb?.price ?? null) : null;
       const b = unit.booking ? (scraped.booking?.price ?? null) : null;
-      if (a !== null && b !== null && a > 0) {
-        const gapPct = ((b - a) / a) * 100;
-        if (gapPct <= BOOKING_OVER_AIRBNB_BAND.min) {
+      const w = webPrice;
+      const stay = `${slot.checkIn} (${slot.nights}n)`;
+
+      // 1. Airbnb should equal Booking or sit slightly above — ±tolerance.
+      if (a !== null && b !== null && b > 0) {
+        const gapPct = ((a - b) / b) * 100;
+        if (Math.abs(gapPct) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) {
+          const dir = gapPct < 0 ? 'below' : 'above';
           gapAlerts.push({
-            key: `undercut:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `🔻 ${unit.label} ${slot.checkIn} (${slot.nights}n): Booking ${b} Kč ≤ Airbnb ${a} Kč — Booking is undercutting`,
+            key: `ab:${unit.id}:${slot.checkIn}:${slot.nights}`,
+            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${Math.abs(gapPct).toFixed(0)}% ${dir} Booking ${b} Kč (tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
           });
-        } else if (gapPct > BOOKING_OVER_AIRBNB_BAND.max) {
+        }
+      }
+
+      // 2. The direct site must never be the expensive option. 1% grace
+      // absorbs decimal-vs-rounded comparisons (web offers carry cents).
+      if (w !== null) {
+        const dearer: string[] = [];
+        if (b !== null && w > b * 1.01) dearer.push(`Booking ${b} Kč`);
+        if (a !== null && w > a * 1.01) dearer.push(`Airbnb ${a} Kč`);
+        if (dearer.length > 0) {
           gapAlerts.push({
-            key: `over:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `📈 ${unit.label} ${slot.checkIn} (${slot.nights}n): Booking ${b} Kč is ${gapPct.toFixed(0)}% over Airbnb ${a} Kč`,
+            key: `web:${unit.id}:${slot.checkIn}:${slot.nights}`,
+            line: `🚨 ${unit.label} ${stay}: our site ${Math.round(w)} Kč is ABOVE ${dearer.join(' and ')}`,
           });
         }
       }
@@ -395,29 +409,35 @@ export async function POST(req: NextRequest) {
         .orderBy(desc(priceSnapshots.capturedAt))
         .limit(1);
       if (prev) {
+        // Rebuild the SAME violation keys from the previous run's rows — the
+        // rules here must stay in lockstep with the checks above.
         const prevRows = await db
           .select()
           .from(priceSnapshots)
           .where(
             and(
               eq(priceSnapshots.runId, prev.runId),
-              inArray(priceSnapshots.channel, ['airbnb', 'booking']),
+              inArray(priceSnapshots.channel, ['web', 'airbnb', 'booking']),
             ),
           );
-        const byKey = new Map<string, { a?: number | null; b?: number | null }>();
+        const byKey = new Map<string, { a?: number | null; b?: number | null; w?: number | null }>();
         for (const r of prevRows) {
+          if (r.unitId.startsWith('comp:')) continue;
           const k = `${r.unitId}:${r.checkIn}:${r.nights}`;
           const entry = byKey.get(k) ?? {};
           const price = r.price === null ? null : Number(r.price);
           if (r.channel === 'airbnb') entry.a = price;
           if (r.channel === 'booking') entry.b = price;
+          if (r.channel === 'web') entry.w = price;
           byKey.set(k, entry);
         }
-        for (const [k, { a, b }] of byKey) {
-          if (a != null && b != null && a > 0) {
-            const gap = ((b - a) / a) * 100;
-            if (gap <= BOOKING_OVER_AIRBNB_BAND.min) prevKeys.add(`undercut:${k}`);
-            else if (gap > BOOKING_OVER_AIRBNB_BAND.max) prevKeys.add(`over:${k}`);
+        for (const [k, { a, b, w }] of byKey) {
+          if (a != null && b != null && b > 0) {
+            const gap = ((a - b) / b) * 100;
+            if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) prevKeys.add(`ab:${k}`);
+          }
+          if (w != null && ((b != null && w > b * 1.01) || (a != null && w > a * 1.01))) {
+            prevKeys.add(`web:${k}`);
           }
         }
       }
@@ -439,7 +459,7 @@ export async function POST(req: NextRequest) {
           ? [`↺ ${ongoing} known violation${ongoing === 1 ? '' : 's'} still in effect — see the Pricing board`]
           : []),
       ].join('\n');
-      await sendTelegram(message);
+      await sendTelegram(message, { chatId: pricingChatId() });
     }
   }
 

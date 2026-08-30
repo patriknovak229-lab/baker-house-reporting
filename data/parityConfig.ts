@@ -35,7 +35,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 3;
+export const PARITY_CONFIG_VERSION = 4;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -191,5 +191,33 @@ export const PARITY_ECONOMICS: Record<string, { booking: ChannelEconomics; airbn
 /** Alert when |observed − expected| / expected exceeds this, per channel. */
 export const EXPECTED_DRIFT_ALERT_PCT = 2;
 
-/** The B-vs-A healthy band, mirrored from the UI's traffic-light rule. */
-export const BOOKING_OVER_AIRBNB_BAND = { min: 0, max: 30 };
+/**
+ * PARITY RULES — Booking.com is the baseline (the biggest channel).
+ *
+ * 1. Airbnb should equal Booking or sit slightly above it: alert when the
+ *    anonymous Airbnb price deviates from Booking by more than this, in
+ *    either direction.
+ * 2. The direct site must never be the expensive option: alert when the Web
+ *    price exceeds the anonymous Booking OR Airbnb price.
+ */
+export const AIRBNB_VS_BOOKING_TOLERANCE_PCT = 5;
+
+/**
+ * Always-on member discounts configured on Booking.com. These never expire,
+ * so the real price members/app users pay is DERIVED here rather than
+ * scraped: memberFloor = anonymous × (1 − genius%) — mobile is the same 10%,
+ * and per Booking's own rules Genius CAN stack on mobile rates, so the
+ * absolute worst case is anonymous × 0.9 × 0.9 = ×0.81. The derived floor is
+ * shown on the board for context; it does NOT feed the web-vs-OTA alert
+ * (a direct site priced between the member floor and the anonymous price is
+ * a pricing decision, not a data error — surfacing it daily would be noise).
+ */
+export const BOOKING_MEMBER_DISCOUNTS = {
+  geniusPct: 10,
+  mobilePct: 10,
+} as const;
+
+/** anonymous Booking price → what a Genius (or app) customer actually pays. */
+export function bookingMemberFloor(anonymousPrice: number): number {
+  return Math.round(anonymousPrice * (1 - BOOKING_MEMBER_DISCOUNTS.geniusPct / 100));
+}

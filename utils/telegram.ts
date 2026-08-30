@@ -7,9 +7,12 @@
 //
 // No-ops (returns false) when TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are unset.
 
-export async function sendTelegram(message: string): Promise<boolean> {
+export async function sendTelegram(
+  message: string,
+  opts?: { chatId?: string },
+): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const chatId = opts?.chatId ?? process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
     console.error("[telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set");
     return false;
@@ -39,4 +42,14 @@ export async function sendTelegram(message: string): Promise<boolean> {
 /** Escape the HTML entities Telegram's HTML parse_mode cares about. */
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Destination for PRICING alerts (parity violations, radar digest). Falls back
+ * to the ops group until TELEGRAM_PRICING_CHAT_ID is set — the operator wants
+ * pricing noise out of the shared Baker House Operations group, so this should
+ * point at a DM with the bot or a dedicated pricing group.
+ */
+export function pricingChatId(): string | undefined {
+  return process.env.TELEGRAM_PRICING_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID;
 }

@@ -28,8 +28,14 @@ launchd (every 5 min)
             check-in in the window (the occupancy board), scraped or not
           · computes expected prices from data/parityConfig economics
           · appends to price_snapshots (history), closes custom requests
-          · Telegram alerts: Booking≤Airbnb, gap>30%, expected-price drift,
-            whole-channel-empty (scraper health)
+          · Telegram alerts (Booking.com is the baseline): Airbnb off Booking
+            by more than ±5%, our site above either channel, expected-price
+            drift, whole-channel-empty (scraper health). Only NEW violations
+            are listed; ongoing ones collapse into a count. Alerts go to
+            TELEGRAM_PRICING_CHAT_ID (falls back to the ops group until set).
+            Booking's always-on member discounts (Genius 10% / mobile 10%) are
+            derived, not scraped — the board shows the Genius/app price next
+            to every Booking observation.
 ```
 
 Most invocations exit in ~1 s with "nothing to do". A grid run takes

@@ -19,7 +19,7 @@ import { requireRole } from '@/utils/authGuard';
 import { pragueToday } from '@/utils/periodUtils';
 import { refreshMarketSnapshot } from '@/data-access/analytics/marketRefresh';
 import { buildRadarDigest } from '@/data-access/pricing/radar';
-import { sendTelegram } from '@/utils/telegram';
+import { pricingChatId, sendTelegram } from '@/utils/telegram';
 
 // Four listings × three calls each, one of which returns ~540 KB. Comfortably
 // inside Vercel Pro's ceiling, nowhere near a default 10s budget.
@@ -52,7 +52,7 @@ async function run(req: NextRequest) {
     if (isMonday || req.nextUrl.searchParams.get('digest') === '1') {
       try {
         const digest = await buildRadarDigest(120);
-        if (digest) await sendTelegram(digest);
+        if (digest) await sendTelegram(digest, { chatId: pricingChatId() });
       } catch (err) {
         console.error('[market-refresh] radar digest failed', err);
       }

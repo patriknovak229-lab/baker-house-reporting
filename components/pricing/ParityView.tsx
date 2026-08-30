@@ -11,7 +11,7 @@
  * carries its capture times.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { COMPETITORS } from '@/data/parityConfig';
+import { AIRBNB_VS_BOOKING_TOLERANCE_PCT, COMPETITORS, bookingMemberFloor } from '@/data/parityConfig';
 import type {
   BoardObservation,
   BoardRow,
@@ -98,18 +98,16 @@ function categorizeDiscount(name: string): DiscountCategoryKey {
   return 'generic';
 }
 
-// ── B vs A gap — same traffic-light rule the alerts use ───────────────────────
+// ── A vs B gap — Booking.com is the baseline; Airbnb should sit 0..+tolerance ──
 
 function computeAbGap(airbnb: number | null, booking: number | null): number | null {
-  if (airbnb == null || booking == null || airbnb === 0) return null;
-  return Math.round(((booking - airbnb) / airbnb) * 100);
+  if (airbnb == null || booking == null || booking === 0) return null;
+  return Math.round(((airbnb - booking) / booking) * 100);
 }
 
 function abGapClass(gap: number | null): string {
   if (gap == null) return 'text-gray-400';
-  if (gap <= 0) return 'text-red-700 font-bold';
-  if (gap > 30) return 'text-red-700 font-bold';
-  if (gap > 15) return 'text-amber-600 font-medium';
+  if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) return 'text-red-700 font-bold';
   return 'text-emerald-600 font-medium';
 }
 
@@ -136,11 +134,14 @@ function ChannelLine({
   obs,
   nights,
   highlight,
+  memberFloor,
 }: {
   tag: string;
   obs: BoardObservation | null;
   nights: number;
   highlight?: string;
+  /** Booking only: derive the always-on Genius/app price (−10%) for context. */
+  memberFloor?: boolean;
 }) {
   if (!obs) return null;
   if (obs.price === null) {
@@ -152,13 +153,18 @@ function ChannelLine({
   }
   const pct = discountPct(obs);
   const stale = ageHours(obs.capturedAt) > 36;
+  const floor = memberFloor && obs.price !== null ? bookingMemberFloor(obs.price) : null;
+  const tooltip =
+    offerTooltip(tag, obs, nights) +
+    (floor !== null ? `\nGenius / app price ≈ ${fmt(floor)} (always-on −10%)` : '');
   return (
     <div
       className={`text-[11px] tabular-nums leading-4 whitespace-nowrap ${highlight ?? 'text-gray-700'}`}
-      title={offerTooltip(tag, obs, nights)}
+      title={tooltip}
     >
       <span className="text-gray-400">{tag}</span> {Math.round(obs.price).toLocaleString('cs-CZ')}
       {pct !== null && <span className="text-emerald-600"> −{pct}%</span>}
+      {floor !== null && <span className="text-gray-400" title="always-on Genius/app member price"> ≥{floor.toLocaleString('cs-CZ')}</span>}
       {stale && <span className="text-amber-500" title="observation older than 36 h"> ◦</span>}
     </div>
   );
@@ -177,16 +183,20 @@ function BoardCellView({ cell, nights }: { cell: BoardRow['units'][number]; nigh
       </td>
     );
   }
-  const gap = computeAbGap(cell.airbnb?.price ?? null, cell.booking?.price ?? null);
-  const undercut = gap !== null && (gap <= 0 || gap > 30);
+  const a = cell.airbnb?.price ?? null;
+  const b = cell.booking?.price ?? null;
+  const w = cell.web?.price ?? null;
+  const gap = computeAbGap(a, b);
+  const abViolation = gap !== null && Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT;
+  const webAbove = w !== null && ((b !== null && w > b * 1.01) || (a !== null && w > a * 1.01));
   return (
-    <td className={`px-3 py-1.5 border-l border-gray-100 align-top ${undercut ? 'bg-red-50/70' : ''}`}>
-      <ChannelLine tag="W" obs={cell.web} nights={nights} />
-      <ChannelLine tag="A" obs={cell.airbnb} nights={nights} />
-      <ChannelLine tag="B" obs={cell.booking} nights={nights} highlight={undercut ? 'text-red-700 font-semibold' : undefined} />
+    <td className={`px-3 py-1.5 border-l border-gray-100 align-top ${abViolation || webAbove ? 'bg-red-50/70' : ''}`}>
+      <ChannelLine tag="W" obs={cell.web} nights={nights} highlight={webAbove ? 'text-red-700 font-semibold' : undefined} />
+      <ChannelLine tag="A" obs={cell.airbnb} nights={nights} highlight={abViolation ? 'text-red-700 font-semibold' : undefined} />
+      <ChannelLine tag="B" obs={cell.booking} nights={nights} memberFloor />
       {gap !== null && (
-        <div className={`text-[10px] leading-4 ${abGapClass(gap)}`} title="Booking over Airbnb">
-          B/A {formatAbGap(gap)}
+        <div className={`text-[10px] leading-4 ${abGapClass(gap)}`} title={`Airbnb over Booking (baseline) — tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%`}>
+          A/B {formatAbGap(gap)}
         </div>
       )}
     </td>
@@ -340,7 +350,7 @@ function SlotCard({ slot }: { slot: ParitySlotView }) {
             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Web</th>
             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Airbnb</th>
             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Booking.com</th>
-            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase w-24">B vs A</th>
+            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase w-24">A vs B</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
@@ -507,7 +517,7 @@ export default function ParityView() {
       <Board
         rows={data?.board2n ?? []}
         title="Next 60 days — 2-night stays"
-        subtitle="One row per check-in. Occupancy (booked/sellable) is re-checked against Beds24 every day for every date; W = our site, A = Airbnb, B = Booking.com customer prices from the scrape rotation (daily for ~3 weeks out, every ~3 days beyond — ◦ marks an observation older than 36 h). Red rows: Booking undercuts Airbnb or exceeds +30%. Weekend check-ins tinted."
+        subtitle="One row per check-in. Occupancy (booked/sellable) is re-checked against Beds24 every day for every date; W = our site, A = Airbnb, B = Booking.com anonymous prices from the scrape rotation (daily for ~3 weeks out, every ~3 days beyond — ◦ marks an observation older than 36 h; ≥n is the always-on Genius/app price). Red cells: Airbnb off Booking by more than ±5%, or our site above a channel. Weekend check-ins tinted."
       />
 
       <Board
@@ -587,9 +597,10 @@ export default function ParityView() {
       </section>
 
       <p className="text-xs text-gray-400">
-        Prices are what an anonymous, logged-out desktop visitor pays — Genius and mobile-app rates are excluded by
-        design (🔒 marks them where a channel leaks the label) · Airbnb covers only units with their own listing ·
-        B vs A bands: ≤0 and &gt;30% alert · 0–15% healthy.
+        Prices are what an anonymous, logged-out desktop visitor pays; Booking&apos;s always-on member discounts
+        (Genius 10% / mobile 10%) are derived, not scraped — the ≥ figure next to B is the Genius/app price ·
+        Booking.com is the baseline: Airbnb must sit within ±{AIRBNB_VS_BOOKING_TOLERANCE_PCT}% of it, and our site must
+        never be above either channel · Airbnb covers only units with their own listing.
       </p>
     </div>
   );
