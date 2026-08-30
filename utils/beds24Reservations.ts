@@ -7,7 +7,7 @@
 // (guest reviews, Stripe fees, overlap flags, rate-map publish,
 // inventory-override blackouts) stay in the route.
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
@@ -24,27 +24,35 @@ export function getRedis(): Redis | null {
 }
 
 /**
- * Fold the non-arrival overlay (flag + editable net price) from
- * `baker:reservation-overrides` onto reservations server-side, so every
- * consumer — Transactions, Performance, Commission, the calendar — sees the
- * same non-arrival state without each having to merge local overrides itself.
- * The Transactions client still layers the full override set on top (identical
- * values), keeping optimistic UI updates instant.
+ * Fold the revenue-affecting overrides from `baker:reservation-overrides` onto
+ * reservations server-side, so every consumer — Transactions, Performance,
+ * Commission, the calendar — sees the same state without each having to merge
+ * local overrides itself. The Transactions client still layers the full
+ * override set on top (identical values), keeping optimistic UI updates
+ * instant.
+ *
+ * Two overlays, both inputs to `reservationRevenue`:
+ *   - non-arrival (flag + editable net retained)
+ *   - platform refund (amount the operator handed back off-channel)
+ * A booking carrying neither is returned untouched.
  */
 export async function attachNonArrivalOverlay(reservations: Reservation[]): Promise<Reservation[]> {
   const overrides = await readAllReservationOverrides<{
     nonArrival?: NonArrival | null;
     nonArrivalNetPriceCzk?: number | null;
+    platformRefund?: PlatformRefund | null;
   }>();
   if (Object.keys(overrides).length === 0) return reservations;
   return reservations.map((r) => {
     const ov = overrides[r.reservationNumber];
-    if (!ov?.nonArrival) return r;
-    return {
-      ...r,
-      nonArrival: ov.nonArrival,
-      nonArrivalNetPriceCzk: ov.nonArrivalNetPriceCzk ?? ov.nonArrival.originalPriceCzk,
-    };
+    if (!ov?.nonArrival && !ov?.platformRefund) return r;
+    const merged = { ...r };
+    if (ov.nonArrival) {
+      merged.nonArrival = ov.nonArrival;
+      merged.nonArrivalNetPriceCzk = ov.nonArrivalNetPriceCzk ?? ov.nonArrival.originalPriceCzk;
+    }
+    if (ov.platformRefund) merged.platformRefund = ov.platformRefund;
+    return merged;
   });
 }
 

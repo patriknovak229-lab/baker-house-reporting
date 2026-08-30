@@ -135,6 +135,46 @@ export interface NonArrival {
   originalPriceCzk: number;  // Beds24 price snapshot at flag time
 }
 
+/**
+ * An off-channel refund the operator granted on a booking the CHANNEL still
+ * bills in full — e.g. a goodwill discount paid back to a Booking.com guest
+ * after a complaint.
+ *
+ * This exists because the reduction never reaches us any other way. Booking.com
+ * keeps charging its commission on the ORIGINAL price and does not push the
+ * refund back down the channel connection, so Beds24's `price` (and therefore
+ * `Reservation.price`) still shows the full amount long after the money went
+ * back — verified on BH-90387422, whose price and commission were unchanged
+ * three days after a 2 500 Kč refund. Without this record the booking's
+ * economics stay permanently overstated.
+ *
+ * Revenue treatment (see utils/reservationRevenue.ts): gross booking value
+ * drops by the refunded amount, while commission and payment fees stay exactly
+ * as the channel charged them — the same fee on a smaller base, which is what
+ * makes the effective channel rate on a refunded booking higher. Net sales,
+ * gross profit and the owner settlement all fall out of that automatically.
+ * Persisted in `baker:reservation-overrides`.
+ */
+export interface PlatformRefund {
+  /** Amount returned to the guest, in CZK. Always positive. */
+  amountCzk: number;
+  /** ISO date (YYYY-MM-DD) the money went back — operator-entered. */
+  refundedAt: string;
+  /** Free-text reason ("noisy neighbours", "late check-in"), optional. */
+  reason?: string;
+  /** ISO timestamp the flag was set. */
+  flaggedAt: string;
+  /** Operator email that set it. */
+  flaggedBy: string;
+  /**
+   * Booking price at flag time. Used to pro-rate the refund when a package
+   * booking is split across its rooms (`expandLinkedReservations`), the same
+   * way `NonArrival.originalPriceCzk` is — and to spot the price drifting
+   * underneath a recorded refund.
+   */
+  originalPriceCzk: number;
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -281,6 +321,16 @@ export interface Reservation {
    * when `nonArrival` is set.
    */
   nonArrivalNetPriceCzk?: number | null;
+  /**
+   * Partial-refund marker for a booking that still stands: the guest stayed,
+   * the channel billed and commissioned the full price, and the operator gave
+   * some of it back. Reduces gross booking value — and so net sales, gross
+   * profit and the owner settlement — while leaving commission and fees at what
+   * the channel actually charged. Mutually exclusive with `nonArrival`, whose
+   * `nonArrivalNetPriceCzk` already nets off any channel-side refund.
+   * Persisted in `baker:reservation-overrides`.
+   */
+  platformRefund?: PlatformRefund | null;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this

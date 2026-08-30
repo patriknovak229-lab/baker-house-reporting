@@ -13,6 +13,7 @@ import EmailGuestModal from "./EmailGuestModal";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
+import { platformRefundShare } from "@/utils/reservationRevenue";
 import {
   freeCancelDaysLeft,
   cancellationTone,
@@ -1863,8 +1864,14 @@ function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
   const [open, setOpen] = useState(false);
   const { price, commissionAmount, paymentChargeAmount, channel } = reservation;
   const totalFees = commissionAmount + paymentChargeAmount;
-  const net = price - totalFees;
-  const hasBreakdown = totalFees > 0;
+  // `price` is what the channel billed. A refund comes off it to give the gross
+  // booking value everything downstream uses, but the fees are NOT recalculated
+  // — the channel charged them on the original price and never learns about the
+  // refund, so the effective rate on this booking is simply higher.
+  const refund = platformRefundShare(reservation);
+  const gbv = price - refund;
+  const net = gbv - totalFees;
+  const hasBreakdown = totalFees > 0 || refund > 0;
   const feesAreMissing = !NO_FEE_CHANNELS.includes(channel) && totalFees === 0;
 
   return (
@@ -1875,7 +1882,7 @@ function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
           className={`flex items-center gap-1 text-sm font-medium text-gray-800 transition-colors ${hasBreakdown ? "hover:text-indigo-600 cursor-pointer" : "cursor-default"}`}
           title={hasBreakdown ? "Click to see fee breakdown" : undefined}
         >
-          {formatCurrency(price)}
+          {formatCurrency(gbv)}
           {hasBreakdown && (
             <svg
               className={`w-3 h-3 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
@@ -1898,8 +1905,23 @@ function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
       </div>
       {open && hasBreakdown && (
         <div className="mt-2 rounded-md border border-gray-100 bg-gray-50 px-3 py-2.5 space-y-1.5 text-xs">
-          <BreakdownRow label="Gross Booking Value" value={price} />
-          <BreakdownRow label={`${channel} commission`} value={-totalFees} />
+          {refund > 0 ? (
+            <>
+              <BreakdownRow label="Billed by channel" value={price} />
+              <BreakdownRow label="Refunded to guest" value={-refund} />
+              <div className="border-t border-gray-200 pt-1.5">
+                <BreakdownRow label="Gross Booking Value" value={gbv} />
+              </div>
+            </>
+          ) : (
+            <BreakdownRow label="Gross Booking Value" value={gbv} />
+          )}
+          {totalFees > 0 && (
+            <BreakdownRow
+              label={refund > 0 ? `${channel} commission (on ${formatCurrency(price)})` : `${channel} commission`}
+              value={-totalFees}
+            />
+          )}
           <div className="border-t border-gray-200 pt-1.5">
             <BreakdownRow label="Net Revenue" value={net} bold />
           </div>
@@ -1974,6 +1996,9 @@ export default function ReservationDrawer({
         isCancelled: true,
         nonArrival: { flaggedAt: new Date().toISOString(), flaggedBy: naUserEmail, originalPriceCzk: r.price },
         nonArrivalNetPriceCzk: r.price,
+        // Net-retained already nets off any channel-side refund — keeping a
+        // separate platform refund on top would deduct the same money twice.
+        platformRefund: null,
         issues: withTask,
       });
     } catch (e) {
@@ -2007,6 +2032,39 @@ export default function ReservationDrawer({
       nonArrivalNetPriceCzk: Math.max(0, Math.round(value || 0)),
       issues: (r.issues ?? []).map((i) => (i.id === taskId ? { ...i, resolved: true } : i)),
     });
+  }
+
+  // ── Partial platform refund ────────────────────────────────────────────────
+  // Money handed back to a guest on a booking that still stands. The channel
+  // never learns about it (Booking.com keeps commissioning the original price
+  // and doesn't push the reduction to Beds24), so it only exists here.
+  function setPlatformRefund(patch: { amountCzk?: number; refundedAt?: string; reason?: string }) {
+    if (!reservation) return;
+    const r = reservation;
+    const existing = r.platformRefund;
+    const amountCzk = Math.max(0, Math.round(patch.amountCzk ?? existing?.amountCzk ?? 0));
+    // `||` not `??` on the free-text fields: clearing an input yields "", and an
+    // empty date would render a blank control the operator can't tell from
+    // unset. An emptied reason genuinely means "no reason", so drop it.
+    const reason = (patch.reason ?? existing?.reason ?? "").trim();
+    onUpdate({
+      ...r,
+      platformRefund: {
+        amountCzk,
+        refundedAt: patch.refundedAt || existing?.refundedAt || pragueToday(),
+        reason: reason || undefined,
+        flaggedAt: existing?.flaggedAt ?? new Date().toISOString(),
+        flaggedBy: existing?.flaggedBy ?? naUserEmail,
+        // Frozen at first flag so the refund keeps its proportional share if the
+        // booking price is later split across rooms or edited on the channel.
+        originalPriceCzk: existing?.originalPriceCzk ?? r.price,
+      },
+    });
+  }
+
+  function clearPlatformRefund() {
+    if (!reservation) return;
+    onUpdate({ ...reservation, platformRefund: null });
   }
 
   const [notes, setNotes] = useState("");
@@ -3334,6 +3392,88 @@ export default function ReservationDrawer({
                 </button>
               ) : null}
             </div>
+
+            {/* Partially refunded — the operator handed money back on a booking
+                that still stands. Nothing about this reaches the channel: it
+                keeps charging commission on the original price and never pushes
+                the reduction to Beds24, so the amount is only ever recorded
+                here. It comes off gross booking value, leaving the channel's fee
+                where it was — a higher effective rate on a smaller sale. Hidden
+                for non-arrivals, whose net-retained price already nets one off. */}
+            {!reservation.nonArrival && (
+              <div className="mt-2">
+                {reservation.platformRefund ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800">
+                        ↩︎ Partially refunded
+                      </span>
+                      {canEditNonArrival && (
+                        <button
+                          onClick={clearPlatformRefund}
+                          className="text-[11px] text-amber-600 hover:underline"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-amber-600 mt-0.5">
+                      Comes off gross revenue. {reservation.channel} keeps its fee on the full{" "}
+                      {formatCurrency(reservation.platformRefund.originalPriceCzk)} it billed.
+                    </p>
+                    <div className="mt-2 flex items-end gap-3 flex-wrap">
+                      <label className="text-[11px] text-amber-700">
+                        Refunded (Kč)
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          defaultValue={reservation.platformRefund.amountCzk}
+                          onBlur={(e) => setPlatformRefund({ amountCzk: Number(e.target.value) })}
+                          disabled={!canEditNonArrival}
+                          className="block w-32 mt-0.5 border border-amber-200 rounded px-2 py-1 text-sm text-amber-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:opacity-60"
+                        />
+                      </label>
+                      <label className="text-[11px] text-amber-700">
+                        Refunded on
+                        <input
+                          type="date"
+                          defaultValue={reservation.platformRefund.refundedAt}
+                          onBlur={(e) => setPlatformRefund({ refundedAt: e.target.value })}
+                          disabled={!canEditNonArrival}
+                          className="block mt-0.5 border border-amber-200 rounded px-2 py-1 text-sm text-amber-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:opacity-60"
+                        />
+                      </label>
+                      <label className="text-[11px] text-amber-700 flex-1 min-w-[10rem]">
+                        Reason
+                        <input
+                          type="text"
+                          placeholder="e.g. goodwill after complaint"
+                          defaultValue={reservation.platformRefund.reason ?? ""}
+                          onBlur={(e) => setPlatformRefund({ reason: e.target.value })}
+                          disabled={!canEditNonArrival}
+                          className="block w-full mt-0.5 border border-amber-200 rounded px-2 py-1 text-sm text-amber-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:opacity-60"
+                        />
+                      </label>
+                    </div>
+                    {reservation.platformRefund.originalPriceCzk !== reservation.price && (
+                      <p className="text-[11px] text-amber-700 mt-1.5">
+                        ⚠ Price was {formatCurrency(reservation.platformRefund.originalPriceCzk)} when this was
+                        recorded, now {formatCurrency(reservation.price)} — the refund is pro-rated to match.
+                      </p>
+                    )}
+                  </div>
+                ) : canEditNonArrival ? (
+                  <button
+                    onClick={() => setPlatformRefund({ amountCzk: 0 })}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors"
+                    title="Money handed back to the guest on a booking that still stands — gross revenue drops, the channel keeps its fee on the full price"
+                  >
+                    ↩︎ Mark partially refunded
+                  </button>
+                ) : null}
+              </div>
+            )}
 
             <div className="flex items-center gap-2 flex-wrap mt-2">
               <button

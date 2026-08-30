@@ -550,13 +550,21 @@ function ReservationCard({
       </div>
 
       {/* Row 5: Stay status + flags (only if present) */}
-      {(stayStatuses.length > 0 || effectiveFlags.length > 0 || res.isCancelled) && (
+      {(stayStatuses.length > 0 ||
+        effectiveFlags.length > 0 ||
+        res.isCancelled ||
+        (res.platformRefund?.amountCzk ?? 0) > 0) && (
         <div className="flex flex-wrap gap-1 mt-2">
           {res.nonArrival ? (
             <Badge variant="purple" size="xs">🚨 Non-arrival</Badge>
           ) : res.isCancelled ? (
             <Badge variant="red" size="xs">🚫 Cancelled</Badge>
           ) : null}
+          {res.platformRefund && res.platformRefund.amountCzk > 0 && (
+            <Badge variant="amber" size="xs">
+              ↩︎ Refunded {Math.round(res.platformRefund.amountCzk).toLocaleString("cs-CZ")} Kč
+            </Badge>
+          )}
           {stayStatuses.map((status) => {
             if (status === "checking-in") return (
               <Badge key={status} variant="amber-filled" size="xs">Checking in</Badge>
@@ -980,6 +988,11 @@ export default function ReservationTable({
                         ) : res.isCancelled ? (
                           <Badge variant="red" size="xs">🚫 Cancelled</Badge>
                         ) : null}
+                        {res.platformRefund && res.platformRefund.amountCzk > 0 && (
+                          <Badge variant="amber" size="xs">
+                            ↩︎ Refunded {Math.round(res.platformRefund.amountCzk).toLocaleString("cs-CZ")} Kč
+                          </Badge>
+                        )}
                         {effectiveFlags.map((flag) => (
                           <Badge
                             key={flag}

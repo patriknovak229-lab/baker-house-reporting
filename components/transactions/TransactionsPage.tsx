@@ -55,6 +55,7 @@ type LocalFields = {
   postStaySnapshot?: import('@/types/reservation').BookingSnapshot;
   nonArrival?: import('@/types/reservation').NonArrival | null;
   nonArrivalNetPriceCzk?: number | null;
+  platformRefund?: import('@/types/reservation').PlatformRefund | null;
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -77,6 +78,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.postStaySnapshot) local.postStaySnapshot = r.postStaySnapshot;
   if (r.nonArrival) local.nonArrival = r.nonArrival;
   if (r.nonArrivalNetPriceCzk != null) local.nonArrivalNetPriceCzk = r.nonArrivalNetPriceCzk;
+  if (r.platformRefund) local.platformRefund = r.platformRefund;
   return local;
 }
 
