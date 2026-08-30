@@ -51,16 +51,25 @@ export function assessStay(cell: BoardUnitCell): StayAssessment {
 
   const issues: StayIssue[] = [];
 
-  // MAJOR — same rules as the Telegram alerts. Airbnb is judged against
-  // Booking's EFFECTIVE price (the derived Genius/app floor): Booking's
-  // anonymous price runs ~19% above what its customers actually pay, while
-  // Airbnb shows one price to everyone.
-  if (a !== null && memberFloor !== null && memberFloor > 0) {
-    const gap = ((a - memberFloor) / memberFloor) * 100;
-    if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) {
+  // MAJOR — same rules as the Telegram alerts. Airbnb must sit INSIDE the
+  // corridor between Booking's two real prices: no lower than the derived
+  // Genius/app floor (Airbnb undercutting the baseline channel) and no higher
+  // than the anonymous price plus tolerance (visibly dearer to a comparison
+  // shopper). A single ± band around either price alone cannot work — the
+  // floor sits ~19% under anonymous BY DESIGN, so anonymous-vs-anonymous
+  // flagged every "Booking.com pays" date and floor-vs-anonymous would flag
+  // every normal one.
+  if (a !== null && b !== null && b > 0 && memberFloor !== null) {
+    const tol = AIRBNB_VS_BOOKING_TOLERANCE_PCT / 100;
+    if (a > b * (1 + tol)) {
       issues.push({
         severity: 'major',
-        text: `Airbnb ${kc(a)} is ${Math.abs(gap).toFixed(0)}% ${gap < 0 ? 'below' : 'above'} Booking's Genius/app price ${kc(memberFloor)} (anonymous ${kc(b!)}; tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
+        text: `Airbnb ${kc(a)} is ${(((a - b) / b) * 100).toFixed(0)}% above Booking's anonymous price ${kc(b)} (allowed +${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
+      });
+    } else if (a < memberFloor * (1 - tol)) {
+      issues.push({
+        severity: 'major',
+        text: `Airbnb ${kc(a)} is ${(((memberFloor - a) / memberFloor) * 100).toFixed(0)}% below even Booking's Genius/app price ${kc(memberFloor)} — Airbnb undercuts the baseline channel`,
       });
     }
   }

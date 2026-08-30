@@ -196,13 +196,16 @@ export const EXPECTED_DRIFT_ALERT_PCT = 2;
 /**
  * PARITY RULES — Booking.com is the baseline (the biggest channel).
  *
- * 1. Airbnb vs Booking is compared at Booking's EFFECTIVE price — the derived
- *    Genius/app floor (anonymous × member discounts), NOT the anonymous
- *    price. Booking's anonymous price is inflated by ~19% relative to what a
- *    Genius app customer actually pays, while Airbnb shows one price to
- *    everyone; comparing anonymous-to-anonymous flagged every date (operator
- *    decision 2026-08-30: apples to apples). Alert when Airbnb deviates from
- *    the floor by more than this, either direction.
+ * 1. Airbnb must sit inside Booking's price CORRIDOR: no lower than the
+ *    derived Genius/app floor (anonymous × member discounts — Airbnb below it
+ *    undercuts the baseline channel), no higher than the anonymous price plus
+ *    this tolerance (visibly dearer to a comparison shopper). The floor sits
+ *    ~19% under anonymous BY DESIGN (Genius 10% × mobile 10% always on), so a
+ *    single ± band around either price alone cannot work: anonymous-vs-
+ *    anonymous flagged every "Booking.com pays" date, floor-vs-anonymous
+ *    would flag every normal one. Operator intent 2026-08-30: compare with
+ *    Genius+mobile taken into consideration, "Airbnb same or slightly above
+ *    Booking".
  * 2. The direct site must never be the expensive option: alert when the Web
  *    price exceeds the anonymous Booking OR Airbnb price.
  */

@@ -345,8 +345,10 @@ function ChannelDetail({
 function DetailPanel({ selection, onClose }: { selection: Selection; onClose: () => void }) {
   const { row, cell, assessment } = selection;
   const a = cell.airbnb?.price ?? null;
+  const b = cell.booking?.price ?? null;
   const floor = assessment.memberFloor;
-  const abGap = a !== null && floor !== null && floor > 0 ? Math.round(((a - floor) / floor) * 100) : null;
+  const corridor = a !== null && b !== null && b > 0 && floor !== null;
+  const insideCorridor = corridor && a >= floor * 0.95 && a <= b * 1.05;
   const minStayLabel = cell.web?.labels.find((l) => /^Min stay \d+$/.test(l)) ?? null;
 
   return (
@@ -406,10 +408,13 @@ function DetailPanel({ selection, onClose }: { selection: Selection; onClose: ()
         <ChannelDetail name="Airbnb" obs={cell.airbnb} nights={row.nights} />
         <ChannelDetail name="Booking.com" obs={cell.booking} nights={row.nights} memberFloor={assessment.memberFloor} />
 
-        {abGap !== null && (
+        {corridor && (
           <div className="text-xs text-gray-500">
-            Airbnb vs Booking&apos;s Genius/app price ({fmt(floor)}):{' '}
-            <span className={Math.abs(abGap) > 5 ? 'text-rose-700 font-semibold' : 'text-emerald-700 font-semibold'}>{abGap > 0 ? '+' : ''}{abGap}%</span> · tolerance ±5%
+            Airbnb corridor (Booking baseline): Genius/app {fmt(floor)} ≤{' '}
+            <span className={insideCorridor ? 'text-emerald-700 font-semibold' : 'text-rose-700 font-semibold'}>
+              Airbnb {fmt(a)}
+            </span>{' '}
+            ≤ anonymous +5% {fmt(Math.round(b * 1.05))} — {insideCorridor ? 'inside' : 'outside'} (tolerance ±5% at each bound)
           </div>
         )}
         {assessment.bookingFunded && (
@@ -643,7 +648,7 @@ export default function ParityView() {
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] border border-gray-200 bg-[repeating-linear-gradient(45deg,#e5e7eb_0px,#e5e7eb_3px,#ffffff_3px,#ffffff_6px)]" /> open, but min-stay blocks this length</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-emerald-100 border border-emerald-200" /> checked, fine</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-amber-300" /> minor — Genius/app price on Booking below our site</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — Airbnb off Booking&apos;s Genius/app price &gt;±5% or our site above a channel</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — Airbnb outside Booking&apos;s Genius↔anonymous corridor or our site above a channel</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-white border border-dashed border-gray-300" /> not scraped yet</span>
         <span className="text-gray-400">· click any block for details</span>
       </div>

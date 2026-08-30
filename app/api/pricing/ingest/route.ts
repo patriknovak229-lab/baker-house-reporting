@@ -288,17 +288,23 @@ export async function POST(req: NextRequest) {
       const w = webPrice;
       const stay = `${slot.checkIn} (${slot.nights}n)`;
 
-      // 1. Airbnb vs Booking's EFFECTIVE price — the derived Genius/app floor,
-      // not the anonymous price (which runs ~19% hot; anonymous-to-anonymous
-      // flagged nearly every stay). Airbnb shows one price to everyone.
+      // 1. Airbnb must sit INSIDE Booking's price corridor: no lower than the
+      // derived Genius/app floor (undercutting the baseline channel), no
+      // higher than the anonymous price + tolerance (visibly dearer). The
+      // floor sits ~19% under anonymous by design, so a single band around
+      // either price alone flags one structural regime or the other.
       const bFloor = b !== null ? bookingMemberFloor(b, scraped.booking?.labels ?? []) : null;
-      if (a !== null && bFloor !== null && bFloor > 0) {
-        const gapPct = ((a - bFloor) / bFloor) * 100;
-        if (Math.abs(gapPct) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) {
-          const dir = gapPct < 0 ? 'below' : 'above';
+      if (a !== null && b !== null && b > 0 && bFloor !== null) {
+        const tol = AIRBNB_VS_BOOKING_TOLERANCE_PCT / 100;
+        if (a > b * (1 + tol)) {
           gapAlerts.push({
             key: `ab:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${Math.abs(gapPct).toFixed(0)}% ${dir} Booking's Genius/app price ${bFloor} Kč (anonymous ${b} Kč; tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
+            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${(((a - b) / b) * 100).toFixed(0)}% above Booking's anonymous ${b} Kč (allowed +${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
+          });
+        } else if (a < bFloor * (1 - tol)) {
+          gapAlerts.push({
+            key: `ab:${unit.id}:${slot.checkIn}:${slot.nights}`,
+            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${(((bFloor - a) / bFloor) * 100).toFixed(0)}% below even Booking's Genius/app price ${bFloor} Kč — Airbnb undercuts the baseline channel`,
           });
         }
       }
@@ -481,8 +487,8 @@ export async function POST(req: NextRequest) {
         for (const [k, { a, b, w, bLabels }] of byKey) {
           if (a != null && b != null && b > 0) {
             const floor = bookingMemberFloor(b, bLabels ?? []);
-            const gap = floor > 0 ? ((a - floor) / floor) * 100 : 0;
-            if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) prevKeys.add(`ab:${k}`);
+            const tol = AIRBNB_VS_BOOKING_TOLERANCE_PCT / 100;
+            if (a > b * (1 + tol) || a < floor * (1 - tol)) prevKeys.add(`ab:${k}`);
           }
           if (w != null && ((b != null && w > b * 1.01) || (a != null && w > a * 1.01))) {
             prevKeys.add(`web:${k}`);
