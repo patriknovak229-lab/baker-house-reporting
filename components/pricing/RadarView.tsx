@@ -21,6 +21,7 @@ import type {
   RadarResponse,
   RadarUnit,
 } from '@/utils/radarTypes';
+import { PARITY_UNITS } from '@/data/parityConfig';
 
 // ── Demand styling ────────────────────────────────────────────────────────────
 
@@ -244,7 +245,7 @@ export default function RadarView() {
   const [radar, setRadar] = useState<RadarResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [horizon, setHorizon] = useState<60 | 120 | 365>(120);
+  const [horizon, setHorizon] = useState<60 | 120 | 365>(60);
   const [highOnly, setHighOnly] = useState(false);
 
   const load = useCallback(async () => {
@@ -303,6 +304,12 @@ export default function RadarView() {
       .filter((d) => (highOnly ? d.demand === 'high' : d.demand === 'high' || d.demand === 'good'))
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [radar, cityDays, horizon, highOnly]);
+
+  // Display order shared with the parity boards: Urban, 1KK Deluxe, O.308, K.201.
+  const orderedUnits = useMemo(() => {
+    const rank = new Map(PARITY_UNITS.map((u, i) => [u.id, i]));
+    return [...(radar?.units ?? [])].sort((a, b) => (rank.get(a.unitId) ?? 99) - (rank.get(b.unitId) ?? 99));
+  }, [radar]);
 
   const dayByUnit = useMemo(() => {
     const map = new Map<string, Map<string, RadarDay>>();
@@ -439,7 +446,7 @@ export default function RadarView() {
                   <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                   <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Demand</th>
                   <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase" title="Highest market occupancy across bedroom categories">Mkt occ</th>
-                  {radar.units.map((u) => (
+                  {orderedUnits.map((u) => (
                     <th key={u.unitId} className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">
                       {u.label.replace('Baker House Apartments', '').trim()}
                     </th>
@@ -469,7 +476,7 @@ export default function RadarView() {
                       <td className="px-3 py-2 text-right tabular-nums text-gray-600">
                         {d.marketOccupancy !== null ? pct(d.marketOccupancy) : '—'}
                       </td>
-                      {radar.units.map((u) => (
+                      {orderedUnits.map((u) => (
                         <UnitPriceCell key={u.unitId} day={dayByUnit.get(u.unitId)?.get(d.date)} />
                       ))}
                     </tr>

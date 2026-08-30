@@ -24,11 +24,14 @@ import { pragueToday } from '@/utils/periodUtils';
 import { sendTelegram } from '@/utils/telegram';
 import {
   BOOKING_OVER_AIRBNB_BAND,
+  COMPETITORS,
   EXPECTED_DRIFT_ALERT_PCT,
   PARITY_CONFIG_VERSION,
   PARITY_ECONOMICS,
+  PARITY_SWEEP,
   PARITY_UNITS,
 } from '@/data/parityConfig';
+import { planSweepSlots } from '@/data-access/pricing/planSlots';
 import type {
   ParityChannel,
   ParityIngestPayload,
@@ -37,7 +40,9 @@ import type {
 } from '@/utils/parityTypes';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+// Grid ingests make ~1 Beds24 offers call per swept check-in (window + slots ≈
+// 100 sequential calls at a few hundred ms each) before the batch insert.
+export const maxDuration = 300;
 
 function checkSecret(req: NextRequest): NextResponse | null {
   const expected = process.env.PRICING_INGEST_SECRET;
@@ -100,11 +105,18 @@ export async function GET(req: NextRequest) {
     .where(eq(priceCheckRequests.status, 'pending'))
     .orderBy(priceCheckRequests.requestedAt);
 
+  const gridDue = lastGridDate === null || lastGridDate < today;
+
+  // The concrete scrape plan. Also sent when the caller forces a plan
+  // (?plan=1) — used by manual runner invocations that re-run a day.
+  const wantPlan = gridDue || req.nextUrl.searchParams.get('plan') === '1';
+
   const order: ParityWorkOrder = {
     today,
     configVersion: PARITY_CONFIG_VERSION,
     lastGridDate,
-    gridDue: lastGridDate === null || lastGridDate < today,
+    gridDue,
+    slots: wantPlan ? await planSweepSlots(today) : undefined,
     pendingRequests: pending.map((r) => ({ id: r.id, checkIn: r.checkIn, nights: r.nights })),
   };
   return NextResponse.json(order);
@@ -254,12 +266,85 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Competitor observations ride along in the same payload, keyed
+    // `comp:<id>`. Stored as-is: no web enrichment, no expected price, no
+    // alerts — they are context, not parity subjects.
+    for (const [key, channels] of Object.entries(slot.offers ?? {})) {
+      if (!key.startsWith('comp:')) continue;
+      if (!COMPETITORS.some((c) => `comp:${c.id}` === key)) continue;
+      for (const channel of ['airbnb', 'booking'] as const) {
+        const offer = channels[channel];
+        if (!offer) continue;
+        const discountPct =
+          offer.price !== null && offer.originalPrice !== null && offer.originalPrice > offer.price
+            ? Math.round(((offer.originalPrice - offer.price) / offer.originalPrice) * 1000) / 10
+            : null;
+        rows.push({
+          runId: payload.runId,
+          source: payload.source,
+          unitId: key,
+          channel,
+          checkIn: slot.checkIn,
+          nights: slot.nights,
+          leadDays,
+          price: offer.price === null ? null : String(offer.price),
+          originalPrice: offer.originalPrice === null ? null : String(offer.originalPrice),
+          discountPct: discountPct === null ? null : String(discountPct),
+          discounts: offer.discountBreakdown ?? null,
+          labels: offer.labels.length > 0 ? offer.labels : null,
+          availability: offer.availability,
+          expectedPrice: null,
+          capturedAt,
+        });
+      }
+    }
+
     // Close the custom request this slot answered.
     if (slot.requestId) {
       await db
         .update(priceCheckRequests)
         .set({ status: 'done', completedAt: new Date(), runId: payload.runId, error: null })
         .where(eq(priceCheckRequests.id, slot.requestId));
+    }
+  }
+
+  // Full-window availability + Web sweep (grid runs only): every 2-night
+  // check-in in the window gets a fresh Web row daily whether or not it was
+  // scraped — one Beds24 offers call per date. This is what keeps the
+  // occupancy board complete while the channel scrapes rotate through the far
+  // zone, and it costs no page loads at all.
+  if (payload.source === 'grid' && beds24Token) {
+    const covered = new Set(
+      payload.slots.filter((s) => s.nights === 2).map((s) => s.checkIn),
+    );
+    for (let lead = PARITY_SWEEP.minLeadDays; lead <= PARITY_SWEEP.windowDays; lead++) {
+      const checkIn = addDays(today, lead);
+      if (covered.has(checkIn)) continue;
+      try {
+        const offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, 2), 2, 0);
+        for (const unit of PARITY_UNITS) {
+          const price = extractPrice(offersForRoom(offers, unit.beds24RoomId));
+          rows.push({
+            runId: payload.runId,
+            source: payload.source,
+            unitId: unit.id,
+            channel: 'web',
+            checkIn,
+            nights: 2,
+            leadDays: lead,
+            price: price === null ? null : String(price),
+            originalPrice: null,
+            discountPct: null,
+            discounts: null,
+            labels: null,
+            availability: price !== null ? 'available' : 'not_available',
+            expectedPrice: null,
+            capturedAt,
+          });
+        }
+      } catch (err) {
+        console.error(`[parity-ingest] web sweep failed for ${checkIn}`, err);
+      }
     }
   }
 

@@ -5,35 +5,41 @@
  * docs/pricing-runner.md). Each invocation:
  *
  *   1. Asks the reporting app for a work order (GET /api/pricing/ingest):
- *      is today's grid run still due, and which custom checks are queued.
+ *      is today's grid run still due (server sends the concrete slot plan —
+ *      an availability-aware sweep of the next 60 days), and which custom
+ *      checks are queued.
  *   2. If there is nothing to do, exits silently — most invocations do this.
  *   3. Scrapes Booking.com + Airbnb in the local real Chrome (residential IP;
- *      Vercel datacenter IPs are bot-walled by Booking.com).
- *   4. POSTs observations back; the server adds the Beds24 Web column,
- *      computes expected prices, stores history, and fires parity alerts.
+ *      Vercel datacenter IPs are bot-walled by Booking.com). Airbnb loads are
+ *      skipped for units the plan says cannot sell the stay. Competitor
+ *      listings from data/parityConfig ride along on grid runs.
+ *   4. POSTs observations back; the server adds the Beds24 Web column for the
+ *      WHOLE window (the occupancy board), computes expected prices, stores
+ *      history, and fires parity alerts.
  *
  * Requires in .env.local: PRICING_INGEST_SECRET, CHROME_EXECUTABLE_PATH.
  * Optional: PARITY_INGEST_URL (defaults to production), RUNNER_HEADFUL=1 to
  * watch the browser work, PARITY_GRID_AFTER=HH:MM Prague gate for the daily
- * grid run (default 08:00).
+ * grid run (default 08:00), PARITY_FORCE_GRID=1 to re-run today's grid.
  */
 import '../_loadEnv';
 import puppeteer, { type Browser } from 'puppeteer-core';
-import { PARITY_GRID, PARITY_UNITS } from '../../data/parityConfig';
+import { COMPETITORS, COMPETITOR_LEADS, PARITY_GRID, PARITY_UNITS } from '../../data/parityConfig';
 import type {
   ParityIngestPayload,
   ParityOffer,
   ParitySlotResult,
   ParityWorkOrder,
 } from '../../utils/parityTypes';
-import { scrapeBookingSlots } from './bookingScraper';
+import { scrapeBookingSlots, scrapeCompetitorBooking } from './bookingScraper';
 import { scrapeAirbnbViaBrowser } from './airbnbScraper';
 
-const RUNNER_VERSION = 'parity-runner/1.0';
+const RUNNER_VERSION = 'parity-runner/2.0';
 
 const BASE_URL = (process.env.PARITY_INGEST_URL ?? 'https://reporting.bakerhouseapartments.cz').replace(/\/$/, '');
 const SECRET = process.env.PRICING_INGEST_SECRET ?? '';
 const CHROME = process.env.CHROME_EXECUTABLE_PATH ?? '';
+const FORCE_GRID = process.env.PARITY_FORCE_GRID === '1';
 
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -65,6 +71,8 @@ interface WorkSlot {
   checkIn: string;
   checkOut: string;
   nights: number;
+  /** Unit ids the plan believes sellable; undefined = scrape everything. */
+  units?: string[];
   requestId?: number;
 }
 
@@ -72,18 +80,25 @@ async function main() {
   if (!SECRET) throw new Error('PRICING_INGEST_SECRET is not set in .env.local');
   if (!CHROME) throw new Error('CHROME_EXECUTABLE_PATH is not set in .env.local');
 
-  const order = await api<ParityWorkOrder>('/api/pricing/ingest');
+  const order = await api<ParityWorkOrder>(`/api/pricing/ingest${FORCE_GRID ? '?plan=1' : ''}`);
 
   // The daily grid waits for a civilised hour so the sample time is stable —
   // comparing a 03:00 scrape to yesterday's 09:00 scrape adds noise for free.
   const gridAfter = process.env.PARITY_GRID_AFTER ?? '08:00';
-  const gridWanted = order.gridDue && pragueNowHHMM() >= gridAfter;
+  const gridWanted = FORCE_GRID || (order.gridDue && pragueNowHHMM() >= gridAfter);
 
+  // Server-planned sweep; fall back to the fixed relative grid when talking
+  // to an older deployment that sent no plan.
   const gridSlots: WorkSlot[] = gridWanted
-    ? PARITY_GRID.map(({ leadDays, nights }) => ({
+    ? (order.slots ?? PARITY_GRID.map(({ leadDays, nights }) => ({
         checkIn: addDays(order.today, leadDays),
-        checkOut: addDays(order.today, leadDays + nights),
         nights,
+        units: undefined,
+      }))).map((s) => ({
+        checkIn: s.checkIn,
+        checkOut: addDays(s.checkIn, s.nights),
+        nights: s.nights,
+        units: 'units' in s ? s.units : undefined,
       }))
     : [];
 
@@ -100,7 +115,7 @@ async function main() {
     return;
   }
   console.log(
-    `[runner] work order: ${gridSlots.length} grid slot(s), ${customSlots.length} custom check(s) → ${BASE_URL}`,
+    `[runner] work order v${order.configVersion ?? '?'}: ${gridSlots.length} grid slot(s), ${customSlots.length} custom check(s), ${gridWanted ? COMPETITORS.length : 0} competitor(s) → ${BASE_URL}`,
   );
 
   const browser: Browser = await puppeteer.launch({
@@ -110,16 +125,30 @@ async function main() {
   });
 
   try {
-    // Booking.com — one property-page load per slot, all units on the page.
-    const bookingBySlot = await scrapeBookingSlots(browser, allSlots);
+    // Booking.com — one property-page load per slot (skipped when the plan
+    // says no unit on the page can sell the stay).
+    const bookingBySlot = await scrapeBookingSlots(
+      browser,
+      allSlots,
+      allSlots.map((s) => s.units),
+    );
 
-    // Airbnb — one pass per configured listing across every slot.
-    const airbnbByUnit = new Map<string, ParityOffer[]>();
+    // Airbnb — one pass per configured listing, only over slots where the
+    // plan says that unit can actually sell the stay.
+    const airbnbByUnit = new Map<string, Map<number, ParityOffer>>();
     for (const unit of PARITY_UNITS) {
       if (!unit.airbnb) continue;
-      console.log(`[runner] airbnb ${unit.id} (${unit.airbnb.listingId}) — ${allSlots.length} slot(s)`);
-      const offers = await scrapeAirbnbViaBrowser(browser, unit.airbnb.listingId, allSlots);
-      airbnbByUnit.set(unit.id, offers);
+      const indices = allSlots
+        .map((s, i) => (s.units === undefined || s.units.includes(unit.id) ? i : -1))
+        .filter((i) => i >= 0);
+      if (indices.length === 0) continue;
+      console.log(`[runner] airbnb ${unit.id} (${unit.airbnb.listingId}) — ${indices.length}/${allSlots.length} slot(s)`);
+      const offers = await scrapeAirbnbViaBrowser(
+        browser,
+        unit.airbnb.listingId,
+        indices.map((i) => allSlots[i]),
+      );
+      airbnbByUnit.set(unit.id, new Map(indices.map((slotIdx, k) => [slotIdx, offers[k]])));
     }
 
     const toSlotResult = (slot: WorkSlot, index: number): ParitySlotResult => {
@@ -127,7 +156,12 @@ async function main() {
       for (const unit of PARITY_UNITS) {
         const entry: ParitySlotResult['offers'][string] = {};
         if (unit.booking) entry.booking = bookingBySlot[index]?.[unit.id];
-        if (unit.airbnb) entry.airbnb = airbnbByUnit.get(unit.id)?.[index];
+        if (unit.airbnb) {
+          const scraped = airbnbByUnit.get(unit.id)?.get(index);
+          // Skipped-by-plan = the stay was unsellable per Beds24 — record it
+          // as such rather than leaving a hole in the board.
+          entry.airbnb = scraped ?? { price: null, originalPrice: null, labels: [], availability: 'not_available' };
+        }
         offers[unit.id] = entry;
       }
       return { checkIn: slot.checkIn, nights: slot.nights, requestId: slot.requestId, offers };
@@ -137,12 +171,41 @@ async function main() {
     const runTag = stamp.replace(/[-:TZ.]/g, '').slice(0, 14);
 
     if (gridSlots.length > 0) {
+      const slots = gridSlots.map((s, i) => toSlotResult(s, i));
+
+      // Competitor pricing rides along on grid runs only.
+      if (COMPETITORS.length > 0) {
+        const compSlots = COMPETITOR_LEADS.map(({ leadDays, nights }) => ({
+          checkIn: addDays(order.today, leadDays),
+          checkOut: addDays(order.today, leadDays + nights),
+          nights,
+        }));
+        for (const comp of COMPETITORS) {
+          const key = `comp:${comp.id}`;
+          const booking = comp.booking ? await scrapeCompetitorBooking(browser, comp, compSlots) : null;
+          const airbnb = comp.airbnb
+            ? await scrapeAirbnbViaBrowser(browser, comp.airbnb.listingId, compSlots)
+            : null;
+          compSlots.forEach((cs, i) => {
+            let slot = slots.find((s) => s.checkIn === cs.checkIn && s.nights === cs.nights);
+            if (!slot) {
+              slot = { checkIn: cs.checkIn, nights: cs.nights, offers: {} };
+              slots.push(slot);
+            }
+            const entry: Partial<Record<'airbnb' | 'booking', ParityOffer>> = {};
+            if (booking) entry.booking = booking[i];
+            if (airbnb) entry.airbnb = airbnb[i];
+            slot.offers[key] = entry;
+          });
+        }
+      }
+
       const payload: ParityIngestPayload = {
         runId: `grid-${runTag}`,
         source: 'grid',
         capturedAt: stamp,
         runner: RUNNER_VERSION,
-        slots: gridSlots.map((s, i) => toSlotResult(s, i)),
+        slots,
       };
       const res = await api<{ inserted: number; alerts: number }>('/api/pricing/ingest', {
         method: 'POST',

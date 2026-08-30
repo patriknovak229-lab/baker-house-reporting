@@ -12,20 +12,29 @@ iCloud invoice import: the Mac is the trusted local half of the pipeline.
 launchd (every 5 min)
   └─ scripts/parity-runner/run.ts
        1. GET  /api/pricing/ingest      ── work order (secret header)
-          · gridDue?  → the 8-slot daily grid (leads 3/7/14/30/60 × 2n/7n),
-            once per day after 08:00 Prague
+          · gridDue? → the server sends today's SLOT PLAN: an
+            availability-aware sweep of the next 60 days (2-night stays daily
+            for ~3 weeks out + a 1-in-3 rotation beyond; 7-night stays on a
+            1-in-7 rotation), planned from the PriceLabs availability
+            snapshot so unsellable stays are never scraped. Once per day
+            after 08:00 Prague. PARITY_SWEEP in data/parityConfig tunes it.
           · pendingRequests → custom checks queued in the UI
        2. Scrape Booking.com (structured .hprt-table parse, all room types)
-          + Airbnb (Reserve-panel logic, per configured listing)
+          + Airbnb (Reserve-panel logic, per configured listing, only for
+          units the plan says can sell the stay) + competitor listings from
+          data/parityConfig COMPETITORS (grid runs only)
        3. POST /api/pricing/ingest      ── observations
-          · server adds the Web column from Beds24 offers
+          · server adds the Web column from Beds24 offers for EVERY 2-night
+            check-in in the window (the occupancy board), scraped or not
           · computes expected prices from data/parityConfig economics
           · appends to price_snapshots (history), closes custom requests
           · Telegram alerts: Booking≤Airbnb, gap>30%, expected-price drift,
             whole-channel-empty (scraper health)
 ```
 
-Most invocations exit in ~1 s with "nothing to do". A grid run takes ~4–6 min.
+Most invocations exit in ~1 s with "nothing to do". A grid run takes
+~10–15 min (roughly 40 Booking + 60 Airbnb page loads). `PARITY_FORCE_GRID=1
+npm run parity:run` re-runs today's grid by hand.
 
 ## Setup (once per Mac)
 

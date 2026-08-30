@@ -2,18 +2,23 @@
  * Parity monitor read layer — assembles snapshot rows back into the per-stay,
  * per-unit view the Pricing tab renders. Pure Postgres reads.
  */
-import { desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, like, lte, notLike, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { priceCheckRequests, priceSnapshots } from '@/lib/db/schema';
 import type { PriceSnapshotRow } from '@/lib/db/schema';
-import { PARITY_UNITS } from '@/data/parityConfig';
+import { COMPETITORS, PARITY_SWEEP, PARITY_UNITS } from '@/data/parityConfig';
+import { pragueToday } from '@/utils/periodUtils';
 import type {
+  BoardObservation,
+  BoardRow,
+  BoardUnitCell,
+  CompetitorObservation,
   DiscountLine,
   ParityCell,
+  ParityChannel,
   ParityOffer,
   ParityRequestView,
   ParityResponse,
-  ParityRunView,
   ParitySlotView,
 } from '@/utils/parityTypes';
 
@@ -78,29 +83,129 @@ export function rowsToSlots(rows: PriceSnapshotRow[]): ParitySlotView[] {
   return slots;
 }
 
-async function loadRun(runId: string): Promise<PriceSnapshotRow[]> {
-  return db.select().from(priceSnapshots).where(eq(priceSnapshots.runId, runId));
+function rowToBoardObservation(row: PriceSnapshotRow): BoardObservation {
+  return { ...rowToOffer(row), capturedAt: row.capturedAt.toISOString() };
+}
+
+/**
+ * Freshest observation per (unit, channel, check-in) for one stay length —
+ * the boards deliberately mix vintages (web refreshes daily, far-zone scrapes
+ * rotate), and each cell carries its own capture time so the UI can say so.
+ */
+async function readBoard(nights: number, todayIso: string, maxAgeDays: number): Promise<BoardRow[]> {
+  const to = addDays(todayIso, PARITY_SWEEP.windowDays);
+  const cutoff = new Date(Date.now() - maxAgeDays * 86_400_000);
+
+  const rows = (await db
+    .selectDistinctOn([priceSnapshots.unitId, priceSnapshots.channel, priceSnapshots.checkIn])
+    .from(priceSnapshots)
+    .where(
+      and(
+        eq(priceSnapshots.nights, nights),
+        gte(priceSnapshots.checkIn, todayIso),
+        lte(priceSnapshots.checkIn, to),
+        gte(priceSnapshots.capturedAt, cutoff),
+        notLike(priceSnapshots.unitId, 'comp:%'),
+      ),
+    )
+    .orderBy(
+      priceSnapshots.unitId,
+      priceSnapshots.channel,
+      priceSnapshots.checkIn,
+      desc(priceSnapshots.capturedAt),
+    )) as PriceSnapshotRow[];
+
+  const byDate = new Map<string, PriceSnapshotRow[]>();
+  for (const row of rows) {
+    const list = byDate.get(row.checkIn) ?? [];
+    list.push(row);
+    byDate.set(row.checkIn, list);
+  }
+
+  const out: BoardRow[] = [];
+  for (const [checkIn, dateRows] of [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const units: BoardUnitCell[] = PARITY_UNITS.map((unit) => {
+      const unitRows = dateRows.filter((r) => r.unitId === unit.id);
+      const chan = (name: ParityChannel) => {
+        const row = unitRows.find((r) => r.channel === name);
+        return row ? rowToBoardObservation(row) : null;
+      };
+      const web = chan('web');
+      return {
+        unitId: unit.id,
+        unitLabel: unit.label,
+        sellable: web === null ? null : web.availability === 'available',
+        web,
+        airbnb: chan('airbnb'),
+        booking: chan('booking'),
+      };
+    });
+    out.push({ checkIn, checkOut: addDays(checkIn, nights), nights, units });
+  }
+  return out;
+}
+
+async function readCompetitors(todayIso: string): Promise<CompetitorObservation[]> {
+  if (COMPETITORS.length === 0) return [];
+  const cutoff = new Date(Date.now() - 14 * 86_400_000);
+  const rows = (await db
+    .selectDistinctOn([
+      priceSnapshots.unitId,
+      priceSnapshots.channel,
+      priceSnapshots.checkIn,
+      priceSnapshots.nights,
+    ])
+    .from(priceSnapshots)
+    .where(
+      and(
+        like(priceSnapshots.unitId, 'comp:%'),
+        gte(priceSnapshots.checkIn, todayIso),
+        gte(priceSnapshots.capturedAt, cutoff),
+      ),
+    )
+    .orderBy(
+      priceSnapshots.unitId,
+      priceSnapshots.channel,
+      priceSnapshots.checkIn,
+      priceSnapshots.nights,
+      desc(priceSnapshots.capturedAt),
+    )) as PriceSnapshotRow[];
+
+  return rows.flatMap((row) => {
+    const comp = COMPETITORS.find((c) => `comp:${c.id}` === row.unitId);
+    if (!comp) return [];
+    return [
+      {
+        compId: comp.id,
+        label: comp.label,
+        bedrooms: comp.bedrooms,
+        channel: row.channel as ParityChannel,
+        checkIn: row.checkIn,
+        nights: row.nights,
+        price: toNum(row.price),
+        originalPrice: toNum(row.originalPrice),
+        labels: Array.isArray(row.labels) ? (row.labels as string[]) : [],
+        capturedAt: row.capturedAt.toISOString(),
+      },
+    ];
+  });
 }
 
 export async function readParity(): Promise<ParityResponse> {
-  // Latest grid run.
-  const [latest] = await db
-    .select({ runId: priceSnapshots.runId, capturedAt: priceSnapshots.capturedAt, source: priceSnapshots.source })
-    .from(priceSnapshots)
-    .where(eq(priceSnapshots.source, 'grid'))
-    .orderBy(desc(priceSnapshots.capturedAt))
-    .limit(1);
+  const today = pragueToday();
 
-  let latestGrid: ParityRunView | null = null;
-  if (latest) {
-    const rows = await loadRun(latest.runId);
-    latestGrid = {
-      runId: latest.runId,
-      source: 'grid',
-      capturedAt: latest.capturedAt.toISOString(),
-      slots: rowsToSlots(rows),
-    };
-  }
+  const [latestGrid] = await db
+    .select({ capturedAt: sql<Date>`max(${priceSnapshots.capturedAt})` })
+    .from(priceSnapshots)
+    .where(eq(priceSnapshots.source, 'grid'));
+
+  // 2-night cells go stale after ~4 days (far-zone stride is 3); 7-night
+  // rotates weekly, so allow 9.
+  const [board2n, board7n, competitors] = await Promise.all([
+    readBoard(2, today, 4),
+    readBoard(7, today, 9),
+    readCompetitors(today),
+  ]);
 
   // Recent custom checks, newest first, with results where finished.
   const requests = await db
@@ -128,7 +233,13 @@ export async function readParity(): Promise<ParityResponse> {
       : null,
   }));
 
-  return { latestGrid, requests: requestViews };
+  return {
+    board2n,
+    board7n,
+    competitors,
+    requests: requestViews,
+    latestGridAt: latestGrid?.capturedAt ? new Date(latestGrid.capturedAt).toISOString() : null,
+  };
 }
 
 export async function queueCheck(

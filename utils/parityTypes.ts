@@ -50,6 +50,17 @@ export interface ParityIngestPayload {
   slots: ParitySlotResult[];
 }
 
+/**
+ * One slot the server wants scraped. `units` lists the unit ids believed
+ * sellable for the stay (from the availability snapshot) — the runner uses it
+ * to skip pointless Airbnb page loads; Booking is one page load either way.
+ */
+export interface PlannedSlot {
+  checkIn: string;
+  nights: number;
+  units: string[];
+}
+
 /** GET /api/pricing/ingest response — the runner's work order. */
 export interface ParityWorkOrder {
   /** Prague calendar date on the server. */
@@ -60,6 +71,8 @@ export interface ParityWorkOrder {
   lastGridDate: string | null;
   /** True when the server wants a full grid run from the runner. */
   gridDue: boolean;
+  /** The concrete scrape plan for today's grid (present when gridDue). */
+  slots?: PlannedSlot[];
   pendingRequests: { id: number; checkIn: string; nights: number }[];
 }
 
@@ -101,7 +114,54 @@ export interface ParityRequestView {
   result: ParitySlotView[] | null;
 }
 
+// ── The 60-day boards ─────────────────────────────────────────────────────────
+
+/** A channel observation with its capture time — boards mix vintages. */
+export interface BoardObservation extends ParityOffer {
+  capturedAt: string;
+}
+
+export interface BoardUnitCell {
+  unitId: string;
+  unitLabel: string;
+  /**
+   * Whether Beds24 would sell this stay online, from the freshest web row:
+   * true = offer exists, false = no offer (booked/blocked/min-stay), null =
+   * no observation yet.
+   */
+  sellable: boolean | null;
+  web: BoardObservation | null;
+  airbnb: BoardObservation | null;
+  booking: BoardObservation | null;
+}
+
+export interface BoardRow {
+  checkIn: string;
+  checkOut: string;
+  nights: number;
+  units: BoardUnitCell[];
+}
+
+export interface CompetitorObservation {
+  compId: string;
+  label: string;
+  bedrooms: number;
+  channel: ParityChannel;
+  checkIn: string;
+  nights: number;
+  price: number | null;
+  originalPrice: number | null;
+  labels: string[];
+  capturedAt: string;
+}
+
 export interface ParityResponse {
-  latestGrid: ParityRunView | null;
+  /** Every 2-night check-in in the window, freshest observation per channel. */
+  board2n: BoardRow[];
+  /** Same for 7-night stays (scraped on a weekly rotation). */
+  board7n: BoardRow[];
+  competitors: CompetitorObservation[];
   requests: ParityRequestView[];
+  /** When the newest grid run landed — the staleness signal. */
+  latestGridAt: string | null;
 }

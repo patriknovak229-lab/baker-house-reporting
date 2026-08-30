@@ -3,16 +3,41 @@
  * Parity check — what a customer actually sees on each channel, from the
  * local Mac runner's scrapes (Booking/Airbnb) + Beds24 offers (Web).
  *
- * Reads /api/pricing/parity (Postgres). The runner reports on its own
- * schedule; this view is honest about staleness rather than pretending to be
- * live. Custom checks are queued here and picked up by the runner's next poll
- * (≤ ~5 minutes), so the form shows a "queued" state instead of a spinner
- * that implies seconds.
+ * The centrepiece is the 60-day board: one row per check-in date, one column
+ * per unit. Occupancy (sellable or not) comes from the daily full-window
+ * Beds24 sweep, so it is complete every day; channel prices come from the
+ * scrape rotation (daily inside ~3 weeks, every ~3 days beyond), so a cell's
+ * price can be a day or two older than its availability — each cell's tooltip
+ * carries its capture times.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ParityCell, ParityOffer, ParityResponse, ParitySlotView } from '@/utils/parityTypes';
+import { COMPETITORS } from '@/data/parityConfig';
+import type {
+  BoardObservation,
+  BoardRow,
+  ParityOffer,
+  ParityResponse,
+  ParitySlotView,
+} from '@/utils/parityTypes';
 
 // ── Formatting ────────────────────────────────────────────────────────────────
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
+
+/** "2026-09-06" → "Sept 6". */
+function fmtDay(iso: string): string {
+  return `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}`;
+}
+
+/** "2026-09-06", "2026-09-08" → "Sept 6 – Sept 8". */
+function fmtRange(fromIso: string, toIso: string): string {
+  return `${fmtDay(fromIso)} – ${fmtDay(toIso)}`;
+}
+
+/** Weekday shorthand for board rows: "Sat". */
+function weekday(iso: string): string {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' });
+}
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return '—';
@@ -31,9 +56,13 @@ function discountPct(offer: ParityOffer): number | null {
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString('en-GB', {
-    day: '2-digit', month: 'short', year: 'numeric',
+    day: '2-digit', month: 'short',
     hour: '2-digit', minute: '2-digit',
   });
+}
+
+function ageHours(ts: string): number {
+  return (Date.now() - new Date(ts).getTime()) / 3_600_000;
 }
 
 // ── Discount badge canon — same real-world discount, same badge, any channel ──
@@ -78,20 +107,161 @@ function computeAbGap(airbnb: number | null, booking: number | null): number | n
 
 function abGapClass(gap: number | null): string {
   if (gap == null) return 'text-gray-400';
-  if (gap <= 0) return 'text-red-700 font-bold animate-pulse';
-  if (gap > 30) return 'text-red-700 font-bold animate-pulse';
+  if (gap <= 0) return 'text-red-700 font-bold';
+  if (gap > 30) return 'text-red-700 font-bold';
   if (gap > 15) return 'text-amber-600 font-medium';
   return 'text-emerald-600 font-medium';
 }
 
 function formatAbGap(gap: number | null): string {
-  if (gap == null) return '—';
+  if (gap == null) return '';
   return `${gap > 0 ? '+' : ''}${gap}%`;
 }
 
-// ── Cells ─────────────────────────────────────────────────────────────────────
+// ── Board cells ───────────────────────────────────────────────────────────────
 
-function OfferCell({ offer, nights, expected }: { offer: ParityOffer | null; nights: number; expected?: number | null }) {
+function offerTooltip(name: string, o: BoardObservation, nights: number): string {
+  const lines = [
+    `${name}: ${fmt(o.price)} (${fmtNightly(o.price, nights)})`,
+    o.originalPrice != null ? `was ${fmt(o.originalPrice)} (−${discountPct(o)}%)` : null,
+    ...(o.discountBreakdown ?? []).map((d) => `  ${d.name}${d.pp != null ? ` −${d.pp}pp` : ''}`),
+    ...(o.labels.length > 0 ? [o.labels.join(' · ')] : []),
+    `observed ${formatTs(o.capturedAt)}`,
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+function ChannelLine({
+  tag,
+  obs,
+  nights,
+  highlight,
+}: {
+  tag: string;
+  obs: BoardObservation | null;
+  nights: number;
+  highlight?: string;
+}) {
+  if (!obs) return null;
+  if (obs.price === null) {
+    return (
+      <div className="text-[11px] text-gray-300 tabular-nums leading-4" title={`${tag}: not bookable (${formatTs(obs.capturedAt)})`}>
+        {tag} —
+      </div>
+    );
+  }
+  const pct = discountPct(obs);
+  const stale = ageHours(obs.capturedAt) > 36;
+  return (
+    <div
+      className={`text-[11px] tabular-nums leading-4 whitespace-nowrap ${highlight ?? 'text-gray-700'}`}
+      title={offerTooltip(tag, obs, nights)}
+    >
+      <span className="text-gray-400">{tag}</span> {Math.round(obs.price).toLocaleString('cs-CZ')}
+      {pct !== null && <span className="text-emerald-600"> −{pct}%</span>}
+      {stale && <span className="text-amber-500" title="observation older than 36 h"> ◦</span>}
+    </div>
+  );
+}
+
+function BoardCellView({ cell, nights }: { cell: BoardRow['units'][number]; nights: number }) {
+  if (cell.sellable === null) {
+    return <td className="px-3 py-1.5 text-center text-gray-200 border-l border-gray-100">·</td>;
+  }
+  if (cell.sellable === false) {
+    return (
+      <td className="px-3 py-1.5 border-l border-gray-100 bg-gray-50/80">
+        <span className="text-[11px] text-gray-400" title={cell.web ? `No online offer (booked, blocked or min-stay) — checked ${formatTs(cell.web.capturedAt)}` : undefined}>
+          booked
+        </span>
+      </td>
+    );
+  }
+  const gap = computeAbGap(cell.airbnb?.price ?? null, cell.booking?.price ?? null);
+  const undercut = gap !== null && (gap <= 0 || gap > 30);
+  return (
+    <td className={`px-3 py-1.5 border-l border-gray-100 align-top ${undercut ? 'bg-red-50/70' : ''}`}>
+      <ChannelLine tag="W" obs={cell.web} nights={nights} />
+      <ChannelLine tag="A" obs={cell.airbnb} nights={nights} />
+      <ChannelLine tag="B" obs={cell.booking} nights={nights} highlight={undercut ? 'text-red-700 font-semibold' : undefined} />
+      {gap !== null && (
+        <div className={`text-[10px] leading-4 ${abGapClass(gap)}`} title="Booking over Airbnb">
+          B/A {formatAbGap(gap)}
+        </div>
+      )}
+    </td>
+  );
+}
+
+function Board({ rows, title, subtitle }: { rows: BoardRow[]; title: string; subtitle: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const unitHeads = rows[0]?.units ?? [];
+  const visible = expanded ? rows : rows.slice(0, 21);
+  return (
+    <section>
+      <div className="mb-3">
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
+      </div>
+      {rows.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-gray-300 flex items-center justify-center h-24 text-gray-400 text-sm">
+          No observations yet — the next grid run fills this in.
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-40">Check-in</th>
+                {unitHeads.map((u) => (
+                  <th key={u.unitId} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase border-l border-gray-100">
+                    {u.unitLabel}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {visible.map((row) => {
+                const isWeekendStart = ['Fri', 'Sat'].includes(weekday(row.checkIn));
+                return (
+                  <tr key={row.checkIn} className={isWeekendStart ? 'bg-indigo-50/40' : ''}>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
+                      <span className="text-gray-800 font-medium">{fmtRange(row.checkIn, row.checkOut)}</span>
+                      <span className="text-[10px] text-gray-400 ml-1.5">{weekday(row.checkIn)}</span>
+                    </td>
+                    {row.units.map((cell) => (
+                      <BoardCellView key={cell.unitId} cell={cell} nights={row.nights} />
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {rows.length > visible.length && (
+            <button
+              onClick={() => setExpanded(true)}
+              className="w-full py-2 text-xs text-indigo-600 hover:bg-indigo-50 border-t border-gray-100"
+            >
+              Show all {rows.length} dates
+            </button>
+          )}
+          {expanded && rows.length > 21 && (
+            <button
+              onClick={() => setExpanded(false)}
+              className="w-full py-2 text-xs text-gray-500 hover:bg-gray-50 border-t border-gray-100"
+            >
+              Collapse
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Custom check result card (unchanged data shape, new date format) ──────────
+
+function OfferCell({ offer, nights }: { offer: ParityOffer | null; nights: number }) {
   if (!offer || offer.price == null) {
     const label =
       offer?.availability === 'error' ? 'scrape error' :
@@ -102,13 +272,7 @@ function OfferCell({ offer, nights, expected }: { offer: ParityOffer | null; nig
       </td>
     );
   }
-
   const pct = discountPct(offer);
-  const drift =
-    expected != null && offer.price != null
-      ? Math.round((Math.abs(offer.price - expected) / expected) * 1000) / 10
-      : null;
-
   return (
     <td className="px-4 py-2.5 text-right tabular-nums text-gray-800 align-top">
       <div className="font-semibold">{fmt(offer.price)}</div>
@@ -118,11 +282,6 @@ function OfferCell({ offer, nights, expected }: { offer: ParityOffer | null; nig
           <span className="line-through">{fmt(offer.originalPrice)}</span>
           <span className="ml-1 text-emerald-700 font-semibold">−{pct}%</span>
           {offer.unparsedDiscount && <span className="ml-1 text-amber-600 text-[10px]">(unbreakable)</span>}
-        </div>
-      )}
-      {drift != null && drift > 2 && (
-        <div className="text-[10px] text-rose-600 mt-0.5" title={`Configured channel economics expect ${fmt(expected)}`}>
-          expected {fmt(expected)} ({drift}% drift)
         </div>
       )}
       {(offer.discountBreakdown?.length || offer.labels.length > 0) && (
@@ -165,26 +324,11 @@ function OfferCell({ offer, nights, expected }: { offer: ParityOffer | null; nig
   );
 }
 
-// ── Slot table ────────────────────────────────────────────────────────────────
-
-function unitRowClass(unitId: string): string {
-  if (unitId === 'deluxe-1kk') return 'border-l-4 border-sky-500';
-  if (unitId === 'k201') return 'border-l-4 border-fuchsia-500';
-  if (unitId === 'o308') return 'border-l-4 border-violet-500';
-  if (unitId === 'urban-1kk') return 'border-l-4 border-teal-500';
-  return 'border-l-4 border-gray-300';
-}
-
 function SlotCard({ slot }: { slot: ParitySlotView }) {
-  // Units with no channel data at all (nothing configured) still render, so
-  // the coverage gap stays visible instead of silently narrowing the table.
-  const rows: ParityCell[] = slot.units;
   return (
     <div className="rounded-lg border border-gray-200 overflow-hidden">
       <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-baseline justify-between flex-wrap gap-2">
-        <div className="font-semibold text-gray-800">
-          {slot.checkIn} → {slot.checkOut}
-        </div>
+        <div className="font-semibold text-gray-800">{fmtRange(slot.checkIn, slot.checkOut)}</div>
         <div className="text-xs text-gray-500">
           {slot.nights} night{slot.nights === 1 ? '' : 's'} · booked {slot.leadDays} day{slot.leadDays === 1 ? '' : 's'} ahead
         </div>
@@ -200,17 +344,17 @@ function SlotCard({ slot }: { slot: ParitySlotView }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {rows.map((cell) => {
+          {slot.units.map((cell) => {
             const gap = computeAbGap(cell.airbnb?.price ?? null, cell.booking?.price ?? null);
             return (
-              <tr key={cell.unitId} className={unitRowClass(cell.unitId)}>
+              <tr key={cell.unitId}>
                 <td className="px-4 py-2.5 align-top">
                   <span className="text-sm font-medium text-gray-800">{cell.unitLabel}</span>
                 </td>
                 <OfferCell offer={cell.web} nights={slot.nights} />
                 <OfferCell offer={cell.airbnb} nights={slot.nights} />
-                <OfferCell offer={cell.booking} nights={slot.nights} expected={cell.expectedBooking} />
-                <td className={`px-4 py-2.5 text-center align-top ${abGapClass(gap)}`}>{formatAbGap(gap)}</td>
+                <OfferCell offer={cell.booking} nights={slot.nights} />
+                <td className={`px-4 py-2.5 text-center align-top ${abGapClass(gap)}`}>{formatAbGap(gap) || '—'}</td>
               </tr>
             );
           })}
@@ -218,6 +362,58 @@ function SlotCard({ slot }: { slot: ParitySlotView }) {
       </table>
     </div>
   );
+}
+
+// ── Competitors ───────────────────────────────────────────────────────────────
+
+function CompetitorSection({ observations }: { observations: ParityResponse['competitors'] }) {
+  if (COMPETITORS.length === 0) return null;
+  return (
+    <section className="border-t border-gray-200 pt-8">
+      <h2 className="text-lg font-semibold text-gray-900 mb-1">Competitors</h2>
+      <p className="text-xs text-gray-500 mb-4">
+        Configured competitor listings, priced alongside each grid run (per-night rates for the sampled stays).
+      </p>
+      {observations.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-gray-300 flex items-center justify-center h-20 text-gray-400 text-sm">
+          No competitor observations yet — they arrive with the next grid run.
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Competitor</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Stay</th>
+                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Channel</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Per night</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {observations.map((o, i) => (
+                <tr key={i}>
+                  <td className="px-3 py-2 text-gray-800">{o.label} <span className="text-xs text-gray-400">({o.bedrooms}BR)</span></td>
+                  <td className="px-3 py-2 whitespace-nowrap text-gray-600">
+                    {fmtRange(o.checkIn, addDaysIso(o.checkIn, o.nights))} · {o.nights}n
+                  </td>
+                  <td className="px-3 py-2 text-center text-xs text-gray-500">{o.channel}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmt(o.price)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">{fmtNightly(o.price, o.nights)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 // ── Main view ─────────────────────────────────────────────────────────────────
@@ -249,7 +445,6 @@ export default function ParityView() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Poll while any request is pending — the runner answers within ~5 minutes.
   const hasPending = useMemo(() => data?.requests.some((r) => r.status === 'pending') ?? false, [data]);
   useEffect(() => {
     if (hasPending && !pollTimer.current) {
@@ -298,8 +493,7 @@ export default function ParityView() {
     return <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>;
   }
 
-  const grid = data?.latestGrid ?? null;
-  const gridAgeHours = grid ? (Date.now() - new Date(grid.capturedAt).getTime()) / 3_600_000 : null;
+  const gridAgeHours = data?.latestGridAt ? ageHours(data.latestGridAt) : null;
 
   return (
     <div className="space-y-10">
@@ -310,31 +504,19 @@ export default function ParityView() {
         </div>
       )}
 
-      <section>
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Daily grid</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              The same relative windows sampled every morning — customer-view totals for an anonymous desktop visitor,
-              scraped from the Mac runner (residential IP). Web = Beds24 offers, the price the site itself charges.
-            </p>
-          </div>
-          {grid && <span className="text-xs text-gray-400">Captured {formatTs(grid.capturedAt)}</span>}
-        </div>
+      <Board
+        rows={data?.board2n ?? []}
+        title="Next 60 days — 2-night stays"
+        subtitle="One row per check-in. Occupancy (booked/sellable) is re-checked against Beds24 every day for every date; W = our site, A = Airbnb, B = Booking.com customer prices from the scrape rotation (daily for ~3 weeks out, every ~3 days beyond — ◦ marks an observation older than 36 h). Red rows: Booking undercuts Airbnb or exceeds +30%. Weekend check-ins tinted."
+      />
 
-        {!grid ? (
-          <div className="rounded-lg border border-dashed border-gray-300 flex flex-col items-center justify-center h-40 text-gray-400 text-sm px-6 text-center">
-            <p>No grid runs yet.</p>
-            <p className="text-xs mt-1">Set up the local runner on the Mac — see <code>docs/pricing-runner.md</code>. It reports the first grid within one poll cycle.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {grid.slots.map((slot) => (
-              <SlotCard key={`${slot.checkIn}-${slot.nights}`} slot={slot} />
-            ))}
-          </div>
-        )}
-      </section>
+      <Board
+        rows={data?.board7n ?? []}
+        title="7-night stays"
+        subtitle="Weekly-rate coverage: every check-in date is re-scraped on a 7-day rotation, so the board fills over the week. Same reading as above."
+      />
+
+      <CompetitorSection observations={data?.competitors ?? []} />
 
       <section className="border-t border-gray-200 pt-8">
         <h2 className="text-lg font-semibold text-gray-900 mb-1">Custom date check</h2>
@@ -378,7 +560,7 @@ export default function ParityView() {
             {data.requests.map((r) => (
               <div key={r.id}>
                 <div className="flex items-center gap-2 text-sm mb-2">
-                  <span className="text-gray-700 font-medium">{r.checkIn} · {r.nights}n</span>
+                  <span className="text-gray-700 font-medium">{fmtDay(r.checkIn)} · {r.nights}n</span>
                   {r.status === 'pending' && (
                     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">
                       <span className="w-2.5 h-2.5 border border-amber-600 border-t-transparent rounded-full animate-spin" />
@@ -405,8 +587,9 @@ export default function ParityView() {
       </section>
 
       <p className="text-xs text-gray-400">
-        🔒 = login/device-locked discount, shown for information but not counted as the anonymous price ·
-        B vs A bands: ≤0 and &gt;30% alert · 0–15% healthy · Airbnb covers only units with their own listing.
+        Prices are what an anonymous, logged-out desktop visitor pays — Genius and mobile-app rates are excluded by
+        design (🔒 marks them where a channel leaks the label) · Airbnb covers only units with their own listing ·
+        B vs A bands: ≤0 and &gt;30% alert · 0–15% healthy.
       </p>
     </div>
   );

@@ -35,30 +35,10 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 2;
+export const PARITY_CONFIG_VERSION = 3;
 
+/** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
-  {
-    id: 'deluxe-1kk',
-    label: '1KK Deluxe',
-    beds24RoomId: 648816,
-    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267401' },
-    airbnb: { listingId: '1560149310755564258' },
-  },
-  {
-    id: 'k201',
-    label: '2KK Deluxe (K.201)',
-    beds24RoomId: 656437,
-    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267403' },
-    airbnb: { listingId: '1635011413648373253' },
-  },
-  {
-    id: 'o308',
-    label: '2BR Deluxe (O.308)',
-    beds24RoomId: 674672,
-    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267405' },
-    airbnb: { listingId: '1703448722265968124' },
-  },
   {
     id: 'urban-1kk',
     label: '1KK Urban',
@@ -69,13 +49,62 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     booking: null,
     airbnb: null,
   },
+  {
+    id: 'deluxe-1kk',
+    label: '1KK Deluxe',
+    beds24RoomId: 648816,
+    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267401' },
+    airbnb: { listingId: '1560149310755564258' },
+  },
+  {
+    id: 'o308',
+    label: '2BR Deluxe (O.308)',
+    beds24RoomId: 674672,
+    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267405' },
+    airbnb: { listingId: '1703448722265968124' },
+  },
+  {
+    id: 'k201',
+    label: '2KK Deluxe (K.201)',
+    beds24RoomId: 656437,
+    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267403' },
+    airbnb: { listingId: '1635011413648373253' },
+  },
 ];
 
 /**
- * The scheduled sampling grid: same relative windows every day, so the series
- * is comparable day over day. lead 3 = "what does a guest booking 3 days out
- * see", and the 2/7-night pair covers the transient and weekly rate shapes.
- * 8 slots → 8 Booking page loads + 16 Airbnb loads ≈ 4–5 min on the Mac.
+ * The daily sweep — focused on the next ~60 days, where most bookings happen.
+ *
+ * Three intensity zones per run (the server plans concrete slots from the
+ * PriceLabs availability snapshot; the runner just executes):
+ *
+ *  · Web + availability: EVERY 2-night check-in for the whole window, every
+ *    day, straight from the Beds24 offers API at ingest time — no scraping,
+ *    so it is effectively free and keeps the occupancy board complete.
+ *  · Channel scrapes, 2 nights: every check-in inside DENSE_DAYS daily, then
+ *    a rotating 1-in-FAR_STRIDE beyond it — every far date is re-scraped once
+ *    per FAR_STRIDE days without tripling the run time.
+ *  · Channel scrapes, 7 nights: rotating 1-in-WEEKLY_STRIDE across the whole
+ *    window — full coverage once per week, matching how fast weekly rates move.
+ */
+export const PARITY_SWEEP = {
+  /** How far ahead the sweep looks, in days. */
+  windowDays: 60,
+  /** Check-ins closer than this get scraped every single day (2-night). */
+  denseDays: 21,
+  /** Beyond denseDays, scrape every Nth date, rotating daily. */
+  farStride: 3,
+  /** 7-night check-ins: every Nth date, rotating daily. */
+  weeklyStride: 7,
+  /** Earliest check-in worth sampling (tomorrow is lead 1). */
+  minLeadDays: 2,
+  /** Hard cap on scrape slots per run — planner degrades stride, never blows this. */
+  maxSlots: 60,
+} as const;
+
+/**
+ * Fallback grid for a runner talking to a server that did not send a slot
+ * plan (older deployment). Same shape as the original fixed grid.
  */
 export const PARITY_GRID: { leadDays: number; nights: number }[] = [
   { leadDays: 3, nights: 2 },
@@ -86,6 +115,38 @@ export const PARITY_GRID: { leadDays: number; nights: number }[] = [
   { leadDays: 7, nights: 7 },
   { leadDays: 30, nights: 7 },
   { leadDays: 60, nights: 7 },
+];
+
+/**
+ * Competitor listings to price-shop alongside our own units.
+ *
+ * Fill with the actual competitor identities: for Airbnb the numeric id from
+ * the listing URL (airbnb.com/rooms/<id>), for Booking the property page path
+ * plus the room_type id if a specific room matters (omit roomTypeId to take
+ * the cheapest room on the page). `bedrooms` is only a display hint.
+ *
+ * The runner prices each competitor at COMPETITOR_LEADS for 2 and 7 nights.
+ * Empty list = the whole feature is dormant and costs nothing.
+ */
+export interface CompetitorConfig {
+  id: string; // short slug, e.g. 'comp-riverside'
+  label: string;
+  bedrooms: number;
+  airbnb?: { listingId: string };
+  booking?: { pagePath: string; roomTypeId?: string };
+}
+
+export const COMPETITORS: CompetitorConfig[] = [
+  // { id: 'example', label: 'Riverside Apts 2BR', bedrooms: 2,
+  //   airbnb: { listingId: '123456789' },
+  //   booking: { pagePath: '/hotel/cz/example.en-gb.html' } },
+];
+
+/** Lead times (days) at which competitors are priced, per stay length. */
+export const COMPETITOR_LEADS: { leadDays: number; nights: number }[] = [
+  { leadDays: 7, nights: 2 },
+  { leadDays: 30, nights: 2 },
+  { leadDays: 14, nights: 7 },
 ];
 
 /**
