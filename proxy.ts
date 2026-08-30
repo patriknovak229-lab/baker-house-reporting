@@ -41,5 +41,14 @@ export const config = {
   // `api/pricing/ingest` is exempt because its caller is the headless parity
   // runner on the operator's Mac — no session cookie, authenticated inside the
   // route by the PRICING_INGEST_SECRET header instead.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest).*)'],
+  //
+  // `api/analytics/market/refresh` is exempt because Vercel cron requests
+  // carry no session and were being 307'd to /login before the handler ran —
+  // verified 2026-08-30: the 06:30 refresh never executed and the PriceLabs
+  // snapshot only moved on manual runs. The route gates itself (x-vercel-cron
+  // header, which Vercel reserves, or admin/super session). The OTHER cron
+  // routes (scheduled payments, due invoices, review checks) are still behind
+  // the middleware and therefore still dormant — unblocking those is a
+  // business decision, not a plumbing one.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh).*)'],
 };
