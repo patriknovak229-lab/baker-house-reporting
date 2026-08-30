@@ -153,10 +153,12 @@ function ChannelLine({
   }
   const pct = discountPct(obs);
   const stale = ageHours(obs.capturedAt) > 36;
-  const floor = memberFloor && obs.price !== null ? bookingMemberFloor(obs.price) : null;
+  const floor = memberFloor && obs.price !== null ? bookingMemberFloor(obs.price, obs.originalPrice) : null;
   const tooltip =
     offerTooltip(tag, obs, nights) +
-    (floor !== null ? `\nGenius / app price ≈ ${fmt(floor)} (always-on −10%)` : '');
+    (floor !== null
+      ? `\nGenius/app price ≈ ${fmt(floor)} (member pp off the original base; excludes any “Booking.com pays” top-up)`
+      : '');
   return (
     <div
       className={`text-[11px] tabular-nums leading-4 whitespace-nowrap ${highlight ?? 'text-gray-700'}`}

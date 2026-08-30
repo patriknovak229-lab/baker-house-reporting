@@ -278,9 +278,13 @@ export async function POST(req: NextRequest) {
         if (b !== null && w > b * 1.01) dearer.push(`Booking ${b} Kč`);
         if (a !== null && w > a * 1.01) dearer.push(`Airbnb ${a} Kč`);
         if (dearer.length > 0) {
+          // When Booking is the cheaper one because Booking itself funds a
+          // discount out of its commission ("Booking.com pays"), that is out
+          // of our control — still worth alerting, but the line says why.
+          const bookingFunded = (scraped.booking?.labels ?? []).includes('Booking.com pays');
           gapAlerts.push({
             key: `web:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `🚨 ${unit.label} ${stay}: our site ${Math.round(w)} Kč is ABOVE ${dearer.join(' and ')}`,
+            line: `🚨 ${unit.label} ${stay}: our site ${Math.round(w)} Kč is ABOVE ${dearer.join(' and ')}${bookingFunded ? ' — includes a “Booking.com pays” discount funded by Booking, not by us' : ''}`,
           });
         }
       }

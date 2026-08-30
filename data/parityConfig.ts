@@ -35,7 +35,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 4;
+export const PARITY_CONFIG_VERSION = 5;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -204,20 +204,39 @@ export const AIRBNB_VS_BOOKING_TOLERANCE_PCT = 5;
 
 /**
  * Always-on member discounts configured on Booking.com. These never expire,
- * so the real price members/app users pay is DERIVED here rather than
- * scraped: memberFloor = anonymous × (1 − genius%) — mobile is the same 10%,
- * and per Booking's own rules Genius CAN stack on mobile rates, so the
- * absolute worst case is anonymous × 0.9 × 0.9 = ×0.81. The derived floor is
- * shown on the board for context; it does NOT feed the web-vs-OTA alert
- * (a direct site priced between the member floor and the anonymous price is
- * a pricing decision, not a data error — surfacing it daily would be noise).
+ * so the price members/app users pay is DERIVED here rather than scraped.
+ *
+ * MECHANICS — confirmed against a live Genius/mobile reservation screenshot
+ * (2026-08-30, Sept 4–6 1KK Deluxe): discounts are ADDITIVE percentage
+ * points of the ORIGINAL (pre-deal) price, not multiplicative on the
+ * discounted one. That reservation: base 7,762.99, Getaway −2,096.01,
+ * Genius −776.30 = exactly 10% OF THE BASE.
+ *
+ *  · Genius 10% — applies always, including alongside special deals.
+ *  · Mobile 10% — DISPLACED by any special deal (Getaway/Early Booker/…);
+ *    only applies on undiscounted stays. A deal is visible to the scraper as
+ *    a strikethrough. (No-deal mobile math still provisional until the
+ *    second reference screenshot arrives.)
+ *  · "Booking.com pays" — Booking sometimes discounts further out of its own
+ *    commission. Out of host control, not configured anywhere, and it can
+ *    push Booking below the direct site on its own. The derived floor
+ *    deliberately EXCLUDES it; where the scraper sees the label, the alert
+ *    says so.
+ *
+ * The floor is shown on the board for context; it does NOT feed the
+ * web-vs-OTA alert (a direct site priced between the member floor and the
+ * anonymous price is a pricing decision, not a data error).
  */
 export const BOOKING_MEMBER_DISCOUNTS = {
   geniusPct: 10,
   mobilePct: 10,
 } as const;
 
-/** anonymous Booking price → what a Genius (or app) customer actually pays. */
-export function bookingMemberFloor(anonymousPrice: number): number {
-  return Math.round(anonymousPrice * (1 - BOOKING_MEMBER_DISCOUNTS.geniusPct / 100));
+/** What a Genius app customer pays: anonymous price − member pp × original base. */
+export function bookingMemberFloor(anonymousPrice: number, originalPrice: number | null): number {
+  const base = originalPrice ?? anonymousPrice;
+  const hasDeal = originalPrice !== null && originalPrice > anonymousPrice;
+  const memberPct =
+    BOOKING_MEMBER_DISCOUNTS.geniusPct + (hasDeal ? 0 : BOOKING_MEMBER_DISCOUNTS.mobilePct);
+  return Math.round(anonymousPrice - (base * memberPct) / 100);
 }

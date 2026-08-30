@@ -116,6 +116,10 @@ async function loadRateRows(
         ['Mobile-only', /Mobile[- ]?only/i],
         ['Genius', /Genius/i],
         ['Limited-time Deal', /Limited[- ]?time\s*Deal/i],
+        // Booking funding a discount out of its own commission — out of host
+        // control and the usual explanation when Booking lands below the
+        // direct site.
+        ['Booking.com pays', /Booking\.com pays/i],
       ];
 
       const table = document.querySelector('.hprt-table');
