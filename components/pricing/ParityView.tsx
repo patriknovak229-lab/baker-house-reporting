@@ -1,20 +1,28 @@
 'use client';
 /**
- * Parity check — what a customer actually sees on each channel, from the
- * local Mac runner's scrapes (Booking/Airbnb) + Beds24 offers (Web).
+ * Parity check — calendar view.
  *
- * The centrepiece is the 60-day board: one row per check-in date, one column
- * per unit. Occupancy (sellable or not) comes from the daily full-window
- * Beds24 sweep, so it is complete every day; channel prices come from the
- * scrape rotation (daily inside ~3 weeks, every ~3 days beyond), so a cell's
- * price can be a day or two older than its availability — each cell's tooltip
- * carries its capture times.
+ * The operator's reading model: colored stay-blocks over the next 60 days,
+ * one strip per unit — grey = booked, yellow = minor issue (a Genius/app
+ * customer on Booking pays less than our site), red = major issue (Airbnb off
+ * Booking by more than the tolerance, or our site above a channel), pale
+ * green = checked and fine, dashed = sellable but not scraped yet. No numbers
+ * on the canvas; clicking a block opens the detail panel with every specific
+ * (prices, discount stacks, the derived Genius/app price, "Booking.com pays"
+ * attribution, observation times).
+ *
+ * Blocks span their true stay length (2 or 7 columns). A stay can start every
+ * day, so blocks overlap by construction — they are staggered into
+ * `nights` lanes (lane = start-day mod nights), which tiles them without
+ * collisions: same-lane neighbours are exactly `nights` days apart.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AIRBNB_VS_BOOKING_TOLERANCE_PCT, COMPETITORS, bookingMemberFloor } from '@/data/parityConfig';
+import { PARITY_UNITS } from '@/data/parityConfig';
+import { assessStay, type StayAssessment } from '@/utils/paritySeverity';
 import type {
   BoardObservation,
   BoardRow,
+  BoardUnitCell,
   ParityOffer,
   ParityResponse,
   ParitySlotView,
@@ -34,9 +42,20 @@ function fmtRange(fromIso: string, toIso: string): string {
   return `${fmtDay(fromIso)} – ${fmtDay(toIso)}`;
 }
 
-/** Weekday shorthand for board rows: "Sat". */
 function weekday(iso: string): string {
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' });
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function diffDays(fromIso: string, toIso: string): number {
+  return Math.round(
+    (new Date(`${toIso}T00:00:00Z`).getTime() - new Date(`${fromIso}T00:00:00Z`).getTime()) / 86_400_000,
+  );
 }
 
 function fmt(n: number | null | undefined): string {
@@ -61,10 +80,6 @@ function formatTs(ts: string): string {
   });
 }
 
-function ageHours(ts: string): number {
-  return (Date.now() - new Date(ts).getTime()) / 3_600_000;
-}
-
 // ── Discount badge canon — same real-world discount, same badge, any channel ──
 
 const DISCOUNT_CATEGORY = {
@@ -78,6 +93,7 @@ const DISCOUNT_CATEGORY = {
   host:     { label: 'Host discount',      class: 'bg-teal-100 text-teal-800 ring-1 ring-teal-200',           deviceLogin: false },
   genius:   { label: 'Genius',             class: 'bg-indigo-100 text-indigo-800 ring-1 ring-indigo-200',     deviceLogin: true  },
   getaway:  { label: 'Getaway/campaign',   class: 'bg-lime-100 text-lime-800 ring-1 ring-lime-200',           deviceLogin: false },
+  bkPays:   { label: 'Booking.com pays',   class: 'bg-slate-200 text-slate-800 ring-1 ring-slate-300',        deviceLogin: false },
   generic:  { label: 'Discount',           class: 'bg-gray-100 text-gray-700 ring-1 ring-gray-200',           deviceLogin: false },
 } as const;
 
@@ -85,6 +101,7 @@ type DiscountCategoryKey = keyof typeof DISCOUNT_CATEGORY;
 
 function categorizeDiscount(name: string): DiscountCategoryKey {
   const lc = name.toLowerCase();
+  if (/booking\.com pays/.test(lc))                                   return 'bkPays';
   if (/\bweekly\b|t[ýy]denn[ií]|t[ýy]dn/.test(lc))                    return 'weekly';
   if (/\bmonthly\b|m[ěe]s[ií]?[čc]n[ií]/.test(lc))                    return 'monthly';
   if (/early\s*(booker?|booking)|brzk[ou][ou]?\s*rezervaci/.test(lc)) return 'early';
@@ -98,180 +115,296 @@ function categorizeDiscount(name: string): DiscountCategoryKey {
   return 'generic';
 }
 
-// ── A vs B gap — Booking.com is the baseline; Airbnb should sit 0..+tolerance ──
-
-function computeAbGap(airbnb: number | null, booking: number | null): number | null {
-  if (airbnb == null || booking == null || booking === 0) return null;
-  return Math.round(((airbnb - booking) / booking) * 100);
-}
-
-function abGapClass(gap: number | null): string {
-  if (gap == null) return 'text-gray-400';
-  if (Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT) return 'text-red-700 font-bold';
-  return 'text-emerald-600 font-medium';
-}
-
-function formatAbGap(gap: number | null): string {
-  if (gap == null) return '';
-  return `${gap > 0 ? '+' : ''}${gap}%`;
-}
-
-// ── Board cells ───────────────────────────────────────────────────────────────
-
-function offerTooltip(name: string, o: BoardObservation, nights: number): string {
-  const lines = [
-    `${name}: ${fmt(o.price)} (${fmtNightly(o.price, nights)})`,
-    o.originalPrice != null ? `was ${fmt(o.originalPrice)} (−${discountPct(o)}%)` : null,
-    ...(o.discountBreakdown ?? []).map((d) => `  ${d.name}${d.pp != null ? ` −${d.pp}pp` : ''}`),
-    ...(o.labels.length > 0 ? [o.labels.join(' · ')] : []),
-    `observed ${formatTs(o.capturedAt)}`,
-  ];
-  return lines.filter(Boolean).join('\n');
-}
-
-function ChannelLine({
-  tag,
-  obs,
-  nights,
-  highlight,
-  memberFloor,
-}: {
-  tag: string;
-  obs: BoardObservation | null;
-  nights: number;
-  highlight?: string;
-  /** Booking only: derive the always-on Genius/app price (−10%) for context. */
-  memberFloor?: boolean;
-}) {
-  if (!obs) return null;
-  if (obs.price === null) {
-    return (
-      <div className="text-[11px] text-gray-300 tabular-nums leading-4" title={`${tag}: not bookable (${formatTs(obs.capturedAt)})`}>
-        {tag} —
-      </div>
-    );
-  }
-  const pct = discountPct(obs);
-  const stale = ageHours(obs.capturedAt) > 36;
-  const floor = memberFloor && obs.price !== null ? bookingMemberFloor(obs.price, obs.labels) : null;
-  const tooltip =
-    offerTooltip(tag, obs, nights) +
-    (floor !== null
-      ? `\nGenius/app price ≈ ${fmt(floor)} (member pp off the original base; excludes any “Booking.com pays” top-up)`
-      : '');
+function DiscountBadge({ name, pp }: { name: string; pp?: number }) {
+  const key = categorizeDiscount(name);
+  const cat = DISCOUNT_CATEGORY[key];
+  const isBkPays = key === 'bkPays';
+  const label = isBkPays || key === 'generic' ? name : cat.label;
   return (
-    <div
-      className={`text-[11px] tabular-nums leading-4 whitespace-nowrap ${highlight ?? 'text-gray-700'}`}
-      title={tooltip}
+    <span
+      className={`inline-block text-[11px] leading-tight px-1.5 py-0.5 rounded font-medium ${cat.class}`}
+      title={
+        isBkPays
+          ? 'Booking discounts this stay out of its own commission — no formula on our side, can change any time, deducted last. Out of our control.'
+          : cat.deviceLogin
+            ? 'Login/device-locked discount — not part of the anonymous price'
+            : undefined
+      }
     >
-      <span className="text-gray-400">{tag}</span> {Math.round(obs.price).toLocaleString('cs-CZ')}
-      {pct !== null && <span className="text-emerald-600"> −{pct}%</span>}
-      {floor !== null && <span className="text-gray-400" title="always-on Genius/app member price"> ≥{floor.toLocaleString('cs-CZ')}</span>}
-      {stale && <span className="text-amber-500" title="observation older than 36 h"> ◦</span>}
+      {cat.deviceLogin && <span aria-hidden className="mr-0.5">🔒</span>}
+      {label}
+      {pp != null && <span className="font-bold"> −{pp}pp</span>}
+    </span>
+  );
+}
+
+// ── Calendar ──────────────────────────────────────────────────────────────────
+
+const COL_PX = 17;
+
+const SEVERITY_STYLE: Record<StayAssessment['severity'], string> = {
+  booked: 'bg-gray-200/80 hover:bg-gray-300',
+  nodata: 'bg-white border border-dashed border-gray-300 hover:border-gray-400',
+  ok: 'bg-emerald-100 hover:bg-emerald-200 border border-emerald-200/60',
+  minor: 'bg-amber-300 hover:bg-amber-400 border border-amber-400/50',
+  major: 'bg-rose-500 hover:bg-rose-600 border border-rose-600/50',
+};
+
+interface Selection {
+  row: BoardRow;
+  cell: BoardUnitCell;
+  assessment: StayAssessment;
+}
+
+function DateAxis({ windowStart, totalDays }: { windowStart: string; totalDays: number }) {
+  const days = Array.from({ length: totalDays }, (_, i) => addDaysIso(windowStart, i));
+  // Month segments for the top row
+  const segments: { label: string; span: number }[] = [];
+  for (const d of days) {
+    const label = MONTHS[Number(d.slice(5, 7)) - 1];
+    const last = segments[segments.length - 1];
+    if (last && last.label === label) last.span += 1;
+    else segments.push({ label, span: 1 });
+  }
+  return (
+    <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm">
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${totalDays}, ${COL_PX}px)` }}>
+        {segments.map((s, i) => (
+          <div key={i} className="text-[10px] font-semibold text-gray-600 border-b border-gray-200 pb-0.5" style={{ gridColumn: `span ${s.span}` }}>
+            {s.span >= 3 ? s.label : ''}
+          </div>
+        ))}
+      </div>
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${totalDays}, ${COL_PX}px)` }}>
+        {days.map((d) => {
+          const wd = new Date(`${d}T00:00:00Z`).getUTCDay();
+          const weekend = wd === 0 || wd === 6;
+          return (
+            <div key={d} className={`text-[9px] text-center pb-1 ${weekend ? 'text-indigo-600 font-bold' : 'text-gray-400'}`}>
+              {Number(d.slice(8, 10))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function BoardCellView({ cell, nights }: { cell: BoardRow['units'][number]; nights: number }) {
-  if (cell.sellable === null) {
-    return <td className="px-3 py-1.5 text-center text-gray-200 border-l border-gray-100">·</td>;
-  }
-  if (cell.sellable === false) {
-    return (
-      <td className="px-3 py-1.5 border-l border-gray-100 bg-gray-50/80">
-        <span className="text-[11px] text-gray-400" title={cell.web ? `No online offer (booked, blocked or min-stay) — checked ${formatTs(cell.web.capturedAt)}` : undefined}>
-          booked
-        </span>
-      </td>
-    );
-  }
-  const a = cell.airbnb?.price ?? null;
-  const b = cell.booking?.price ?? null;
-  const w = cell.web?.price ?? null;
-  const gap = computeAbGap(a, b);
-  const abViolation = gap !== null && Math.abs(gap) > AIRBNB_VS_BOOKING_TOLERANCE_PCT;
-  const webAbove = w !== null && ((b !== null && w > b * 1.01) || (a !== null && w > a * 1.01));
-  return (
-    <td className={`px-3 py-1.5 border-l border-gray-100 align-top ${abViolation || webAbove ? 'bg-red-50/70' : ''}`}>
-      <ChannelLine tag="W" obs={cell.web} nights={nights} highlight={webAbove ? 'text-red-700 font-semibold' : undefined} />
-      <ChannelLine tag="A" obs={cell.airbnb} nights={nights} highlight={abViolation ? 'text-red-700 font-semibold' : undefined} />
-      <ChannelLine tag="B" obs={cell.booking} nights={nights} memberFloor />
-      {gap !== null && (
-        <div className={`text-[10px] leading-4 ${abGapClass(gap)}`} title={`Airbnb over Booking (baseline) — tolerance ±${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%`}>
-          A/B {formatAbGap(gap)}
-        </div>
-      )}
-    </td>
-  );
-}
-
-function Board({ rows, title, subtitle }: { rows: BoardRow[]; title: string; subtitle: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const unitHeads = rows[0]?.units ?? [];
-  const visible = expanded ? rows : rows.slice(0, 21);
+function StayCalendar({
+  title,
+  subtitle,
+  rows,
+  nights,
+  windowStart,
+  totalDays,
+  onSelect,
+  selected,
+}: {
+  title: string;
+  subtitle: string;
+  rows: BoardRow[];
+  nights: number;
+  windowStart: string;
+  totalDays: number;
+  onSelect: (s: Selection) => void;
+  selected: Selection | null;
+}) {
   return (
     <section>
-      <div className="mb-3">
+      <div className="mb-2">
         <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
         <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
       </div>
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 flex items-center justify-center h-24 text-gray-400 text-sm">
+        <div className="rounded-lg border border-dashed border-gray-300 flex items-center justify-center h-20 text-gray-400 text-sm">
           No observations yet — the next grid run fills this in.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase w-40">Check-in</th>
-                {unitHeads.map((u) => (
-                  <th key={u.unitId} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase border-l border-gray-100">
-                    {u.unitLabel}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {visible.map((row) => {
-                const isWeekendStart = ['Fri', 'Sat'].includes(weekday(row.checkIn));
-                return (
-                  <tr key={row.checkIn} className={isWeekendStart ? 'bg-indigo-50/40' : ''}>
-                    <td className="px-3 py-1.5 whitespace-nowrap">
-                      <span className="text-gray-800 font-medium">{fmtRange(row.checkIn, row.checkOut)}</span>
-                      <span className="text-[10px] text-gray-400 ml-1.5">{weekday(row.checkIn)}</span>
-                    </td>
-                    {row.units.map((cell) => (
-                      <BoardCellView key={cell.unitId} cell={cell} nights={row.nights} />
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {rows.length > visible.length && (
-            <button
-              onClick={() => setExpanded(true)}
-              className="w-full py-2 text-xs text-indigo-600 hover:bg-indigo-50 border-t border-gray-100"
-            >
-              Show all {rows.length} dates
-            </button>
-          )}
-          {expanded && rows.length > 21 && (
-            <button
-              onClick={() => setExpanded(false)}
-              className="w-full py-2 text-xs text-gray-500 hover:bg-gray-50 border-t border-gray-100"
-            >
-              Collapse
-            </button>
-          )}
+        <div className="overflow-x-auto rounded-lg border border-gray-200 p-3 bg-white">
+          <div style={{ width: totalDays * COL_PX + 1 }}>
+            <DateAxis windowStart={windowStart} totalDays={totalDays} />
+            {PARITY_UNITS.map((unit) => (
+              <div key={unit.id} className="mt-2">
+                <div className="text-[11px] font-medium text-gray-600 mb-1">{unit.label}</div>
+                <div
+                  className="grid gap-[2px]"
+                  style={{
+                    gridTemplateColumns: `repeat(${totalDays}, ${COL_PX}px)`,
+                    gridTemplateRows: `repeat(${nights}, 15px)`,
+                  }}
+                >
+                  {rows.map((row) => {
+                    const cell = row.units.find((u) => u.unitId === unit.id);
+                    if (!cell) return null;
+                    const startIdx = diffDays(windowStart, row.checkIn);
+                    if (startIdx < 0 || startIdx >= totalDays) return null;
+                    const assessment = assessStay(cell);
+                    const isSelected =
+                      selected?.row.checkIn === row.checkIn &&
+                      selected?.row.nights === row.nights &&
+                      selected?.cell.unitId === unit.id;
+                    return (
+                      <button
+                        key={row.checkIn}
+                        onClick={() => onSelect({ row, cell, assessment })}
+                        title={`${unit.label} · ${fmtRange(row.checkIn, row.checkOut)} — click for details`}
+                        className={`rounded-[3px] transition-colors cursor-pointer ${SEVERITY_STYLE[assessment.severity]} ${isSelected ? 'ring-2 ring-indigo-600 ring-offset-1 z-10' : ''}`}
+                        style={{
+                          gridColumn: `${startIdx + 1} / span ${Math.min(nights, totalDays - startIdx)}`,
+                          gridRow: (startIdx % nights) + 1,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </section>
   );
 }
 
-// ── Custom check result card (unchanged data shape, new date format) ──────────
+// ── Detail panel ──────────────────────────────────────────────────────────────
+
+function ChannelDetail({
+  name,
+  obs,
+  nights,
+  memberFloor,
+}: {
+  name: string;
+  obs: BoardObservation | null;
+  nights: number;
+  memberFloor?: number | null;
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200 p-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-semibold text-gray-500 uppercase">{name}</span>
+        {obs && <span className="text-[10px] text-gray-400">observed {formatTs(obs.capturedAt)}</span>}
+      </div>
+      {!obs ? (
+        <div className="text-sm text-gray-400 italic mt-1">no observation yet</div>
+      ) : obs.price === null ? (
+        <div className="text-sm text-gray-400 italic mt-1">
+          {obs.availability === 'error' ? 'scrape error' : 'not bookable'}
+        </div>
+      ) : (
+        <>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-xl font-semibold text-gray-900 tabular-nums">{fmt(obs.price)}</span>
+            <span className="text-xs text-gray-500">{fmtNightly(obs.price, nights)}</span>
+          </div>
+          {obs.originalPrice != null && discountPct(obs) != null && (
+            <div className="text-xs text-gray-500 mt-0.5">
+              <span className="line-through">{fmt(obs.originalPrice)}</span>
+              <span className="ml-1 text-emerald-700 font-semibold">−{discountPct(obs)}%</span>
+              {obs.unparsedDiscount && <span className="ml-1 text-amber-600 text-[10px]">(unbreakable)</span>}
+            </div>
+          )}
+          {(obs.discountBreakdown?.length || obs.labels.length > 0) && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {(obs.discountBreakdown ?? []).map((d, i) => (
+                <DiscountBadge key={`b${i}`} name={d.name} pp={d.pp} />
+              ))}
+              {obs.labels
+                .filter((l) => {
+                  const seen = new Set((obs.discountBreakdown ?? []).map((d) => categorizeDiscount(d.name)));
+                  const cat = categorizeDiscount(l);
+                  return !(seen.has(cat) && cat !== 'generic' && cat !== 'bkPays');
+                })
+                .map((l, i) => (
+                  <DiscountBadge key={`l${i}`} name={l} />
+                ))}
+            </div>
+          )}
+          {memberFloor != null && (
+            <div className="mt-2 text-xs text-gray-600">
+              Genius/app customer pays <span className="font-semibold tabular-nums">≈{fmt(memberFloor)}</span>
+              <span className="text-gray-400"> (derived: −10% Genius{obs.labels.some((l) => ['Getaway Deal', 'Limited-time Deal', 'Smart Deal'].includes(l)) ? '; mobile blocked by the campaign deal' : ' −10% mobile'})</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function DetailPanel({ selection, onClose }: { selection: Selection; onClose: () => void }) {
+  const { row, cell, assessment } = selection;
+  const a = cell.airbnb?.price ?? null;
+  const b = cell.booking?.price ?? null;
+  const abGap = a !== null && b !== null && b > 0 ? Math.round(((a - b) / b) * 100) : null;
+
+  return (
+    <aside className="fixed inset-y-0 right-0 w-full sm:w-[430px] bg-white border-l border-gray-200 shadow-2xl z-50 overflow-y-auto">
+      <div className="sticky top-0 bg-white border-b border-gray-200 px-5 py-4 flex items-start justify-between">
+        <div>
+          <div className="text-lg font-semibold text-gray-900">{cell.unitLabel}</div>
+          <div className="text-sm text-gray-500">
+            {fmtRange(row.checkIn, row.checkOut)} · {row.nights} night{row.nights === 1 ? '' : 's'} ·{' '}
+            {weekday(row.checkIn)} check-in
+          </div>
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none px-2 py-1" aria-label="Close">
+          ×
+        </button>
+      </div>
+
+      <div className="px-5 py-4 space-y-4">
+        {assessment.severity === 'booked' && (
+          <div className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
+            Not sellable online (booked, blocked or min-stay) per Beds24.
+          </div>
+        )}
+        {assessment.severity === 'nodata' && (
+          <div className="rounded-lg bg-gray-50 border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-500">
+            Sellable, but no channel observation yet — the scrape rotation reaches this date within a few days
+            (or the channel was configured after the last run).
+          </div>
+        )}
+        {assessment.issues.map((issue, i) => (
+          <div
+            key={i}
+            className={`rounded-lg px-3 py-2 text-sm border ${
+              issue.severity === 'major'
+                ? 'bg-rose-50 border-rose-200 text-rose-800'
+                : 'bg-amber-50 border-amber-200 text-amber-800'
+            }`}
+          >
+            {issue.severity === 'major' ? '🔴' : '🟡'} {issue.text}
+          </div>
+        ))}
+        {assessment.severity === 'ok' && (
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-800">
+            ✓ All parity rules pass for this stay.
+          </div>
+        )}
+
+        <ChannelDetail name="Web (our site)" obs={cell.web} nights={row.nights} />
+        <ChannelDetail name="Airbnb" obs={cell.airbnb} nights={row.nights} />
+        <ChannelDetail name="Booking.com" obs={cell.booking} nights={row.nights} memberFloor={assessment.memberFloor} />
+
+        {abGap !== null && (
+          <div className="text-xs text-gray-500">
+            Airbnb vs Booking (baseline): <span className={Math.abs(abGap) > 5 ? 'text-rose-700 font-semibold' : 'text-emerald-700 font-semibold'}>{abGap > 0 ? '+' : ''}{abGap}%</span> · tolerance ±5%
+          </div>
+        )}
+        {assessment.bookingFunded && (
+          <div className="text-xs text-gray-500">
+            ⚠ This Booking price includes a <strong>“Booking.com pays”</strong> discount — Booking funds it from its
+            own commission, the amount follows no formula we know, can change any time, and is deducted last. Out of
+            our control; shown so you know it was present.
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+// ── Custom check result card ──────────────────────────────────────────────────
 
 function OfferCell({ offer, nights }: { offer: ParityOffer | null; nights: number }) {
   if (!offer || offer.price == null) {
@@ -293,43 +426,16 @@ function OfferCell({ offer, nights }: { offer: ParityOffer | null; nights: numbe
         <div className="text-xs text-gray-500 mt-0.5">
           <span className="line-through">{fmt(offer.originalPrice)}</span>
           <span className="ml-1 text-emerald-700 font-semibold">−{pct}%</span>
-          {offer.unparsedDiscount && <span className="ml-1 text-amber-600 text-[10px]">(unbreakable)</span>}
         </div>
       )}
       {(offer.discountBreakdown?.length || offer.labels.length > 0) && (
         <div className="mt-1.5 flex flex-wrap gap-1 justify-end max-w-[240px] ml-auto">
-          {(offer.discountBreakdown ?? []).map((d, i) => {
-            const cat = DISCOUNT_CATEGORY[categorizeDiscount(d.name)];
-            return (
-              <span key={`b${i}`} className={`inline-block text-[11px] leading-tight px-1.5 py-0.5 rounded font-medium ${cat.class}`}
-                title={cat.deviceLogin ? 'Login/device-locked discount — not what an anonymous desktop user sees' : undefined}>
-                {cat.deviceLogin && <span aria-hidden className="mr-0.5">🔒</span>}
-                {cat.label}{d.pp != null && <span className="font-bold"> −{d.pp}pp</span>}
-              </span>
-            );
-          })}
-          {(() => {
-            const seen = new Set((offer.discountBreakdown ?? []).map((d) => categorizeDiscount(d.name)));
-            return offer.labels
-              .filter((l) => {
-                const cat = categorizeDiscount(l);
-                if (seen.has(cat) && cat !== 'generic') return false;
-                seen.add(cat);
-                return true;
-              })
-              .slice(0, 3)
-              .map((l, i) => {
-                const cat = DISCOUNT_CATEGORY[categorizeDiscount(l)];
-                const isGeneric = categorizeDiscount(l) === 'generic';
-                return (
-                  <span key={`l${i}`} className={`inline-block text-[10px] leading-tight px-1.5 py-0.5 rounded font-medium ${cat.class}`}
-                    title={cat.deviceLogin ? 'Login/device-locked discount' : undefined}>
-                    {cat.deviceLogin && <span aria-hidden className="mr-0.5">🔒</span>}
-                    {isGeneric ? l : cat.label}
-                  </span>
-                );
-              });
-          })()}
+          {(offer.discountBreakdown ?? []).map((d, i) => (
+            <DiscountBadge key={`b${i}`} name={d.name} pp={d.pp} />
+          ))}
+          {offer.labels.slice(0, 3).map((l, i) => (
+            <DiscountBadge key={`l${i}`} name={l} />
+          ))}
         </div>
       )}
     </td>
@@ -352,24 +458,19 @@ function SlotCard({ slot }: { slot: ParitySlotView }) {
             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Web</th>
             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Airbnb</th>
             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Booking.com</th>
-            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase w-24">A vs B</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {slot.units.map((cell) => {
-            const gap = computeAbGap(cell.airbnb?.price ?? null, cell.booking?.price ?? null);
-            return (
-              <tr key={cell.unitId}>
-                <td className="px-4 py-2.5 align-top">
-                  <span className="text-sm font-medium text-gray-800">{cell.unitLabel}</span>
-                </td>
-                <OfferCell offer={cell.web} nights={slot.nights} />
-                <OfferCell offer={cell.airbnb} nights={slot.nights} />
-                <OfferCell offer={cell.booking} nights={slot.nights} />
-                <td className={`px-4 py-2.5 text-center align-top ${abGapClass(gap)}`}>{formatAbGap(gap) || '—'}</td>
-              </tr>
-            );
-          })}
+          {slot.units.map((cell) => (
+            <tr key={cell.unitId}>
+              <td className="px-4 py-2.5 align-top">
+                <span className="text-sm font-medium text-gray-800">{cell.unitLabel}</span>
+              </td>
+              <OfferCell offer={cell.web} nights={slot.nights} />
+              <OfferCell offer={cell.airbnb} nights={slot.nights} />
+              <OfferCell offer={cell.booking} nights={slot.nights} />
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -379,53 +480,41 @@ function SlotCard({ slot }: { slot: ParitySlotView }) {
 // ── Competitors ───────────────────────────────────────────────────────────────
 
 function CompetitorSection({ observations }: { observations: ParityResponse['competitors'] }) {
-  if (COMPETITORS.length === 0) return null;
+  if (observations.length === 0) return null;
   return (
     <section className="border-t border-gray-200 pt-8">
       <h2 className="text-lg font-semibold text-gray-900 mb-1">Competitors</h2>
       <p className="text-xs text-gray-500 mb-4">
-        Configured competitor listings, priced alongside each grid run (per-night rates for the sampled stays).
+        Configured competitor listings, priced alongside each grid run.
       </p>
-      {observations.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 flex items-center justify-center h-20 text-gray-400 text-sm">
-          No competitor observations yet — they arrive with the next grid run.
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Competitor</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Stay</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Channel</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Per night</th>
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Competitor</th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Stay</th>
+              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Channel</th>
+              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Per night</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {observations.map((o, i) => (
+              <tr key={i}>
+                <td className="px-3 py-2 text-gray-800">{o.label} <span className="text-xs text-gray-400">({o.bedrooms}BR)</span></td>
+                <td className="px-3 py-2 whitespace-nowrap text-gray-600">
+                  {fmtRange(o.checkIn, addDaysIso(o.checkIn, o.nights))} · {o.nights}n
+                </td>
+                <td className="px-3 py-2 text-center text-xs text-gray-500">{o.channel}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{fmt(o.price)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-gray-500">{fmtNightly(o.price, o.nights)}</td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {observations.map((o, i) => (
-                <tr key={i}>
-                  <td className="px-3 py-2 text-gray-800">{o.label} <span className="text-xs text-gray-400">({o.bedrooms}BR)</span></td>
-                  <td className="px-3 py-2 whitespace-nowrap text-gray-600">
-                    {fmtRange(o.checkIn, addDaysIso(o.checkIn, o.nights))} · {o.nights}n
-                  </td>
-                  <td className="px-3 py-2 text-center text-xs text-gray-500">{o.channel}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmt(o.price)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">{fmtNightly(o.price, o.nights)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
-}
-
-function addDaysIso(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 // ── Main view ─────────────────────────────────────────────────────────────────
@@ -434,6 +523,7 @@ export default function ParityView() {
   const [data, setData] = useState<ParityResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
 
   const [checkIn, setCheckIn] = useState('');
   const [nights, setNights] = useState('2');
@@ -493,6 +583,18 @@ export default function ParityView() {
     }
   }
 
+  const windowStart = useMemo(() => {
+    const starts = [...(data?.board2n ?? []), ...(data?.board7n ?? [])].map((r) => r.checkIn);
+    return starts.length > 0 ? starts.sort()[0] : new Date().toISOString().slice(0, 10);
+  }, [data]);
+
+  const totalDays = useMemo(() => {
+    const ends = [...(data?.board2n ?? []), ...(data?.board7n ?? [])].map((r) =>
+      diffDays(windowStart, r.checkOut),
+    );
+    return Math.max(10, ...ends);
+  }, [data, windowStart]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-400 text-sm gap-2">
@@ -505,7 +607,7 @@ export default function ParityView() {
     return <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>;
   }
 
-  const gridAgeHours = data?.latestGridAt ? ageHours(data.latestGridAt) : null;
+  const gridAgeHours = data?.latestGridAt ? (Date.now() - new Date(data.latestGridAt).getTime()) / 3_600_000 : null;
 
   return (
     <div className="space-y-10">
@@ -516,16 +618,35 @@ export default function ParityView() {
         </div>
       )}
 
-      <Board
+      <div className="flex items-center gap-4 flex-wrap text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-gray-200" /> booked</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-emerald-100 border border-emerald-200" /> checked, fine</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-amber-300" /> minor — Genius/app price on Booking below our site</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — Airbnb off Booking &gt;±5% or our site above a channel</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-white border border-dashed border-gray-300" /> not scraped yet</span>
+        <span className="text-gray-400">· click any block for details</span>
+      </div>
+
+      <StayCalendar
+        title="2-night stays — next 60 days"
+        subtitle="Each block is one 2-night stay, spanning its dates (staggered rows keep overlapping stays apart)."
         rows={data?.board2n ?? []}
-        title="Next 60 days — 2-night stays"
-        subtitle="One row per check-in. Occupancy (booked/sellable) is re-checked against Beds24 every day for every date; W = our site, A = Airbnb, B = Booking.com anonymous prices from the scrape rotation (daily for ~3 weeks out, every ~3 days beyond — ◦ marks an observation older than 36 h; ≥n is the always-on Genius/app price). Red cells: Airbnb off Booking by more than ±5%, or our site above a channel. Weekend check-ins tinted."
+        nights={2}
+        windowStart={windowStart}
+        totalDays={totalDays}
+        onSelect={setSelection}
+        selected={selection}
       />
 
-      <Board
-        rows={data?.board7n ?? []}
+      <StayCalendar
         title="7-night stays"
-        subtitle="Weekly-rate coverage: every check-in date is re-scraped on a 7-day rotation, so the board fills over the week. Same reading as above."
+        subtitle="Each block is one 7-night stay; coverage fills over the weekly scrape rotation."
+        rows={data?.board7n ?? []}
+        nights={7}
+        windowStart={windowStart}
+        totalDays={totalDays}
+        onSelect={setSelection}
+        selected={selection}
       />
 
       <CompetitorSection observations={data?.competitors ?? []} />
@@ -599,11 +720,11 @@ export default function ParityView() {
       </section>
 
       <p className="text-xs text-gray-400">
-        Prices are what an anonymous, logged-out desktop visitor pays; Booking&apos;s always-on member discounts
-        (Genius 10% / mobile 10%) are derived, not scraped — the ≥ figure next to B is the Genius/app price ·
-        Booking.com is the baseline: Airbnb must sit within ±{AIRBNB_VS_BOOKING_TOLERANCE_PCT}% of it, and our site must
-        never be above either channel · Airbnb covers only units with their own listing.
+        Prices are what an anonymous, logged-out desktop visitor pays; Booking&apos;s member prices (Genius/mobile) and
+        “Booking.com pays” attribution are derived and shown in the detail panel · Booking.com is the baseline channel.
       </p>
+
+      {selection && <DetailPanel selection={selection} onClose={() => setSelection(null)} />}
     </div>
   );
 }

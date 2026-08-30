@@ -16,7 +16,7 @@
  * competitor page, cheapest 2-person rate — optionally pinned to a room type).
  */
 import type { Browser, Page } from 'puppeteer-core';
-import { PARITY_UNITS, type CompetitorConfig } from '../../data/parityConfig';
+import { KNOWN_DEAL_PERCENTAGES, PARITY_UNITS, type CompetitorConfig } from '../../data/parityConfig';
 import type { ParityOffer } from '../../utils/parityTypes';
 
 const BOOKING_BASE = 'https://www.booking.com';
@@ -172,6 +172,15 @@ async function loadRateRows(
         for (const [label, re] of DEAL_PATTERNS) {
           if (re.test(rowText) && !dealNames.includes(label)) dealNames.push(label);
         }
+        // "Booking.com pays" often lives in the row's hidden breakdown markup
+        // rather than its visible text — check outerHTML for this one label
+        // only (the phrase is too specific to false-positive on class names).
+        if (
+          !dealNames.includes('Booking.com pays') &&
+          /Booking\.com pays/i.test((tr as HTMLElement).outerHTML ?? '')
+        ) {
+          dealNames.push('Booking.com pays');
+        }
 
         out.push({
           roomTypeId: currentRoomId,
@@ -204,6 +213,30 @@ function pickBest(rows: RawRateRow[]): RawRateRow | null {
 function toOffer(best: RawRateRow): ParityOffer {
   const labels = [...best.dealNames];
   if (best.pctOff !== null && labels.length === 0) labels.push(`${best.pctOff}% off`);
+
+  // Derive "Booking.com pays" when the page hides it: if every named deal on
+  // the row has a KNOWN percentage and the observed price is meaningfully
+  // below base × Π(1 − deal%), the residual is Booking discounting out of its
+  // own commission (always deducted last, no formula on our side). Only claim
+  // it when the attribution is airtight — an unknown deal % means the
+  // residual could be ours.
+  if (
+    !labels.includes('Booking.com pays') &&
+    best.price !== null &&
+    best.originalPrice !== null &&
+    best.originalPrice > best.price
+  ) {
+    const hostDeals = best.dealNames.filter((d) => d !== 'Genius' && d !== 'Mobile-only');
+    const allKnown = hostDeals.every((d) => KNOWN_DEAL_PERCENTAGES[d] !== undefined);
+    if (allKnown && hostDeals.length > 0) {
+      const expected = hostDeals.reduce(
+        (acc, d) => acc * (1 - KNOWN_DEAL_PERCENTAGES[d] / 100),
+        best.originalPrice,
+      );
+      if (best.price < expected * 0.98) labels.push('Booking.com pays (derived)');
+    }
+  }
+
   return {
     price: best.price,
     originalPrice: best.originalPrice,

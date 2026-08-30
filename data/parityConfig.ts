@@ -35,7 +35,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 7;
+export const PARITY_CONFIG_VERSION = 8;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -239,6 +239,19 @@ export const BOOKING_MEMBER_DISCOUNTS = {
 
 /** Campaign deals displace the mobile discount; property deals combine with it. */
 const MOBILE_BLOCKING_DEALS = ['Getaway Deal', 'Limited-time Deal', 'Smart Deal'];
+
+/**
+ * Deal percentages CONFIRMED from reservation math (2026-08-30). Used to
+ * derive the "Booking.com pays" residual: when the anonymous price is
+ * meaningfully below base × (1 − deal%), the remainder is Booking discounting
+ * out of its own commission — an amount with no formula on our side, changing
+ * at Booking's whim, always deducted last. We can't predict it; we CAN detect
+ * that it was present. Update when campaigns change.
+ */
+export const KNOWN_DEAL_PERCENTAGES: Record<string, number> = {
+  'Getaway Deal': 30,
+  'Early Booker Deal': 20,
+};
 
 /** What a Genius app customer pays, given the anonymous price and its deal labels. */
 export function bookingMemberFloor(anonymousPrice: number, dealLabels: string[]): number {
