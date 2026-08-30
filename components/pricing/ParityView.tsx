@@ -153,7 +153,7 @@ function ChannelLine({
   }
   const pct = discountPct(obs);
   const stale = ageHours(obs.capturedAt) > 36;
-  const floor = memberFloor && obs.price !== null ? bookingMemberFloor(obs.price, obs.originalPrice) : null;
+  const floor = memberFloor && obs.price !== null ? bookingMemberFloor(obs.price, obs.labels) : null;
   const tooltip =
     offerTooltip(tag, obs, nights) +
     (floor !== null

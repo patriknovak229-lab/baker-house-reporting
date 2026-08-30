@@ -35,7 +35,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 5;
+export const PARITY_CONFIG_VERSION = 6;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -43,10 +43,11 @@ export const PARITY_UNITS: ParityUnitConfig[] = [
     id: 'urban-1kk',
     label: '1KK Urban',
     beds24RoomId: 679714,
-    // The Urban studios are NOT on the main Booking.com property page
-    // (verified 2026-08-29 — no room type matches). If they sell on Booking
-    // under their own property, put its page path + room type id here.
-    booking: null,
+    // Sold on the main Booking page as "Apartment with Terrace" (40 m²,
+    // "We have 3 left" = the 3-unit VR; operator-confirmed 2026-08-30). The
+    // earlier "not on the page" note came from a date it was sold out on —
+    // sold-out room types vanish from the table entirely.
+    booking: { pagePath: BOOKING_PAGE_MAIN, roomTypeId: '1541267404' },
     airbnb: null,
   },
   {
@@ -206,22 +207,25 @@ export const AIRBNB_VS_BOOKING_TOLERANCE_PCT = 5;
  * Always-on member discounts configured on Booking.com. These never expire,
  * so the price members/app users pay is DERIVED here rather than scraped.
  *
- * MECHANICS — confirmed against a live Genius/mobile reservation screenshot
- * (2026-08-30, Sept 4–6 1KK Deluxe): discounts are ADDITIVE percentage
- * points of the ORIGINAL (pre-deal) price, not multiplicative on the
- * discounted one. That reservation: base 7,762.99, Getaway −2,096.01,
- * Genius −776.30 = exactly 10% OF THE BASE.
+ * MECHANICS — confirmed against TWO live Genius/mobile reservations
+ * (screenshots 2026-08-30). Discounts apply SEQUENTIALLY, each on the
+ * remainder left by the previous one, in the order Genius → deal → mobile:
  *
- *  · Genius 10% — applies always, including alongside special deals.
- *  · Mobile 10% — DISPLACED by any special deal (Getaway/Early Booker/…);
- *    only applies on undiscounted stays. A deal is visible to the scraper as
- *    a strikethrough. (No-deal mobile math still provisional until the
- *    second reference screenshot arrives.)
- *  · "Booking.com pays" — Booking sometimes discounts further out of its own
- *    commission. Out of host control, not configured anywhere, and it can
- *    push Booking below the direct site on its own. The derived floor
- *    deliberately EXCLUDES it; where the scraper sees the label, the alert
- *    says so.
+ *   Oct 13–15: 8,691.50 ×0.9 (Genius) ×0.8 (Early Booker) ×0.9 (mobile)
+ *              = 5,632.09, then "Booking.com pays" −399.60 → 5,232.49 ✓
+ *   Sep 4–6:   7,762.99 ×0.9 (Genius) ×0.7 (Getaway) = 4,890.68, no mobile
+ *              line at all, then −470.31 → 4,420.37 ✓
+ *
+ * Because the ANONYMOUS price we scrape is base × (1 − deal), the member
+ * price is simply scraped × 0.9 (Genius, always) × 0.9 (mobile — unless the
+ * active deal is a CAMPAIGN deal, which displaces mobile: Getaway confirmed
+ * blocking, Early Booker confirmed combining; other campaign-type deals
+ * assumed blocking by category).
+ *
+ * "Booking.com pays" — Booking discounting further out of its own
+ * commission. Out of host control, not configured anywhere, and it can push
+ * Booking below the direct site on its own. The derived floor deliberately
+ * EXCLUDES it; where the scraper sees the label, the alert says so.
  *
  * The floor is shown on the board for context; it does NOT feed the
  * web-vs-OTA alert (a direct site priced between the member floor and the
@@ -232,11 +236,13 @@ export const BOOKING_MEMBER_DISCOUNTS = {
   mobilePct: 10,
 } as const;
 
-/** What a Genius app customer pays: anonymous price − member pp × original base. */
-export function bookingMemberFloor(anonymousPrice: number, originalPrice: number | null): number {
-  const base = originalPrice ?? anonymousPrice;
-  const hasDeal = originalPrice !== null && originalPrice > anonymousPrice;
-  const memberPct =
-    BOOKING_MEMBER_DISCOUNTS.geniusPct + (hasDeal ? 0 : BOOKING_MEMBER_DISCOUNTS.mobilePct);
-  return Math.round(anonymousPrice - (base * memberPct) / 100);
+/** Campaign deals displace the mobile discount; property deals combine with it. */
+const MOBILE_BLOCKING_DEALS = ['Getaway Deal', 'Limited-time Deal', 'Smart Deal'];
+
+/** What a Genius app customer pays, given the anonymous price and its deal labels. */
+export function bookingMemberFloor(anonymousPrice: number, dealLabels: string[]): number {
+  const mobileBlocked = dealLabels.some((l) => MOBILE_BLOCKING_DEALS.includes(l));
+  let floor = anonymousPrice * (1 - BOOKING_MEMBER_DISCOUNTS.geniusPct / 100);
+  if (!mobileBlocked) floor *= 1 - BOOKING_MEMBER_DISCOUNTS.mobilePct / 100;
+  return Math.round(floor);
 }
