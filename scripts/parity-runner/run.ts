@@ -59,6 +59,10 @@ function pragueNowHHMM(): string {
   }).format(new Date());
 }
 
+function pragueTodayIso(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(new Date());
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
@@ -100,6 +104,7 @@ async function main() {
     if (Number.isFinite(qStart) && Number.isFinite(qEnd) && inQuiet) return;
   }
 
+  const startedAtMs = Date.now();
   const order = await api<ParityWorkOrder>(
     `/api/pricing/ingest${FORCE_GRID ? `?plan=1${FULL_SWEEP ? '&full=1' : ''}` : ''}`,
   );
@@ -220,6 +225,19 @@ async function main() {
       }
       return { checkIn: slot.checkIn, nights: slot.nights, requestId: slot.requestId, offers };
     };
+
+    // A Mac that sleeps mid-scrape resumes the process hours later and would
+    // post a stale mix (and, worse, pile on top of the day's real grid run —
+    // three Telegram pings inside 30 minutes on 2026-08-31). If the run took
+    // implausibly long or the Prague date moved on, throw the data away; the
+    // work order machinery re-runs cleanly on the next poll.
+    if (pragueTodayIso() !== order.today || Date.now() - startedAtMs > 3 * 3_600_000) {
+      console.log(
+        `[runner] abandoning stale run: work order for ${order.today}, now ${pragueTodayIso()}, ` +
+          `${Math.round((Date.now() - startedAtMs) / 60_000)} min elapsed (slept mid-run?)`,
+      );
+      return;
+    }
 
     const stamp = new Date().toISOString();
     const runTag = stamp.replace(/[-:TZ.]/g, '').slice(0, 14);

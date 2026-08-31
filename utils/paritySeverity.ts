@@ -2,14 +2,19 @@
  * Stay-level severity — one place that turns a board cell into the calendar
  * colour and the human-readable issue list the detail panel shows.
  *
- * Client-safe: pure functions over data, no env access. The MAJOR rules
- * mirror the Telegram alert rules in the ingest route exactly; MINOR is
- * view-only by design (the operator wants to see it, not be pinged about it).
+ * Client-safe: pure functions over data, no env access. The comparison rules
+ * come from the operator-editable config (utils/parityRules) — the SAME list
+ * the ingest route uses for Telegram alerts, so the calendar and the pings
+ * can never disagree. Severity 'minor' is view-only by design (the operator
+ * wants to see it, not be pinged about it).
  */
+import { bookingMemberFloor } from '@/data/parityConfig';
 import {
-  AIRBNB_VS_BOOKING_TOLERANCE_PCT,
-  bookingMemberFloor,
-} from '@/data/parityConfig';
+  evaluateParityRules,
+  ruleContextFromLabels,
+  type ParityRule,
+  type PriceKey,
+} from '@/utils/parityRules';
 import type { BoardUnitCell } from '@/utils/parityTypes';
 
 export type StaySeverity = 'booked' | 'restricted' | 'nodata' | 'ok' | 'minor' | 'major';
@@ -28,15 +33,18 @@ export interface StayAssessment {
   bookingFunded: boolean;
 }
 
-const kc = (n: number) => `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
-
-export function assessStay(cell: BoardUnitCell): StayAssessment {
-  const w = cell.web?.price ?? null;
-  const a = cell.airbnb?.price ?? null;
-  const b = cell.booking?.price ?? null;
+export function assessStay(cell: BoardUnitCell, rules: ParityRule[]): StayAssessment {
   const bookingLabels = cell.booking?.labels ?? [];
   const bookingFunded = bookingLabels.some((l) => l.startsWith('Booking.com pays'));
+  const b = cell.booking?.price ?? null;
   const memberFloor = b !== null ? bookingMemberFloor(b, bookingLabels) : null;
+
+  const prices: Record<PriceKey, number | null> = {
+    web: cell.web?.price ?? null,
+    airbnb: cell.airbnb?.price ?? null,
+    bookingAnon: b,
+    bookingComputed: memberFloor,
+  };
 
   // Open calendar, but a min-stay rule refuses this stay length — visually
   // distinct from booked (the room is NOT occupied; the rate setup is why
@@ -54,47 +62,14 @@ export function assessStay(cell: BoardUnitCell): StayAssessment {
     return { severity: 'booked', issues: [], memberFloor, bookingFunded };
   }
 
-  const issues: StayIssue[] = [];
-
-  // MAJOR — same rules as the Telegram alerts. Airbnb must sit INSIDE the
-  // corridor between Booking's two real prices: no lower than the derived
-  // Genius/app floor (Airbnb undercutting the baseline channel) and no higher
-  // than the anonymous price plus tolerance (visibly dearer to a comparison
-  // shopper). A single ± band around either price alone cannot work — the
-  // floor sits ~19% under anonymous BY DESIGN, so anonymous-vs-anonymous
-  // flagged every "Booking.com pays" date and floor-vs-anonymous would flag
-  // every normal one.
-  if (a !== null && b !== null && b > 0 && memberFloor !== null) {
-    const tol = AIRBNB_VS_BOOKING_TOLERANCE_PCT / 100;
-    if (a > b * (1 + tol)) {
-      issues.push({
-        severity: 'major',
-        text: `Airbnb ${kc(a)} is ${(((a - b) / b) * 100).toFixed(0)}% above Booking's anonymous price ${kc(b)} (allowed +${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
-      });
-    } else if (a < memberFloor * (1 - tol)) {
-      issues.push({
-        severity: 'major',
-        text: `Airbnb ${kc(a)} is ${(((memberFloor - a) / memberFloor) * 100).toFixed(0)}% below even Booking's Genius/app price ${kc(memberFloor)} — Airbnb undercuts the baseline channel`,
-      });
-    }
-  }
-  if (w !== null && b !== null && w > b * 1.01) {
-    issues.push({
-      severity: 'major',
-      text: `Our site ${kc(w)} is above Booking ${kc(b)}${bookingFunded ? ' — the Booking price includes a “Booking.com pays” discount funded by Booking, not by us' : ''}`,
-    });
-  }
-  if (w !== null && a !== null && w > a * 1.01) {
-    issues.push({ severity: 'major', text: `Our site ${kc(w)} is above Airbnb ${kc(a)}` });
-  }
-
-  // MINOR — the computed Genius/app price on Booking undercuts the direct site.
-  if (w !== null && memberFloor !== null && memberFloor < w * 0.99 && !issues.some((i) => i.severity === 'major')) {
-    issues.push({
-      severity: 'minor',
-      text: `A Genius/app customer pays ≈${kc(memberFloor)} on Booking — below our site ${kc(w)}`,
-    });
-  }
+  const issues: StayIssue[] = evaluateParityRules(rules, prices, ruleContextFromLabels(bookingLabels)).map((f) => ({
+    severity: f.rule.severity === 'major' ? 'major' : 'minor',
+    text:
+      f.text +
+      (bookingFunded && (f.rule.left.startsWith('booking') || f.rule.right.startsWith('booking'))
+        ? ' — the Booking price includes a “Booking.com pays” discount funded by Booking, not by us'
+        : ''),
+  }));
 
   if (issues.some((i) => i.severity === 'major')) {
     return { severity: 'major', issues, memberFloor, bookingFunded };
@@ -104,7 +79,7 @@ export function assessStay(cell: BoardUnitCell): StayAssessment {
   }
   // Sellable per Beds24 but no channel observation yet (fresh config, or the
   // rotation has not reached this date) — visibly different from "all good".
-  if (a === null && b === null) {
+  if (prices.airbnb === null && b === null) {
     return { severity: 'nodata', issues: [], memberFloor, bookingFunded };
   }
   return { severity: 'ok', issues: [], memberFloor, bookingFunded };

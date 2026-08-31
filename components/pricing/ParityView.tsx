@@ -19,6 +19,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PARITY_UNITS, UNITS_2N, UNITS_3N, type ParityUnitConfig } from '@/data/parityConfig';
 import { assessStay, type StayAssessment } from '@/utils/paritySeverity';
+import {
+  defaultParityRules,
+  PRICE_LABEL,
+  rulesForNights,
+  STAY_LENGTHS,
+  type ParityRule,
+  type ParityRuleConfig,
+  type PriceKey,
+  type StayLengthKey,
+} from '@/utils/parityRules';
 import type {
   BoardObservation,
   BoardRow,
@@ -201,6 +211,7 @@ function StayCalendar({
   rows,
   nights,
   units,
+  rules,
   windowStart,
   totalDays,
   onSelect,
@@ -211,6 +222,7 @@ function StayCalendar({
   rows: BoardRow[];
   nights: number;
   units: ParityUnitConfig[];
+  rules: ParityRule[];
   windowStart: string;
   totalDays: number;
   onSelect: (s: Selection) => void;
@@ -245,7 +257,7 @@ function StayCalendar({
                     if (!cell) return null;
                     const startIdx = diffDays(windowStart, row.checkIn);
                     if (startIdx < 0 || startIdx >= totalDays) return null;
-                    const assessment = assessStay(cell);
+                    const assessment = assessStay(cell, rules);
                     const isSelected =
                       selected?.row.checkIn === row.checkIn &&
                       selected?.row.nights === row.nights &&
@@ -346,11 +358,6 @@ function ChannelDetail({
 
 function DetailPanel({ selection, onClose }: { selection: Selection; onClose: () => void }) {
   const { row, cell, assessment } = selection;
-  const a = cell.airbnb?.price ?? null;
-  const b = cell.booking?.price ?? null;
-  const floor = assessment.memberFloor;
-  const corridor = a !== null && b !== null && b > 0 && floor !== null;
-  const insideCorridor = corridor && a >= floor * 0.95 && a <= b * 1.05;
   const minStayLabel = cell.web?.labels.find((l) => /^Min stay \d+$/.test(l)) ?? null;
 
   return (
@@ -410,15 +417,6 @@ function DetailPanel({ selection, onClose }: { selection: Selection; onClose: ()
         <ChannelDetail name="Airbnb" obs={cell.airbnb} nights={row.nights} />
         <ChannelDetail name="Booking.com" obs={cell.booking} nights={row.nights} memberFloor={assessment.memberFloor} />
 
-        {corridor && (
-          <div className="text-xs text-gray-500">
-            Airbnb corridor (Booking baseline): Genius/app {fmt(floor)} ≤{' '}
-            <span className={insideCorridor ? 'text-emerald-700 font-semibold' : 'text-rose-700 font-semibold'}>
-              Airbnb {fmt(a)}
-            </span>{' '}
-            ≤ anonymous +5% {fmt(Math.round(b * 1.05))} — {insideCorridor ? 'inside' : 'outside'} (tolerance ±5% at each bound)
-          </div>
-        )}
         {assessment.bookingFunded && (
           <div className="text-xs text-gray-500">
             ⚠ This Booking price includes a <strong>“Booking.com pays”</strong> discount — Booking funds it from its
@@ -504,6 +502,141 @@ function SlotCard({ slot }: { slot: ParitySlotView }) {
   );
 }
 
+// ── Alert-rule editor ─────────────────────────────────────────────────────────
+
+const PRICE_OPTIONS: PriceKey[] = ['web', 'airbnb', 'bookingAnon', 'bookingComputed'];
+const LOS_TITLE: Record<StayLengthKey, string> = {
+  '1': '1-night stays',
+  '2': '2-night stays (studios)',
+  '3': '3-night stays (2BR units)',
+  '7': '7-night stays',
+};
+const SELECT_CLS =
+  'border border-gray-300 rounded px-1.5 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500';
+const PCT_CLS =
+  'w-14 border border-gray-300 rounded px-1.5 py-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-indigo-500';
+
+function pctOrNull(raw: string): number | null {
+  if (raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+}
+
+function RulesEditor({
+  config,
+  onChange,
+  onSave,
+  saving,
+  dirty,
+  error,
+  savedAt,
+}: {
+  config: ParityRuleConfig;
+  onChange: (c: ParityRuleConfig) => void;
+  onSave: () => void;
+  saving: boolean;
+  dirty: boolean;
+  error: string | null;
+  savedAt: number | null;
+}) {
+  const update = (los: StayLengthKey, idx: number, patch: Partial<ParityRule>) =>
+    onChange({ ...config, [los]: config[los].map((r, i) => (i === idx ? { ...r, ...patch } : r)) });
+  const remove = (los: StayLengthKey, idx: number) =>
+    onChange({ ...config, [los]: config[los].filter((_, i) => i !== idx) });
+  const add = (los: StayLengthKey) =>
+    onChange({
+      ...config,
+      [los]: [
+        ...config[los],
+        {
+          left: 'web', op: 'above', right: 'bookingAnon',
+          tolerancePct: 1, tolerancePctBookingFunded: null, tolerancePctCampaign: null,
+          severity: 'major',
+        } satisfies ParityRule,
+      ],
+    });
+
+  return (
+    <section className="border-t border-gray-200 pt-8">
+      <h2 className="text-lg font-semibold text-gray-900 mb-1">Alert rules</h2>
+      <p className="text-xs text-gray-500 mb-4 max-w-3xl">
+        One rule = one price comparison with an allowed slack. <strong>Red</strong> colours the block and goes to
+        Telegram on the daily run; <strong>Yellow</strong> only colours the block. The two override fields replace the
+        threshold when the Booking offer carries a <em>Booking.com pays</em> discount or an operator campaign deal
+        (Getaway / Limited-time / Smart) — set 100 to effectively switch the rule off in that situation. Changes
+        recolour the boards immediately (preview); <strong>Save</strong> makes them stick and the next grid run&apos;s
+        Telegram follows them. Checks are prospective — history is never re-judged.
+      </p>
+
+      <div className="space-y-5">
+        {STAY_LENGTHS.map((los) => (
+          <div key={los} className="rounded-lg border border-gray-200 p-3">
+            <div className="text-sm font-semibold text-gray-800 mb-2">{LOS_TITLE[los]}</div>
+            {config[los].length === 0 && (
+              <div className="text-xs text-gray-400 italic mb-2">No rules — every scraped stay shows green.</div>
+            )}
+            <div className="space-y-1.5">
+              {config[los].map((rule, idx) => (
+                <div key={idx} className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+                  <select className={SELECT_CLS} value={rule.left} onChange={(e) => update(los, idx, { left: e.target.value as PriceKey })}>
+                    {PRICE_OPTIONS.map((p) => <option key={p} value={p}>{PRICE_LABEL[p]}</option>)}
+                  </select>
+                  <select className={SELECT_CLS} value={rule.op} onChange={(e) => update(los, idx, { op: e.target.value as ParityRule['op'] })}>
+                    <option value="above">above</option>
+                    <option value="below">below</option>
+                  </select>
+                  <select className={SELECT_CLS} value={rule.right} onChange={(e) => update(los, idx, { right: e.target.value as PriceKey })}>
+                    {PRICE_OPTIONS.map((p) => <option key={p} value={p}>{PRICE_LABEL[p]}</option>)}
+                  </select>
+                  <span>by &gt;</span>
+                  <input type="number" min={0} max={100} step={0.5} className={PCT_CLS} value={rule.tolerancePct}
+                    onChange={(e) => update(los, idx, { tolerancePct: pctOrNull(e.target.value) ?? 0 })} />
+                  <span>%</span>
+                  <span className="text-gray-400 ml-1" title="Replacement threshold when the Booking offer carries a Booking.com-pays discount">
+                    B.com pays:
+                  </span>
+                  <input type="number" min={0} max={100} step={0.5} className={PCT_CLS} placeholder="—"
+                    value={rule.tolerancePctBookingFunded ?? ''}
+                    onChange={(e) => update(los, idx, { tolerancePctBookingFunded: pctOrNull(e.target.value) })} />
+                  <span className="text-gray-400" title="Replacement threshold when a campaign deal (Getaway/Limited-time/Smart) is on the Booking offer">
+                    campaign:
+                  </span>
+                  <input type="number" min={0} max={100} step={0.5} className={PCT_CLS} placeholder="—"
+                    value={rule.tolerancePctCampaign ?? ''}
+                    onChange={(e) => update(los, idx, { tolerancePctCampaign: pctOrNull(e.target.value) })} />
+                  <select className={SELECT_CLS} value={rule.severity} onChange={(e) => update(los, idx, { severity: e.target.value as ParityRule['severity'] })}>
+                    <option value="major">🔴 Red + Telegram</option>
+                    <option value="minor">🟡 Yellow (board only)</option>
+                    <option value="off">Off</option>
+                  </select>
+                  <button onClick={() => remove(los, idx)} aria-label="Remove rule"
+                    className="text-gray-400 hover:text-red-600 px-1 text-sm">×</button>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => add(los)} className="mt-2 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+              + Add rule
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          onClick={onSave}
+          disabled={saving || !dirty}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {saving ? 'Saving…' : 'Save alert rules'}
+        </button>
+        {dirty && !saving && <span className="text-xs text-amber-700">Unsaved changes — boards preview them, Telegram does not yet.</span>}
+        {!dirty && savedAt !== null && <span className="text-xs text-emerald-700">Saved ✓</span>}
+        {error && <span className="text-xs text-red-600">{error}</span>}
+      </div>
+    </section>
+  );
+}
+
 // ── Competitors ───────────────────────────────────────────────────────────────
 
 function CompetitorSection({ observations }: { observations: ParityResponse['competitors'] }) {
@@ -552,6 +685,13 @@ export default function ParityView() {
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
 
+  // Local, editable copy of the alert-rule config — the boards recolour from
+  // it LIVE (preview before saving); Save persists it for the ingest alerts.
+  const [ruleConfig, setRuleConfig] = useState<ParityRuleConfig | null>(null);
+  const [savingRules, setSavingRules] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const [rulesSavedAt, setRulesSavedAt] = useState<number | null>(null);
+
   const [checkIn, setCheckIn] = useState('');
   const [nights, setNights] = useState('2');
   const [queueing, setQueueing] = useState(false);
@@ -573,6 +713,34 @@ export default function ParityView() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (data?.ruleConfig && ruleConfig === null) setRuleConfig(data.ruleConfig);
+  }, [data, ruleConfig]);
+
+  const cfg = ruleConfig ?? data?.ruleConfig ?? defaultParityRules();
+  const rulesDirty = data ? JSON.stringify(cfg) !== JSON.stringify(data.ruleConfig) : false;
+
+  async function saveRules() {
+    setSavingRules(true);
+    setRulesError(null);
+    try {
+      const res = await fetch('/api/pricing/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: cfg }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error ?? `Failed (${res.status})`);
+      setRuleConfig(body.config);
+      setData((d) => (d ? { ...d, ruleConfig: body.config } : d));
+      setRulesSavedAt(Date.now());
+    } catch (e) {
+      setRulesError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSavingRules(false);
+    }
+  }
 
   const hasPending = useMemo(() => data?.requests.some((r) => r.status === 'pending') ?? false, [data]);
   useEffect(() => {
@@ -652,8 +820,8 @@ export default function ParityView() {
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-gray-200" /> booked</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] border border-gray-200 bg-[repeating-linear-gradient(45deg,#e5e7eb_0px,#e5e7eb_3px,#ffffff_3px,#ffffff_6px)]" /> open, but min-stay blocks this length</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-emerald-100 border border-emerald-200" /> checked, fine</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-amber-300" /> minor — Genius/app price on Booking below our site</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — Airbnb outside Booking&apos;s Genius↔anonymous corridor or our site above a channel</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-amber-300" /> minor — a yellow alert rule fired</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — a red alert rule fired (Telegram on the daily run)</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-white border border-dashed border-gray-300" /> not scraped yet</span>
         <span className="text-gray-400">· click any block for details</span>
       </div>
@@ -664,6 +832,7 @@ export default function ParityView() {
         rows={data?.board1n ?? []}
         nights={1}
         units={PARITY_UNITS}
+        rules={rulesForNights(cfg, 1)}
         windowStart={windowStart}
         totalDays={totalDays}
         onSelect={setSelection}
@@ -676,6 +845,7 @@ export default function ParityView() {
         rows={data?.board2n ?? []}
         nights={2}
         units={UNITS_2N}
+        rules={rulesForNights(cfg, 2)}
         windowStart={windowStart}
         totalDays={totalDays}
         onSelect={setSelection}
@@ -688,6 +858,7 @@ export default function ParityView() {
         rows={data?.board3n ?? []}
         nights={3}
         units={UNITS_3N}
+        rules={rulesForNights(cfg, 3)}
         windowStart={windowStart}
         totalDays={totalDays}
         onSelect={setSelection}
@@ -700,10 +871,21 @@ export default function ParityView() {
         rows={data?.board7n ?? []}
         nights={7}
         units={PARITY_UNITS}
+        rules={rulesForNights(cfg, 7)}
         windowStart={windowStart}
         totalDays={totalDays}
         onSelect={setSelection}
         selected={selection}
+      />
+
+      <RulesEditor
+        config={cfg}
+        onChange={setRuleConfig}
+        onSave={saveRules}
+        saving={savingRules}
+        dirty={rulesDirty}
+        error={rulesError}
+        savedAt={rulesSavedAt}
       />
 
       <CompetitorSection observations={data?.competitors ?? []} />
@@ -779,7 +961,8 @@ export default function ParityView() {
 
       <p className="text-xs text-gray-400">
         Prices are what an anonymous, logged-out desktop visitor pays; Booking&apos;s member prices (Genius/mobile) and
-        “Booking.com pays” attribution are derived and shown in the detail panel · Booking.com is the baseline channel.
+        “Booking.com pays” attribution are derived and shown in the detail panel · alert thresholds are configured in
+        the Alert rules section above, per stay length.
       </p>
 
       {selection && <DetailPanel selection={selection} onClose={() => setSelection(null)} />}

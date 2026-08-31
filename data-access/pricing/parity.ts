@@ -7,6 +7,7 @@ import { db } from '@/lib/db';
 import { priceCheckRequests, priceSnapshots } from '@/lib/db/schema';
 import type { PriceSnapshotRow } from '@/lib/db/schema';
 import { COMPETITORS, PARITY_SWEEP, PARITY_UNITS } from '@/data/parityConfig';
+import { readParityRuleConfig } from '@/data-access/pricing/rules';
 import { pragueToday } from '@/utils/periodUtils';
 import type {
   BoardObservation,
@@ -112,6 +113,10 @@ async function readBoard(nights: number, todayIso: string, maxAgeDays: number): 
       priceSnapshots.unitId,
       priceSnapshots.channel,
       priceSnapshots.checkIn,
+      // Prefer the freshest USABLE observation: a run whose lookup errored
+      // must not shadow yesterday's real quote (a stay quoted on a channel
+      // but "error" on web reads as nonsense to the operator).
+      sql`(${priceSnapshots.availability} = 'error') asc`,
       desc(priceSnapshots.capturedAt),
     )) as PriceSnapshotRow[];
 
@@ -236,6 +241,7 @@ export async function readParity(): Promise<ParityResponse> {
   }));
 
   return {
+    ruleConfig: await readParityRuleConfig(),
     board1n,
     board2n,
     board3n,

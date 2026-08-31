@@ -15,7 +15,7 @@
  * browser has no business POSTing observations.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, inArray, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, ne } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { priceCheckRequests, priceSnapshots } from '@/lib/db/schema';
 import { getAccessToken } from '@/utils/beds24Auth';
@@ -23,7 +23,6 @@ import { extractPrice, fetchOffers, offersForRoom } from '@/utils/beds24Pricing'
 import { pragueToday } from '@/utils/periodUtils';
 import { pricingChatId, sendTelegram } from '@/utils/telegram';
 import {
-  AIRBNB_VS_BOOKING_TOLERANCE_PCT,
   bookingMemberFloor,
   COMPETITORS,
   EXPECTED_DRIFT_ALERT_PCT,
@@ -32,6 +31,14 @@ import {
   PARITY_SWEEP,
   PARITY_UNITS,
 } from '@/data/parityConfig';
+import {
+  evaluateParityRules,
+  ruleContextFromLabels,
+  ruleKey,
+  rulesForNights,
+  type PriceKey,
+} from '@/utils/parityRules';
+import { readParityRuleConfig } from '@/data-access/pricing/rules';
 import {
   classifyUnsoldStay,
   loadNightMap,
@@ -162,6 +169,7 @@ export async function POST(req: NextRequest) {
 
   const today = pragueToday();
   const capturedAt = payload.capturedAt ? new Date(payload.capturedAt) : new Date();
+  const ruleConfig = await readParityRuleConfig();
 
   // Retry safety: a runner that POSTs the same runId twice replaces, not
   // duplicates. Observations are append-only across runs, idempotent within one.
@@ -299,49 +307,34 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Parity rules — Booking.com is the baseline channel.
+      // Parity rules — evaluated from the operator-editable config (Pricing
+      // tab → Alert rules). MAJOR rules alert; minor ones are view-only.
       const a = unit.airbnb ? (scraped.airbnb?.price ?? null) : null;
       const b = unit.booking ? (scraped.booking?.price ?? null) : null;
-      const w = webPrice;
+      const bookingLabels = scraped.booking?.labels ?? [];
+      const bookingFunded = bookingLabels.some((l) => l.startsWith('Booking.com pays'));
+      const prices: Record<PriceKey, number | null> = {
+        web: webPrice,
+        airbnb: a,
+        bookingAnon: b,
+        bookingComputed: b !== null ? bookingMemberFloor(b, bookingLabels) : null,
+      };
       const stay = `${slot.checkIn} (${slot.nights}n)`;
-
-      // 1. Airbnb must sit INSIDE Booking's price corridor: no lower than the
-      // derived Genius/app floor (undercutting the baseline channel), no
-      // higher than the anonymous price + tolerance (visibly dearer). The
-      // floor sits ~19% under anonymous by design, so a single band around
-      // either price alone flags one structural regime or the other.
-      const bFloor = b !== null ? bookingMemberFloor(b, scraped.booking?.labels ?? []) : null;
-      if (a !== null && b !== null && b > 0 && bFloor !== null) {
-        const tol = AIRBNB_VS_BOOKING_TOLERANCE_PCT / 100;
-        if (a > b * (1 + tol)) {
-          gapAlerts.push({
-            key: `ab:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${(((a - b) / b) * 100).toFixed(0)}% above Booking's anonymous ${b} Kč (allowed +${AIRBNB_VS_BOOKING_TOLERANCE_PCT}%)`,
-          });
-        } else if (a < bFloor * (1 - tol)) {
-          gapAlerts.push({
-            key: `ab:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `↕️ ${unit.label} ${stay}: Airbnb ${a} Kč is ${(((bFloor - a) / bFloor) * 100).toFixed(0)}% below even Booking's Genius/app price ${bFloor} Kč — Airbnb undercuts the baseline channel`,
-          });
-        }
-      }
-
-      // 2. The direct site must never be the expensive option. 1% grace
-      // absorbs decimal-vs-rounded comparisons (web offers carry cents).
-      if (w !== null) {
-        const dearer: string[] = [];
-        if (b !== null && w > b * 1.01) dearer.push(`Booking ${b} Kč`);
-        if (a !== null && w > a * 1.01) dearer.push(`Airbnb ${a} Kč`);
-        if (dearer.length > 0) {
-          // When Booking is the cheaper one because Booking itself funds a
-          // discount out of its commission ("Booking.com pays"), that is out
-          // of our control — still worth alerting, but the line says why.
-          const bookingFunded = (scraped.booking?.labels ?? []).includes('Booking.com pays');
-          gapAlerts.push({
-            key: `web:${unit.id}:${slot.checkIn}:${slot.nights}`,
-            line: `🚨 ${unit.label} ${stay}: our site ${Math.round(w)} Kč is ABOVE ${dearer.join(' and ')}${bookingFunded ? ' — includes a “Booking.com pays” discount funded by Booking, not by us' : ''}`,
-          });
-        }
+      for (const fired of evaluateParityRules(
+        rulesForNights(ruleConfig, slot.nights),
+        prices,
+        ruleContextFromLabels(bookingLabels),
+      )) {
+        if (fired.rule.severity !== 'major') continue;
+        // When Booking is involved and funds a discount out of its own
+        // commission ("Booking.com pays"), still alert — but say why.
+        const funded =
+          bookingFunded &&
+          (fired.rule.left.startsWith('booking') || fired.rule.right.startsWith('booking'));
+        gapAlerts.push({
+          key: `${ruleKey(fired.rule)}:${unit.id}:${slot.checkIn}:${slot.nights}`,
+          line: `🚨 ${unit.label} ${stay}: ${fired.text}${funded ? ' — includes a “Booking.com pays” discount funded by Booking, not by us' : ''}`,
+        });
       }
     }
 
@@ -486,13 +479,34 @@ export async function POST(req: NextRequest) {
   }
 
   // Alerts only for the scheduled grid — a custom check is interactive and its
-  // result is already on the operator's screen; pinging the group would be noise.
+  // result is already on the operator's screen; pinging the group would be
+  // noise. And only for the day's FIRST grid ingest: forced re-runs and
+  // resumed-after-sleep stragglers re-post the same day (three pings inside
+  // 30 minutes on 2026-08-31) — their data is welcome, their alerts are not.
   //
   // Gap violations persist for days (an undercut stays until someone moves a
   // rate), so the message lists only NEW ones — everything already flagged in
   // the previous grid run collapses into a count. Otherwise the group gets an
   // identical 15-line wall every morning and learns to ignore it.
-  if (payload.source === 'grid' && (alerts.length > 0 || gapAlerts.length > 0)) {
+  let firstGridToday = payload.source === 'grid';
+  if (firstGridToday) {
+    // Same +2h Prague-day approximation as the GET's gridDue.
+    const dayStartUtc = new Date(new Date(`${today}T00:00:00Z`).getTime() - 2 * 3_600_000);
+    const [prior] = await db
+      .select({ runId: priceSnapshots.runId })
+      .from(priceSnapshots)
+      .where(
+        and(
+          eq(priceSnapshots.source, 'grid'),
+          ne(priceSnapshots.runId, payload.runId),
+          gte(priceSnapshots.capturedAt, dayStartUtc),
+        ),
+      )
+      .limit(1);
+    firstGridToday = !prior;
+  }
+
+  if (payload.source === 'grid' && firstGridToday && (alerts.length > 0 || gapAlerts.length > 0)) {
     const prevKeys = new Set<string>();
     try {
       const [prev] = await db
@@ -513,14 +527,18 @@ export async function POST(req: NextRequest) {
               inArray(priceSnapshots.channel, ['web', 'airbnb', 'booking']),
             ),
           );
+        // Rebuild the previous run's violations with the CURRENT rule config
+        // (checks are prospective — a threshold change applies to the diff
+        // too, so an operator edit never floods the chat with "new" lines
+        // that were already visible yesterday under the new thresholds).
         const byKey = new Map<
           string,
-          { a?: number | null; b?: number | null; w?: number | null; bLabels?: string[] }
+          { nights: number; a?: number | null; b?: number | null; w?: number | null; bLabels?: string[] }
         >();
         for (const r of prevRows) {
           if (r.unitId.startsWith('comp:')) continue;
           const k = `${r.unitId}:${r.checkIn}:${r.nights}`;
-          const entry = byKey.get(k) ?? {};
+          const entry = byKey.get(k) ?? { nights: r.nights };
           const price = r.price === null ? null : Number(r.price);
           if (r.channel === 'airbnb') entry.a = price;
           if (r.channel === 'booking') {
@@ -530,14 +548,19 @@ export async function POST(req: NextRequest) {
           if (r.channel === 'web') entry.w = price;
           byKey.set(k, entry);
         }
-        for (const [k, { a, b, w, bLabels }] of byKey) {
-          if (a != null && b != null && b > 0) {
-            const floor = bookingMemberFloor(b, bLabels ?? []);
-            const tol = AIRBNB_VS_BOOKING_TOLERANCE_PCT / 100;
-            if (a > b * (1 + tol) || a < floor * (1 - tol)) prevKeys.add(`ab:${k}`);
-          }
-          if (w != null && ((b != null && w > b * 1.01) || (a != null && w > a * 1.01))) {
-            prevKeys.add(`web:${k}`);
+        for (const [k, { nights, a, b, w, bLabels }] of byKey) {
+          const prevPrices: Record<PriceKey, number | null> = {
+            web: w ?? null,
+            airbnb: a ?? null,
+            bookingAnon: b ?? null,
+            bookingComputed: b != null ? bookingMemberFloor(b, bLabels ?? []) : null,
+          };
+          for (const fired of evaluateParityRules(
+            rulesForNights(ruleConfig, nights),
+            prevPrices,
+            ruleContextFromLabels(bLabels ?? []),
+          )) {
+            if (fired.rule.severity === 'major') prevKeys.add(`${ruleKey(fired.rule)}:${k}`);
           }
         }
       }

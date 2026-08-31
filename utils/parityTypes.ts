@@ -159,7 +159,11 @@ export interface CompetitorObservation {
   capturedAt: string;
 }
 
+import type { ParityRuleConfig } from './parityRules';
+
 export interface ParityResponse {
+  /** Operator-editable alert rules, per stay length (utils/parityRules). */
+  ruleConfig: ParityRuleConfig;
   /** 1-night stays, all units, next 14 days (daily; gap-filler pricing). */
   board1n: BoardRow[];
   /** 2-night stays — the studio units (urban + deluxe 1KK). */
