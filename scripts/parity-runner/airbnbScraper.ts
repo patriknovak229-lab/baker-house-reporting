@@ -9,7 +9,7 @@
  * strikethrough for the discount label. Every heuristic in here earned its
  * place against a real regression — trim with care.
  */
-import type { Browser } from 'puppeteer-core';
+import type { Browser, Page } from 'puppeteer-core';
 import type { ParityOffer } from '../../utils/parityTypes';
 
 type Offer = ParityOffer;
@@ -120,11 +120,7 @@ function parseTooltipBreakdown(
   return { originalPrice, total, discounts };
 }
 
-export async function scrapeAirbnbViaBrowser(
-  browser: Browser,
-  listingId: string,
-  slots: Array<{ checkIn: string; checkOut: string; nights: number }>,
-): Promise<Offer[]> {
+async function newAirbnbPage(browser: Browser): Promise<Page> {
   const page = await browser.newPage();
   // tsx/esbuild `__name` helper polyfill — see bookingScraper.ts for why.
   await page.evaluateOnNewDocument('window.__name = (fn) => fn;');
@@ -139,6 +135,15 @@ export async function scrapeAirbnbViaBrowser(
   for (const domain of ['.airbnb.com', '.airbnb.cz', 'www.airbnb.com']) {
     await page.setCookie({ name: 'currency', value: 'CZK', domain }).catch(() => null);
   }
+  return page;
+}
+
+export async function scrapeAirbnbViaBrowser(
+  browser: Browser,
+  listingId: string,
+  slots: Array<{ checkIn: string; checkOut: string; nights: number }>,
+): Promise<Offer[]> {
+  let page = await newAirbnbPage(browser);
 
   const results: Offer[] = [];
   const shortId = listingId.slice(-6);
@@ -702,9 +707,19 @@ export async function scrapeAirbnbViaBrowser(
     } catch (err) {
       console.log(`[pricing] ${tag} failed: ${err instanceof Error ? err.message : err}`);
       results.push({ ...NULL_OFFER, availability: 'error' });
+      // Airbnb's heavy pages sometimes crash the tab mid-listing ("Navigating
+      // frame was detached" — every later slot then fails instantly). A fresh
+      // page rescues the rest of the listing; a dead BROWSER cannot be fixed
+      // here, so let the caller's relaunch logic handle it.
+      if (!browser.connected) throw err;
+      if (page.isClosed() || /detached|Session closed|Target closed/i.test(String(err))) {
+        console.log(`[pricing] ${tag}: recreating the page after a tab crash`);
+        await page.close().catch(() => null);
+        page = await newAirbnbPage(browser);
+      }
     }
   }
 
-  await page.close();
+  await page.close().catch(() => null);
   return results;
 }

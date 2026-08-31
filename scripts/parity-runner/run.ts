@@ -140,20 +140,45 @@ async function main() {
     `[runner] work order v${order.configVersion ?? '?'}: ${gridSlots.length} grid slot(s), ${customSlots.length} custom check(s), ${gridWanted ? COMPETITORS.length : 0} competitor(s) → ${BASE_URL}`,
   );
 
-  const browser: Browser = await puppeteer.launch({
-    executablePath: CHROME,
-    headless: process.env.RUNNER_HEADFUL === '1' ? false : true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1440,1200'],
-  });
+  const launchBrowser = (): Promise<Browser> =>
+    puppeteer.launch({
+      executablePath: CHROME,
+      headless: process.env.RUNNER_HEADFUL === '1' ? false : true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1440,1200'],
+    });
+  let browser: Browser = await launchBrowser();
+
+  // Chrome can die mid-run (Airbnb's heavy pages have crashed the renderer
+  // ~25 loads into a listing — observed twice on 2026-08-31). One phase's
+  // death must not lose the whole run: relaunch the browser and carry on with
+  // 'error' offers for whatever was lost; the POST still delivers everything
+  // else, and the server's channel-empty health alert flags a total loss.
+  const reviveBrowser = async () => {
+    if (browser.connected) return;
+    console.log('[runner] browser died — relaunching');
+    await browser.close().catch(() => null);
+    browser = await launchBrowser();
+  };
+
+  const ERROR_OFFER: ParityOffer = { price: null, originalPrice: null, labels: [], availability: 'error' };
 
   try {
     // Booking.com — one property-page load per slot (skipped when the plan
     // says no unit on the page can sell the stay).
-    const bookingBySlot = await scrapeBookingSlots(
-      browser,
-      allSlots,
-      allSlots.map((s) => s.units),
-    );
+    let bookingBySlot: Record<string, ParityOffer>[];
+    try {
+      bookingBySlot = await scrapeBookingSlots(
+        browser,
+        allSlots,
+        allSlots.map((s) => s.units),
+      );
+    } catch (err) {
+      console.log(`[runner] booking phase failed entirely: ${err instanceof Error ? err.message : err}`);
+      bookingBySlot = allSlots.map(() =>
+        Object.fromEntries(PARITY_UNITS.filter((u) => u.booking).map((u) => [u.id, { ...ERROR_OFFER }])),
+      );
+      await reviveBrowser();
+    }
 
     // Airbnb — one pass per configured listing, only over slots where the
     // plan says that unit can actually sell the stay.
@@ -165,12 +190,19 @@ async function main() {
         .filter((i) => i >= 0);
       if (indices.length === 0) continue;
       console.log(`[runner] airbnb ${unit.id} (${unit.airbnb.listingId}) — ${indices.length}/${allSlots.length} slot(s)`);
-      const offers = await scrapeAirbnbViaBrowser(
-        browser,
-        unit.airbnb.listingId,
-        indices.map((i) => allSlots[i]),
-      );
-      airbnbByUnit.set(unit.id, new Map(indices.map((slotIdx, k) => [slotIdx, offers[k]])));
+      try {
+        await reviveBrowser();
+        const offers = await scrapeAirbnbViaBrowser(
+          browser,
+          unit.airbnb.listingId,
+          indices.map((i) => allSlots[i]),
+        );
+        airbnbByUnit.set(unit.id, new Map(indices.map((slotIdx, k) => [slotIdx, offers[k]])));
+      } catch (err) {
+        console.log(`[runner] airbnb ${unit.id} failed entirely: ${err instanceof Error ? err.message : err}`);
+        airbnbByUnit.set(unit.id, new Map(indices.map((slotIdx) => [slotIdx, { ...ERROR_OFFER }])));
+        await reviveBrowser();
+      }
     }
 
     const toSlotResult = (slot: WorkSlot, index: number): ParitySlotResult => {
