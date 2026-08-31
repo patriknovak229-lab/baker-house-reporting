@@ -417,21 +417,28 @@ export async function POST(req: NextRequest) {
       for (let lead = sweep.fromLead; lead <= sweep.toLead; lead++) {
         const checkIn = addDays(today, lead);
         if (covered.has(checkIn)) continue;
-        // A span NO room in the property can host comes back as a non-OK
-        // status, not an empty list — rows are still written (grey/hatched
-        // per the market snapshot, 'error' where the snapshot disagrees), so
-        // fully-booked dates never show as "not scraped yet".
+        // Beds24 rations API credits per 5 minutes, and the whole sweep runs
+        // as one burst — calling offers for every date exhausted the budget
+        // partway through every run (failures grew monotonically down the
+        // sweep order). So Beds24 is only asked about stays the market
+        // snapshot says SOMEBODY could sell; booked/min-stay dates are
+        // written straight from the snapshot without spending a call.
+        const anySellable = sweep.units.some((u) =>
+          staySellablePerMarket(nightMap, u.id, checkIn, sweep.nights),
+        );
         let offers: unknown = null;
-        let fetchOk = true;
-        try {
-          offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, sweep.nights), 2, 0);
-        } catch (err) {
-          fetchOk = false;
-          console.error(`[parity-ingest] web sweep failed for ${checkIn} (${sweep.nights}n)`, err);
+        let fetchOk = anySellable;
+        if (anySellable) {
+          try {
+            offers = await fetchOffers(beds24Token, checkIn, addDays(checkIn, sweep.nights), 2, 0);
+          } catch (err) {
+            fetchOk = false;
+            console.error(`[parity-ingest] web sweep failed for ${checkIn} (${sweep.nights}n)`, err);
+          }
         }
         for (const unit of sweep.units) {
           const price = fetchOk ? extractPrice(offersForRoom(offers, unit.beds24RoomId)) : null;
-          const offer = webOffer(unit.id, checkIn, sweep.nights, price, fetchOk);
+          const offer = webOffer(unit.id, checkIn, sweep.nights, price, fetchOk || !anySellable);
           rows.push({
             runId: payload.runId,
             source: payload.source,
