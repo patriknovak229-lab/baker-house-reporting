@@ -356,9 +356,46 @@ function ChannelDetail({
   );
 }
 
-function DetailPanel({ selection, onClose }: { selection: Selection; onClose: () => void }) {
+function DetailPanel({
+  selection,
+  onClose,
+  onQueued,
+}: {
+  selection: Selection;
+  onClose: () => void;
+  onQueued?: () => void;
+}) {
   const { row, cell, assessment } = selection;
   const minStayLabel = cell.web?.labels.find((l) => /^Min stay \d+$/.test(l)) ?? null;
+
+  // One-click re-scrape of this exact stay (all units share the page loads) —
+  // rides the existing custom-check queue; the runner picks it up within
+  // ~15 min and the freshest observation replaces what is shown here.
+  const [requeue, setRequeue] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [requeueMsg, setRequeueMsg] = useState<string | null>(null);
+  useEffect(() => {
+    setRequeue('idle');
+    setRequeueMsg(null);
+  }, [row.checkIn, row.nights, cell.unitId]);
+
+  async function requeueCheck() {
+    setRequeue('busy');
+    setRequeueMsg(null);
+    try {
+      const res = await fetch('/api/pricing/parity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkIn: row.checkIn, nights: row.nights }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error ?? `Failed (${res.status})`);
+      setRequeue('done');
+      onQueued?.();
+    } catch (e) {
+      setRequeue('error');
+      setRequeueMsg(e instanceof Error ? e.message : 'Failed to queue');
+    }
+  }
 
   return (
     <aside className="fixed inset-y-0 right-0 w-full sm:w-[430px] bg-white border-l border-gray-200 shadow-2xl z-50 overflow-y-auto">
@@ -376,6 +413,23 @@ function DetailPanel({ selection, onClose }: { selection: Selection; onClose: ()
       </div>
 
       <div className="px-5 py-4 space-y-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={requeueCheck}
+            disabled={requeue === 'busy' || requeue === 'done'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            {requeue === 'busy' ? 'Queueing…' : requeue === 'done' ? '✓ Queued for re-scrape' : '↻ Re-scrape these dates'}
+          </button>
+          {requeue === 'done' && (
+            <span className="text-[11px] text-gray-500">
+              The runner re-checks all units for this stay within ~15 min (Mac awake) — this panel shows the fresh
+              prices once it lands.
+            </span>
+          )}
+          {requeue === 'error' && <span className="text-xs text-red-600">{requeueMsg}</span>}
+        </div>
+
         {assessment.severity === 'booked' && (
           <div className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
             Not sellable online (booked or blocked) per Beds24.
@@ -965,7 +1019,9 @@ export default function ParityView() {
         the Alert rules section above, per stay length.
       </p>
 
-      {selection && <DetailPanel selection={selection} onClose={() => setSelection(null)} />}
+      {selection && (
+        <DetailPanel selection={selection} onClose={() => setSelection(null)} onQueued={() => load(true)} />
+      )}
     </div>
   );
 }
