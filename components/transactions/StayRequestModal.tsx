@@ -16,7 +16,13 @@
 import { useState } from 'react';
 import type { Reservation } from '@/types/reservation';
 import { pragueToday } from '@/utils/periodUtils';
-import { planStayRequest, nightsBetween, type StaySegment, type StayRequestPlan } from '@/utils/stayRequest';
+import {
+  planStayRequest,
+  nightsBetween,
+  SELLABLE_UNITS,
+  type StaySegment,
+  type StayRequestPlan,
+} from '@/utils/stayRequest';
 
 type PriceSource = 'offers' | 'calendar-nominal' | 'none';
 
@@ -58,6 +64,12 @@ export default function StayRequestModal({
   const [children, setChildren] = useState(0);
   const [allowShuffle, setAllowShuffle] = useState(true);
   const [discount, setDiscount] = useState(0);
+  /** Which types the operator is willing to offer — all of them until narrowed. */
+  const [allowedIds, setAllowedIds] = useState<number[]>(SELLABLE_UNITS.map((s) => s.roomId));
+  /** 0 = no preference (fewest room changes). */
+  const [preferredId, setPreferredId] = useState(0);
+  /** '' = uncapped. Only meaningful alongside a preference. */
+  const [maxChanges, setMaxChanges] = useState<string>('');
 
   const [plan, setPlan] = useState<StayRequestPlan | null>(null);
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
@@ -75,7 +87,12 @@ export default function StayRequestModal({
     setCopied(false);
 
     // Feasibility first — free, and it tells us what to ask Beds24 to price.
-    const result = planStayRequest(reservations, arrival, departure, today, { allowShuffle });
+    const result = planStayRequest(reservations, arrival, departure, today, {
+      allowShuffle,
+      allowedRoomIds: allowedIds,
+      preferredRoomId: preferredId || undefined,
+      maxRoomChanges: maxChanges === '' ? undefined : Number(maxChanges),
+    });
     setPlan(result);
     if (!result.feasible) return;
 
@@ -175,6 +192,61 @@ export default function StayRequestModal({
             </label>
           </div>
 
+          {/* Which types to offer — the lever for "the guest wants something cheaper" */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-1 border-b border-gray-100">
+            <span className="text-xs font-medium text-gray-500">Offer</span>
+            {SELLABLE_UNITS.map((s) => (
+              <label key={s.roomId} className="flex items-center gap-1.5 text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={allowedIds.includes(s.roomId)}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? [...allowedIds, s.roomId]
+                      : allowedIds.filter((id) => id !== s.roomId);
+                    setAllowedIds(next);
+                    // A preference for a type no longer on offer would be ignored anyway.
+                    if (!next.includes(preferredId)) setPreferredId(0);
+                  }}
+                  className="rounded"
+                />
+                {s.label}
+              </label>
+            ))}
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 ml-auto">
+              <span className="text-xs font-medium text-gray-500">Maximise nights in</span>
+              <select
+                value={preferredId}
+                onChange={(e) => setPreferredId(Number(e.target.value))}
+                className="px-2 py-1 rounded-md border border-gray-200 text-sm"
+              >
+                <option value={0}>— fewest room changes</option>
+                {SELLABLE_UNITS.filter((s) => allowedIds.includes(s.roomId)).map((s) => (
+                  <option key={s.roomId} value={s.roomId}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-sm text-gray-600">
+              <span
+                className="text-xs font-medium text-gray-500"
+                title="Cap how often the guest changes room. Fewer changes means fewer nights in the preferred type — the itinerary shows the trade."
+              >
+                Max room changes
+              </span>
+              <select
+                value={maxChanges}
+                onChange={(e) => setMaxChanges(e.target.value)}
+                className="px-2 py-1 rounded-md border border-gray-200 text-sm"
+              >
+                <option value="">any</option>
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+              </select>
+            </label>
+          </div>
+
           <div className="flex flex-wrap items-center gap-4">
             <label className="flex items-center gap-2 text-sm text-gray-600">
               <input type="checkbox" checked={allowShuffle} onChange={(e) => setAllowShuffle(e.target.checked)} className="rounded" />
@@ -191,7 +263,7 @@ export default function StayRequestModal({
             <span className="text-xs text-gray-400">{nights > 0 ? `${nights} nights` : 'pick dates'}</span>
             <button
               onClick={handleCheck}
-              disabled={loading || nights <= 0}
+              disabled={loading || nights <= 0 || allowedIds.length === 0}
               className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
             >
               {loading ? 'Pricing…' : 'Check'}
@@ -209,7 +281,9 @@ export default function StayRequestModal({
                 Not possible — blocked on {plan.blockedAt}
               </p>
               <p className="text-xs text-rose-700 mt-0.5">
-                No room type has a free unit that night{allowShuffle ? ', even after shuffling movable guests' : ' (shuffling is switched off)'}.
+                {allowedIds.length === SELLABLE_UNITS.length ? 'No room type' : 'None of the selected room types'} has a
+                free unit that night{allowShuffle ? ', even after shuffling movable guests' : ' (shuffling is switched off)'}.
+                {allowShuffle && ' A shuffle only changes which unit a guest occupies — it cannot add one.'}
               </p>
               {plan.holders.length > 0 && (
                 <table className="mt-3 w-full text-xs">
@@ -239,6 +313,13 @@ export default function StayRequestModal({
                     ? '1 reservation, no room change'
                     : `${plan.segments.length} reservations, ${plan.segments.length - 1} room change${plan.segments.length > 2 ? 's' : ''} for the guest`}
                 </p>
+                {preferredId > 0 && (
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    {plan.segments.filter((s) => s.sellableRoomId === preferredId).reduce((n, s) => n + s.nights, 0)}
+                    {' of '}{plan.totalNights} nights in {SELLABLE_UNITS.find((s) => s.roomId === preferredId)?.label}
+                    {' — the rest bridges nights it could not cover.'}
+                  </p>
+                )}
               </div>
 
               <table className="w-full text-xs">

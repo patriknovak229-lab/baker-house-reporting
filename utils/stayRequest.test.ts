@@ -175,6 +175,194 @@ describe("planStayRequest", () => {
     expect(plan.segments[0].room).not.toBe("K.202");
   });
 
+  it("restricts the offer to the selected types, and blames only their units", () => {
+    // Urban's three studios are all taken on 2026-09-03 by different guests —
+    // the real Sept case. Deluxe is wide open, so unrestricted this is trivially
+    // possible; restricted to Urban it must fail, because a shuffle rearranges
+    // which unit a guest holds and cannot conjure a fourth studio.
+    const all: ResRef[] = [
+      stay({ reservationNumber: "U1", room: "K.102", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+      stay({ reservationNumber: "U2", room: "K.103", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+      stay({ reservationNumber: "U3", room: "K.106", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+    ];
+    const URBAN = SELLABLE_UNITS.find((s) => s.label === "1KK Urban Studios")!.roomId;
+
+    const anyType = planStayRequest(all, "2026-09-01", "2026-09-06", TODAY);
+    expect(anyType.feasible).toBe(true);
+
+    const urbanOnly = planStayRequest(all, "2026-09-01", "2026-09-06", TODAY, { allowedRoomIds: [URBAN] });
+    expect(urbanOnly.feasible).toBe(false);
+    if (urbanOnly.feasible) return;
+    expect(urbanOnly.blockedAt).toBe("2026-09-03");
+    // Only Urban units are named — Deluxe was never on offer.
+    expect(urbanOnly.holders.map((h) => h.room).sort()).toEqual(["K.102", "K.103", "K.106"]);
+  });
+
+  it("nothing selected means nothing to offer", () => {
+    expect(planStayRequest([], "2026-09-01", "2026-09-10", TODAY, { allowedRoomIds: [] }).feasible).toBe(false);
+  });
+
+  it("preferred type wins the nights it can take, and bridges the ones it can't", () => {
+    // Urban full on 2026-09-03 only. Preferring Urban should buy Urban for
+    // 01–03 and 04–08, with a single bridging night in another type — instead of
+    // the fewest-segments answer, which would put the whole stay in Deluxe.
+    const all: ResRef[] = [
+      stay({ reservationNumber: "U1", room: "K.102", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+      stay({ reservationNumber: "U2", room: "K.103", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+      stay({ reservationNumber: "U3", room: "K.106", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+    ];
+    const URBAN = SELLABLE_UNITS.find((s) => s.label === "1KK Urban Studios")!.roomId;
+
+    const fewest = planStayRequest(all, "2026-09-01", "2026-09-08", TODAY);
+    expect(fewest.feasible).toBe(true);
+    if (!fewest.feasible) return;
+    expect(fewest.segments).toHaveLength(1); // one type spans it → no Urban at all
+    expect(fewest.segments[0].sellableRoomId).not.toBe(URBAN);
+
+    const preferUrban = planStayRequest(all, "2026-09-01", "2026-09-08", TODAY, { preferredRoomId: URBAN });
+    expect(preferUrban.feasible).toBe(true);
+    if (!preferUrban.feasible) return;
+    expect(preferUrban.segments).toHaveLength(3);
+    expect(coversSpan(preferUrban.segments, "2026-09-01", "2026-09-08")).toBe(true);
+    // The bridge is exactly the one night Urban could not take.
+    const bridge = preferUrban.segments.filter((s) => s.sellableRoomId !== URBAN);
+    expect(bridge).toHaveLength(1);
+    expect(bridge[0].from).toBe("2026-09-03");
+    expect(bridge[0].nights).toBe(1);
+    // Everything else is the preferred type: 6 of 7 nights.
+    const urbanNights = preferUrban.segments
+      .filter((s) => s.sellableRoomId === URBAN)
+      .reduce((n, s) => n + s.nights, 0);
+    expect(urbanNights).toBe(6);
+  });
+
+  it("preference cannot rescue a night no allowed type can cover", () => {
+    // Urban full on the 3rd and Deluxe full for the whole span, standalones too.
+    const all: ResRef[] = [
+      ...["K.102", "K.103", "K.106"].map((room, i) =>
+        stay({ reservationNumber: `U${i}`, room, checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+      ),
+      ...["K.202", "K.203", "K.201", "O.308"].map((room, i) =>
+        stay({ reservationNumber: `D${i}`, room, checkInDate: "2026-09-01", checkOutDate: "2026-09-08" }),
+      ),
+    ];
+    const URBAN = SELLABLE_UNITS.find((s) => s.label === "1KK Urban Studios")!.roomId;
+    const plan = planStayRequest(all, "2026-09-01", "2026-09-08", TODAY, { preferredRoomId: URBAN });
+
+    expect(plan.feasible).toBe(false);
+    if (plan.feasible) return;
+    expect(plan.blockedAt).toBe("2026-09-03");
+  });
+
+  it("maxRoomChanges merges segments back, trading preferred nights for fewer moves", () => {
+    // Urban full on the 3rd and the 6th, Deluxe wide open. Preferring Urban
+    // wants Urban-bridge-Urban-bridge-Urban (5 segments); a 1-change budget must
+    // collapse that to 2, and every night must still be covered exactly once.
+    const all: ResRef[] = [
+      ...["K.102", "K.103", "K.106"].flatMap((room, i) => [
+        stay({ reservationNumber: `A${i}`, room, checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+        stay({ reservationNumber: `B${i}`, room, checkInDate: "2026-09-06", checkOutDate: "2026-09-07" }),
+      ]),
+    ];
+    const URBAN = SELLABLE_UNITS.find((s) => s.label === "1KK Urban Studios")!.roomId;
+
+    const greedy = planStayRequest(all, "2026-09-01", "2026-09-10", TODAY, { preferredRoomId: URBAN });
+    expect(greedy.feasible).toBe(true);
+    if (!greedy.feasible) return;
+    expect(greedy.segments.length).toBeGreaterThan(2);
+
+    const capped = planStayRequest(all, "2026-09-01", "2026-09-10", TODAY, {
+      preferredRoomId: URBAN,
+      maxRoomChanges: 1,
+    });
+    expect(capped.feasible).toBe(true);
+    if (!capped.feasible) return;
+    expect(capped.segments).toHaveLength(2);
+    expect(coversSpan(capped.segments, "2026-09-01", "2026-09-10")).toBe(true);
+
+    // The budget costs preferred nights — that is the trade, and it must be real.
+    const nightsIn = (p: typeof capped) =>
+      p.feasible ? p.segments.filter((s) => s.sellableRoomId === URBAN).reduce((n, s) => n + s.nights, 0) : 0;
+    expect(nightsIn(capped)).toBeLessThan(nightsIn(greedy));
+
+    // A zero-change budget means one reservation or nothing.
+    const single = planStayRequest(all, "2026-09-01", "2026-09-10", TODAY, {
+      preferredRoomId: URBAN,
+      maxRoomChanges: 0,
+    });
+    expect(single.feasible).toBe(true);
+    if (!single.feasible) return;
+    expect(single.segments).toHaveLength(1);
+    expect(single.segments[0].sellableRoomId).not.toBe(URBAN); // Urban can't span it
+  });
+
+  it("never emits two consecutive segments one type could hold as one reservation", () => {
+    // A split that costs nothing is not a split: consecutive nights in the same
+    // type are one booking, so the itinerary must never show them separately.
+    const all: ResRef[] = [
+      ...["K.102", "K.103", "K.106"].flatMap((room, i) => [
+        stay({ reservationNumber: `A${i}`, room, checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+        stay({ reservationNumber: `B${i}`, room, checkInDate: "2026-09-06", checkOutDate: "2026-09-07" }),
+      ]),
+    ];
+    const URBAN = SELLABLE_UNITS.find((s) => s.label === "1KK Urban Studios")!.roomId;
+
+    for (const maxRoomChanges of [0, 1, 2, 3, undefined]) {
+      const plan = planStayRequest(all, "2026-09-01", "2026-09-10", TODAY, { preferredRoomId: URBAN, maxRoomChanges });
+      expect(plan.feasible).toBe(true);
+      if (!plan.feasible) return;
+      const adjacentSameType = plan.segments.some(
+        (s, i) => i > 0 && plan.segments[i - 1].sellableRoomId === s.sellableRoomId,
+      );
+      expect(adjacentSameType).toBe(false);
+    }
+  });
+
+  it("never moves the same guest twice from the same unit (segments thread state)", () => {
+    // Two Urban-blocking nights force Urban→bridge→Urban→bridge→Urban, and the
+    // long-staying movable guests get shuffled in more than one segment. Each
+    // move must start from where the PREVIOUS segment left the guest, or the
+    // itinerary is not executable.
+    const all: ResRef[] = [
+      // Long movable Urban stays that overlap several segments.
+      stay({ reservationNumber: "LONG1", room: "K.102", checkInDate: "2026-09-02", checkOutDate: "2026-09-09", firstName: "Long", lastName: "One" }),
+      stay({ reservationNumber: "LONG2", room: "K.103", checkInDate: "2026-09-02", checkOutDate: "2026-09-09", firstName: "Long", lastName: "Two" }),
+      // The nights that push the guest out of Urban entirely.
+      stay({ reservationNumber: "FULL1", room: "K.106", checkInDate: "2026-09-03", checkOutDate: "2026-09-04" }),
+      stay({ reservationNumber: "FULL2", room: "K.106", checkInDate: "2026-09-06", checkOutDate: "2026-09-07" }),
+    ];
+    const URBAN = SELLABLE_UNITS.find((s) => s.label === "1KK Urban Studios")!.roomId;
+    const plan = planStayRequest(all, "2026-09-01", "2026-09-09", TODAY, { preferredRoomId: URBAN });
+
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+
+    // Replay every move in order: each one must depart from the guest's current
+    // unit, which is what makes the list executable top to bottom.
+    const whereIs = new Map<string, string>([
+      ["LONG1", "K.102"],
+      ["LONG2", "K.103"],
+    ]);
+    for (const seg of plan.segments) {
+      for (const move of seg.moves) {
+        const known = whereIs.get(move.reservationNumber);
+        if (known !== undefined) expect(move.from).toBe(known);
+        whereIs.set(move.reservationNumber, move.to);
+      }
+    }
+
+    // And no segment may be handed a unit the guest already occupies elsewhere
+    // in the itinerary at the same time (segments are disjoint, so this is about
+    // the request's own footprint being respected).
+    const perRoom = new Map<string, { from: string; to: string }[]>();
+    for (const seg of plan.segments) {
+      const list = perRoom.get(seg.room) ?? [];
+      for (const other of list) expect(seg.from < other.to && other.from < seg.to).toBe(false);
+      list.push({ from: seg.from, to: seg.to });
+      perRoom.set(seg.room, list);
+    }
+  });
+
   it("rejects a zero-night or inverted request", () => {
     expect(planStayRequest([], "2026-09-05", "2026-09-05", TODAY).feasible).toBe(false);
     expect(planStayRequest([], "2026-09-05", "2026-09-01", TODAY).feasible).toBe(false);
