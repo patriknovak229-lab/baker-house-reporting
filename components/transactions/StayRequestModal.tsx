@@ -313,6 +313,19 @@ export default function StayRequestModal({
                     ? '1 reservation, no room change'
                     : `${plan.segments.length} reservations, ${plan.segments.length - 1} room change${plan.segments.length > 2 ? 's' : ''} for the guest`}
                 </p>
+                {/* An empty Unit column is ambiguous — say plainly whether anyone is disturbed. */}
+                {(() => {
+                  const moves = plan.segments.flatMap((s) => s.moves);
+                  const notices = moves.filter((m) => m.needsGuestNotice).length;
+                  return moves.length === 0 ? (
+                    <p className="text-xs text-emerald-700 mt-0.5">No other guests need to move.</p>
+                  ) : (
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {moves.length} other guest{moves.length > 1 ? 's' : ''} must change room — listed per segment below
+                      {notices > 0 && `, ${notices} of whom already has a room/door code and must be told`}.
+                    </p>
+                  );
+                })()}
                 {preferredId > 0 && (
                   <p className="text-xs text-emerald-700 mt-0.5">
                     {plan.segments.filter((s) => s.sellableRoomId === preferredId).reduce((n, s) => n + s.nights, 0)}
