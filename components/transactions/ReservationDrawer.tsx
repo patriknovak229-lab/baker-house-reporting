@@ -1,6 +1,7 @@
 'use client';
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import QRCodeLib from "qrcode";
 import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, RateType } from "@/types/reservation";
 import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
@@ -37,6 +38,7 @@ import {
 } from "@/utils/rateType";
 import {
   printInvoice,
+  buildInvoiceHTML,
   generateInvoiceNumber,
   PAYMENT_IBAN,
   PAYMENT_SWIFT,
@@ -1600,238 +1602,109 @@ const CATEGORY_CONFIG: Record<IssueCategory, {
 };
 
 // ── Invoice preview rendered inside the drawer ────────────────────────────────
-const GOLD = "#B08D57";
-const DARK_BROWN = "#3B2F2F";
+/**
+ * Shows the REAL invoice: the same `buildInvoiceHTML()` output that Print,
+ * Send and Save-to-Drive produce, in an iframe.
+ *
+ * This was previously a hand-written JSX copy of the invoice layout, so every
+ * change to the actual document silently left the preview behind — it was
+ * showing an invoice that no longer existed. One source of truth is the point:
+ * what renders here is what the guest receives.
+ */
+
+/** A4 (210mm) minus the 18mm side margins `buildInvoiceHTML` sets via @page,
+ *  at 96dpi — the width the invoice actually occupies on the printed page. */
+const PRINT_CONTENT_WIDTH_PX = 658;
+/** Placeholder box height until the iframe reports its real content height. */
+const PREVIEW_PLACEHOLDER_HEIGHT = 420;
 
 function InvoicePreview({
   res,
   invoiceData,
+  includeQR,
 }: {
   res: Reservation;
   invoiceData: InvoiceData;
+  includeQR: boolean;
 }) {
-  const invoiceNum = generateInvoiceNumber(res.reservationNumber);
-  const today = new Date().toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-  const unitPrice = res.numberOfNights > 0 ? res.price / res.numberOfNights : res.price;
+  const [html, setHtml] = useState<string | null>(null);
+  const [docHeight, setDocHeight] = useState(0);
+  const [scale, setScale] = useState(1);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+
+  // Build exactly what would be printed, QR toggle included. forEmail=true
+  // omits the auto-print script — a preview must never open a print dialog.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const invoiceNum = generateInvoiceNumber(res.reservationNumber);
+      let payment: { qrDataUrl: string; info: PaymentQRInfo } | undefined;
+      if (includeQR) {
+        const info = buildPaymentQRInfo(res.reservationNumber, res.price);
+        const qrDataUrl = await QRCodeLib.toDataURL(info.spdString, {
+          width: 200,
+          margin: 1,
+          errorCorrectionLevel: "M",
+        });
+        payment = { qrDataUrl, info };
+      }
+      const next = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, true);
+      // Identical strings bail out of the re-render, so an unrelated
+      // reservation update doesn't reload the iframe.
+      if (!cancelled) setHtml(next);
+    })();
+    return () => { cancelled = true; };
+  }, [res, invoiceData, includeQR]);
+
+  // Scale the full-width page down to whatever width the drawer gives us.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const fit = () => setScale(Math.min(1, el.clientWidth / PRINT_CONTENT_WIDTH_PX));
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  /** Body height, not documentElement — documentElement fills the iframe and
+   *  would latch the height at its largest ever value. */
+  function measure() {
+    const body = frameRef.current?.contentDocument?.body;
+    if (!body) return;
+    const h = Math.ceil(body.getBoundingClientRect().height || body.scrollHeight);
+    if (h > 0) setDocHeight(h);
+  }
 
   return (
     <div
-      style={{
-        fontFamily: "sans-serif",
-        color: DARK_BROWN,
-        background: "#fff",
-        borderRadius: 10,
-        border: "1px solid #e8e0d6",
-        overflow: "hidden",
-        fontSize: 12,
-      }}
+      ref={wrapRef}
+      className="rounded-lg border border-[#e8e0d6] bg-white overflow-hidden"
+      style={{ height: docHeight ? Math.ceil(docHeight * scale) : PREVIEW_PLACEHOLDER_HEIGHT }}
     >
-      {/* Brand name */}
-      <div
-        style={{
-          fontFamily: "'Great Vibes', cursive",
-          fontSize: 52,
-          color: GOLD,
-          textAlign: "center",
-          padding: "18px 24px 4px",
-          lineHeight: 1.1,
-        }}
-      >
-        Baker House Apartments
-      </div>
-
-      {/* Provider + Invoice number row */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          borderBottom: `2px solid ${GOLD}`,
-          padding: "10px 20px 14px",
-          gap: 16,
-        }}
-      >
-        {/* Left: Provider */}
-        <div style={{ flex: 1 }}>
-          <div
-            style={{
-              color: GOLD,
-              fontWeight: "bold",
-              fontSize: 10,
-              textTransform: "uppercase",
-              letterSpacing: 1,
-              marginBottom: 4,
-            }}
-          >
-            Dodavatel / Provider
-          </div>
-          <div style={{ fontWeight: "bold" }}>Truthseeker s.r.o.</div>
-          <div style={{ color: "#6b5b4e" }}>Šumavská 493/10, 602 00 Brno</div>
-          <div style={{ color: "#6b5b4e" }}>IČ: 19876106</div>
-          <div style={{ fontStyle: "italic", color: GOLD, fontSize: 11, marginTop: 2 }}>
-            Nejsme plátci DPH / Non-VAT payer
-          </div>
-        </div>
-
-        {/* Right: Invoice details */}
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: "bold", marginBottom: 4 }}>
-            FAKTURA č. {invoiceNum}
-          </div>
-          <div style={{ color: "#6b5b4e" }}>Datum / Date: {today}</div>
-          <div style={{ color: "#6b5b4e" }}>Rezervace: #{res.reservationNumber}</div>
-        </div>
-      </div>
-
-      {/* Customer */}
-      <div style={{ padding: "12px 20px", borderBottom: `1px solid #EFEAE4` }}>
-        <div
-          style={{
-            color: GOLD,
-            fontWeight: "bold",
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: 1,
-            marginBottom: 5,
+      {html && (
+        <iframe
+          ref={frameRef}
+          srcDoc={html}
+          title="Invoice preview"
+          // No scripts: the document carries none, and this guarantees it.
+          sandbox="allow-same-origin"
+          onLoad={() => {
+            measure();
+            // The signature webfont lands late and changes the height.
+            frameRef.current?.contentDocument?.fonts?.ready.then(measure).catch(() => {});
           }}
-        >
-          Odběratel / Customer
-        </div>
-        <div style={{ fontWeight: "bold", fontSize: 13 }}>{invoiceData.companyName}</div>
-        <div style={{ color: "#6b5b4e" }}>{invoiceData.companyAddress}</div>
-        {invoiceData.ico && <div style={{ color: "#6b5b4e" }}>IČO: {invoiceData.ico}</div>}
-        {invoiceData.vatNumber && (
-          <div style={{ color: "#6b5b4e" }}>DIČ: {invoiceData.vatNumber}</div>
-        )}
-      </div>
-
-      {/* Booking details */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 8,
-          padding: "12px 20px",
-          borderBottom: `1px solid #EFEAE4`,
-          background: "#fdfaf7",
-        }}
-      >
-        {[
-          ["Pokoj / Room", res.room],
-          ["Příjezd / Check-in", formatDate(res.checkInDate)],
-          ["Odjezd / Check-out", formatDate(res.checkOutDate)],
-          ["Nocí / Nights", String(res.numberOfNights)],
-          ["Hostů / Guests", String(res.numberOfGuests)],
-          ["Rezervace / Booking", res.reservationNumber],
-        ].map(([label, value]) => (
-          <div key={label}>
-            <div style={{ color: GOLD, fontSize: 9, textTransform: "uppercase", fontWeight: "bold", letterSpacing: 0.5, marginBottom: 2 }}>
-              {label}
-            </div>
-            <div style={{ color: DARK_BROWN, fontWeight: 500 }}>{value}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Line items table */}
-      <div style={{ padding: "12px 20px" }}>
-        {/* Header row */}
-        <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "1fr auto auto auto",
-            gap: 8,
-            borderBottom: `1px solid #d4c4b0`,
-            paddingBottom: 5,
-            marginBottom: 6,
-            color: GOLD,
-            fontSize: 10,
-            fontWeight: "bold",
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
+            width: PRINT_CONTENT_WIDTH_PX,
+            height: docHeight || PREVIEW_PLACEHOLDER_HEIGHT,
+            border: 0,
+            display: "block",
+            transform: `scale(${scale})`,
+            transformOrigin: "top left",
           }}
-        >
-          <span>Popis / Description</span>
-          <span style={{ textAlign: "right", minWidth: 40 }}>Nocí</span>
-          <span style={{ textAlign: "right", minWidth: 70 }}>Cena / night</span>
-          <span style={{ textAlign: "right", minWidth: 70 }}>Celkem</span>
-        </div>
-        {/* Item row */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr auto auto auto",
-            gap: 8,
-            paddingBottom: 8,
-            borderBottom: `1px solid #EFEAE4`,
-            color: DARK_BROWN,
-          }}
-        >
-          <span>
-            Ubytování / Accommodation
-            <br />
-            <span style={{ fontSize: 11, color: "#6b5b4e" }}>
-              {res.firstName} {res.lastName}
-            </span>
-          </span>
-          <span style={{ textAlign: "right", minWidth: 40 }}>{res.numberOfNights}</span>
-          <span style={{ textAlign: "right", minWidth: 70 }}>{formatCurrency(unitPrice)}</span>
-          <span style={{ textAlign: "right", minWidth: 70 }}>{formatCurrency(res.price)}</span>
-        </div>
-        {/* Total row */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: 8,
-            fontWeight: "bold",
-            fontSize: 14,
-            color: DARK_BROWN,
-          }}
-        >
-          <span>Celkem / Total</span>
-          <span style={{ color: GOLD }}>{formatCurrency(res.price)}</span>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div
-        style={{
-          borderTop: `1px solid #EFEAE4`,
-          padding: "14px 20px 16px",
-          textAlign: "center",
-          background: "#fdfaf7",
-        }}
-      >
-        <div style={{ color: "#6b5b4e", marginBottom: 2, fontSize: 11 }}>
-          Děkujeme za Vaši návštěvu! / Thank you for your stay!
-        </div>
-        <div
-          style={{
-            fontFamily: "'Great Vibes', cursive",
-            fontSize: 34,
-            color: GOLD,
-            lineHeight: 1.2,
-          }}
-        >
-          Patrik &amp; Zuzana
-        </div>
-        <a
-          href="https://www.bakerhouseapartments.cz"
-          style={{ fontSize: 13, color: "#B08D57", fontWeight: 600, textDecoration: "none", display: "block", marginTop: 4 }}
-        >
-          www.bakerhouseapartments.cz
-        </a>
-        {invoiceData.billingEmail && (
-          <div style={{ fontSize: 10, color: "#aaa", marginTop: 1 }}>
-            Billing: {invoiceData.billingEmail}
-          </div>
-        )}
-      </div>
+        />
+      )}
     </div>
   );
 }
@@ -4492,7 +4365,11 @@ export default function ReservationDrawer({
 
                 {invoiceExpanded && (<>
                 {/* PDF Preview */}
-                <InvoicePreview res={reservation} invoiceData={reservation.invoiceData!} />
+                <InvoicePreview
+                  res={reservation}
+                  invoiceData={reservation.invoiceData!}
+                  includeQR={includePaymentQR}
+                />
 
                 {/* Payment QR toggle */}
                 <button
