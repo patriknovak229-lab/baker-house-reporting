@@ -1,5 +1,5 @@
 import QRCodeLib from "qrcode";
-import type { Reservation, InvoiceData, InvoiceModification } from "@/types/reservation";
+import type { Reservation, InvoiceData, InvoiceModification, PaymentStatus } from "@/types/reservation";
 import { formatDate, formatCurrency } from "./formatters";
 
 /** Count calendar nights between two ISO date strings (exclusive end, same as reservations). */
@@ -18,6 +18,17 @@ function shortDate(iso: string): string {
 const GOLD = "#B08D57";
 const DARK_BROWN = "#3B2F2F";
 const MID_BROWN = "#6b5b4e";
+const GREEN = "#2F7A4D";
+const AMBER = "#8A6414";
+const RED = "#A1452F";
+
+/** Bilingual chip copy + colours per payment status. */
+const PAYMENT_STATUS_LABELS: Record<string, { text: string; color: string; bg: string }> = {
+  "Paid":           { text: "UHRAZENO / PAID",                    color: GREEN,     bg: "#EDF6F0" },
+  "Partially Paid": { text: "ČÁSTEČNĚ UHRAZENO / PARTIALLY PAID", color: AMBER,     bg: "#FBF4E4" },
+  "Unpaid":         { text: "NEUHRAZENO / UNPAID",                color: RED,       bg: "#FBF0ED" },
+  "Refunded":       { text: "VRÁCENO / REFUNDED",                 color: MID_BROWN, bg: "#F4F1ED" },
+};
 
 export const PAYMENT_IBAN = "CZ2001000001311073630227";
 export const PAYMENT_SWIFT = "KOMBCZPP";
@@ -31,6 +42,79 @@ export interface PaymentQRInfo {
 
 export function generateInvoiceNumber(reservationNumber: string): string {
   return `INV-${reservationNumber.slice(3)}`;
+}
+
+/**
+ * Payment status as the drawer shows it: a manual override always wins over the
+ * Beds24/Stripe-derived value. Read-only — this never changes payment state.
+ */
+export function effectivePaymentStatus(res: Reservation): PaymentStatus | null {
+  return res.paymentStatusOverride ?? res.paymentStatus ?? null;
+}
+
+/**
+ * How the guest's money reached us, for the invoice status band.
+ *
+ *  - Booking.com / Airbnb collect from the guest themselves.
+ *  - Direct-Web is the rental site, whose checkout is Stripe-only (it writes
+ *    deposit = price into Beds24 straight from the Stripe webhook).
+ *  - Direct-Phone goes through Stripe whenever a payment link was actually
+ *    paid, which is exactly what a settled AdditionalPayment records.
+ *
+ * Returns null when we genuinely cannot tell — legacy `Direct` bookings typed
+ * straight into the Beds24 UI carry no instrument at all, and guessing one on
+ * an accounting document is worse than saying nothing.
+ */
+export function resolvePaymentChannel(res: Reservation): { cs: string; en: string } | null {
+  if (res.channel === "Booking.com") return { cs: "Booking.com", en: "Booking.com" };
+  if (res.channel === "Airbnb") return { cs: "Airbnb", en: "Airbnb" };
+
+  const settledStripePayment = (res.additionalPayments ?? []).some(
+    p => p.status === "paid" || p.status === "partially-refunded" || p.status === "refunded"
+  );
+  if (res.channel === "Direct-Web" || settledStripePayment) {
+    return { cs: "platební bránu Stripe", en: "Stripe payment gateway" };
+  }
+  return null;
+}
+
+/**
+ * Status band: payment status, how it was paid, and the confirmed-and-valid
+ * statement. Purely derived from the reservation — nothing here writes back.
+ */
+function buildStatusBandHTML(res: Reservation, modification?: InvoiceModification): string {
+  const status = effectivePaymentStatus(res);
+  const chip = status ? PAYMENT_STATUS_LABELS[status] : undefined;
+  const paidChannel = resolvePaymentChannel(res);
+  const isPaidish = status === "Paid" || status === "Partially Paid";
+
+  const methodLine = isPaidish && paidChannel
+    ? `Uhrazeno přes ${paidChannel.cs} / Paid via ${paidChannel.en}`
+    : "";
+
+  // Outstanding balance only makes sense against the booking's own price, so
+  // it is suppressed on invoice variants that carry their own total.
+  const outstandingLine =
+    status === "Partially Paid" && modification?.amount == null && typeof res.amountPaid === "number"
+      ? `Uhrazeno / Paid: ${formatCurrency(res.amountPaid)} · Zbývá uhradit / Outstanding: ${formatCurrency(Math.max(0, res.price - res.amountPaid))}`
+      : "";
+
+  const cancelled = res.isCancelled === true || (res.status ?? "").toLowerCase().startsWith("cancel");
+  const bookingStateLine = cancelled
+    ? "Rezervace byla zrušena. / This reservation has been cancelled."
+    : "Rezervace je potvrzená a platná. / This reservation is confirmed and valid.";
+
+  return `
+  <!-- Payment + booking status -->
+  <div style="padding:10px 20px 12px;border-top:1px solid #EFEAE4">
+    <div style="color:${GOLD};font-weight:bold;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Stav / Status</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      ${chip ? `<span style="display:inline-block;border:1px solid ${chip.color};background:${chip.bg};color:${chip.color};font-size:11px;font-weight:bold;letter-spacing:0.4px;padding:3px 10px;border-radius:11px">${chip.text}</span>` : ""}
+      ${methodLine ? `<span style="font-size:12px;color:${DARK_BROWN};font-weight:500">${methodLine}</span>` : ""}
+    </div>
+    ${outstandingLine ? `<div style="font-size:11px;color:${MID_BROWN};margin-top:5px">${outstandingLine}</div>` : ""}
+    <div style="font-size:12px;color:${cancelled ? RED : MID_BROWN};margin-top:6px">${bookingStateLine}</div>
+  </div>`;
 }
 
 export function buildInvoiceHTML(
@@ -125,6 +209,9 @@ export function buildInvoiceHTML(
     </div>`;
   }
 
+  // ── Payment + booking status band ──────────────────────────────────────────
+  const statusBandHtml = buildStatusBandHTML(res, modification);
+
   return `<!DOCTYPE html>
 <html lang="cs">
 <head>
@@ -167,7 +254,7 @@ export function buildInvoiceHTML(
       <div style="font-style:italic;color:${GOLD};font-size:11px;margin-top:2px">Nejsme plátci DPH / Non-VAT payer</div>
     </div>
     <div style="text-align:right;flex-shrink:0">
-      <div style="font-size:16px;font-weight:bold;margin-bottom:4px">FAKTURA č. ${invoiceNum}</div>
+      <div style="font-size:16px;font-weight:bold;margin-bottom:4px">FAKTURA č. / INVOICE No. ${invoiceNum}</div>
       <div style="color:${MID_BROWN};font-size:12px">Datum / Date: ${today}</div>
       <div style="color:${MID_BROWN};font-size:12px">Rezervace: #${res.reservationNumber}</div>
     </div>
@@ -201,7 +288,7 @@ export function buildInvoiceHTML(
       <span style="color:${GOLD}">${formatCurrency(invoiceTotal)}</span>
     </div>
   </div>
-
+${statusBandHtml}
   ${payment ? `
   <!-- Payment QR -->
   <div style="padding:12px 20px;border-top:1px solid #EFEAE4;display:flex;align-items:center;gap:16px;background:#fdfaf7">
