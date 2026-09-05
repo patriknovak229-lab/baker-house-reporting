@@ -5,9 +5,10 @@ import { requireRole } from '@/utils/authGuard';
 // the offers-vs-calendar distinction and the undocumented response shapes.
 import {
   extractPrice,
-  fetchRoomCalendar,
   fetchOffers,
   offersForRoom,
+  nominalWebPrice,
+  comparePrice,
 } from '@/utils/beds24Pricing';
 
 // Sellable Beds24 room IDs (what the offers endpoint returns prices for)
@@ -40,12 +41,17 @@ async function fetchCalendarPrices(
   token: string,
   arrival: string,
   departure: string,
-): Promise<{ priceMap: Record<number, number | null>; rawByRoom: Record<number, unknown> }> {
+): Promise<{
+  priceMap: Record<number, number | null>;
+  rawByRoom: Record<number, unknown>;
+  bookingPageMultiplier: number | null;
+  basePriceMap: Record<number, number | null>;
+}> {
   const [r2kk, r1kk, r2br, rUrban] = await Promise.all([
-    fetchRoomCalendar(token, SELL_ROOM_2KK,   arrival, departure),
-    fetchRoomCalendar(token, SELL_ROOM_1KK,   arrival, departure),
-    fetchRoomCalendar(token, SELL_ROOM_2BR,   arrival, departure),
-    fetchRoomCalendar(token, SELL_ROOM_URBAN, arrival, departure),
+    nominalWebPrice(token, SELL_ROOM_2KK,   arrival, departure),
+    nominalWebPrice(token, SELL_ROOM_1KK,   arrival, departure),
+    nominalWebPrice(token, SELL_ROOM_2BR,   arrival, departure),
+    nominalWebPrice(token, SELL_ROOM_URBAN, arrival, departure),
   ]);
   return {
     priceMap: {
@@ -54,6 +60,14 @@ async function fetchCalendarPrices(
       [SELL_ROOM_2BR]:   r2br.price,
       [SELL_ROOM_URBAN]: rUrban.price,
     },
+    basePriceMap: {
+      [SELL_ROOM_2KK]:   r2kk.basePrice,
+      [SELL_ROOM_1KK]:   r1kk.basePrice,
+      [SELL_ROOM_2BR]:   r2br.basePrice,
+      [SELL_ROOM_URBAN]: rUrban.basePrice,
+    },
+    // Same property for every room, so any of them carries the same value.
+    bookingPageMultiplier: rUrban.bookingPageMultiplier,
     rawByRoom: {
       [SELL_ROOM_2KK]:   r2kk.raw,
       [SELL_ROOM_1KK]:   r1kk.raw,
@@ -68,7 +82,12 @@ async function fetchCalendarPrices(
  * Returns per-room prices from Beds24.
  *
  * - ignoreAvailability=false (default): uses /inventory/rooms/offers — only available rooms have a price
- * - ignoreAvailability=true: uses /inventory/rooms/calendar — sums daily price1 across nights regardless of availability
+ * - ignoreAvailability=true: uses /inventory/rooms/calendar — sums daily price1 × the
+ *   per-date multiplier, then applies the property's bookingPageMultiplier, so the
+ *   number is on the same footing as a web price. It still does NOT evaluate rate
+ *   plans, so length-of-stay discounts are missing and long spans read high.
+ * - compare=1: prices one span BOTH ways and returns the ratio, to measure that
+ *   remaining gap on spans Beds24 will actually quote. Read-only diagnostics.
  *
  * Room mapping:
  *   K.201            = Beds24 roomId 656437 (2KK Deluxe, 1 unit)
@@ -86,6 +105,7 @@ export async function GET(req: NextRequest) {
   const children = req.nextUrl.searchParams.get('children') ?? '0';
   const ignoreAvailability = req.nextUrl.searchParams.get('ignoreAvailability') === 'true';
   const debug = req.nextUrl.searchParams.get('debug') === '1';
+  const compare = req.nextUrl.searchParams.get('compare') === '1';
 
   if (!arrival || !departure) {
     return NextResponse.json({ error: 'arrival and departure are required' }, { status: 400 });
@@ -95,15 +115,28 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Diagnostics: real offer vs our estimate, per sellable room, for this span.
+    if (compare) {
+      const comparisons = [];
+      for (const rid of [SELL_ROOM_URBAN, SELL_ROOM_2KK, SELL_ROOM_1KK, SELL_ROOM_2BR]) {
+        comparisons.push(await comparePrice(rid, arrival, departure, Number(adults), Number(children)));
+      }
+      return NextResponse.json({ arrival, departure, comparisons });
+    }
+
     const token = await getAccessToken();
 
     let priceMap: Record<number, number | null>;
     let rawByRoom: Record<number, unknown> | null = null;
+    let bookingPageMultiplier: number | null = null;
+    let basePriceMap: Record<number, number | null> | null = null;
 
     if (ignoreAvailability) {
       const result = await fetchCalendarPrices(token, arrival, departure);
       priceMap = result.priceMap;
       rawByRoom = result.rawByRoom;
+      bookingPageMultiplier = result.bookingPageMultiplier;
+      basePriceMap = result.basePriceMap;
     } else {
       const wantedIds = [SELL_ROOM_2KK, SELL_ROOM_1KK, SELL_ROOM_2BR, SELL_ROOM_URBAN];
       const data = await fetchOffers(token, arrival, departure, Number(adults), Number(children));
@@ -150,14 +183,17 @@ export async function GET(req: NextRequest) {
     ];
 
     if (debug) {
-      return NextResponse.json({ offers, ignoreAvailability, debug: { rawByRoom, priceMap } });
+      return NextResponse.json({
+        offers, ignoreAvailability, bookingPageMultiplier,
+        debug: { rawByRoom, priceMap, basePriceMap },
+      });
     }
-    return NextResponse.json({ offers, ignoreAvailability });
+    return NextResponse.json({ offers, ignoreAvailability, bookingPageMultiplier });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     // An upstream Beds24 failure stays a 502 (as before the shared helpers
     // started throwing it); anything else is ours and stays a 500.
-    const status = /^Beds24 (offers|calendar)/.test(message) ? 502 : 500;
+    const status = /^Beds24 (offers|calendar|properties)/.test(message) ? 502 : 500;
     return NextResponse.json({ error: message }, { status });
   }
 }

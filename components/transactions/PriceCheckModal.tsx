@@ -28,6 +28,8 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
   // Track which mode the displayed offers were fetched in, so the amber notice
   // only shows when the visible prices were retrieved with availability ignored.
   const [offersIgnoredAvailability, setOffersIgnoredAvailability] = useState(false);
+  /** The property's booking-page multiplier Beds24 reported for this lookup. */
+  const [multiplier, setMultiplier] = useState<number | null>(null);
 
   async function handleCheck() {
     if (!arrival || !departure) { setError('Pick dates'); return; }
@@ -48,6 +50,7 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
       if (!res.ok) throw new Error(data.error ?? 'Request failed');
       setOffers(data.offers ?? []);
       setOffersIgnoredAvailability(ignoreAvailability);
+      setMultiplier(typeof data.bookingPageMultiplier === 'number' ? data.bookingPageMultiplier : null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -203,7 +206,15 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
                   <svg className="w-3.5 h-3.5 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                   </svg>
-                  <span>Prices shown regardless of availability — rooms may be booked.</span>
+                  <span>
+                    Prices shown regardless of availability — rooms may be booked. Daily rates
+                    {multiplier != null
+                      ? ` × the web multiplier Beds24 has set (${multiplier}), `
+                      : ' (no web multiplier is set in Beds24), '}
+                    but <strong>rate plans are not applied</strong>: any length-of-stay discount is
+                    missing, so long stays read high. An available room priced with the toggle off is
+                    the real quote.
+                  </span>
                 </div>
               )}
               {offers.map((o) => (
