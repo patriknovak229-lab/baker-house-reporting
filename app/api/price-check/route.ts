@@ -30,8 +30,8 @@ export type PriceCheckOffer = {
   basePrice?: number | null;
   webMultiplier?: number;
   webMultiplierFromBeds24?: boolean;
-  discountFactor?: number;
-  discountReason?: string;
+  rateFactor?: number;
+  rateRule?: string;
 };
 
 /** Count nights between two YYYY-MM-DD strings (departure exclusive). */
@@ -186,8 +186,8 @@ export async function GET(req: NextRequest) {
             basePrice: e.basePrice,
             webMultiplier: e.webMultiplier,
             webMultiplierFromBeds24: e.webMultiplierFromBeds24,
-            discountFactor: e.discountFactor,
-            discountReason: e.discountReason,
+            rateFactor: e.rateFactor,
+            rateRule: e.rateRule,
           }
         : o;
     });

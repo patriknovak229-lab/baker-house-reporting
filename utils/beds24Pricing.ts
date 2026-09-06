@@ -505,9 +505,14 @@ export interface NominalWebPrice {
   bookingPageMultiplierRaw: unknown;
   /** Set when we could not READ the setting — distinct from it being unset. */
   multiplierError?: string;
-  /** The single best discount applied, and why. */
-  discountFactor: number;
-  discountReason: string;
+  /**
+   * The winning rule's effect on the standard price, as a factor. Usually below
+   * 1 (a discount) but NOT always — a one-night stay carries a surcharge and
+   * lands around 1.37, which is why this is not called a discount.
+   */
+  rateFactor: number;
+  /** Which Beds24 rule won, e.g. "Weekly Rate Urban (-20%)". */
+  rateRule: string;
   raw?: unknown;
 }
 
@@ -542,10 +547,10 @@ export async function nominalWebPrice(
     bookingPageMultiplier: multiplier.value,
     bookingPageMultiplierRaw: multiplier.raw,
     multiplierError: multiplier.error,
-    discountFactor: rate === null || basePrice === null || basePrice === 0
+    rateFactor: rate === null || basePrice === null || basePrice === 0
       ? 1
       : Math.round((rate.price / basePrice) * 10000) / 10000,
-    discountReason: rate === null ? 'no direct rate covers this stay length' : `${rate.rule} (${rate.offset})`,
+    rateRule: rate === null ? 'no direct rate covers this stay length' : `${rate.rule} (${rate.offset})`,
     raw,
   };
 }
@@ -571,8 +576,8 @@ export interface PriceComparison {
   multiplierError?: string;
   webMultiplier: number;
   webMultiplierFromBeds24: boolean;
-  discountFactor: number;
-  discountReason: string;
+  rateFactor: number;
+  rateRule: string;
   ratio: number | null;
 }
 
@@ -606,8 +611,8 @@ export async function comparePrice(
     multiplierError: nominal.multiplierError,
     webMultiplier: nominal.webMultiplier,
     webMultiplierFromBeds24: nominal.webMultiplierFromBeds24,
-    discountFactor: nominal.discountFactor,
-    discountReason: nominal.discountReason,
+    rateFactor: nominal.rateFactor,
+    rateRule: nominal.rateRule,
     ratio:
       offerPrice !== null && nominal.price !== null && nominal.price > 0
         ? Math.round((offerPrice / nominal.price) * 1000) / 1000

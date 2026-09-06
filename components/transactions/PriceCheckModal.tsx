@@ -9,8 +9,8 @@ type RoomOffer = {
   basePrice?: number | null;
   webMultiplier?: number;
   webMultiplierFromBeds24?: boolean;
-  discountFactor?: number;
-  discountReason?: string;
+  rateFactor?: number;
+  rateRule?: string;
 };
 
 function formatCZK(n: number): string {
@@ -241,8 +241,8 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
                       <p className="text-[11px] text-gray-400 mt-0.5">
                         {Math.round(o.basePrice).toLocaleString('cs-CZ')} × {o.webMultiplier}
                         {o.webMultiplierFromBeds24 ? '' : ' (assumed)'}
-                        {o.discountFactor != null && o.discountFactor !== 1 && ` × ${o.discountFactor}`}
-                        {o.discountReason ? ` — ${o.discountReason}` : ''}
+                        {o.rateFactor != null && o.rateFactor !== 1 && ` × ${o.rateFactor}`}
+                        {o.rateRule ? ` — ${o.rateRule}` : ''}
                       </p>
                     )}
                     {o.price != null && nights > 0 && (

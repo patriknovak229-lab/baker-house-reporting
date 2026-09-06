@@ -157,6 +157,22 @@ describe('bestDirectRate — the Beds24 Daily Price Rules, direct channel only',
     expect(price(104629, DELUXE_1KK, 30)).toBe(62777.4);
   });
 
+  it('prices a one-night Urban stay exactly as Beds24 did', () => {
+    // Live check 2026-09-07→08: base 2716 → Beds24 quoted 2787, ratio 1.000.
+    // This pins the ORDER of operations, which the percentage rules cannot:
+    // the surcharge joins the rate and the web multiplier then applies to it.
+    //   (2716 + 1000) × 0.75 = 2787   ✓ what Beds24 charges
+    //    2716 × 0.75 + 1000  = 3037   ✗ the other ordering
+    const rate = bestDirectRate(URBAN, 1, 2716)!;
+    expect(rate.rule).toBe('One Night Stays');
+    expect(Math.round(rate.price * WEB_MULTIPLIER * 100) / 100).toBe(2787);
+  });
+
+  it('reports a one-night stay as the surcharge it is, above 1, not as a discount', () => {
+    const rate = bestDirectRate(URBAN, 1, 2716)!;
+    expect(rate.price / 2716).toBeGreaterThan(1);
+  });
+
   it('returns null rather than inventing a price for an unknown room', () => {
     expect(bestDirectRate(999999, 3, 100)).toBeNull();
   });
