@@ -176,6 +176,74 @@ export function resetMultiplierCache(): void {
   multiplierCache = null;
 }
 
+/**
+ * THE RATE MODEL — how a web price is built for a span Beds24 will not quote.
+ *
+ * Confirmed by the operator (2026-09-03) and verified to the cent against six
+ * live offers via `?compare=1`:
+ *
+ *   price = Σ(price1 × date multiplier) × webMultiplier × bestDiscount
+ *
+ * Beds24 returns its cheapest offer first, so the estimate must mirror the BEST
+ * applicable discount — and the discounts never stack: a stay of 7+ nights gets
+ * the weekly discount and nothing else, a shorter one gets the non-refundable
+ * rate where that rate exists. Last-minute and similar promotions live on the
+ * channels, not in Beds24, so they are correctly absent here.
+ *
+ * These are constants only because Beds24 has not (yet) given us the values
+ * over the API — `fetchBookingPageMultiplier` is preferred whenever it answers,
+ * and `?compare=1` re-measures the whole model against real offers, so drift
+ * shows up as a ratio away from 1.0 rather than as a silently wrong quote.
+ */
+export interface RateModel {
+  /** Channel/web multiplier, used when Beds24 will not report it. */
+  webMultiplier: number;
+  /** Stays of at least `minNights` take this factor INSTEAD of any other. */
+  weekly: { minNights: number; factor: number };
+  /**
+   * The non-refundable rate.
+   *
+   * The operator's intent is that EVERY sellable room type carries it, but the
+   * live check disagreed: on a 3-night span Urban and O.308 came back at
+   * base × 0.75 × 0.93 while K.201 and 1KK Deluxe came back at exactly
+   * base × 0.75. So the rooms are listed rather than assumed, because an
+   * estimate must predict what Beds24 will actually charge, not what the
+   * configuration was meant to say. If the Beds24 rates turn out to carry it
+   * everywhere, add the two roomIds here and `?compare=1` will confirm the
+   * ratios move to 1.0.
+   */
+  nonRefundable: { factor: number; roomIds: number[] };
+}
+
+export const RATE_MODEL: RateModel = {
+  webMultiplier: 0.75,
+  weekly: { minNights: 7, factor: 0.8 },
+  nonRefundable: { factor: 0.93, roomIds: [679714, 674672] },
+};
+
+export interface DiscountChoice {
+  factor: number;
+  /** Operator-facing explanation of which discount won. */
+  reason: string;
+}
+
+/** The single best discount for this room and length — they never stack. */
+export function bestDiscount(roomId: number, nights: number, model: RateModel = RATE_MODEL): DiscountChoice {
+  if (nights >= model.weekly.minNights) {
+    return {
+      factor: model.weekly.factor,
+      reason: `${Math.round((1 - model.weekly.factor) * 100)}% weekly discount (${model.weekly.minNights}+ nights)`,
+    };
+  }
+  if (model.nonRefundable.roomIds.includes(roomId)) {
+    return {
+      factor: model.nonRefundable.factor,
+      reason: `${Math.round((1 - model.nonRefundable.factor) * 100)}% non-refundable rate`,
+    };
+  }
+  return { factor: 1, reason: 'no discount applies' };
+}
+
 /** Subtract one day from a YYYY-MM-DD string (departure → last night). */
 export function previousDay(yyyymmdd: string): string {
   const d = new Date(yyyymmdd + 'T00:00:00Z');
@@ -371,26 +439,35 @@ export async function priceSegment(
 }
 
 /**
- * The "if it were free, what would the web charge?" number: the stored daily
- * rates for the span, scaled by each date's multiplier and then by the
- * property's booking-page multiplier.
+ * What the web would charge for this span, whether or not Beds24 will sell it.
  *
- * Still NOT a Beds24 quote — rate plans and their length-of-stay discounts are
- * not evaluated — so it reads high on long spans. Callers must keep labelling
- * it as an estimate; `basePrice` and `bookingPageMultiplier` are returned so the
- * operator can see how the number was built rather than trusting it blind.
+ * This is the whole point of the "ignore availability" mode: before moving
+ * anyone, the operator needs the price of a span that is currently booked, and
+ * Beds24 refuses to quote those. So we rebuild it — stored daily rates, the
+ * per-date multiplier, the web multiplier, and the best applicable discount.
+ *
+ * Every component is returned, not just the total, because an estimate the
+ * operator cannot audit is one they cannot trust: `basePrice`, which multiplier
+ * was used and whether it came from Beds24 or the model, and which discount won.
  */
 export interface NominalWebPrice {
-  /** After both multipliers — the number to show. */
+  /** Base × multiplier × discount — the number to show. */
   price: number | null;
-  /** Sum of price1 × per-date multiplier, before the booking-page multiplier. */
+  /** Sum of price1 × per-date multiplier, before anything else. */
   basePrice: number | null;
-  /** The factor applied, or null when Beds24 has none set. */
+  /** The web multiplier actually applied. */
+  webMultiplier: number;
+  /** true = read live from Beds24; false = the model's constant. */
+  webMultiplierFromBeds24: boolean;
+  /** The factor Beds24 reported, or null when it did not report one. */
   bookingPageMultiplier: number | null;
   /** Exactly what Beds24 returned for the setting, for debugging. */
   bookingPageMultiplierRaw: unknown;
   /** Set when we could not READ the setting — distinct from it being unset. */
   multiplierError?: string;
+  /** The single best discount applied, and why. */
+  discountFactor: number;
+  discountReason: string;
   raw?: unknown;
 }
 
@@ -405,13 +482,27 @@ export async function nominalWebPrice(
     fetchBookingPageMultiplier(token),
   ]);
 
-  const factor = multiplier.value ?? 1;
+  // Prefer what Beds24 says; fall back to the model rather than to 1, since
+  // "no multiplier" would overstate every price by a third.
+  const webMultiplier = multiplier.value ?? RATE_MODEL.webMultiplier;
+  const nights = Math.round(
+    (Date.parse(departure + 'T00:00:00Z') - Date.parse(arrival + 'T00:00:00Z')) / 86_400_000,
+  );
+  const discount = bestDiscount(roomId, nights);
+
   return {
-    price: basePrice === null ? null : Math.round(basePrice * factor * 100) / 100,
+    price:
+      basePrice === null
+        ? null
+        : Math.round(basePrice * webMultiplier * discount.factor * 100) / 100,
     basePrice,
+    webMultiplier,
+    webMultiplierFromBeds24: multiplier.value !== null,
     bookingPageMultiplier: multiplier.value,
     bookingPageMultiplierRaw: multiplier.raw,
     multiplierError: multiplier.error,
+    discountFactor: discount.factor,
+    discountReason: discount.reason,
     raw,
   };
 }
@@ -435,6 +526,10 @@ export interface PriceComparison {
   bookingPageMultiplier: number | null;
   /** Why the multiplier is null, when it is null for a reason we can name. */
   multiplierError?: string;
+  webMultiplier: number;
+  webMultiplierFromBeds24: boolean;
+  discountFactor: number;
+  discountReason: string;
   ratio: number | null;
 }
 
@@ -466,6 +561,10 @@ export async function comparePrice(
     basePrice: nominal.basePrice,
     bookingPageMultiplier: nominal.bookingPageMultiplier,
     multiplierError: nominal.multiplierError,
+    webMultiplier: nominal.webMultiplier,
+    webMultiplierFromBeds24: nominal.webMultiplierFromBeds24,
+    discountFactor: nominal.discountFactor,
+    discountReason: nominal.discountReason,
     ratio:
       offerPrice !== null && nominal.price !== null && nominal.price > 0
         ? Math.round((offerPrice / nominal.price) * 1000) / 1000

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { parseMultiplier, sumCalendarPrice, extractPrice, offersForRoom, previousDay } from './beds24Pricing';
+import {
+  parseMultiplier, sumCalendarPrice, extractPrice, offersForRoom, previousDay,
+  bestDiscount, RATE_MODEL,
+} from './beds24Pricing';
+
+const URBAN = 679714;      // offers a non-refundable rate
+const O308 = 674672;       // offers a non-refundable rate
+const K201 = 656437;       // does not
+const DELUXE_1KK = 648816; // does not
 
 /** A calendar response in the shape Beds24 returns for includePrices+includeMultiplier. */
 function calendar(days: { from: string; to?: string; price1?: number; multiplier?: number }[]) {
@@ -91,5 +99,48 @@ describe('previousDay', () => {
   it('turns a departure date into the last charged night, across a month end', () => {
     expect(previousDay('2026-10-01')).toBe('2026-09-30');
     expect(previousDay('2026-03-01')).toBe('2026-02-28');
+  });
+});
+
+describe('bestDiscount — the ladder verified against six live Beds24 offers', () => {
+  it('gives the weekly discount from 7 nights, to every room', () => {
+    for (const roomId of [URBAN, O308, K201, DELUXE_1KK]) {
+      expect(bestDiscount(roomId, 7).factor).toBe(0.8);
+      expect(bestDiscount(roomId, 30).factor).toBe(0.8);
+    }
+  });
+
+  it('does not stack: a long stay takes the weekly discount INSTEAD of the non-refundable one', () => {
+    // 0.8, never 0.8 × 0.93. Live data: Urban 30n = base × 0.75 × 0.80 exactly.
+    expect(bestDiscount(URBAN, 30).factor).toBe(0.8);
+    expect(bestDiscount(URBAN, 30).reason).toMatch(/weekly/i);
+  });
+
+  it('applies the non-refundable rate below a week, only where that rate exists', () => {
+    expect(bestDiscount(URBAN, 3).factor).toBe(0.93);
+    expect(bestDiscount(O308, 3).factor).toBe(0.93);
+    // These two quoted at the plain multiplier for 3 nights in the live check.
+    expect(bestDiscount(K201, 3).factor).toBe(1);
+    expect(bestDiscount(DELUXE_1KK, 3).factor).toBe(1);
+  });
+
+  it('steps exactly at the weekly threshold, not around it', () => {
+    expect(bestDiscount(K201, 6).factor).toBe(1);
+    expect(bestDiscount(K201, 7).factor).toBe(0.8);
+    expect(bestDiscount(URBAN, 6).factor).toBe(0.93);
+    expect(bestDiscount(URBAN, 7).factor).toBe(0.8);
+  });
+
+  it('reproduces the live offers to the cent', () => {
+    // base × webMultiplier × discount, checked against real Beds24 quotes.
+    const price = (base: number, roomId: number, nights: number) =>
+      Math.round(base * RATE_MODEL.webMultiplier * bestDiscount(roomId, nights).factor * 100) / 100;
+
+    expect(price(21212, K201, 3)).toBe(15909);
+    expect(price(12971, DELUXE_1KK, 3)).toBe(9728.25);
+    expect(price(11353, URBAN, 3)).toBe(7918.72);
+    expect(price(18031, O308, 3)).toBe(12576.62);
+    expect(price(93292, URBAN, 30)).toBe(55975.2);
+    expect(price(104629, DELUXE_1KK, 30)).toBe(62777.4);
   });
 });

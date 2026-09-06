@@ -25,6 +25,13 @@ export type PriceCheckOffer = {
   room: string;      // "K.201" | "K.202 / K.203" | "1KK Urban Studios"
   description: string;
   price: number | null;
+  /** How an ignore-availability estimate was built. Absent in offers mode,
+   *  where the price is Beds24's own and needs no explaining. */
+  basePrice?: number | null;
+  webMultiplier?: number;
+  webMultiplierFromBeds24?: boolean;
+  discountFactor?: number;
+  discountReason?: string;
 };
 
 /** Count nights between two YYYY-MM-DD strings (departure exclusive). */
@@ -42,40 +49,10 @@ async function fetchCalendarPrices(
   token: string,
   arrival: string,
   departure: string,
-): Promise<{
-  priceMap: Record<number, number | null>;
-  rawByRoom: Record<number, unknown>;
-  bookingPageMultiplier: number | null;
-  basePriceMap: Record<number, number | null>;
-}> {
-  const [r2kk, r1kk, r2br, rUrban] = await Promise.all([
-    nominalWebPrice(token, SELL_ROOM_2KK,   arrival, departure),
-    nominalWebPrice(token, SELL_ROOM_1KK,   arrival, departure),
-    nominalWebPrice(token, SELL_ROOM_2BR,   arrival, departure),
-    nominalWebPrice(token, SELL_ROOM_URBAN, arrival, departure),
-  ]);
-  return {
-    priceMap: {
-      [SELL_ROOM_2KK]:   r2kk.price,
-      [SELL_ROOM_1KK]:   r1kk.price,
-      [SELL_ROOM_2BR]:   r2br.price,
-      [SELL_ROOM_URBAN]: rUrban.price,
-    },
-    basePriceMap: {
-      [SELL_ROOM_2KK]:   r2kk.basePrice,
-      [SELL_ROOM_1KK]:   r1kk.basePrice,
-      [SELL_ROOM_2BR]:   r2br.basePrice,
-      [SELL_ROOM_URBAN]: rUrban.basePrice,
-    },
-    // Same property for every room, so any of them carries the same value.
-    bookingPageMultiplier: rUrban.bookingPageMultiplier,
-    rawByRoom: {
-      [SELL_ROOM_2KK]:   r2kk.raw,
-      [SELL_ROOM_1KK]:   r1kk.raw,
-      [SELL_ROOM_2BR]:   r2br.raw,
-      [SELL_ROOM_URBAN]: rUrban.raw,
-    },
-  };
+): Promise<Record<number, Awaited<ReturnType<typeof nominalWebPrice>>>> {
+  const ids = [SELL_ROOM_2KK, SELL_ROOM_1KK, SELL_ROOM_2BR, SELL_ROOM_URBAN];
+  const results = await Promise.all(ids.map((id) => nominalWebPrice(token, id, arrival, departure)));
+  return Object.fromEntries(ids.map((id, i) => [id, results[i]]));
 }
 
 /**
@@ -83,10 +60,11 @@ async function fetchCalendarPrices(
  * Returns per-room prices from Beds24.
  *
  * - ignoreAvailability=false (default): uses /inventory/rooms/offers — only available rooms have a price
- * - ignoreAvailability=true: uses /inventory/rooms/calendar — sums daily price1 × the
- *   per-date multiplier, then applies the property's bookingPageMultiplier, so the
- *   number is on the same footing as a web price. It still does NOT evaluate rate
- *   plans, so length-of-stay discounts are missing and long spans read high.
+ * - ignoreAvailability=true: uses /inventory/rooms/calendar and rebuilds the web
+ *   price — daily price1 × per-date multiplier × web multiplier × the best
+ *   applicable discount (see RATE_MODEL). This is the mode that answers "what
+ *   would this cost?" for a span that is currently BOOKED, which is exactly when
+ *   Beds24 refuses to quote and the operator has to decide whether to move guests.
  * - compare=1: prices one span BOTH ways and returns the ratio, to measure that
  *   remaining gap on spans Beds24 will actually quote. Read-only diagnostics.
  * - inspect=1: dumps the property price settings and the rate plans (trimmed to
@@ -146,14 +124,15 @@ export async function GET(req: NextRequest) {
     let priceMap: Record<number, number | null>;
     let rawByRoom: Record<number, unknown> | null = null;
     let bookingPageMultiplier: number | null = null;
-    let basePriceMap: Record<number, number | null> | null = null;
+    // Present only for estimates — how each room's number was built.
+    let estimates: Record<number, Awaited<ReturnType<typeof nominalWebPrice>>> | null = null;
 
     if (ignoreAvailability) {
-      const result = await fetchCalendarPrices(token, arrival, departure);
-      priceMap = result.priceMap;
-      rawByRoom = result.rawByRoom;
-      bookingPageMultiplier = result.bookingPageMultiplier;
-      basePriceMap = result.basePriceMap;
+      estimates = await fetchCalendarPrices(token, arrival, departure);
+      priceMap = Object.fromEntries(Object.entries(estimates).map(([id, e]) => [id, e.price]));
+      rawByRoom = Object.fromEntries(Object.entries(estimates).map(([id, e]) => [id, e.raw]));
+      // Same property for every room, so any entry carries the same value.
+      bookingPageMultiplier = estimates[SELL_ROOM_URBAN]?.bookingPageMultiplier ?? null;
     } else {
       const wantedIds = [SELL_ROOM_2KK, SELL_ROOM_1KK, SELL_ROOM_2BR, SELL_ROOM_URBAN];
       const data = await fetchOffers(token, arrival, departure, Number(adults), Number(children));
@@ -199,13 +178,27 @@ export async function GET(req: NextRequest) {
       },
     ];
 
+    const withBasis: PriceCheckOffer[] = offers.map((o) => {
+      const e = estimates?.[o.roomId];
+      return e
+        ? {
+            ...o,
+            basePrice: e.basePrice,
+            webMultiplier: e.webMultiplier,
+            webMultiplierFromBeds24: e.webMultiplierFromBeds24,
+            discountFactor: e.discountFactor,
+            discountReason: e.discountReason,
+          }
+        : o;
+    });
+
     if (debug) {
       return NextResponse.json({
-        offers, ignoreAvailability, bookingPageMultiplier,
-        debug: { rawByRoom, priceMap, basePriceMap },
+        offers: withBasis, ignoreAvailability, bookingPageMultiplier,
+        debug: { rawByRoom, priceMap, estimates },
       });
     }
-    return NextResponse.json({ offers, ignoreAvailability, bookingPageMultiplier });
+    return NextResponse.json({ offers: withBasis, ignoreAvailability, bookingPageMultiplier });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     // An upstream Beds24 failure stays a 502 (as before the shared helpers

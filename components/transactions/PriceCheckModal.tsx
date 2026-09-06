@@ -1,7 +1,17 @@
 'use client';
 import { useState } from 'react';
 
-type RoomOffer = { room: string; description: string; price: number | null };
+type RoomOffer = {
+  room: string;
+  description: string;
+  price: number | null;
+  /** Present only for ignore-availability estimates — how the number was built. */
+  basePrice?: number | null;
+  webMultiplier?: number;
+  webMultiplierFromBeds24?: boolean;
+  discountFactor?: number;
+  discountReason?: string;
+};
 
 function formatCZK(n: number): string {
   return n.toLocaleString('cs-CZ', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' Kč';
@@ -207,13 +217,10 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                   </svg>
                   <span>
-                    Prices shown regardless of availability — rooms may be booked. Daily rates
-                    {multiplier != null
-                      ? ` × the web multiplier Beds24 has set (${multiplier}), `
-                      : ' (no web multiplier is set in Beds24), '}
-                    but <strong>rate plans are not applied</strong>: any length-of-stay discount is
-                    missing, so long stays read high. An available room priced with the toggle off is
-                    the real quote.
+                    Prices shown regardless of availability — rooms may be booked. Each is rebuilt as
+                    daily rates × web multiplier × the best applicable discount, shown per room below.
+                    {multiplier == null && ' Beds24 did not report the web multiplier, so the configured 0.75 is assumed.'}
+                    {' '}For a room that IS free, switching the toggle off gives Beds24\u2019s own quote.
                   </span>
                 </div>
               )}
@@ -229,6 +236,15 @@ export default function PriceCheckModal({ onClose }: { onClose: () => void }) {
                   <div>
                     <p className="text-sm font-medium text-gray-800">{o.room}</p>
                     <p className="text-xs text-gray-400">{o.description}</p>
+                    {/* Show the arithmetic: an estimate the operator can't audit is one they can't trust. */}
+                    {o.basePrice != null && o.webMultiplier != null && (
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {Math.round(o.basePrice).toLocaleString('cs-CZ')} × {o.webMultiplier}
+                        {o.webMultiplierFromBeds24 ? '' : ' (assumed)'}
+                        {o.discountFactor != null && o.discountFactor !== 1 && ` × ${o.discountFactor}`}
+                        {o.discountReason ? ` — ${o.discountReason}` : ''}
+                      </p>
+                    )}
                     {o.price != null && nights > 0 && (
                       <p className="text-xs text-gray-400 mt-0.5">
                         {formatCZK(Math.round(o.price / nights))} / night
