@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseMultiplier, sumCalendarPrice, extractPrice, offersForRoom, previousDay,
-  bestDiscount, RATE_MODEL,
+  bestDirectRate, WEB_MULTIPLIER,
 } from './beds24Pricing';
 
 const URBAN = 679714;      // offers a non-refundable rate
@@ -102,39 +102,52 @@ describe('previousDay', () => {
   });
 });
 
-describe('bestDiscount — the ladder verified against six live Beds24 offers', () => {
-  it('gives the weekly discount from 7 nights, to every room', () => {
+describe('bestDirectRate — the Beds24 Daily Price Rules, direct channel only', () => {
+  it('takes the non-refundable rate where it IS sold direct', () => {
+    expect(bestDirectRate(URBAN, 3, 100)?.price).toBeCloseTo(93);
+    expect(bestDirectRate(O308, 3, 100)?.price).toBeCloseTo(93);
+  });
+
+  it('ignores a non-refundable rate that is not published to Direct', () => {
+    // K.201 (-10%) and Deluxe 1KK (-7%) sell theirs to Booking.com and Agent
+    // only, so a direct guest pays the standard rate. Live data agreed exactly.
+    expect(bestDirectRate(K201, 3, 100)?.price).toBeCloseTo(100);
+    expect(bestDirectRate(K201, 3, 100)?.rule).toMatch(/standard/i);
+    expect(bestDirectRate(DELUXE_1KK, 3, 100)?.price).toBeCloseTo(100);
+  });
+
+  it("falls back to the cheapest direct rule when the STANDARD rate isn't sold direct", () => {
+    // O.308's standard rate is Booking.com-only, so 2–6 nights start from the
+    // non-refundable rate rather than from the standard one.
+    expect(bestDirectRate(O308, 3, 100)?.rule).toMatch(/non refundable/i);
+  });
+
+  it('switches to the weekly discount at exactly 7 nights, and drops the non-refundable one', () => {
+    expect(bestDirectRate(URBAN, 6, 100)?.price).toBeCloseTo(93);   // non-refundable still valid
+    expect(bestDirectRate(URBAN, 7, 100)?.price).toBeCloseTo(80);   // maxNights 6 ends it; weekly starts
+    expect(bestDirectRate(URBAN, 7, 100)?.rule).toMatch(/weekly/i);
+    expect(bestDirectRate(K201, 7, 100)?.price).toBeCloseTo(80);
+  });
+
+  it('charges the one-night surcharge instead of any discount for a single night', () => {
+    // The non-refundable rules start at 2 nights — a 1-night stay is dearer,
+    // not cheaper, and treating it as a discount would underquote badly.
+    expect(bestDirectRate(URBAN, 1, 3000)?.price).toBe(4000);
+    expect(bestDirectRate(DELUXE_1KK, 1, 3000)?.price).toBe(4200);
+    expect(bestDirectRate(O308, 1, 3000)?.price).toBe(4800);
+    expect(bestDirectRate(K201, 1, 3000)?.price).toBe(5000);
+    expect(bestDirectRate(URBAN, 1, 3000)?.rule).toMatch(/one night/i);
+  });
+
+  it('never picks a dearer flexible rate when a cheaper one applies', () => {
     for (const roomId of [URBAN, O308, K201, DELUXE_1KK]) {
-      expect(bestDiscount(roomId, 7).factor).toBe(0.8);
-      expect(bestDiscount(roomId, 30).factor).toBe(0.8);
+      expect(bestDirectRate(roomId, 10, 100)!.price).toBeLessThanOrEqual(100);
     }
   });
 
-  it('does not stack: a long stay takes the weekly discount INSTEAD of the non-refundable one', () => {
-    // 0.8, never 0.8 × 0.93. Live data: Urban 30n = base × 0.75 × 0.80 exactly.
-    expect(bestDiscount(URBAN, 30).factor).toBe(0.8);
-    expect(bestDiscount(URBAN, 30).reason).toMatch(/weekly/i);
-  });
-
-  it('applies the non-refundable rate below a week, only where that rate exists', () => {
-    expect(bestDiscount(URBAN, 3).factor).toBe(0.93);
-    expect(bestDiscount(O308, 3).factor).toBe(0.93);
-    // These two quoted at the plain multiplier for 3 nights in the live check.
-    expect(bestDiscount(K201, 3).factor).toBe(1);
-    expect(bestDiscount(DELUXE_1KK, 3).factor).toBe(1);
-  });
-
-  it('steps exactly at the weekly threshold, not around it', () => {
-    expect(bestDiscount(K201, 6).factor).toBe(1);
-    expect(bestDiscount(K201, 7).factor).toBe(0.8);
-    expect(bestDiscount(URBAN, 6).factor).toBe(0.93);
-    expect(bestDiscount(URBAN, 7).factor).toBe(0.8);
-  });
-
-  it('reproduces the live offers to the cent', () => {
-    // base × webMultiplier × discount, checked against real Beds24 quotes.
+  it('reproduces the six live Beds24 offers to the cent', () => {
     const price = (base: number, roomId: number, nights: number) =>
-      Math.round(base * RATE_MODEL.webMultiplier * bestDiscount(roomId, nights).factor * 100) / 100;
+      Math.round(bestDirectRate(roomId, nights, base)!.price * WEB_MULTIPLIER * 100) / 100;
 
     expect(price(21212, K201, 3)).toBe(15909);
     expect(price(12971, DELUXE_1KK, 3)).toBe(9728.25);
@@ -142,5 +155,9 @@ describe('bestDiscount — the ladder verified against six live Beds24 offers', 
     expect(price(18031, O308, 3)).toBe(12576.62);
     expect(price(93292, URBAN, 30)).toBe(55975.2);
     expect(price(104629, DELUXE_1KK, 30)).toBe(62777.4);
+  });
+
+  it('returns null rather than inventing a price for an unknown room', () => {
+    expect(bestDirectRate(999999, 3, 100)).toBeNull();
   });
 });

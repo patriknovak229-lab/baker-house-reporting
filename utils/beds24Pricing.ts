@@ -177,71 +177,111 @@ export function resetMultiplierCache(): void {
 }
 
 /**
- * THE RATE MODEL — how a web price is built for a span Beds24 will not quote.
+ * THE DAILY PRICE RULES, as configured in Beds24 (operator screenshots,
+ * 2026-09-03) and verified to the cent against six live offers via `?compare=1`.
  *
- * Confirmed by the operator (2026-09-03) and verified to the cent against six
- * live offers via `?compare=1`:
+ *   price = Σ(price1 × date multiplier) × cheapest applicable Direct rule
+ *                                       × bookingPageMultiplier
  *
- *   price = Σ(price1 × date multiplier) × webMultiplier × bestDiscount
+ * THE THING THAT IS EASY TO GET WRONG: a rule only affects the web price if it
+ * is published to the **Direct** channel. K.201 and 1KK Deluxe both have a
+ * non-refundable rate (−10% and −7%), but neither is sold direct — they go to
+ * Booking.com and Agent only — which is exactly why both quoted at the plain
+ * multiplier for a 3-night stay while Urban and O.308 came back 7% lower.
+ * O.308 is the mirror image: its STANDARD rate is Booking.com-only, so the
+ * cheapest thing a direct guest can get for 2–6 nights is the non-refundable one.
  *
- * Beds24 returns its cheapest offer first, so the estimate must mirror the BEST
- * applicable discount — and the discounts never stack: a stay of 7+ nights gets
- * the weekly discount and nothing else, a shorter one gets the non-refundable
- * rate where that rate exists. Last-minute and similar promotions live on the
- * channels, not in Beds24, so they are correctly absent here.
- *
- * These are constants only because Beds24 has not (yet) given us the values
- * over the API — `fetchBookingPageMultiplier` is preferred whenever it answers,
- * and `?compare=1` re-measures the whole model against real offers, so drift
- * shows up as a ratio away from 1.0 rather than as a silently wrong quote.
+ * Beds24 sells the cheapest applicable offer, so we take the minimum over the
+ * rules that are (a) published to Direct and (b) valid for this stay length.
+ * Stay-length windows matter as much as the offsets: the non-refundable rules
+ * stop at 6 nights, the weekly ones start at 7, and a ONE-NIGHT stay gets a
+ * fixed surcharge rather than any discount at all.
  */
-export interface RateModel {
-  /** Channel/web multiplier, used when Beds24 will not report it. */
-  webMultiplier: number;
-  /** Stays of at least `minNights` take this factor INSTEAD of any other. */
-  weekly: { minNights: number; factor: number };
-  /**
-   * The non-refundable rate.
-   *
-   * The operator's intent is that EVERY sellable room type carries it, but the
-   * live check disagreed: on a 3-night span Urban and O.308 came back at
-   * base × 0.75 × 0.93 while K.201 and 1KK Deluxe came back at exactly
-   * base × 0.75. So the rooms are listed rather than assumed, because an
-   * estimate must predict what Beds24 will actually charge, not what the
-   * configuration was meant to say. If the Beds24 rates turn out to carry it
-   * everywhere, add the two roomIds here and `?compare=1` will confirm the
-   * ratios move to 1.0.
-   */
-  nonRefundable: { factor: number; roomIds: number[] };
+export interface DailyPriceRule {
+  name: string;
+  minNights: number;
+  maxNights: number;
+  /** Percentage offset from the standard rate: -7 = 7% cheaper, +5 = dearer. */
+  percent?: number;
+  /** Flat CZK added per night (the one-night-stay surcharge). */
+  fixedPerNight?: number;
+  /** false = not sold on the direct booking page, so irrelevant to a web price. */
+  direct: boolean;
 }
 
-export const RATE_MODEL: RateModel = {
-  webMultiplier: 0.75,
-  weekly: { minNights: 7, factor: 0.8 },
-  nonRefundable: { factor: 0.93, roomIds: [679714, 674672] },
+export const DAILY_PRICE_RULES: Record<number, DailyPriceRule[]> = {
+  // 1KK Urban Studios
+  679714: [
+    { name: 'Standard Rate Urban', minNights: 2, maxNights: 365, percent: 0, direct: true },
+    { name: 'Non Refundable Rate', minNights: 2, maxNights: 6, percent: -7, direct: true },
+    { name: 'Flexible Rate', minNights: 2, maxNights: 365, percent: 5, direct: true },
+    { name: 'Weekly Rate Urban', minNights: 7, maxNights: 365, percent: -20, direct: true },
+    { name: 'One Night Stays', minNights: 1, maxNights: 1, fixedPerNight: 1000, direct: true },
+  ],
+  // Deluxe Apartments 1KK — non-refundable is NOT sold direct
+  648816: [
+    { name: 'Standard rate', minNights: 2, maxNights: 365, percent: 0, direct: true },
+    { name: 'Non Refundable Rate', minNights: 2, maxNights: 6, percent: -7, direct: false },
+    { name: 'Flexible Rate', minNights: 2, maxNights: 365, percent: 5, direct: true },
+    { name: '7 days + Discount', minNights: 7, maxNights: 365, percent: -20, direct: true },
+    { name: 'One Night Stays', minNights: 1, maxNights: 1, fixedPerNight: 1200, direct: true },
+  ],
+  // K.201 — non-refundable is −10% here, and also NOT sold direct
+  656437: [
+    { name: 'Standard rate', minNights: 2, maxNights: 365, percent: 0, direct: true },
+    { name: 'Non Refundable Rate', minNights: 2, maxNights: 6, percent: -10, direct: false },
+    { name: 'Flexible 3 day', minNights: 2, maxNights: 365, percent: 5, direct: true },
+    { name: 'Weekly 2BR rate', minNights: 7, maxNights: 365, percent: -20, direct: true },
+    { name: 'One Night Stays K201', minNights: 1, maxNights: 1, fixedPerNight: 2000, direct: true },
+  ],
+  // O.308 — the STANDARD rate is Booking.com-only, so direct guests start from
+  // the non-refundable one for short stays.
+  674672: [
+    { name: 'Standard rate O308', minNights: 2, maxNights: 365, percent: 0, direct: false },
+    { name: 'Non Refundable Rate', minNights: 2, maxNights: 6, percent: -7, direct: true },
+    { name: 'Flexible Rate O308', minNights: 2, maxNights: 365, percent: 10, direct: true },
+    { name: 'Weekly Rate O308', minNights: 7, maxNights: 365, percent: -20, direct: true },
+    { name: 'One Night O308', minNights: 1, maxNights: 1, fixedPerNight: 1800, direct: true },
+  ],
 };
 
-export interface DiscountChoice {
-  factor: number;
-  /** Operator-facing explanation of which discount won. */
-  reason: string;
+/** The property-level booking-page multiplier, used when Beds24 will not report it. */
+export const WEB_MULTIPLIER = 0.75;
+
+export interface RateChoice {
+  /** Price for the whole stay before the booking-page multiplier. */
+  price: number;
+  /** Which rule won, for the operator to check against Beds24. */
+  rule: string;
+  /** Human-readable offset, e.g. "-20%" or "+1 000 Kč/night". */
+  offset: string;
 }
 
-/** The single best discount for this room and length — they never stack. */
-export function bestDiscount(roomId: number, nights: number, model: RateModel = RATE_MODEL): DiscountChoice {
-  if (nights >= model.weekly.minNights) {
-    return {
-      factor: model.weekly.factor,
-      reason: `${Math.round((1 - model.weekly.factor) * 100)}% weekly discount (${model.weekly.minNights}+ nights)`,
-    };
-  }
-  if (model.nonRefundable.roomIds.includes(roomId)) {
-    return {
-      factor: model.nonRefundable.factor,
-      reason: `${Math.round((1 - model.nonRefundable.factor) * 100)}% non-refundable rate`,
-    };
-  }
-  return { factor: 1, reason: 'no discount applies' };
+/**
+ * The cheapest rate a DIRECT guest can book for this stay, given the standard
+ * price for the span. Returns null when no direct rule covers the length — the
+ * honest answer for a stay we do not sell, rather than a made-up number.
+ */
+export function bestDirectRate(roomId: number, nights: number, standardPrice: number): RateChoice | null {
+  const rules = (DAILY_PRICE_RULES[roomId] ?? []).filter(
+    (r) => r.direct && nights >= r.minNights && nights <= r.maxNights,
+  );
+  if (rules.length === 0) return null;
+
+  const priced = rules.map((r) => ({
+    rule: r.name,
+    price:
+      r.fixedPerNight !== undefined
+        ? standardPrice + r.fixedPerNight * nights
+        : standardPrice * (1 + (r.percent ?? 0) / 100),
+    offset:
+      r.fixedPerNight !== undefined
+        ? `+${r.fixedPerNight.toLocaleString('cs-CZ')} Kč/night`
+        : `${(r.percent ?? 0) > 0 ? '+' : ''}${r.percent ?? 0}%`,
+  }));
+
+  // Beds24 sells the cheapest applicable offer.
+  return priced.reduce((best, cur) => (cur.price < best.price ? cur : best));
 }
 
 /** Subtract one day from a YYYY-MM-DD string (departure → last night). */
@@ -482,27 +522,30 @@ export async function nominalWebPrice(
     fetchBookingPageMultiplier(token),
   ]);
 
-  // Prefer what Beds24 says; fall back to the model rather than to 1, since
+  // Prefer what Beds24 says; fall back to the constant rather than to 1, since
   // "no multiplier" would overstate every price by a third.
-  const webMultiplier = multiplier.value ?? RATE_MODEL.webMultiplier;
+  const webMultiplier = multiplier.value ?? WEB_MULTIPLIER;
   const nights = Math.round(
     (Date.parse(departure + 'T00:00:00Z') - Date.parse(arrival + 'T00:00:00Z')) / 86_400_000,
   );
-  const discount = bestDiscount(roomId, nights);
+  const rate = basePrice === null ? null : bestDirectRate(roomId, nights, basePrice);
 
   return {
-    price:
-      basePrice === null
-        ? null
-        : Math.round(basePrice * webMultiplier * discount.factor * 100) / 100,
+    // The booking-page multiplier is applied to the rate Beds24 computed, so it
+    // comes last. That ordering only matters for the flat one-night surcharge —
+    // for percentage rules the two commute — and it is the one part of this
+    // model not yet confirmed against a live offer.
+    price: rate === null ? null : Math.round(rate.price * webMultiplier * 100) / 100,
     basePrice,
     webMultiplier,
     webMultiplierFromBeds24: multiplier.value !== null,
     bookingPageMultiplier: multiplier.value,
     bookingPageMultiplierRaw: multiplier.raw,
     multiplierError: multiplier.error,
-    discountFactor: discount.factor,
-    discountReason: discount.reason,
+    discountFactor: rate === null || basePrice === null || basePrice === 0
+      ? 1
+      : Math.round((rate.price / basePrice) * 10000) / 10000,
+    discountReason: rate === null ? 'no direct rate covers this stay length' : `${rate.rule} (${rate.offset})`,
     raw,
   };
 }
