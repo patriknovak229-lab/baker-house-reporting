@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import QRCodeLib from "qrcode";
 import PaymentLinkModal from "./PaymentLinkModal";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, RateType } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, RateType, StayShortening } from "@/types/reservation";
 import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
@@ -15,6 +15,7 @@ import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
 import { platformRefundShare } from "@/utils/reservationRevenue";
+import { planShortening, describeShortening, nightsLabel } from "@/utils/stayShorten";
 import {
   freeCancelDaysLeft,
   cancellationTone,
@@ -1828,6 +1829,15 @@ export default function ReservationDrawer({
   const canEditNonArrival = naUserRole ? canMutate(naUserRole, "transactions") : false;
   const [naBusy, setNaBusy] = useState(false);
 
+  // Shorten-stay form (see applyShortening below).
+  const [shortenOpen, setShortenOpen] = useState(false);
+  const [shortenArrival, setShortenArrival] = useState("");
+  const [shortenDeparture, setShortenDeparture] = useState("");
+  const [shortenReason, setShortenReason] = useState("");
+  const [shortenLock, setShortenLock] = useState(true);
+  const [shortenBusy, setShortenBusy] = useState(false);
+  const [shortenError, setShortenError] = useState<string | null>(null);
+
   // Mark a booking as non-arrival: cancel + channel-lock it in Beds24 (frees the
   // room to resell; guest stays charged on the OTA), then persist our flag, seed
   // the net-retained price, and drop a checkout-dated task to finalise the price.
@@ -1904,6 +1914,128 @@ export default function ReservationDrawer({
       ...r,
       nonArrivalNetPriceCzk: Math.max(0, Math.round(value || 0)),
       issues: (r.issues ?? []).map((i) => (i.id === taskId ? { ...i, resolved: true } : i)),
+    });
+  }
+
+  // ── Shorten the stay ───────────────────────────────────────────────────────
+  // The guest keeps the booking but drops a night (arrives later or leaves
+  // earlier) and wants that night's money back. The dates move in Beds24 — so
+  // the trimmed nights are instantly back on sale — and the price is adjusted
+  // by hand afterwards, because the refund is what was agreed with the guest,
+  // not what a rate would say. Beds24 never recalculates a price on a date
+  // change, so nothing here touches money.
+  const shortenPreview =
+    reservation && shortenArrival && shortenDeparture
+      ? planShortening(
+          { arrival: reservation.checkInDate, departure: reservation.checkOutDate },
+          { arrival: shortenArrival, departure: shortenDeparture },
+          { today: pragueToday() },
+        )
+      : null;
+
+  function openShorten() {
+    if (!reservation) return;
+    setShortenArrival(reservation.checkInDate);
+    setShortenDeparture(reservation.checkOutDate);
+    setShortenReason("");
+    // OTA bookings default to locked: the channel still holds the original
+    // reservation and its next sync would otherwise re-block a night we may
+    // already have resold. Direct bookings have no channel to lock.
+    setShortenLock(reservation.channel === "Booking.com" || reservation.channel === "Airbnb");
+    setShortenError(null);
+    setShortenOpen(true);
+  }
+
+  async function applyShortening() {
+    if (!reservation || shortenBusy) return;
+    const r = reservation;
+    if (!shortenPreview) return;
+    if (!shortenPreview.ok) {
+      setShortenError(shortenPreview.error);
+      return;
+    }
+    const { plan } = shortenPreview;
+    if (
+      !window.confirm(
+        `Shorten this stay?\n\n${r.checkInDate} → ${r.checkOutDate} becomes ${plan.toArrival} → ${plan.toDeparture} (${describeShortening(plan)}).\n\n` +
+          `${nightsLabel(plan.nightsRemoved)} go back on sale immediately. The price stays at ${formatCurrency(r.price)} — adjust it in Beds24 and refund the guest yourself.` +
+          (shortenLock ? `\n\n${r.channel} will be blocked from changing this booking, so it can't restore the original dates.` : ""),
+      )
+    )
+      return;
+    setShortenBusy(true);
+    setShortenError(null);
+    try {
+      const res = await fetch("/api/bookings/shorten", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reservationNumber: r.reservationNumber,
+          arrival: plan.toArrival,
+          departure: plan.toDeparture,
+          lockChannel: shortenLock,
+          reason: shortenReason.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      // Shortening the same booking twice keeps the ORIGINAL dates and price as
+      // the baseline — that's what "what did this stay start out as?" means.
+      const prior = r.stayShortened;
+      const record: StayShortening = {
+        shortenedAt: new Date().toISOString(),
+        shortenedBy: naUserEmail,
+        fromArrival: prior?.fromArrival ?? plan.fromArrival,
+        fromDeparture: prior?.fromDeparture ?? plan.fromDeparture,
+        toArrival: plan.toArrival,
+        toDeparture: plan.toDeparture,
+        nightsRemoved: (prior?.nightsRemoved ?? 0) + plan.nightsRemoved,
+        originalPriceCzk: prior?.originalPriceCzk ?? r.price,
+        channelLocked: shortenLock || prior?.channelLocked,
+        reason: shortenReason.trim() || prior?.reason,
+      };
+      const taskId = `shorten-price-${r.reservationNumber}`;
+      const issues = r.issues ?? [];
+      const withTask = issues.some((i) => i.id === taskId && !i.resolved)
+        ? issues
+        : [
+            ...issues.filter((i) => i.id !== taskId),
+            {
+              id: taskId,
+              category: "problem" as const,
+              text: `Stay shortened by ${nightsLabel(record.nightsRemoved)} — adjust the price in Beds24 and refund the guest`,
+              actionableDate: pragueToday(),
+              resolved: false,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+      // Optimistic dates: Beds24 is the source of truth, but its shared cache
+      // coalesces refetches for 90s, so show the operator their own change now.
+      onUpdate({
+        ...r,
+        checkInDate: plan.toArrival,
+        checkOutDate: plan.toDeparture,
+        numberOfNights: plan.nightsAfter,
+        stayShortened: record,
+        issues: withTask,
+      });
+      setShortenOpen(false);
+    } catch (e) {
+      setShortenError(e instanceof Error ? e.message : "Failed to shorten the stay in Beds24");
+    } finally {
+      setShortenBusy(false);
+    }
+  }
+
+  /** Drop the shortening record. Does NOT restore the dates in Beds24. */
+  function clearShortening() {
+    if (!reservation) return;
+    const r = reservation;
+    const taskId = `shorten-price-${r.reservationNumber}`;
+    onUpdate({
+      ...r,
+      stayShortened: null,
+      issues: (r.issues ?? []).filter((i) => i.id !== taskId),
     });
   }
 
@@ -2126,7 +2258,23 @@ export default function ReservationDrawer({
     setSendInvoiceDeferral(null);
     setModDriveResults({});
     setModDriveErrors({});
+    // Half-filled shorten dates belong to the booking they were typed for.
+    setShortenOpen(false);
+    setShortenError(null);
   }, [reservation?.reservationNumber]);
+
+  // Re-seed the shorten form whenever the stay's dates move — on opening it, and
+  // if a sync (or another operator) changes them while it sits open. Without
+  // this the form keeps offering dates the booking no longer has. Deliberately
+  // depends on the two date VALUES, not the reservation object, so an unrelated
+  // save (a note, a flag) doesn't wipe what the operator is typing.
+  const shortenSeedIn = reservation?.checkInDate;
+  const shortenSeedOut = reservation?.checkOutDate;
+  useEffect(() => {
+    if (!shortenOpen || !shortenSeedIn || !shortenSeedOut) return;
+    setShortenArrival(shortenSeedIn);
+    setShortenDeparture(shortenSeedOut);
+  }, [shortenOpen, shortenSeedIn, shortenSeedOut]);
 
   useEffect(() => {
     if (reservation) {
@@ -3265,6 +3413,165 @@ export default function ReservationDrawer({
                 </button>
               ) : null}
             </div>
+
+            {/* Shorten stay — the guest still comes but drops a night and wants
+                that night's money back. Moves the dates in Beds24 (freeing the
+                trimmed nights for resale straight away) and leaves the price
+                alone: the refund is whatever was agreed, entered by hand in
+                Beds24 afterwards. Not offered on non-arrivals or cancellations
+                — those nights are already free. */}
+            {!reservation.nonArrival && !reservation.isCancelled && !reservation.isBlackout && (
+              <div className="mt-2">
+                {reservation.stayShortened && (
+                  <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5 mb-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-sky-800">
+                        ✂️ Stay shortened by {nightsLabel(reservation.stayShortened.nightsRemoved)}
+                      </span>
+                      {canEditNonArrival && (
+                        <button
+                          onClick={clearShortening}
+                          className="text-[11px] text-sky-600 hover:underline"
+                          title="Removes this record only — the dates stay as they are in Beds24"
+                        >
+                          Clear record
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-sky-700 mt-0.5">
+                      {reservation.stayShortened.fromArrival} → {reservation.stayShortened.fromDeparture}
+                      {"  ⇒  "}
+                      {reservation.stayShortened.toArrival} → {reservation.stayShortened.toDeparture}
+                      {reservation.stayShortened.channelLocked && " · channel updates blocked"}
+                    </p>
+                    {reservation.stayShortened.reason && (
+                      <p className="text-[11px] text-sky-600 mt-0.5 italic">
+                        {reservation.stayShortened.reason}
+                      </p>
+                    )}
+                    <p className="text-[11px] mt-1">
+                      {Math.round(reservation.price) === Math.round(reservation.stayShortened.originalPriceCzk) ? (
+                        <span className="text-amber-700">
+                          ⏳ Price still {formatCurrency(reservation.stayShortened.originalPriceCzk)} — adjust it in
+                          Beds24 and refund the guest.
+                        </span>
+                      ) : (
+                        <span className="text-sky-700">
+                          Price adjusted: {formatCurrency(reservation.stayShortened.originalPriceCzk)} →{" "}
+                          {formatCurrency(reservation.price)}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {canEditNonArrival && reservation.numberOfNights > 1 && (
+                  shortenOpen ? (
+                    <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5">
+                      <div className="text-sm font-medium text-sky-800">✂️ Shorten stay</div>
+                      <p className="text-[11px] text-sky-600 mt-0.5">
+                        Moves the dates in Beds24 and puts the trimmed nights back on sale. The price is
+                        left untouched — adjust it in Beds24 and refund the guest yourself.
+                      </p>
+                      <div className="mt-2 flex items-end gap-3 flex-wrap">
+                        <label className="text-[11px] text-sky-700">
+                          New check-in
+                          <input
+                            type="date"
+                            value={shortenArrival}
+                            min={reservation.checkInDate}
+                            max={reservation.checkOutDate}
+                            disabled={reservation.checkInDate <= pragueToday()}
+                            onChange={(e) => { setShortenArrival(e.target.value); setShortenError(null); }}
+                            className="block mt-0.5 border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-60 disabled:bg-sky-50"
+                            title={
+                              reservation.checkInDate <= pragueToday()
+                                ? "The stay has already started — only the check-out can move"
+                                : undefined
+                            }
+                          />
+                        </label>
+                        <label className="text-[11px] text-sky-700">
+                          New check-out
+                          <input
+                            type="date"
+                            value={shortenDeparture}
+                            min={reservation.checkInDate}
+                            max={reservation.checkOutDate}
+                            onChange={(e) => { setShortenDeparture(e.target.value); setShortenError(null); }}
+                            className="block mt-0.5 border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+                          />
+                        </label>
+                      </div>
+                      <input
+                        type="text"
+                        value={shortenReason}
+                        onChange={(e) => setShortenReason(e.target.value)}
+                        placeholder="Why (optional) — e.g. guest flying home a day early"
+                        className="mt-2 w-full border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+                      />
+                      {(reservation.channel === "Booking.com" || reservation.channel === "Airbnb") && (
+                        <label className="mt-2 flex items-start gap-1.5 text-[11px] text-sky-700">
+                          <input
+                            type="checkbox"
+                            checked={shortenLock}
+                            onChange={(e) => setShortenLock(e.target.checked)}
+                            className="mt-0.5"
+                          />
+                          <span>
+                            Block {reservation.channel} from changing this booking. Recommended — it still holds
+                            the original dates and could otherwise re-block the freed nights. Genuine
+                            channel-side changes stop arriving too, until you unlock it in Beds24.
+                          </span>
+                        </label>
+                      )}
+                      <p className="text-[11px] mt-2">
+                        {shortenArrival === reservation.checkInDate &&
+                        shortenDeparture === reservation.checkOutDate ? (
+                          // Untouched form — a hint, not an error the operator caused.
+                          <span className="text-sky-600">
+                            Move a date to see what gets freed. Currently{" "}
+                            {reservation.checkInDate} → {reservation.checkOutDate}.
+                          </span>
+                        ) : shortenPreview && !shortenPreview.ok ? (
+                          <span className="text-red-600">{shortenPreview.error}</span>
+                        ) : shortenPreview ? (
+                          <span className="text-sky-800 font-medium">
+                            {describeShortening(shortenPreview.plan)} ·{" "}
+                            {nightsLabel(shortenPreview.plan.nightsRemoved)} back on sale
+                          </span>
+                        ) : null}
+                      </p>
+                      {shortenError && <p className="text-[11px] text-red-600 mt-1">{shortenError}</p>}
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={applyShortening}
+                          disabled={shortenBusy || !shortenPreview?.ok}
+                          className="px-3 py-1.5 text-xs font-medium text-white bg-sky-600 rounded-lg hover:bg-sky-700 transition-colors disabled:opacity-50"
+                        >
+                          {shortenBusy ? "Shortening…" : "Shorten in Beds24"}
+                        </button>
+                        <button
+                          onClick={() => setShortenOpen(false)}
+                          disabled={shortenBusy}
+                          className="px-3 py-1.5 text-xs text-sky-700 hover:underline disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={openShorten}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-700 border border-sky-200 rounded-lg hover:bg-sky-50 transition-colors"
+                      title="Guest is still coming but wants a night off the stay — move the dates in Beds24 and free those nights for resale"
+                    >
+                      ✂️ Shorten stay
+                    </button>
+                  )
+                )}
+              </div>
+            )}
 
             {/* Partially refunded — the operator handed money back on a booking
                 that still stands. Nothing about this reaches the channel: it

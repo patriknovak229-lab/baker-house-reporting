@@ -175,6 +175,36 @@ export interface PlatformRefund {
   originalPriceCzk: number;
 }
 
+/**
+ * Audit record of a stay the operator trimmed at the guest's request — see
+ * `POST /api/bookings/shorten`. The dates themselves live in Beds24 (this is a
+ * real modification, not an overlay), so this only remembers what the booking
+ * looked like before and who changed it. Persisted in `baker:reservation-overrides`.
+ *
+ * It carries no money: the refund is agreed with the guest and entered by hand
+ * as the new Beds24 price, which flows through revenue on its own. Keeping the
+ * pre-change price here is what lets the drawer show whether that adjustment
+ * has actually been made yet.
+ */
+export interface StayShortening {
+  /** ISO timestamp the stay was shortened. */
+  shortenedAt: string;
+  /** Operator email that did it. */
+  shortenedBy: string;
+  fromArrival: string;    // YYYY-MM-DD
+  fromDeparture: string;  // YYYY-MM-DD
+  toArrival: string;      // YYYY-MM-DD
+  toDeparture: string;    // YYYY-MM-DD
+  /** Nights freed for resale. */
+  nightsRemoved: number;
+  /** Beds24 price at the moment the dates moved, before any manual reduction. */
+  originalPriceCzk: number;
+  /** True when channel updates were blocked so the OTA can't restore the dates. */
+  channelLocked?: boolean;
+  /** Free-text note ("guest flying home a day early"), optional. */
+  reason?: string;
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -331,6 +361,13 @@ export interface Reservation {
    * Persisted in `baker:reservation-overrides`.
    */
   platformRefund?: PlatformRefund | null;
+  /**
+   * Set when the operator trimmed nights off this stay at the guest's request.
+   * Purely a record of the change — the shortened dates are the ones Beds24
+   * reports, and the refund shows up as the operator's manual price reduction.
+   * Persisted in `baker:reservation-overrides`.
+   */
+  stayShortened?: StayShortening | null;
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this

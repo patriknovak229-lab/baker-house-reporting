@@ -56,6 +56,7 @@ type LocalFields = {
   nonArrival?: import('@/types/reservation').NonArrival | null;
   nonArrivalNetPriceCzk?: number | null;
   platformRefund?: import('@/types/reservation').PlatformRefund | null;
+  stayShortened?: import('@/types/reservation').StayShortening | null;
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -79,6 +80,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.nonArrival) local.nonArrival = r.nonArrival;
   if (r.nonArrivalNetPriceCzk != null) local.nonArrivalNetPriceCzk = r.nonArrivalNetPriceCzk;
   if (r.platformRefund) local.platformRefund = r.platformRefund;
+  if (r.stayShortened) local.stayShortened = r.stayShortened;
   return local;
 }
 
