@@ -9,6 +9,7 @@ import {
   offersForRoom,
   nominalWebPrice,
   comparePrice,
+  inspectPricingConfig,
 } from '@/utils/beds24Pricing';
 
 // Sellable Beds24 room IDs (what the offers endpoint returns prices for)
@@ -88,6 +89,9 @@ async function fetchCalendarPrices(
  *   plans, so length-of-stay discounts are missing and long spans read high.
  * - compare=1: prices one span BOTH ways and returns the ratio, to measure that
  *   remaining gap on spans Beds24 will actually quote. Read-only diagnostics.
+ * - inspect=1: dumps the property price settings and the rate plans (trimmed to
+ *   price-setting fields) so the multiplier and the discount ladder can be read
+ *   from Beds24 rather than inferred. Read-only diagnostics.
  *
  * Room mapping:
  *   K.201            = Beds24 roomId 656437 (2KK Deluxe, 1 unit)
@@ -106,6 +110,19 @@ export async function GET(req: NextRequest) {
   const ignoreAvailability = req.nextUrl.searchParams.get('ignoreAvailability') === 'true';
   const debug = req.nextUrl.searchParams.get('debug') === '1';
   const compare = req.nextUrl.searchParams.get('compare') === '1';
+  const inspect = req.nextUrl.searchParams.get('inspect') === '1';
+
+  // Config inspection is about the property, not a stay — it needs no dates.
+  if (inspect) {
+    try {
+      return NextResponse.json(await inspectPricingConfig());
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : 'inspect failed' },
+        { status: 502 },
+      );
+    }
+  }
 
   if (!arrival || !departure) {
     return NextResponse.json({ error: 'arrival and departure are required' }, { status: 400 });

@@ -70,28 +70,105 @@ export function parseMultiplier(raw: unknown): number | null {
 let multiplierCache: { value: number | null; raw: unknown; at: number } | null = null;
 const MULTIPLIER_TTL_MS = 60 * 60 * 1000;
 
-/** The property's booking-page (direct/web) multiplier, or null if unset. */
+/**
+ * The property's booking-page (direct/web) multiplier.
+ *
+ * `value: null` is ambiguous on its own — the setting may be unset, the field
+ * may not be returned, or the call may have failed — so `error` distinguishes
+ * them. An earlier version swallowed the failure into a bare null, which made a
+ * live check read "no multiplier configured" when the truth was "we never got an
+ * answer". Never collapse those two again.
+ */
 export async function fetchBookingPageMultiplier(
   token: string,
-): Promise<{ value: number | null; raw: unknown }> {
+): Promise<{ value: number | null; raw: unknown; error?: string }> {
   if (multiplierCache && Date.now() - multiplierCache.at < MULTIPLIER_TTL_MS) {
     return { value: multiplierCache.value, raw: multiplierCache.raw };
   }
 
-  const res = await fetch(`${BEDS24_API_BASE}/properties?id=${BEDS24_PROPERTY_ID}`, {
-    headers: { token },
-    cache: 'no-store',
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Beds24 properties returned ${res.status}: ${text}`);
+  try {
+    // includePriceRules is cheap and is the documented home of price-related
+    // property settings, so ask for it in case the field is gated behind it.
+    const res = await fetch(
+      `${BEDS24_API_BASE}/properties?id=${BEDS24_PROPERTY_ID}&includePriceRules=true`,
+      { headers: { token }, cache: 'no-store' },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      return { value: null, raw: undefined, error: `Beds24 properties ${res.status}: ${text.slice(0, 300)}` };
+    }
+
+    const json = (await res.json()) as { data?: { bookingPageMultiplier?: unknown }[] };
+    const raw = Array.isArray(json?.data) ? json.data[0]?.bookingPageMultiplier : undefined;
+    const value = parseMultiplier(raw);
+    multiplierCache = { value, raw, at: Date.now() };
+    return { value, raw };
+  } catch (err) {
+    return { value: null, raw: undefined, error: err instanceof Error ? err.message : 'properties fetch failed' };
+  }
+}
+
+/**
+ * One-shot diagnostics for "where does the web price actually come from?".
+ *
+ * Live comparison proved the model is exactly
+ *   offer = calendarSum × 0.75 × rateDiscount(room, nights)
+ * to the cent, but `bookingPageMultiplier` read back empty — so this returns
+ * what Beds24 actually says about the property AND the rate plans, trimmed to
+ * the fields that set a price. Read-only; it changes nothing.
+ */
+export async function inspectPricingConfig(): Promise<{
+  property: { keys: string[]; bookingPageMultiplier: unknown; error?: string };
+  rates: unknown[];
+  ratesError?: string;
+}> {
+  const token = await getAccessToken();
+
+  let propertyInfo: { keys: string[]; bookingPageMultiplier: unknown; error?: string } = {
+    keys: [], bookingPageMultiplier: undefined,
+  };
+  try {
+    const res = await fetch(
+      `${BEDS24_API_BASE}/properties?id=${BEDS24_PROPERTY_ID}&includePriceRules=true`,
+      { headers: { token }, cache: 'no-store' },
+    );
+    if (!res.ok) {
+      propertyInfo.error = `${res.status}: ${(await res.text()).slice(0, 300)}`;
+    } else {
+      const json = (await res.json()) as { data?: Record<string, unknown>[] };
+      const prop = Array.isArray(json?.data) ? json.data[0] ?? {} : {};
+      // Field names only — property config is not something to dump wholesale.
+      propertyInfo = { keys: Object.keys(prop), bookingPageMultiplier: prop.bookingPageMultiplier };
+    }
+  } catch (err) {
+    propertyInfo.error = err instanceof Error ? err.message : 'properties fetch failed';
   }
 
-  const json = (await res.json()) as { data?: { bookingPageMultiplier?: unknown }[] };
-  const raw = Array.isArray(json?.data) ? json.data[0]?.bookingPageMultiplier : undefined;
-  const value = parseMultiplier(raw);
-  multiplierCache = { value, raw, at: Date.now() };
-  return { value, raw };
+  let rates: unknown[] = [];
+  let ratesError: string | undefined;
+  try {
+    const res = await fetch(`${BEDS24_API_BASE}/inventory/fixedPrices?propertyId=${BEDS24_PROPERTY_ID}`, {
+      headers: { token },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      ratesError = `${res.status}: ${(await res.text()).slice(0, 300)}`;
+    } else {
+      const json = (await res.json()) as { data?: Record<string, unknown>[] };
+      rates = (Array.isArray(json?.data) ? json.data : []).map((r) => ({
+        id: r.id, roomId: r.roomId, name: r.name,
+        firstNight: r.firstNight, lastNight: r.lastNight,
+        minNights: r.minNights, maxNights: r.maxNights,
+        roomPrice: r.roomPrice, roomPriceEnable: r.roomPriceEnable,
+        allowMultiplier: r.allowMultiplier, strategy: r.strategy,
+        discounts: r.discounts,
+      }));
+    }
+  } catch (err) {
+    ratesError = err instanceof Error ? err.message : 'fixedPrices fetch failed';
+  }
+
+  return { property: propertyInfo, rates, ratesError };
 }
 
 /** Test seam — drops the cached property multiplier. */
@@ -312,6 +389,8 @@ export interface NominalWebPrice {
   bookingPageMultiplier: number | null;
   /** Exactly what Beds24 returned for the setting, for debugging. */
   bookingPageMultiplierRaw: unknown;
+  /** Set when we could not READ the setting — distinct from it being unset. */
+  multiplierError?: string;
   raw?: unknown;
 }
 
@@ -323,7 +402,7 @@ export async function nominalWebPrice(
 ): Promise<NominalWebPrice> {
   const [{ price: basePrice, raw }, multiplier] = await Promise.all([
     fetchRoomCalendar(token, roomId, arrival, departure),
-    fetchBookingPageMultiplier(token).catch(() => ({ value: null, raw: undefined })),
+    fetchBookingPageMultiplier(token),
   ]);
 
   const factor = multiplier.value ?? 1;
@@ -332,6 +411,7 @@ export async function nominalWebPrice(
     basePrice,
     bookingPageMultiplier: multiplier.value,
     bookingPageMultiplierRaw: multiplier.raw,
+    multiplierError: multiplier.error,
     raw,
   };
 }
@@ -353,6 +433,8 @@ export interface PriceComparison {
   nominalPrice: number | null;
   basePrice: number | null;
   bookingPageMultiplier: number | null;
+  /** Why the multiplier is null, when it is null for a reason we can name. */
+  multiplierError?: string;
   ratio: number | null;
 }
 
@@ -383,6 +465,7 @@ export async function comparePrice(
     nominalPrice: nominal.price,
     basePrice: nominal.basePrice,
     bookingPageMultiplier: nominal.bookingPageMultiplier,
+    multiplierError: nominal.multiplierError,
     ratio:
       offerPrice !== null && nominal.price !== null && nominal.price > 0
         ? Math.round((offerPrice / nominal.price) * 1000) / 1000
