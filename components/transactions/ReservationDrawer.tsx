@@ -1225,6 +1225,11 @@ function RateTypeControl({
  * toggle any of them (manual wins over the rate default) or reset to auto. The
  * special-treatment note (e.g. the wine) is editable so a substitute can be
  * recorded, and it can be removed outright.
+ *
+ * The note doubles as the ad-hoc channel to the cleaner: whatever is typed here
+ * is published to the cleaning app and shown on that stay's cleanings (welcome
+ * gift, extra minibar, ...), so it is written for the cleaner to read — in
+ * Czech, since the cleaning app never rewrites operator-authored text.
  */
 function PerksControl({
   rate,
@@ -1294,6 +1299,9 @@ function PerksControl({
   return (
     <div>
       <p className="text-[11px] text-gray-400 mb-1">Perks (rate-based · manual overrides)</p>
+      <p className="text-[10px] text-gray-400 mb-1.5">
+        The special-treatment note reaches the cleaner in the cleaning app — write it in Czech.
+      </p>
       <div className="space-y-1.5">
         {boolRow("earlyCheckIn", `Early check-in (from ${EARLY_CHECKIN_TIME})`, "bg-teal-500")}
         {boolRow("lateCheckout", `Late checkout (until ${LATE_CHECKOUT_TIME})`, "bg-orange-500")}
@@ -1333,7 +1341,7 @@ function PerksControl({
                 autoFocus
                 value={wineDraft}
                 onChange={(e) => setWineDraft(e.target.value)}
-                placeholder="Special-treatment note"
+                placeholder="e.g. Připravit láhev vína / doplnit minibar"
                 className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && wineDraft.trim()) { setSpecial(wineDraft.trim()); setEditingWine(false); }

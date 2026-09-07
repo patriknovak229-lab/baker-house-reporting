@@ -130,6 +130,25 @@ async function persistOverride(reservationNumber: string, fields: LocalFields): 
   }
 }
 
+/**
+ * Patch this reservation's entry in the rate-perk map the cleaning app reads
+ * (`baker:reservation-rate-perks`). Sends only booking facts — the note text is
+ * recomputed server-side from the stored override.
+ */
+async function publishRatePerks(r: Reservation): Promise<void> {
+  const res = await fetch('/api/rate-perks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reservationNumber: r.reservationNumber,
+      rateType: effectiveRateType(r),
+      reservationDate: r.reservationDate,
+      cancelled: r.isCancelled,
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
@@ -978,6 +997,15 @@ export default function TransactionsPage() {
   }, [reservations, search, filters, activeCutoff]);
 
   async function handleUpdate(updated: Reservation) {
+    // Did anything that changes the guest's EFFECTIVE perks move? The perk map
+    // the cleaning app reads is otherwise only rewritten by GET /api/bookings,
+    // so without this an ad-hoc special treatment would stay invisible to the
+    // cleaner until someone next loads Transactions.
+    const before = reservations.find((r) => r.reservationNumber === updated.reservationNumber);
+    const perksChanged =
+      JSON.stringify(before?.perkOverrides ?? {}) !== JSON.stringify(updated.perkOverrides ?? {}) ||
+      (before?.rateTypeOverride ?? null) !== (updated.rateTypeOverride ?? null);
+
     // Optimistic UI: reflect the change locally before the server confirms.
     setReservations((prev) =>
       prev.map((r) => r.reservationNumber === updated.reservationNumber ? updated : r)
@@ -989,6 +1017,14 @@ export default function TransactionsPage() {
     setSaveStatus('saving');
     try {
       await persistOverride(updated.reservationNumber, extractLocalFields(updated));
+      // Override is stored — now push this reservation's effective perks to the
+      // shared map so the cleaner sees it on their next page load. Best-effort:
+      // the next bookings sync republishes authoritatively either way.
+      if (perksChanged) {
+        publishRatePerks(updated).catch((err) =>
+          console.warn('[rate-perks] publish failed for', updated.reservationNumber, err)
+        );
+      }
       setSaveStatus('saved');
       saveStatusTimer.current = setTimeout(() => setSaveStatus('idle'), 2200);
     } catch (err) {

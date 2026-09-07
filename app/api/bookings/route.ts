@@ -13,6 +13,7 @@ import { AIRBNB_REVIEW_ROOM_IDS } from "@/utils/rooms";
 import type { GuestRating } from "@/types/reservation";
 import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, attachNonArrivalOverlay, mapChannel, mapRoom, infoItemsText, BEDS24_API_BASE, APP_PHONE_MARKER, type Beds24Booking } from "@/utils/beds24Reservations";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
+import { RATE_PERKS_KEY, RATE_TYPES_KEY } from "@/utils/ratePerksPublish";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 
 // Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
@@ -107,9 +108,6 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
   });
 }
 
-const RATE_TYPES_KEY = "baker:reservation-rate-types";
-const RATE_PERKS_KEY = "baker:reservation-rate-perks";
-
 /**
  * Publish each reservation's EFFECTIVE rate + EFFECTIVE perks to shared Redis
  * maps keyed by reservationNumber. The cleaning app consumes the perks map
@@ -119,6 +117,11 @@ const RATE_PERKS_KEY = "baker:reservation-rate-perks";
  * Recomputed on every sync from the current booking set, so a cancelled /
  * re-rated / modified reservation self-corrects (it drops out or updates here).
  * Read-only side effect — never affects the API response.
+ *
+ * This is the AUTHORITATIVE writer. A saved perk/rate override also patches its
+ * single entry immediately (POST /api/rate-perks → publishRatePerksEntry) so an
+ * ad-hoc special treatment reaches the cleaner without waiting for a sync; both
+ * derive from the same stored override, and this pass wins any race.
  */
 async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   const redis = getRedis();
