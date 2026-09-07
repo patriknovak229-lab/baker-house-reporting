@@ -47,6 +47,12 @@ import {
   staySellablePerMarket,
   type NightMap,
 } from '@/data-access/pricing/planSlots';
+import { marketSnapshotAgeHours, refreshMarketSnapshot } from '@/data-access/analytics/marketRefresh';
+
+/** Refresh the PriceLabs snapshot from the work-order path once it is older than this. */
+const MARKET_STALE_HOURS = 20;
+/** Warn on Telegram when even the self-refresh could not fix the age. */
+const MARKET_ALERT_HOURS = 30;
 import type {
   ParityChannel,
   ParityIngestPayload,
@@ -130,11 +136,35 @@ export async function GET(req: NextRequest) {
   const wantPlan = gridDue || req.nextUrl.searchParams.get('plan') === '1';
   const full = req.nextUrl.searchParams.get('full') === '1';
 
+  // Refresh the PriceLabs snapshot BEFORE planning, when it is stale and a
+  // plan is about to be built. The plan's availability (and the boards'
+  // booked/min-stay attribution) come from that snapshot, so a stale one
+  // silently degrades everything downstream — it sat 9 days stale in Sept
+  // 2026 because the Vercel cron never reached the route. This path is driven
+  // by the Mac runner, which has proven reliable, and is self-limiting: a
+  // successful refresh resets the age, so it happens at most once a day.
+  let marketAgeHours = await marketSnapshotAgeHours();
+  if (wantPlan && (marketAgeHours === null || marketAgeHours > MARKET_STALE_HOURS)) {
+    try {
+      const result = await refreshMarketSnapshot(today);
+      const failed = result.listings.filter((l) => l.error).length;
+      console.log(
+        `[parity-ingest] market snapshot was ${marketAgeHours === null ? 'absent' : `${marketAgeHours.toFixed(0)}h old`} — refreshed (${result.listings.length - failed}/${result.listings.length} listings ok)`,
+      );
+      marketAgeHours = await marketSnapshotAgeHours();
+    } catch (err) {
+      // Never block the work order on PriceLabs: the plan just uses the older
+      // snapshot, and the POST path warns about the age.
+      console.error('[parity-ingest] market refresh failed — planning on the stale snapshot', err);
+    }
+  }
+
   const order: ParityWorkOrder = {
     today,
     configVersion: PARITY_CONFIG_VERSION,
     lastGridDate,
     gridDue,
+    marketAgeHours: marketAgeHours === null ? null : Math.round(marketAgeHours),
     slots: wantPlan ? await planSweepSlots(today, { full }) : undefined,
     pendingRequests: pending.map((r) => ({ id: r.id, checkIn: r.checkIn, nights: r.nights })),
   };
@@ -458,6 +488,18 @@ export async function POST(req: NextRequest) {
     const CHUNK = 100;
     for (let i = 0; i < rows.length; i += CHUNK) {
       await db.insert(priceSnapshots).values(rows.slice(i, i + CHUNK));
+    }
+  }
+
+  // Snapshot health: the availability data behind the plan and the board's
+  // booked/min-stay attribution. The work-order path self-refreshes it, so an
+  // age past MARKET_ALERT_HOURS here means PriceLabs itself is failing.
+  if (payload.source === 'grid') {
+    const age = await marketSnapshotAgeHours();
+    if (age === null || age > MARKET_ALERT_HOURS) {
+      alerts.unshift(
+        `🛑 PriceLabs market snapshot is ${age === null ? 'MISSING' : `${Math.round(age)} h old`} — availability planning and the booked/min-stay colours are running on stale data. Check /api/analytics/market/refresh.`,
+      );
     }
   }
 

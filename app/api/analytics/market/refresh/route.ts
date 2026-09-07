@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import { pragueToday } from '@/utils/periodUtils';
-import { refreshMarketSnapshot } from '@/data-access/analytics/marketRefresh';
+import { marketSnapshotAgeHours, refreshMarketSnapshot } from '@/data-access/analytics/marketRefresh';
 import { buildRadarDigest } from '@/data-access/pricing/radar';
 import { pricingChatId, sendTelegram } from '@/utils/telegram';
 
@@ -26,11 +26,53 @@ import { pricingChatId, sendTelegram } from '@/utils/telegram';
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
+/** A cron pull is a no-op while the snapshot is younger than this. */
+const CRON_MIN_AGE_HOURS = 6;
+
+/**
+ * Is this a platform cron invocation? Accept every signal Vercel documents,
+ * because getting it wrong is invisible: a mismatched gate answers 401 and the
+ * snapshot just quietly stops moving (it sat 9 days stale in Sept 2026 while
+ * the route itself was perfectly healthy).
+ *
+ * `CRON_SECRET` is the authoritative one — when it is set, Vercel sends
+ * `Authorization: Bearer <secret>` and NOTHING else can forge it. The header /
+ * user-agent checks are the fallback for when it is not configured; note that
+ * `x-vercel-cron` is NOT stripped from external requests, so on its own it is a
+ * convention, not a credential. Set CRON_SECRET to make this route private.
+ */
+function cronAuth(req: NextRequest): { isCron: boolean; via: string | null } {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.headers.get('authorization') === `Bearer ${secret}`) {
+    return { isCron: true, via: 'cron-secret' };
+  }
+  if (req.headers.get('x-vercel-cron') !== null) return { isCron: true, via: 'x-vercel-cron' };
+  if (/vercel-cron/i.test(req.headers.get('user-agent') ?? '')) return { isCron: true, via: 'user-agent' };
+  return { isCron: false, via: null };
+}
+
 async function run(req: NextRequest) {
-  const isCron = req.headers.get('x-vercel-cron') === '1';
+  const { isCron, via } = cronAuth(req);
+  // Logged so a silent cron failure is diagnosable from the Vercel logs alone:
+  // either a line here naming the signal, or no line at all = never invoked.
+  console.log(`[market-refresh] invoked (cron=${isCron}${via ? ` via ${via}` : ''})`);
   if (!isCron) {
     const guard = await requireRole(['admin', 'super']);
     if ('error' in guard) return guard.error;
+  }
+
+  // Cron invocations are cheap to ignore when the data is already fresh: the
+  // parity work-order path also refreshes this snapshot, so a duplicate pull
+  // buys nothing and PriceLabs bills per synced listing. This also caps the
+  // cost of the header-only cron signal being forgeable from outside (proven
+  // 2026-09-07) — an attacker gets a no-op. Operators pressing Refresh in the
+  // UI authenticate as admin/super and always get a real pull.
+  if (isCron) {
+    const age = await marketSnapshotAgeHours();
+    if (age !== null && age < CRON_MIN_AGE_HOURS) {
+      console.log(`[market-refresh] skipped — snapshot is only ${age.toFixed(1)} h old`);
+      return NextResponse.json({ skipped: true, ageHours: Math.round(age * 10) / 10 });
+    }
   }
 
   try {

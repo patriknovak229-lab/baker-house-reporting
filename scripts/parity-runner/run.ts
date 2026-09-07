@@ -142,7 +142,7 @@ async function main() {
     return;
   }
   console.log(
-    `[runner] work order v${order.configVersion ?? '?'}: ${gridSlots.length} grid slot(s), ${customSlots.length} custom check(s), ${gridWanted ? COMPETITORS.length : 0} competitor(s) → ${BASE_URL}`,
+    `[runner] work order v${order.configVersion ?? '?'}: ${gridSlots.length} grid slot(s), ${customSlots.length} custom check(s), ${gridWanted ? COMPETITORS.length : 0} competitor(s), market snapshot ${order.marketAgeHours ?? '?'}h old → ${BASE_URL}`,
   );
 
   const launchBrowser = (): Promise<Browser> =>

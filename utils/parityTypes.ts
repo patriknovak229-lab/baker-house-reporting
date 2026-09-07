@@ -75,6 +75,8 @@ export interface ParityWorkOrder {
   lastGridDate: string | null;
   /** True when the server wants a full grid run from the runner. */
   gridDue: boolean;
+  /** Age of the PriceLabs availability snapshot in hours (null = none stored). */
+  marketAgeHours?: number | null;
   /** The concrete scrape plan for today's grid (present when gridDue). */
   slots?: PlannedSlot[];
   pendingRequests: { id: number; checkIn: string; nights: number }[];

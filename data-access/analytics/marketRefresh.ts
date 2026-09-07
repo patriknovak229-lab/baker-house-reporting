@@ -31,6 +31,20 @@ import {
   type MarketDailyDraft,
 } from './marketTypes';
 
+/**
+ * Age of the newest market_daily row, in hours (null when the table is empty).
+ * The snapshot is the availability source the parity sweep planner reads, so a
+ * stale one silently degrades the scrape plan — callers use this to refresh on
+ * demand instead of trusting a cron they cannot see.
+ */
+export async function marketSnapshotAgeHours(): Promise<number | null> {
+  const [row] = await db
+    .select({ newest: sql<Date | null>`max(${marketDaily.capturedAt})` })
+    .from(marketDaily);
+  if (!row?.newest) return null;
+  return (Date.now() - new Date(row.newest).getTime()) / 3_600_000;
+}
+
 export interface RefreshResult {
   configured: boolean;
   listings: {
