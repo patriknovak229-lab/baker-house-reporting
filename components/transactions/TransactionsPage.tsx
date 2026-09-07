@@ -131,9 +131,10 @@ async function persistOverride(reservationNumber: string, fields: LocalFields): 
 }
 
 /**
- * Patch this reservation's entry in the rate-perk map the cleaning app reads
- * (`baker:reservation-rate-perks`). Sends only booking facts — the note text is
- * recomputed server-side from the stored override.
+ * Patch this reservation's entries in the maps the cleaning app reads
+ * (`baker:reservation-rate-perks` and `baker:reservation-ops-tasks`). Sends only
+ * booking facts — every note and task text is read server-side from the stored
+ * override, never from this body.
  */
 async function publishRatePerks(r: Reservation): Promise<void> {
   const res = await fetch('/api/rate-perks', {
@@ -997,14 +998,15 @@ export default function TransactionsPage() {
   }, [reservations, search, filters, activeCutoff]);
 
   async function handleUpdate(updated: Reservation) {
-    // Did anything that changes the guest's EFFECTIVE perks move? The perk map
-    // the cleaning app reads is otherwise only rewritten by GET /api/bookings,
-    // so without this an ad-hoc special treatment would stay invisible to the
-    // cleaner until someone next loads Transactions.
+    // Did anything the CLEANING app reads move? Its maps are otherwise only
+    // rewritten by GET /api/bookings, so without this an operational task or an
+    // ad-hoc perk would stay invisible to the cleaner until someone next loads
+    // Transactions. `issues` covers add / resolve / delete of a room task.
     const before = reservations.find((r) => r.reservationNumber === updated.reservationNumber);
-    const perksChanged =
+    const cleaningFeedChanged =
       JSON.stringify(before?.perkOverrides ?? {}) !== JSON.stringify(updated.perkOverrides ?? {}) ||
-      (before?.rateTypeOverride ?? null) !== (updated.rateTypeOverride ?? null);
+      (before?.rateTypeOverride ?? null) !== (updated.rateTypeOverride ?? null) ||
+      JSON.stringify(before?.issues ?? []) !== JSON.stringify(updated.issues ?? []);
 
     // Optimistic UI: reflect the change locally before the server confirms.
     setReservations((prev) =>
@@ -1017,10 +1019,10 @@ export default function TransactionsPage() {
     setSaveStatus('saving');
     try {
       await persistOverride(updated.reservationNumber, extractLocalFields(updated));
-      // Override is stored — now push this reservation's effective perks to the
-      // shared map so the cleaner sees it on their next page load. Best-effort:
-      // the next bookings sync republishes authoritatively either way.
-      if (perksChanged) {
+      // Override is stored — now push this reservation's perks and room tasks to
+      // the shared maps so the cleaner sees them on their next page load.
+      // Best-effort: the next bookings sync republishes authoritatively anyway.
+      if (cleaningFeedChanged) {
         publishRatePerks(updated).catch((err) =>
           console.warn('[rate-perks] publish failed for', updated.reservationNumber, err)
         );
