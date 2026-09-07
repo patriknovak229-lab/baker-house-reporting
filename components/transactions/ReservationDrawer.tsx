@@ -37,6 +37,7 @@ import {
   effectiveRateType,
   isRateTypeInScope,
 } from "@/utils/rateType";
+import { getChannelColor } from "@/utils/channelColors";
 import {
   printInvoice,
   buildInvoiceHTML,
@@ -880,9 +881,16 @@ interface ReservationDrawerProps {
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
-function SourceLabel({ source }: { source: string }) {
+function SourceLabel({ source, color }: { source: string; color?: string }) {
+  // `color` brands the chip (channel colours from utils/channelColors); without
+  // it the chip stays the neutral "where this data comes from" grey.
   return (
-    <span className="text-[10px] font-medium text-gray-400 border border-gray-200 rounded px-1.5 py-0.5 ml-2">
+    <span
+      className={`text-[10px] font-semibold rounded px-1.5 py-0.5 ml-2 border ${
+        color ? "" : "text-gray-400 border-gray-200 font-medium"
+      }`}
+      style={color ? { color, borderColor: color, backgroundColor: `${color}12` } : undefined}
+    >
       {source}
     </span>
   );
@@ -918,13 +926,17 @@ function SectionTitle({
  */
 function DrawerSection({
   title,
+  icon,
   source,
+  sourceColor,
   summary,
   defaultOpen = true,
   children,
 }: {
   title: string;
+  icon?: React.ReactNode;
   source?: string;
+  sourceColor?: string;
   summary?: React.ReactNode;
   defaultOpen?: boolean;
   children: React.ReactNode;
@@ -946,16 +958,120 @@ function DrawerSection({
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" />
         </svg>
+        {icon && <span className="shrink-0 text-gray-400 group-hover:text-gray-600 transition-colors">{icon}</span>}
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider group-hover:text-gray-700 transition-colors">
           {title}
         </h3>
-        {source && <SourceLabel source={source} />}
+        {source && <SourceLabel source={source} color={sourceColor} />}
         {!open && summary && <span className="ml-auto flex items-center gap-1.5">{summary}</span>}
       </button>
       {open && children}
     </section>
   );
 }
+
+/** The reservation ID, sized to be read and one click to copy — it's the thing
+ *  the operator pastes into Beds24, the bank, and messages to guests. */
+function ReservationIdCopy({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      title={copied ? "Copied" : "Copy reservation ID"}
+      className="group mt-0.5 inline-flex items-center gap-1.5 rounded px-1 -ml-1 hover:bg-gray-100 transition-colors"
+    >
+      <span className="text-sm font-mono font-semibold tracking-tight text-gray-700">{value}</span>
+      {copied ? (
+        <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+      ) : (
+        <svg
+          className="w-3.5 h-3.5 text-gray-300 group-hover:text-indigo-500 transition-colors"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Header for a task kind. Loud on purpose: the whole point of splitting the list
+ * is that WHERE a task goes is obvious at a glance, so the destination is
+ * spelled out in the header rather than implied by a grey caption.
+ */
+function TaskKindHeader({ kind }: { kind: "admin" | "ops" }) {
+  const ops = kind === "ops";
+  return (
+    <div
+      className={`rounded-lg border-l-4 px-3 py-2 mb-2.5 ${
+        ops ? "border-purple-500 bg-purple-50" : "border-slate-400 bg-slate-50"
+      }`}
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <h4 className={`text-sm font-bold ${ops ? "text-purple-900" : "text-slate-800"}`}>
+          {ops ? "Operations" : "Admin"}
+        </h4>
+        <span
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+            ops ? "bg-purple-600 text-white" : "bg-slate-600 text-white"
+          }`}
+        >
+          {ops ? "→ goes to the cleaners" : "stays with the operator"}
+        </span>
+      </div>
+      <p className={`text-[11px] mt-1 ${ops ? "text-purple-800" : "text-slate-600"}`}>
+        {ops
+          ? "Room-level work. Cleaner-facing tasks appear on this stay's cleaning in the cleaning app."
+          : "Never reaches a cleaner. Shows up as a pending task in the Transactions overview."}
+      </p>
+    </div>
+  );
+}
+
+/** Section header icons — 14px line icons, one per drawer section. */
+const SECTION_ICON = {
+  reservation: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3M3 11h18M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  ),
+  messaging: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.9 9.9 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+    </svg>
+  ),
+  payment: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M3 7a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+    </svg>
+  ),
+  cancellation: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 5.636L5.636 18.364M12 21a9 9 0 110-18 9 9 0 010 18z" />
+    </svg>
+  ),
+  management: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+    </svg>
+  ),
+  invoice: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+  ),
+} as const;
 
 /** Sub-heading inside a grouped section (e.g. "Notes" within Reservation Management). */
 function SubTitle({
@@ -1617,6 +1733,20 @@ const CATEGORY_CONFIG: Record<IssueCategory, {
     buttonBg: "bg-red-600 hover:bg-red-700",
     icon: <span className="font-bold leading-none">!</span>,
   },
+  repair: {
+    label: "Repair",
+    badgeBg: "bg-amber-700",
+    cardBg: "bg-amber-50/70",
+    cardBorder: "border-amber-200",
+    buttonBg: "bg-amber-700 hover:bg-amber-800",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+        <circle cx="12" cy="12" r="3" strokeWidth={2.5} />
+      </svg>
+    ),
+  },
   invoice: {
     label: "Send Invoice",
     badgeBg: "bg-amber-500",
@@ -1710,6 +1840,7 @@ const CATEGORY_CONFIG: Record<IssueCategory, {
  */
 const CATEGORY_KIND: Record<IssueCategory, "admin" | "ops"> = {
   problem: "admin",
+  repair: "admin",
   invoice: "admin",
   // Order matters: KIND_CATEGORIES derives from it, and the FIRST entry of each
   // kind is what a fresh form defaults to. The cleaner-facing room task leads
@@ -1737,6 +1868,7 @@ const KIND_CATEGORIES: Record<"admin" | "ops", IssueCategory[]> = {
 /** Categories where the note IS the task, so free text is required. */
 const TEXT_REQUIRED: ReadonlySet<IssueCategory> = new Set<IssueCategory>([
   "problem",
+  "repair",
   "special",
   "facility",
 ]);
@@ -1766,7 +1898,7 @@ function TaskBlock({
   const [category, setCategory] = useState<IssueCategory>(categories[0]);
   const [text, setText] = useState("");
   const [date, setDate] = useState(() => defaultIssueDate(categories[0], reservation));
-  const [timing, setTiming] = useState<"prep" | "after">("after");
+  const [timing, setTiming] = useState<"prep" | "after">("prep");
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
 
@@ -1778,6 +1910,16 @@ function TaskBlock({
   // only asked where it can change the answer.
   const showTiming = category === "special";
   const textRequired = TEXT_REQUIRED.has(category);
+
+  /** Timing decides the date the task is anchored to, because that's the date
+   *  the operator would otherwise have to work out by hand: "before arrival"
+   *  means ready by check-in, "during / after" means the checkout clean — which
+   *  is the last cleaning of the stay, and the right guess unless a mid-stay
+   *  clean exists, in which case the operator moves the date. */
+  function pickTiming(next: "prep" | "after") {
+    setTiming(next);
+    setDate(next === "after" ? reservation.checkOutDate : reservation.checkInDate);
+  }
 
   function submit() {
     if (textRequired && !text.trim()) return;
@@ -1793,7 +1935,7 @@ function TaskBlock({
     setText("");
     setCategory(categories[0]);
     setDate(defaultIssueDate(categories[0], reservation));
-    setTiming("after");
+    setTiming("prep");
     setAdding(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -1885,12 +2027,20 @@ function TaskBlock({
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="flex items-center gap-1 text-[11px] font-medium text-indigo-500 hover:text-indigo-700"
+          className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white shadow-sm transition-colors ${
+            kind === "ops"
+              ? "bg-purple-600 hover:bg-purple-700"
+              : "bg-slate-600 hover:bg-slate-700"
+          }`}
         >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
           </svg>
-          {saved ? "✓ Added — add another" : kind === "ops" ? "Add room task / request" : "Add admin task"}
+          {saved
+            ? "Added ✓ — add another"
+            : kind === "ops"
+            ? "Add room task / request"
+            : "Add admin task"}
         </button>
       ) : (
         <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50/60 p-2.5">
@@ -1953,7 +2103,7 @@ function TaskBlock({
                     key={value}
                     type="button"
                     title={hint}
-                    onClick={() => setTiming(value)}
+                    onClick={() => pickTiming(value)}
                     className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
                       timing === value
                         ? "bg-purple-600 text-white border-transparent"
@@ -3266,9 +3416,7 @@ export default function ReservationDrawer({
                 <span className="ml-1.5">{ratingSmiley(reservation)}</span>
               )}
             </p>
-            <p className="text-xs text-gray-400 font-mono mt-0.5">
-              {reservation.reservationNumber}
-            </p>
+            <ReservationIdCopy value={reservation.reservationNumber} />
           </div>
           <button
             onClick={onClose}
@@ -3386,7 +3534,7 @@ export default function ReservationDrawer({
           {/* ── 1. Reservation — the stay, the guest, and the two operational
                facts that belong to it (cleaning + parking). Always open: this is
                what the operator needs before anything else. ── */}
-          <DrawerSection title="Reservation" source="Beds24">
+          <DrawerSection title="Reservation" icon={SECTION_ICON.reservation} source="Beds24">
             <div className="grid grid-cols-2 gap-3">
               <ReadOnlyField label="Room" value={reservation.room} />
               <ReadOnlyField label="Channel" value={reservation.channel} />
@@ -3622,7 +3770,7 @@ export default function ReservationDrawer({
           <hr className="border-gray-100" />
 
           {/* ── 2. Messaging ── */}
-          <DrawerSection title="Messaging" source="Beds24">
+          <DrawerSection title="Messaging" icon={SECTION_ICON.messaging} source="Beds24">
             <div className="flex items-center justify-end mb-2 flex-wrap gap-2">
               <div className="flex items-center gap-2 flex-wrap">
                 {/* Email Guest pill — only when a usable email is on file.
@@ -3758,15 +3906,25 @@ export default function ReservationDrawer({
                the summary chip carries the one fact that matters. ── */}
           <DrawerSection
             title="Payment"
+            icon={SECTION_ICON.payment}
             source={isOTAChannel ? reservation.channel : isDirectPhone ? "Direct" : "Stripe"}
+            sourceColor={getChannelColor(reservation.channel)}
             defaultOpen={false}
-            summary={
-              <span className="text-[11px] font-medium text-gray-500">
-                {reservation.paymentStatusOverride ?? reservation.paymentStatus}
-                <span className="text-gray-300"> · </span>
-                {formatCurrency(reservation.price)}
-              </span>
-            }
+            summary={(() => {
+              // Money collected is good news, so the folded summary says so in
+              // green; anything short of Paid stays amber so it reads as open.
+              const st = reservation.paymentStatusOverride ?? reservation.paymentStatus;
+              const good = st === "Paid";
+              return (
+                <span
+                  className={`text-[11px] font-semibold ${good ? "text-emerald-600" : "text-amber-600"}`}
+                >
+                  {st}
+                  <span className="text-gray-300 font-normal"> · </span>
+                  {formatCurrency(reservation.price)}
+                </span>
+              );
+            })()}
           >
             {isOTAChannel ? (
               <div className="space-y-2">
@@ -4126,7 +4284,17 @@ export default function ReservationDrawer({
 
           {/* ── 4. Cancellation — promoted out of Payment: the policy is a
                property of the booking, not of how it was paid. ── */}
-          <DrawerSection title="Cancellation" defaultOpen={false}>
+          <DrawerSection
+            title="Cancellation"
+            icon={SECTION_ICON.cancellation}
+            defaultOpen={false}
+            summary={(() => {
+              // The booked rate determines the terms, so it's the one fact worth
+              // carrying through the fold.
+              const rt = effectiveRateType(reservation);
+              return rt ? <span className={rateChipClasses(rt)}>{RATE_TYPE_SHORT[rt]}</span> : null;
+            })()}
+          >
             <CancellationPolicyPanel reservation={reservation} />
           </DrawerSection>
 
@@ -4137,10 +4305,8 @@ export default function ReservationDrawer({
                OPERATIONS is room-level work (the cleaner-facing ones reach the
                cleaning app), ADMIN falls on the operator and carries the booking
                actions that belong with it. Guest record follows underneath. ── */}
-          <DrawerSection title="Reservation Management">
-            <SubTitle hint="Room-level work. Cleaner-facing tasks show up on this stay's cleaning in the cleaning app.">
-              Operations
-            </SubTitle>
+          <DrawerSection title="Reservation Management" icon={SECTION_ICON.management}>
+            <TaskKindHeader kind="ops" />
             <TaskBlock
               key={`ops-${reservation.reservationNumber}`}
               kind="ops"
@@ -4151,7 +4317,7 @@ export default function ReservationDrawer({
             />
 
             <hr className="border-gray-100 my-4" />
-            <SubTitle hint="Falls on the operator. Never leaves this app.">Admin</SubTitle>
+            <TaskKindHeader kind="admin" />
             {/* Non-arrival — guest can't come and can't cancel on the OTA. Marking
                 it cancels + channel-locks the booking in Beds24 (frees the room to
                 resell) while the guest stays charged on the OTA; revenue counts the
@@ -4510,6 +4676,7 @@ export default function ReservationDrawer({
           {/* ── 6. Invoice ── */}
           <DrawerSection
             title="Invoice"
+            icon={SECTION_ICON.invoice}
             defaultOpen={false}
             summary={<span className="text-[11px] font-medium text-gray-500">{reservation.invoiceStatus}</span>}
           >

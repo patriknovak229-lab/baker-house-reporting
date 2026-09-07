@@ -2060,6 +2060,7 @@ export default function TransactionsPage() {
                     const cat = (issue.category ?? "problem") as IssueCategory;
                     const catLabels: Record<IssueCategory, string> = {
                       problem: "Problem",
+                      repair: "Repair",
                       invoice: "Send Invoice",
                       cleaning: "Mid-stay Cleaning",
                       special: "Room Task — cleaners",

@@ -132,6 +132,16 @@ const CAT_CFG: Record<IssueCategory, { bg: string; icon: React.ReactNode }> = {
     bg: "bg-red-500",
     icon: <span className="font-bold text-[10px] leading-none">!</span>,
   },
+  repair: {
+    bg: "bg-amber-700",
+    icon: (
+      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3" strokeWidth={2.5} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+          d="M12 3v3m0 12v3m9-9h-3M6 12H3" />
+      </svg>
+    ),
+  },
   invoice: {
     bg: "bg-amber-500",
     icon: (
@@ -193,6 +203,7 @@ const CAT_CFG: Record<IssueCategory, { bg: string; icon: React.ReactNode }> = {
 // no free-text note (e.g. an early-checkin request added by category alone).
 const CATEGORY_TOOLTIP_LABEL: Record<IssueCategory, string> = {
   problem: "Issue",
+  repair: "Repair",
   invoice: "Invoice task",
   cleaning: "Mid-stay cleaning",
   special: "Room task — cleaners",

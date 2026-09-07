@@ -59,6 +59,9 @@ export type RateType =
  */
 export type IssueCategory =
   | "problem"        // General problem/issue — red !
+  | "repair"         // Repair to organise — amber wrench. ADMIN: the operator books
+                     //   the tradesperson. Distinct from `facility`, which is a room
+                     //   task someone handles in passing.
   | "invoice"        // Send invoice task — amber envelope
   | "cleaning"       // Mid-stay cleaning task — blue sparkles
   | "special"        // Room task for the CLEANERS — purple ! (was "Special Treatment";
