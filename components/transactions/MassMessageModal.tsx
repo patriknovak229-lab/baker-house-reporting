@@ -282,7 +282,7 @@ export default function MassMessageModal({ reservations, onClose }: Props) {
                   Send to {sendableCount} guest{sendableCount === 1 ? '' : 's'}?
                 </p>
                 <p className="text-[11px] text-sky-800 mt-0.5">
-                  {counts.chat} via chat · {counts.email} via email. This can&apos;t be undone.
+                  {counts.chat} via chat · {counts.email}{" "}via email. This can&apos;t be undone.
                 </p>
               </div>
 
@@ -307,7 +307,7 @@ export default function MassMessageModal({ reservations, onClose }: Props) {
               {unreachable.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                   <p className="text-[11px] font-semibold text-amber-800">
-                    {unreachable.length} guest{unreachable.length === 1 ? '' : 's'} can&apos;t be reached
+                    {unreachable.length} guest{unreachable.length === 1 ? '' : 's'}{" "}can&apos;t be reached
                     automatically — follow up by hand:
                   </p>
                   <ul className="mt-1 space-y-0.5">
