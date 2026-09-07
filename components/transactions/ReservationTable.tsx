@@ -159,6 +159,10 @@ const CAT_CFG: Record<IssueCategory, { bg: string; icon: React.ReactNode }> = {
       </svg>
     ),
   },
+  facility: {
+    bg: "bg-slate-500",
+    icon: <span className="font-bold text-[10px] leading-none">!</span>,
+  },
   // Distinct from "problem" — these are guest-driven REQUESTS, not host
   // problems. Teal = early arrival (going UP into the apartment sooner),
   // orange = late departure (staying past the deadline).
@@ -191,7 +195,8 @@ const CATEGORY_TOOLTIP_LABEL: Record<IssueCategory, string> = {
   problem: "Issue",
   invoice: "Invoice task",
   cleaning: "Mid-stay cleaning",
-  special: "Special treatment",
+  special: "Room task — cleaners",
+  facility: "Room task — facility",
   earlyCheckin: "Early check-in request",
   lateCheckout: "Late checkout request",
 };

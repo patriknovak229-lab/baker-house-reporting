@@ -50,11 +50,22 @@ export type RateType =
   | "One-Night"
   | "Weekly";
 
+/**
+ * Split into two kinds by who acts on it (see CATEGORY_KIND in
+ * ReservationDrawer): ADMIN falls on the operator, OPERATIONS is room-level
+ * work. The cleaner-facing operations categories are the ones that reach the
+ * cleaning app — `facility` deliberately does not (operator/facility manager
+ * handles equipment themselves).
+ */
 export type IssueCategory =
   | "problem"        // General problem/issue — red !
   | "invoice"        // Send invoice task — amber envelope
   | "cleaning"       // Mid-stay cleaning task — blue sparkles
-  | "special"        // Special treatment / VIP — purple gift
+  | "special"        // Room task for the CLEANERS — purple ! (was "Special Treatment";
+                     //   the generic ad-hoc request: restock minibar, extra towels,
+                     //   leave a bottle of wine. Key kept so existing entries carry over.)
+  | "facility"       // Room task for FACILITY/operator — slate ! (replace a wine opener,
+                     //   equipment). Reporting-only; never published to cleaning.
   | "earlyCheckin"   // Guest-requested early check-in — teal clock ↑ (PENDING decision, not approved)
   | "lateCheckout";  // Guest-requested late checkout — orange clock ↓ (PENDING decision, not approved)
 
@@ -65,6 +76,18 @@ export interface Issue {
   actionableDate: string;  // ISO date YYYY-MM-DD — when the issue becomes actionable
   resolved: boolean;
   createdAt: string;       // ISO timestamp
+  /**
+   * WHEN in the stay a cleaner-facing room task must be done — the operator
+   * picks it, because it decides which cleaning the task lands on:
+   *   "prep"  → the cleaning that readies the room for this guest (physically
+   *             the PREVIOUS booking's checkout clean, where this guest is the
+   *             incoming one) — e.g. a welcome gift for a repeat customer.
+   *   "after" → the next cleaning from now to the end of this stay: a mid-stay
+   *             clean if one is still upcoming, otherwise the checkout clean.
+   * Only meaningful for `special` (Room Task — cleaners); absent elsewhere.
+   * Placement itself is Phase 2 (the cleaning app doesn't read this yet).
+   */
+  timing?: "prep" | "after";
 }
 
 /**

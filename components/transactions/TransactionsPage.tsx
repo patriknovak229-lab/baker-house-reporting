@@ -2062,7 +2062,8 @@ export default function TransactionsPage() {
                       problem: "Problem",
                       invoice: "Send Invoice",
                       cleaning: "Mid-stay Cleaning",
-                      special: "Special Treatment",
+                      special: "Room Task — cleaners",
+                      facility: "Room Task — facility",
                       earlyCheckin: "Early Check-in Request",
                       lateCheckout: "Late Checkout Request",
                     };

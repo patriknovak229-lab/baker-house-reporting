@@ -903,6 +903,81 @@ function SectionTitle({
   );
 }
 
+/**
+ * A drawer section with a fold. Sections the operator needs at a glance
+ * (Reservation, Messaging, Reservation Management) stay open; the
+ * record-keeping ones (Payment, Cancellation, Invoice) start closed so the
+ * drawer opens on what is actionable rather than on a wall of history.
+ *
+ * `summary` is what survives the fold — a collapsed Payment section still
+ * shows whether the booking is paid. Without it, collapsing would hide the
+ * very signal the operator opened the drawer for.
+ *
+ * Open state is per-mount and deliberately NOT persisted: every reservation
+ * opens with the same predictable layout.
+ */
+function DrawerSection({
+  title,
+  source,
+  summary,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  source?: string;
+  summary?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 mb-3 text-left group"
+      >
+        <svg
+          className={`w-3 h-3 shrink-0 text-gray-400 transition-transform ${open ? "rotate-90" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" />
+        </svg>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider group-hover:text-gray-700 transition-colors">
+          {title}
+        </h3>
+        {source && <SourceLabel source={source} />}
+        {!open && summary && <span className="ml-auto flex items-center gap-1.5">{summary}</span>}
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
+/** Sub-heading inside a grouped section (e.g. "Notes" within Reservation Management). */
+function SubTitle({
+  children,
+  hint,
+  source,
+}: {
+  children: React.ReactNode;
+  hint?: string;
+  source?: string;
+}) {
+  return (
+    <div className="mb-2">
+      <div className="flex items-center gap-1">
+        <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">{children}</h4>
+        {source && <SourceLabel source={source} />}
+      </div>
+      {hint && <p className="text-[10px] text-gray-400 mt-0.5">{hint}</p>}
+    </div>
+  );
+}
+
 // Channels an operator can attribute a manual rating to. Booking.com is out of
 // 10; everything else (Airbnb, Google, Direct) is out of 5.
 const MANUAL_RATING_CHANNELS: NonNullable<GuestRating["channel"]>[] = [
@@ -1093,7 +1168,7 @@ function CancellationPolicyPanel({ reservation }: { reservation: Reservation }) 
       <div>
         <p className="text-[11px] text-gray-400 mb-1">Cancellation policy</p>
         <p className="text-xs text-gray-500">
-          Not available — {reservation.channel} didn&apos;t send one for this booking
+          Not available — {reservation.channel}{" "}didn&apos;t send one for this booking
           {reservation.isCancelled ? " (cancelled bookings lose it)" : ""}. Check the channel
           extranet.
         </p>
@@ -1300,7 +1375,8 @@ function PerksControl({
     <div>
       <p className="text-[11px] text-gray-400 mb-1">Perks (rate-based · manual overrides)</p>
       <p className="text-[10px] text-gray-400 mb-1.5">
-        The special-treatment note reaches the cleaner in the cleaning app — write it in Czech.
+        Rate-derived. For an ad-hoc request use Reservation Management → Operations. The note
+        here does still reach the cleaner, so write it in Czech.
       </p>
       <div className="space-y-1.5">
         {boolRow("earlyCheckIn", `Early check-in (from ${EARLY_CHECKIN_TIME})`, "bg-teal-500")}
@@ -1567,18 +1643,27 @@ const CATEGORY_CONFIG: Record<IssueCategory, {
       </svg>
     ),
   },
+  // The generic ad-hoc room request for CLEANERS. Deliberately keeps the
+  // `special` key (was "Special Treatment") so entries logged under the old
+  // label carry over with no migration. Purple is kept on purpose: cleaners
+  // already read purple as "something extra to prepare" in the cleaning app.
   special: {
-    label: "Special Treatment",
+    label: "Room Task — cleaners",
     badgeBg: "bg-purple-500",
     cardBg: "bg-purple-50",
     cardBorder: "border-purple-100",
     buttonBg: "bg-purple-600 hover:bg-purple-700",
-    icon: (
-      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
-          d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
-      </svg>
-    ),
+    icon: <span className="font-bold leading-none">!</span>,
+  },
+  // Same shape, but for facility/equipment — stays in reporting, never
+  // published to the cleaning app.
+  facility: {
+    label: "Room Task — facility",
+    badgeBg: "bg-slate-500",
+    cardBg: "bg-slate-50",
+    cardBorder: "border-slate-200",
+    buttonBg: "bg-slate-600 hover:bg-slate-700",
+    icon: <span className="font-bold leading-none">!</span>,
   },
   // Guest-driven REQUESTS — distinct from operator-side "problems".
   // Same teal/orange palette as the table badges in ReservationTable.tsx.
@@ -1609,6 +1694,310 @@ const CATEGORY_CONFIG: Record<IssueCategory, {
     ),
   },
 };
+
+/**
+ * Who acts on each category. The drawer renders one list per kind, so this map
+ * IS the Admin/Operations split — no new field, no migration: every issue ever
+ * logged classifies itself.
+ *
+ *   ADMIN      — falls on the operator: invoices, complaints, cancellations,
+ *                the generic problem, and the booking actions (non-arrival,
+ *                shorten stay) that sit alongside them.
+ *   OPERATIONS — room-level work. `special` (cleaners) and the three
+ *                guest-timing categories reach the cleaning app; `facility`
+ *                is operator-only, marked as such per row so the mistake of
+ *                "I logged it and the cleaner never saw it" can't repeat.
+ */
+const CATEGORY_KIND: Record<IssueCategory, "admin" | "ops"> = {
+  problem: "admin",
+  invoice: "admin",
+  // Order matters: KIND_CATEGORIES derives from it, and the FIRST entry of each
+  // kind is what a fresh form defaults to. The cleaner-facing room task leads
+  // because it is the common case.
+  special: "ops",
+  facility: "ops",
+  cleaning: "ops",
+  earlyCheckin: "ops",
+  lateCheckout: "ops",
+};
+
+/** Operations categories the cleaning app is (or will be) fed. */
+const CLEANER_FACING: ReadonlySet<IssueCategory> = new Set<IssueCategory>([
+  "special",
+  "cleaning",
+  "earlyCheckin",
+  "lateCheckout",
+]);
+
+const KIND_CATEGORIES: Record<"admin" | "ops", IssueCategory[]> = {
+  admin: (Object.keys(CATEGORY_KIND) as IssueCategory[]).filter((c) => CATEGORY_KIND[c] === "admin"),
+  ops: (Object.keys(CATEGORY_KIND) as IssueCategory[]).filter((c) => CATEGORY_KIND[c] === "ops"),
+};
+
+/** Categories where the note IS the task, so free text is required. */
+const TEXT_REQUIRED: ReadonlySet<IssueCategory> = new Set<IssueCategory>([
+  "problem",
+  "special",
+  "facility",
+]);
+
+/**
+ * One task list + its entry form, for a single kind (Admin or Operations).
+ *
+ * Extracted from the old single "Issue Log" so the two kinds can sit in
+ * separate blocks without duplicating ~120 lines of JSX. Each block owns its
+ * OWN draft state — otherwise typing an operational task would bleed into the
+ * admin form and vice versa.
+ */
+function TaskBlock({
+  kind,
+  reservation,
+  onAdd,
+  onToggleResolved,
+  onDelete,
+}: {
+  kind: "admin" | "ops";
+  reservation: Reservation;
+  onAdd: (issue: Issue) => void;
+  onToggleResolved: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const categories = KIND_CATEGORIES[kind];
+  const [category, setCategory] = useState<IssueCategory>(categories[0]);
+  const [text, setText] = useState("");
+  const [date, setDate] = useState(() => defaultIssueDate(categories[0], reservation));
+  const [timing, setTiming] = useState<"prep" | "after">("after");
+  const [saved, setSaved] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  const issues = (reservation.issues ?? [])
+    .filter((i) => CATEGORY_KIND[i.category ?? "problem"] === kind)
+    .sort((a, b) => a.actionableDate.localeCompare(b.actionableDate));
+
+  // Timing decides WHICH cleaning a cleaner-facing room task lands on, so it's
+  // only asked where it can change the answer.
+  const showTiming = category === "special";
+  const textRequired = TEXT_REQUIRED.has(category);
+
+  function submit() {
+    if (textRequired && !text.trim()) return;
+    onAdd({
+      id: Date.now().toString(),
+      category,
+      text: text.trim(),
+      actionableDate: date,
+      resolved: false,
+      createdAt: new Date().toISOString(),
+      ...(showTiming ? { timing } : {}),
+    });
+    setText("");
+    setCategory(categories[0]);
+    setDate(defaultIssueDate(categories[0], reservation));
+    setTiming("after");
+    setAdding(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  }
+
+  return (
+    <div>
+      {issues.length > 0 && (
+        <div className="space-y-2 mb-2">
+          {issues.map((issue) => {
+            const cat = issue.category ?? "problem";
+            const cfg = CATEGORY_CONFIG[cat];
+            return (
+              <div
+                key={issue.id}
+                className={`rounded-md border px-3 py-2.5 ${
+                  issue.resolved ? "border-gray-100 bg-gray-50" : `${cfg.cardBorder} ${cfg.cardBg}`
+                }`}
+              >
+                <div className="flex items-start gap-2">
+                  <span className={`mt-0.5 shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full text-white ${cfg.badgeBg}`}>
+                    {cfg.icon}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xs font-semibold mb-0.5 flex items-center gap-1.5 flex-wrap ${issue.resolved ? "text-gray-400" : "text-gray-500"}`}>
+                      {cfg.label}
+                      {kind === "ops" && !issue.resolved && (
+                        <span
+                          className={`inline-flex items-center rounded px-1 py-px text-[9px] font-medium uppercase tracking-wide ${
+                            CLEANER_FACING.has(cat)
+                              ? "bg-purple-100 text-purple-700"
+                              : "bg-gray-100 text-gray-500"
+                          }`}
+                          title={
+                            CLEANER_FACING.has(cat)
+                              ? "Shown to the assigned cleaner in the cleaning app"
+                              : "Stays in this app — the cleaner never sees it"
+                          }
+                        >
+                          {CLEANER_FACING.has(cat) ? "→ cleaner" : "operator only"}
+                        </span>
+                      )}
+                      {issue.timing && !issue.resolved && (
+                        <span className="inline-flex items-center rounded bg-white/70 border border-current/20 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-gray-500">
+                          {issue.timing === "prep" ? "before arrival" : "during / after stay"}
+                        </span>
+                      )}
+                    </p>
+                    {issue.text && (
+                      <p className={`text-sm ${issue.resolved ? "line-through text-gray-400" : "text-gray-800"}`}>
+                        {issue.text}
+                      </p>
+                    )}
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Actionable: {formatDate(issue.actionableDate)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => onToggleResolved(issue.id)}
+                      className={`text-[11px] px-2 py-1 rounded border font-medium transition-colors ${
+                        issue.resolved
+                          ? "border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-600"
+                          : "border-green-200 text-green-700 bg-green-50 hover:bg-green-100"
+                      }`}
+                    >
+                      {issue.resolved ? "Reopen" : "Resolve"}
+                    </button>
+                    <button
+                      onClick={() => onDelete(issue.id)}
+                      className="p-1 text-gray-300 hover:text-red-400 transition-colors"
+                      title="Delete"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* The form is behind a click: with two blocks on screen, two always-open
+          forms would bury the lists they belong to. */}
+      {!adding ? (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex items-center gap-1 text-[11px] font-medium text-indigo-500 hover:text-indigo-700"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          {saved ? "✓ Added — add another" : kind === "ops" ? "Add room task / request" : "Add admin task"}
+        </button>
+      ) : (
+        <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50/60 p-2.5">
+          <div className="flex gap-1.5 flex-wrap">
+            {categories.map((cat) => {
+              const cfg = CATEGORY_CONFIG[cat];
+              const active = category === cat;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => {
+                    setCategory(cat);
+                    setDate(defaultIssueDate(cat, reservation));
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                    active
+                      ? `${cfg.badgeBg} text-white border-transparent`
+                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  <span className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-white/20" : cfg.badgeBg} text-white`}>
+                    {cfg.icon}
+                  </span>
+                  {cfg.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {kind === "ops" && (
+            <p className="text-[10px] text-gray-400">
+              {CLEANER_FACING.has(category)
+                ? "The assigned cleaner reads this text as written — write it in Czech."
+                : "Stays in this app. The cleaner never sees a facility task."}
+            </p>
+          )}
+
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={2}
+            placeholder={
+              kind === "ops"
+                ? "e.g. Doplnit minibar · Připravit láhev vína · Navíc ručníky"
+                : "Describe the issue or task…"
+            }
+            className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+          />
+
+          {showTiming && (
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">When does it need doing?</label>
+              <div className="flex gap-1.5">
+                {([
+                  ["prep", "Before arrival", "Goes on the cleaning that readies the room for this guest"],
+                  ["after", "During / after the stay", "Goes on the next cleaning up to check-out"],
+                ] as const).map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    title={hint}
+                    onClick={() => setTiming(value)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      timing === value
+                        ? "bg-purple-600 text-white border-transparent"
+                        : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="text-[11px] text-gray-400 block mb-1">Actionable date</label>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div className="flex items-end gap-1.5">
+              <button
+                onClick={submit}
+                disabled={textRequired && !text.trim()}
+                className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${CATEGORY_CONFIG[category].buttonBg}`}
+              >
+                Add
+              </button>
+              <button
+                onClick={() => { setAdding(false); setText(""); }}
+                className="px-2 py-1.5 text-gray-400 hover:text-gray-600 text-sm"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Invoice preview rendered inside the drawer ────────────────────────────────
 /**
@@ -2081,9 +2470,6 @@ export default function ReservationDrawer({
   }
 
   const [notes, setNotes] = useState("");
-  const [newIssueText, setNewIssueText] = useState("");
-  const [newIssueDate, setNewIssueDate] = useState(() => defaultIssueDate("problem", reservation));
-  const [newIssueCategory, setNewIssueCategory] = useState<IssueCategory>("problem");
   const [includePaymentQR, setIncludePaymentQR] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState<InvoiceData>({
     companyName: "",
@@ -2199,7 +2585,6 @@ export default function ReservationDrawer({
   // Notes save feedback
   const [noteSaved, setNoteSaved] = useState(false);
   // Add issue feedback
-  const [issueSaved, setIssueSaved] = useState(false);
   // Invoice request accept/reject — tracks which request is currently being processed
   const [processingInvoiceRequestId, setProcessingInvoiceRequestId] = useState<string | null>(null);
   // Invoice modification editor
@@ -2224,9 +2609,6 @@ export default function ReservationDrawer({
       setIncludePaymentQR(reservation.includeQR ?? false);
       setInvoiceExpanded(false);
       setNotes(reservation.notes);
-      setNewIssueText("");
-      setNewIssueDate(defaultIssueDate("problem", reservation));
-      setNewIssueCategory("problem");
       setDriveSaveResult(null);
       setDriveSaveError(null);
       setSaveDetailsSaved(false);
@@ -2329,27 +2711,11 @@ export default function ReservationDrawer({
     setTimeout(() => setNoteSaved(false), 2500);
   }
 
-  function addIssue() {
-    // Only "problem" and "special" require a note — for early-checkin
-    // and late-checkout the category itself is the request; any free-text
-    // is optional context the operator might add.
-    const textRequired =
-      newIssueCategory === "problem" || newIssueCategory === "special";
-    if (textRequired && !newIssueText.trim()) return;
-    const issue: Issue = {
-      id: Date.now().toString(),
-      category: newIssueCategory,
-      text: newIssueText.trim(),
-      actionableDate: newIssueDate,
-      resolved: false,
-      createdAt: new Date().toISOString(),
-    };
+  /** Append one task. The form (category, text, date, timing) lives in
+   *  `TaskBlock`, which owns its own draft state per kind — the drawer only
+   *  persists what comes back. */
+  function addIssue(issue: Issue) {
     onUpdate({ ...reservation!, issues: [...(reservation!.issues ?? []), issue] });
-    setNewIssueText("");
-    setNewIssueDate(defaultIssueDate("problem", reservation));
-    setIssueSaved(true);
-    setTimeout(() => setIssueSaved(false), 2500);
-    setNewIssueCategory("problem");
   }
 
   function toggleIssueResolved(id: string) {
@@ -3017,9 +3383,10 @@ export default function ReservationDrawer({
               );
             })}
 
-          {/* 1. Reservation Info */}
-          <section>
-            <SectionTitle source="Beds24">Reservation Info</SectionTitle>
+          {/* ── 1. Reservation — the stay, the guest, and the two operational
+               facts that belong to it (cleaning + parking). Always open: this is
+               what the operator needs before anything else. ── */}
+          <DrawerSection title="Reservation" source="Beds24">
             <div className="grid grid-cols-2 gap-3">
               <ReadOnlyField label="Room" value={reservation.room} />
               <ReadOnlyField label="Channel" value={reservation.channel} />
@@ -3086,13 +3453,7 @@ export default function ReservationDrawer({
                 </span>
               )}
             </div>
-          </section>
-
-          <hr className="border-gray-100" />
-
-          {/* 2. Guest Info */}
-          <section>
-            <SectionTitle source="Beds24">Guest Info</SectionTitle>
+            <hr className="border-gray-100 my-4" />
             <div className="grid grid-cols-2 gap-3">
               <ReadOnlyField label="First Name" value={reservation.firstName} />
               <ReadOnlyField label="Last Name" value={reservation.lastName} />
@@ -3163,14 +3524,106 @@ export default function ReservationDrawer({
                 />
               )}
             </div>
-          </section>
+            <hr className="border-gray-100 my-4" />
+            <SubTitle source="Cleaning App">Cleaning</SubTitle>
+            <div>
+              <p className="text-[11px] text-gray-400 mb-1">Status</p>
+              <Badge
+                variant={
+                  reservation.cleaningStatus === "Completed"
+                    ? "green"
+                    : reservation.cleaningStatus === "In Progress"
+                      ? "blue"
+                      : "amber"
+                }
+              >
+                {reservation.cleaningStatus}
+              </Badge>
+            </div>
+            <hr className="border-gray-100 my-4" />
+            <SubTitle>Parking</SubTitle>
+            <div className="space-y-2">
+              {/* Current assignment */}
+              {myParking ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700">
+                    Space <span className="font-semibold">{myParking.space}</span>
+                  </span>
+                  <Badge variant={myParking.type === "auto" ? "blue" : "purple"}>
+                    {myParking.type}
+                  </Badge>
+                  {myParking.conflict && (
+                    <Badge variant="amber">conflict</Badge>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400">No parking assigned</p>
+              )}
+
+              {/* Conflict warning */}
+              {myParking?.conflict && (
+                <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                  <svg className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <p className="text-xs text-amber-700">{myParking.conflict}</p>
+                </div>
+              )}
+
+              {/* Dropdown */}
+              <select
+                value={
+                  reservation.parkingOverride === undefined
+                    ? "__auto__"
+                    : reservation.parkingOverride === "none"
+                      ? "__none__"
+                      : reservation.parkingOverride
+                }
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const override =
+                    val === "__auto__" ? undefined :
+                    val === "__none__" ? "none" :
+                    val;
+                  // Build a clean update — remove key entirely for undefined
+                  const updated = { ...reservation! };
+                  if (override === undefined) {
+                    delete updated.parkingOverride;
+                  } else {
+                    updated.parkingOverride = override;
+                  }
+                  onUpdate(updated);
+                }}
+                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              >
+                <option value="__auto__">Auto (room rules)</option>
+                <option value="__none__">No parking</option>
+                {/* Show currently assigned space if it's manual and not in free list */}
+                {reservation.parkingOverride &&
+                  reservation.parkingOverride !== "none" &&
+                  !freeSpaces.includes(reservation.parkingOverride) && (
+                    <option value={reservation.parkingOverride}>
+                      Space {reservation.parkingOverride} (current)
+                    </option>
+                  )}
+                {freeSpaces.map((space) => {
+                  const ps = PARKING_SPACES.find((p) => p.space === space);
+                  const label = ps?.permanentRoom
+                    ? `Space ${space} (${ps.permanentRoom})`
+                    : `Space ${space} (hot)`;
+                  return (
+                    <option key={space} value={space}>{label}</option>
+                  );
+                })}
+              </select>
+            </div>
+          </DrawerSection>
 
           <hr className="border-gray-100" />
 
-          {/* 3. Messaging */}
-          <section>
-            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-              <SectionTitle source="Beds24">Messaging</SectionTitle>
+          {/* ── 2. Messaging ── */}
+          <DrawerSection title="Messaging" source="Beds24">
+            <div className="flex items-center justify-end mb-2 flex-wrap gap-2">
               <div className="flex items-center gap-2 flex-wrap">
                 {/* Email Guest pill — only when a usable email is on file.
                     The send log appears as a small line under the pill (see the
@@ -3296,16 +3749,25 @@ export default function ReservationDrawer({
                 Use WhatsApp{reservation.phone ? "" : " (add a phone number above)"} or email to contact this guest directly.
               </p>
             )}
-          </section>
+          </DrawerSection>
 
           <hr className="border-gray-100" />
 
-          {/* 4. Payment */}
-          <section>
-            <SectionTitle source={isOTAChannel ? reservation.channel : isDirectPhone ? "Direct" : "Stripe"}>
-              Payment
-            </SectionTitle>
-
+          {/* ── 3. Payment — money in, money back, and the vouchers attached to
+               it. Collapsed: on a paid booking there is nothing to do here, and
+               the summary chip carries the one fact that matters. ── */}
+          <DrawerSection
+            title="Payment"
+            source={isOTAChannel ? reservation.channel : isDirectPhone ? "Direct" : "Stripe"}
+            defaultOpen={false}
+            summary={
+              <span className="text-[11px] font-medium text-gray-500">
+                {reservation.paymentStatusOverride ?? reservation.paymentStatus}
+                <span className="text-gray-300"> · </span>
+                {formatCurrency(reservation.price)}
+              </span>
+            }
+          >
             {isOTAChannel ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-3 flex-wrap">
@@ -3334,7 +3796,6 @@ export default function ReservationDrawer({
                     onOverride={(v) => onUpdate({ ...reservation, perkOverrides: v })}
                   />
                 )}
-                <CancellationPolicyPanel reservation={reservation} />
                 <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2.5 py-1.5">
                   Paid through {reservation.channel} — collected by channel.
                 </p>
@@ -3360,223 +3821,10 @@ export default function ReservationDrawer({
                     onOverride={(v) => onUpdate({ ...reservation, rateTypeOverride: v })}
                   />
                 )}
-                <CancellationPolicyPanel reservation={reservation} />
                 {reservation.paymentStatus === "Partially Paid" && (
                   <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
                     Outstanding balance: {formatCurrency(reservation.price - reservation.amountPaid)}
                   </p>
-                )}
-              </div>
-            )}
-
-            {/* Non-arrival — guest can't come and can't cancel on the OTA. Marking
-                it cancels + channel-locks the booking in Beds24 (frees the room to
-                resell) while the guest stays charged on the OTA; revenue counts the
-                net retained after any channel-side refund, set below. */}
-            <div className="mt-3">
-              {reservation.nonArrival ? (
-                <div className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-purple-800">
-                      🚨 Non-arrival
-                    </span>
-                    {canEditNonArrival && (
-                      <button
-                        onClick={unmarkNonArrival}
-                        className="text-[11px] text-purple-600 hover:underline"
-                      >
-                        Remove flag
-                      </button>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-purple-600 mt-0.5">
-                    Cancelled &amp; channel-locked in Beds24; guest still charged via {reservation.channel}.
-                  </p>
-                  <div className="mt-2 flex items-end gap-3 flex-wrap">
-                    <label className="text-[11px] text-purple-700">
-                      Net retained (Kč)
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        defaultValue={reservation.nonArrivalNetPriceCzk ?? reservation.nonArrival.originalPriceCzk}
-                        onBlur={(e) => setNonArrivalNet(Number(e.target.value))}
-                        disabled={!canEditNonArrival}
-                        className="block w-32 mt-0.5 border border-purple-200 rounded px-2 py-1 text-sm text-purple-900 bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-60"
-                      />
-                    </label>
-                    <span className="text-[11px] text-purple-500 pb-1.5">
-                      Original {formatCurrency(reservation.nonArrival.originalPriceCzk)}
-                    </span>
-                  </div>
-                </div>
-              ) : canEditNonArrival ? (
-                <button
-                  onClick={markNonArrival}
-                  disabled={naBusy}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors disabled:opacity-50"
-                  title="Guest can't come and can't cancel on the OTA — cancel + lock in Beds24 to free the room for resale while still charging"
-                >
-                  🚨 {naBusy ? "Marking…" : "Mark as non-arrival"}
-                </button>
-              ) : null}
-            </div>
-
-            {/* Shorten stay — the guest still comes but drops a night and wants
-                that night's money back. Moves the dates in Beds24 (freeing the
-                trimmed nights for resale straight away) and leaves the price
-                alone: the refund is whatever was agreed, entered by hand in
-                Beds24 afterwards. Not offered on non-arrivals or cancellations
-                — those nights are already free. */}
-            {!reservation.nonArrival && !reservation.isCancelled && !reservation.isBlackout && (
-              <div className="mt-2">
-                {reservation.stayShortened && (
-                  <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5 mb-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-sky-800">
-                        ✂️ Stay shortened by {nightsLabel(reservation.stayShortened.nightsRemoved)}
-                      </span>
-                      {canEditNonArrival && (
-                        <button
-                          onClick={clearShortening}
-                          className="text-[11px] text-sky-600 hover:underline"
-                          title="Removes this record only — the dates stay as they are in Beds24"
-                        >
-                          Clear record
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-sky-700 mt-0.5">
-                      {reservation.stayShortened.fromArrival} → {reservation.stayShortened.fromDeparture}
-                      {"  ⇒  "}
-                      {reservation.stayShortened.toArrival} → {reservation.stayShortened.toDeparture}
-                      {reservation.stayShortened.channelLocked && " · channel updates blocked"}
-                    </p>
-                    {reservation.stayShortened.reason && (
-                      <p className="text-[11px] text-sky-600 mt-0.5 italic">
-                        {reservation.stayShortened.reason}
-                      </p>
-                    )}
-                    <p className="text-[11px] mt-1">
-                      {Math.round(reservation.price) === Math.round(reservation.stayShortened.originalPriceCzk) ? (
-                        <span className="text-amber-700">
-                          ⏳ Price still {formatCurrency(reservation.stayShortened.originalPriceCzk)} — adjust it in
-                          Beds24 and refund the guest.
-                        </span>
-                      ) : (
-                        <span className="text-sky-700">
-                          Price adjusted: {formatCurrency(reservation.stayShortened.originalPriceCzk)} →{" "}
-                          {formatCurrency(reservation.price)}
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                )}
-
-                {canEditNonArrival && reservation.numberOfNights > 1 && (
-                  shortenOpen ? (
-                    <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5">
-                      <div className="text-sm font-medium text-sky-800">✂️ Shorten stay</div>
-                      <p className="text-[11px] text-sky-600 mt-0.5">
-                        Moves the dates in Beds24 and puts the trimmed nights back on sale. The price is
-                        left untouched — adjust it in Beds24 and refund the guest yourself.
-                      </p>
-                      <div className="mt-2 flex items-end gap-3 flex-wrap">
-                        <label className="text-[11px] text-sky-700">
-                          New check-in
-                          <input
-                            type="date"
-                            value={shortenArrival}
-                            min={reservation.checkInDate}
-                            max={reservation.checkOutDate}
-                            disabled={reservation.checkInDate <= pragueToday()}
-                            onChange={(e) => { setShortenArrival(e.target.value); setShortenError(null); }}
-                            className="block mt-0.5 border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-60 disabled:bg-sky-50"
-                            title={
-                              reservation.checkInDate <= pragueToday()
-                                ? "The stay has already started — only the check-out can move"
-                                : undefined
-                            }
-                          />
-                        </label>
-                        <label className="text-[11px] text-sky-700">
-                          New check-out
-                          <input
-                            type="date"
-                            value={shortenDeparture}
-                            min={reservation.checkInDate}
-                            max={reservation.checkOutDate}
-                            onChange={(e) => { setShortenDeparture(e.target.value); setShortenError(null); }}
-                            className="block mt-0.5 border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
-                          />
-                        </label>
-                      </div>
-                      <input
-                        type="text"
-                        value={shortenReason}
-                        onChange={(e) => setShortenReason(e.target.value)}
-                        placeholder="Why (optional) — e.g. guest flying home a day early"
-                        className="mt-2 w-full border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
-                      />
-                      {(reservation.channel === "Booking.com" || reservation.channel === "Airbnb") && (
-                        <label className="mt-2 flex items-start gap-1.5 text-[11px] text-sky-700">
-                          <input
-                            type="checkbox"
-                            checked={shortenLock}
-                            onChange={(e) => setShortenLock(e.target.checked)}
-                            className="mt-0.5"
-                          />
-                          <span>
-                            Block {reservation.channel} from changing this booking. Recommended — it still holds
-                            the original dates and could otherwise re-block the freed nights. Genuine
-                            channel-side changes stop arriving too, until you unlock it in Beds24.
-                          </span>
-                        </label>
-                      )}
-                      <p className="text-[11px] mt-2">
-                        {shortenArrival === reservation.checkInDate &&
-                        shortenDeparture === reservation.checkOutDate ? (
-                          // Untouched form — a hint, not an error the operator caused.
-                          <span className="text-sky-600">
-                            Move a date to see what gets freed. Currently{" "}
-                            {reservation.checkInDate} → {reservation.checkOutDate}.
-                          </span>
-                        ) : shortenPreview && !shortenPreview.ok ? (
-                          <span className="text-red-600">{shortenPreview.error}</span>
-                        ) : shortenPreview ? (
-                          <span className="text-sky-800 font-medium">
-                            {describeShortening(shortenPreview.plan)} ·{" "}
-                            {nightsLabel(shortenPreview.plan.nightsRemoved)} back on sale
-                          </span>
-                        ) : null}
-                      </p>
-                      {shortenError && <p className="text-[11px] text-red-600 mt-1">{shortenError}</p>}
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          onClick={applyShortening}
-                          disabled={shortenBusy || !shortenPreview?.ok}
-                          className="px-3 py-1.5 text-xs font-medium text-white bg-sky-600 rounded-lg hover:bg-sky-700 transition-colors disabled:opacity-50"
-                        >
-                          {shortenBusy ? "Shortening…" : "Shorten in Beds24"}
-                        </button>
-                        <button
-                          onClick={() => setShortenOpen(false)}
-                          disabled={shortenBusy}
-                          className="px-3 py-1.5 text-xs text-sky-700 hover:underline disabled:opacity-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={openShorten}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-700 border border-sky-200 rounded-lg hover:bg-sky-50 transition-colors"
-                      title="Guest is still coming but wants a night off the stay — move the dates in Beds24 and free those nights for resale"
-                    >
-                      ✂️ Shorten stay
-                    </button>
-                  )
                 )}
               </div>
             )}
@@ -3840,28 +4088,8 @@ export default function ReservationDrawer({
                 </div>
               </div>
             )}
-          </section>
-
-          {showPaymentModal && (
-            <PaymentLinkModal
-              defaultEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
-              defaultPhone={reservation.phone}
-              defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
-              defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
-              reservationNumber={reservation.reservationNumber}
-              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
-              onPaymentCreated={onPaymentCreated}
-              onClose={() => setShowPaymentModal(false)}
-            />
-          )}
-
-          <hr className="border-gray-100" />
-
-          {/* 4b. Vouchers */}
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <SectionTitle>Vouchers</SectionTitle>
-            </div>
+            <hr className="border-gray-100 my-4" />
+            <SubTitle>Vouchers</SubTitle>
 
             <button
               onClick={() => setShowVoucherModal(true)}
@@ -3892,403 +4120,310 @@ export default function ReservationDrawer({
                 </div>
               </div>
             )}
-          </section>
+          </DrawerSection>
 
-          {showVoucherModal && (
-            <CreateVoucherModal
-              reservationNumber={reservation.reservationNumber}
-              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
-              guestEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
-              guestPhone={reservation.phone}
-              onVoucherCreated={onPaymentCreated}
-              onClose={() => setShowVoucherModal(false)}
-            />
-          )}
+          <hr className="border-gray-100" />
 
-          {showEmailGuestModal && (
-            <EmailGuestModal
+          {/* ── 4. Cancellation — promoted out of Payment: the policy is a
+               property of the booking, not of how it was paid. ── */}
+          <DrawerSection title="Cancellation" defaultOpen={false}>
+            <CancellationPolicyPanel reservation={reservation} />
+          </DrawerSection>
+
+          <hr className="border-gray-100" />
+
+          {/* ── 5. Reservation Management — the drawer's action centre, and the
+               reason it stays open. Two task lists split by who acts:
+               OPERATIONS is room-level work (the cleaner-facing ones reach the
+               cleaning app), ADMIN falls on the operator and carries the booking
+               actions that belong with it. Guest record follows underneath. ── */}
+          <DrawerSection title="Reservation Management">
+            <SubTitle hint="Room-level work. Cleaner-facing tasks show up on this stay's cleaning in the cleaning app.">
+              Operations
+            </SubTitle>
+            <TaskBlock
+              key={`ops-${reservation.reservationNumber}`}
+              kind="ops"
               reservation={reservation}
-              channel="email"
-              defaultEmail={
-                reservation.additionalEmail
-                  || reservation.invoiceData?.billingEmail
-                  || reservation.email
-                  || ''
-              }
-              onClose={() => setShowEmailGuestModal(false)}
-              onSent={() => {
-                setShowEmailGuestModal(false);
-                onPaymentCreated?.();
-              }}
+              onAdd={addIssue}
+              onToggleResolved={toggleIssueResolved}
+              onDelete={deleteIssue}
             />
-          )}
 
-          {showWhatsAppGuestModal && reservation.phone && (
-            <EmailGuestModal
-              reservation={reservation}
-              channel="whatsapp"
-              phone={reservation.phone}
-              onClose={() => setShowWhatsAppGuestModal(false)}
-              onSent={() => {
-                setShowWhatsAppGuestModal(false);
-                onPaymentCreated?.();
-              }}
-            />
-          )}
-
-          {showSmsGuestModal && reservation.phone && (
-            <EmailGuestModal
-              reservation={reservation}
-              channel="sms"
-              phone={reservation.phone}
-              onClose={() => setShowSmsGuestModal(false)}
-              onSent={() => {
-                setShowSmsGuestModal(false);
-                onPaymentCreated?.();
-              }}
-            />
-          )}
-
-          {/* Move-to-another-room confirmation modal — maintenance / ad-hoc.
-              Allows any room incl. cross-type and in-house guests. Occupied
-              targets are disabled unless the operator ticks "Ignore occupied",
-              which is how a multi-step swap/rotation gets its first leg done. */}
-          {showMoveModal && reservation && (() => {
-            const todayStr = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Prague" });
-            const inHouse =
-              reservation.checkInDate <= todayStr && reservation.checkOutDate > todayStr;
-            const targetOccupiers = occupiersDuringStay.get(moveTargetRoom) ?? [];
-            return (
-              <div
-                className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-                onClick={() => !moveSubmitting && setShowMoveModal(false)}
-              >
-                <div
-                  className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5"
-                  onClick={(e) => e.stopPropagation()}
+            <hr className="border-gray-100 my-4" />
+            <SubTitle hint="Falls on the operator. Never leaves this app.">Admin</SubTitle>
+            {/* Non-arrival — guest can't come and can't cancel on the OTA. Marking
+                it cancels + channel-locks the booking in Beds24 (frees the room to
+                resell) while the guest stays charged on the OTA; revenue counts the
+                net retained after any channel-side refund, set below. */}
+            <div className="mt-3">
+              {reservation.nonArrival ? (
+                <div className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-medium text-purple-800">
+                      🚨 Non-arrival
+                    </span>
+                    {canEditNonArrival && (
+                      <button
+                        onClick={unmarkNonArrival}
+                        className="text-[11px] text-purple-600 hover:underline"
+                      >
+                        Remove flag
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-purple-600 mt-0.5">
+                    Cancelled &amp; channel-locked in Beds24; guest still charged via {reservation.channel}.
+                  </p>
+                  <div className="mt-2 flex items-end gap-3 flex-wrap">
+                    <label className="text-[11px] text-purple-700">
+                      Net retained (Kč)
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        defaultValue={reservation.nonArrivalNetPriceCzk ?? reservation.nonArrival.originalPriceCzk}
+                        onBlur={(e) => setNonArrivalNet(Number(e.target.value))}
+                        disabled={!canEditNonArrival}
+                        className="block w-32 mt-0.5 border border-purple-200 rounded px-2 py-1 text-sm text-purple-900 bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-60"
+                      />
+                    </label>
+                    <span className="text-[11px] text-purple-500 pb-1.5">
+                      Original {formatCurrency(reservation.nonArrival.originalPriceCzk)}
+                    </span>
+                  </div>
+                </div>
+              ) : canEditNonArrival ? (
+                <button
+                  onClick={markNonArrival}
+                  disabled={naBusy}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors disabled:opacity-50"
+                  title="Guest can't come and can't cancel on the OTA — cancel + lock in Beds24 to free the room for resale while still charging"
                 >
-                  <h3 className="text-base font-semibold text-gray-900">Move to another room</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {reservation.firstName} {reservation.lastName} ·{" "}
-                    {formatDate(reservation.checkInDate)} → {formatDate(reservation.checkOutDate)}
-                  </p>
-                  <p className="mt-3 text-sm text-gray-700">
-                    From <span className="font-medium">{reservation.room}</span>
-                  </p>
+                  🚨 {naBusy ? "Marking…" : "Mark as non-arrival"}
+                </button>
+              ) : null}
+            </div>
 
-                  <label className="block text-xs font-medium text-gray-600 mt-3 mb-1">Move to</label>
-                  <select
-                    value={moveTargetRoom}
-                    onChange={(e) => setMoveTargetRoom(e.target.value)}
-                    disabled={moveSubmitting || moveDone}
-                    className="w-full border border-gray-200 rounded-md px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
-                  >
-                    <option value="">Select a room…</option>
-                    {PHYSICAL_ROOMS.filter((u) => u.room !== reservation.room).map((u) => {
-                      const occupiers = occupiersDuringStay.get(u.room) ?? [];
-                      const occ = occupiers.length > 0;
-                      // One holder → name it; several → just the count, since a
-                      // native <option> has no room for two of them.
-                      const detail = !occ
-                        ? " — free"
-                        : occupiers.length === 1
-                          ? ` — occupied · ${occupierLabel(occupiers[0])}`
-                          : ` — occupied · ${occupiers.length} bookings`;
-                      return (
-                        <option key={u.room} value={u.room} disabled={occ && !moveIgnoreOccupied}>
-                          {u.room}{detail}
-                        </option>
-                      );
-                    })}
-                  </select>
-
-                  {/* The override. Deliberately unchecked on every open: forcing
-                      a double-booking is a per-move decision, not a preference. */}
-                  <label className="mt-2 flex items-start gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={moveIgnoreOccupied}
-                      disabled={moveSubmitting || moveDone}
-                      onChange={(e) => {
-                        const on = e.target.checked;
-                        setMoveIgnoreOccupied(on);
-                        setMoveError(null);
-                        // Turning it back OFF must not leave an occupied room
-                        // selected — the Move button would then just 409.
-                        if (!on && (occupiersDuringStay.get(moveTargetRoom)?.length ?? 0) > 0) {
-                          setMoveTargetRoom("");
-                        }
-                      }}
-                      className="mt-0.5 w-3.5 h-3.5 accent-rose-600 disabled:opacity-50"
-                    />
-                    <span className="text-[11px] leading-snug text-gray-600">
-                      <span className="font-medium text-gray-800">Ignore occupied</span> — allow moving into
-                      a unit that is already booked. For multi-step swaps and rotations, where every leg but
-                      the last lands on a taken room.
-                    </span>
-                  </label>
-
-                  {moveIgnoreOccupied && targetOccupiers.length > 0 && (
-                    <div className="mt-2 text-[11px] text-rose-800 bg-rose-50 border border-rose-300 rounded px-2 py-1.5">
-                      <p className="font-semibold">
-                        This creates a real double-booking in {moveTargetRoom}.
+            {/* Shorten stay — the guest still comes but drops a night and wants
+                that night's money back. Moves the dates in Beds24 (freeing the
+                trimmed nights for resale straight away) and leaves the price
+                alone: the refund is whatever was agreed, entered by hand in
+                Beds24 afterwards. Not offered on non-arrivals or cancellations
+                — those nights are already free. */}
+            {!reservation.nonArrival && !reservation.isCancelled && !reservation.isBlackout && (
+              <div className="mt-2">
+                {reservation.stayShortened && (
+                  <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5 mb-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-sky-800">
+                        ✂️ Stay shortened by {nightsLabel(reservation.stayShortened.nightsRemoved)}
+                      </span>
+                      {canEditNonArrival && (
+                        <button
+                          onClick={clearShortening}
+                          className="text-[11px] text-sky-600 hover:underline"
+                          title="Removes this record only — the dates stay as they are in Beds24"
+                        >
+                          Clear record
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-sky-700 mt-0.5">
+                      {reservation.stayShortened.fromArrival} → {reservation.stayShortened.fromDeparture}
+                      {"  ⇒  "}
+                      {reservation.stayShortened.toArrival} → {reservation.stayShortened.toDeparture}
+                      {reservation.stayShortened.channelLocked && " · channel updates blocked"}
+                    </p>
+                    {reservation.stayShortened.reason && (
+                      <p className="text-[11px] text-sky-600 mt-0.5 italic">
+                        {reservation.stayShortened.reason}
                       </p>
-                      <ul className="mt-1 space-y-0.5">
-                        {targetOccupiers.map((o) => (
-                          <li key={o.reservationNumber}>
-                            · {o.reservationNumber} — {occupierLabel(o)}
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="mt-1">Finish the remaining moves — Transactions will flag the clash until you do.</p>
+                    )}
+                    <p className="text-[11px] mt-1">
+                      {Math.round(reservation.price) === Math.round(reservation.stayShortened.originalPriceCzk) ? (
+                        <span className="text-amber-700">
+                          ⏳ Price still {formatCurrency(reservation.stayShortened.originalPriceCzk)} — adjust it in
+                          Beds24 and refund the guest.
+                        </span>
+                      ) : (
+                        <span className="text-sky-700">
+                          Price adjusted: {formatCurrency(reservation.stayShortened.originalPriceCzk)} →{" "}
+                          {formatCurrency(reservation.price)}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {canEditNonArrival && reservation.numberOfNights > 1 && (
+                  shortenOpen ? (
+                    <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5">
+                      <div className="text-sm font-medium text-sky-800">✂️ Shorten stay</div>
+                      <p className="text-[11px] text-sky-600 mt-0.5">
+                        Moves the dates in Beds24 and puts the trimmed nights back on sale. The price is
+                        left untouched — adjust it in Beds24 and refund the guest yourself.
+                      </p>
+                      <div className="mt-2 flex items-end gap-3 flex-wrap">
+                        <label className="text-[11px] text-sky-700">
+                          New check-in
+                          <input
+                            type="date"
+                            value={shortenArrival}
+                            min={reservation.checkInDate}
+                            max={reservation.checkOutDate}
+                            disabled={reservation.checkInDate <= pragueToday()}
+                            onChange={(e) => { setShortenArrival(e.target.value); setShortenError(null); }}
+                            className="block mt-0.5 border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-60 disabled:bg-sky-50"
+                            title={
+                              reservation.checkInDate <= pragueToday()
+                                ? "The stay has already started — only the check-out can move"
+                                : undefined
+                            }
+                          />
+                        </label>
+                        <label className="text-[11px] text-sky-700">
+                          New check-out
+                          <input
+                            type="date"
+                            value={shortenDeparture}
+                            min={reservation.checkInDate}
+                            max={reservation.checkOutDate}
+                            onChange={(e) => { setShortenDeparture(e.target.value); setShortenError(null); }}
+                            className="block mt-0.5 border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+                          />
+                        </label>
+                      </div>
+                      <input
+                        type="text"
+                        value={shortenReason}
+                        onChange={(e) => setShortenReason(e.target.value)}
+                        placeholder="Why (optional) — e.g. guest flying home a day early"
+                        className="mt-2 w-full border border-sky-200 rounded px-2 py-1 text-sm text-sky-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+                      />
+                      {(reservation.channel === "Booking.com" || reservation.channel === "Airbnb") && (
+                        <label className="mt-2 flex items-start gap-1.5 text-[11px] text-sky-700">
+                          <input
+                            type="checkbox"
+                            checked={shortenLock}
+                            onChange={(e) => setShortenLock(e.target.checked)}
+                            className="mt-0.5"
+                          />
+                          <span>
+                            Block {reservation.channel} from changing this booking. Recommended — it still holds
+                            the original dates and could otherwise re-block the freed nights. Genuine
+                            channel-side changes stop arriving too, until you unlock it in Beds24.
+                          </span>
+                        </label>
+                      )}
+                      <p className="text-[11px] mt-2">
+                        {shortenArrival === reservation.checkInDate &&
+                        shortenDeparture === reservation.checkOutDate ? (
+                          // Untouched form — a hint, not an error the operator caused.
+                          <span className="text-sky-600">
+                            Move a date to see what gets freed. Currently{" "}
+                            {reservation.checkInDate} → {reservation.checkOutDate}.
+                          </span>
+                        ) : shortenPreview && !shortenPreview.ok ? (
+                          <span className="text-red-600">{shortenPreview.error}</span>
+                        ) : shortenPreview ? (
+                          <span className="text-sky-800 font-medium">
+                            {describeShortening(shortenPreview.plan)} ·{" "}
+                            {nightsLabel(shortenPreview.plan.nightsRemoved)} back on sale
+                          </span>
+                        ) : null}
+                      </p>
+                      {shortenError && <p className="text-[11px] text-red-600 mt-1">{shortenError}</p>}
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={applyShortening}
+                          disabled={shortenBusy || !shortenPreview?.ok}
+                          className="px-3 py-1.5 text-xs font-medium text-white bg-sky-600 rounded-lg hover:bg-sky-700 transition-colors disabled:opacity-50"
+                        >
+                          {shortenBusy ? "Shortening…" : "Shorten in Beds24"}
+                        </button>
+                        <button
+                          onClick={() => setShortenOpen(false)}
+                          disabled={shortenBusy}
+                          className="px-3 py-1.5 text-xs text-sky-700 hover:underline disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                  )}
-
-                  {unallocatedDuringStay.length > 0 && (
-                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                      {unallocatedDuringStay.length}{" "}
-                      {unallocatedDuringStay.length === 1 ? "booking" : "bookings"} overlapping this stay
-                      {unallocatedDuringStay.length === 1 ? " is" : " are"} still unallocated (
-                      {unallocatedDuringStay.map((r) => r.room).join(", ")}) — a unit shown as free may be
-                      claimed once Beds24 assigns {unallocatedDuringStay.length === 1 ? "it" : "them"}.
-                    </p>
-                  )}
-
-                  {inHouse && (
-                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                      This guest is currently <strong>in-house</strong> — make sure they&apos;re physically moved.
-                    </p>
-                  )}
-                  {moveError && (
-                    <p className="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
-                      {moveError}
-                    </p>
-                  )}
-                  {moveDone && (
-                    <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
-                      ✓ Moved to {moveTargetRoom}. Syncing… A move notice now sits in the alert bar
-                      until you dismiss it.
-                    </p>
-                  )}
-
-                  <div className="mt-4 flex justify-end gap-2">
-                    <button
-                      onClick={() => !moveSubmitting && setShowMoveModal(false)}
-                      disabled={moveSubmitting}
-                      className="px-3 py-2 text-sm text-gray-700 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleMoveRoom}
-                      disabled={moveSubmitting || moveDone || !moveTargetRoom}
-                      className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
-                        targetOccupiers.length > 0
-                          ? "bg-rose-600 hover:bg-rose-700"
-                          : "bg-indigo-600 hover:bg-indigo-700"
-                      }`}
-                    >
-                      {moveSubmitting
-                        ? "Moving…"
-                        : targetOccupiers.length > 0
-                          ? `Force into ${moveTargetRoom}`
-                          : `Move to ${moveTargetRoom || "…"}`}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Confirmation email preview modal — operator reviews rendered
-              email in an iframe, can Cancel or Send. */}
-          {showConfirmationPreview && (
-            <div
-              className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-              onClick={() => !sendingConfirmation && setShowConfirmationPreview(false)}
-            >
-              <div
-                className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-amber-50">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                    </svg>
-                    <h2 className="text-sm font-semibold text-amber-900">Preview confirmation email</h2>
-                  </div>
-                  <button
-                    onClick={() => !sendingConfirmation && setShowConfirmationPreview(false)}
-                    disabled={sendingConfirmation}
-                    className="text-amber-700 hover:text-amber-900 disabled:opacity-50"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="flex-1 overflow-hidden bg-gray-100">
-                  {confirmationPreviewError ? (
-                    <p className="p-4 text-sm text-red-600">{confirmationPreviewError}</p>
-                  ) : confirmationPreviewHtml ? (
-                    <iframe
-                      title="Confirmation preview"
-                      srcDoc={confirmationPreviewHtml}
-                      sandbox=""
-                      className="w-full h-full bg-white"
-                    />
                   ) : (
-                    <div className="p-8 text-center text-xs text-gray-500">
-                      <svg className="w-5 h-5 mx-auto mb-2 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                      Loading preview…
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-gray-100 bg-white">
-                  <p className="text-xs text-gray-500 truncate">
-                    Will be sent to{' '}
-                    <span className="font-medium text-gray-700">
-                      {reservation.invoiceData?.billingEmail
-                        || reservation.additionalEmail
-                        || reservation.email
-                        || '(no email on file)'}
-                    </span>
-                  </p>
-                  <div className="flex items-center gap-2 shrink-0">
                     <button
-                      onClick={() => setShowConfirmationPreview(false)}
-                      disabled={sendingConfirmation}
-                      className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50"
+                      onClick={openShorten}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-700 border border-sky-200 rounded-lg hover:bg-sky-50 transition-colors"
+                      title="Guest is still coming but wants a night off the stay — move the dates in Beds24 and free those nights for resale"
                     >
-                      Cancel
+                      ✂️ Shorten stay
                     </button>
-                    <button
-                      onClick={handleSendConfirmation}
-                      disabled={sendingConfirmation || !confirmationPreviewHtml || !!confirmationPreviewError}
-                      className="px-4 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50 transition-colors"
-                    >
-                      {sendingConfirmation ? 'Sending…' : 'Send email'}
-                    </button>
-                  </div>
-                </div>
+                  )
+                )}
               </div>
+            )}
+
+            <div className="mt-3">
+              <TaskBlock
+                key={`admin-${reservation.reservationNumber}`}
+                kind="admin"
+                reservation={reservation}
+                onAdd={addIssue}
+                onToggleResolved={toggleIssueResolved}
+                onDelete={deleteIssue}
+              />
             </div>
-          )}
 
-          <hr className="border-gray-100" />
+            <hr className="border-gray-100 my-4" />
+            <SubTitle>Notes</SubTitle>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={4}
+              placeholder="Add internal notes about this reservation..."
+              className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+            />
+            <button
+              onClick={saveNote}
+              className={`mt-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                noteSaved
+                  ? "bg-green-600 text-white hover:bg-green-700"
+                  : "bg-indigo-600 text-white hover:bg-indigo-700"
+              }`}
+            >
+              {noteSaved ? "✓ Saved" : "Save Note"}
+            </button>
+            <hr className="border-gray-100 my-4" />
+            <SubTitle>Customer Flags</SubTitle>
+            <div className="flex flex-col gap-2">
+              {ALL_FLAGS.map((flag) => {
+                const isActive = effectiveFlags.includes(flag);
+                const isAuto = autoFlags.has(flag);
+                const isOverridden = reservation.manualFlagOverrides[flag] !== undefined;
+                const { label, activeClass, inactiveClass } = flagConfig[flag];
 
-          {/* 5. Cleaning */}
-          <section>
-            <SectionTitle source="Cleaning App">Cleaning</SectionTitle>
-            <div>
-              <p className="text-[11px] text-gray-400 mb-1">Status</p>
-              <Badge
-                variant={
-                  reservation.cleaningStatus === "Completed"
-                    ? "green"
-                    : reservation.cleaningStatus === "In Progress"
-                      ? "blue"
-                      : "amber"
-                }
-              >
-                {reservation.cleaningStatus}
-              </Badge>
+                return (
+                  <button
+                    key={flag}
+                    onClick={() => handleToggleFlag(flag)}
+                    className={`px-3 py-2 rounded-md border text-sm font-medium text-left transition-colors flex items-center justify-between ${
+                      isActive ? activeClass : inactiveClass
+                    }`}
+                  >
+                    <span>{label}</span>
+                    <span className="text-[10px] opacity-60 font-normal ml-2">
+                      {isOverridden ? "manual" : isAuto && isActive ? "auto" : ""}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          </section>
-
-          <hr className="border-gray-100" />
-
-          {/* 5b. Parking */}
-          <section>
-            <SectionTitle>Parking</SectionTitle>
-            <div className="space-y-2">
-              {/* Current assignment */}
-              {myParking ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-700">
-                    Space <span className="font-semibold">{myParking.space}</span>
-                  </span>
-                  <Badge variant={myParking.type === "auto" ? "blue" : "purple"}>
-                    {myParking.type}
-                  </Badge>
-                  {myParking.conflict && (
-                    <Badge variant="amber">conflict</Badge>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">No parking assigned</p>
-              )}
-
-              {/* Conflict warning */}
-              {myParking?.conflict && (
-                <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
-                  <svg className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                  </svg>
-                  <p className="text-xs text-amber-700">{myParking.conflict}</p>
-                </div>
-              )}
-
-              {/* Dropdown */}
-              <select
-                value={
-                  reservation.parkingOverride === undefined
-                    ? "__auto__"
-                    : reservation.parkingOverride === "none"
-                      ? "__none__"
-                      : reservation.parkingOverride
-                }
-                onChange={(e) => {
-                  const val = e.target.value;
-                  const override =
-                    val === "__auto__" ? undefined :
-                    val === "__none__" ? "none" :
-                    val;
-                  // Build a clean update — remove key entirely for undefined
-                  const updated = { ...reservation! };
-                  if (override === undefined) {
-                    delete updated.parkingOverride;
-                  } else {
-                    updated.parkingOverride = override;
-                  }
-                  onUpdate(updated);
-                }}
-                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              >
-                <option value="__auto__">Auto (room rules)</option>
-                <option value="__none__">No parking</option>
-                {/* Show currently assigned space if it's manual and not in free list */}
-                {reservation.parkingOverride &&
-                  reservation.parkingOverride !== "none" &&
-                  !freeSpaces.includes(reservation.parkingOverride) && (
-                    <option value={reservation.parkingOverride}>
-                      Space {reservation.parkingOverride} (current)
-                    </option>
-                  )}
-                {freeSpaces.map((space) => {
-                  const ps = PARKING_SPACES.find((p) => p.space === space);
-                  const label = ps?.permanentRoom
-                    ? `Space ${space} (${ps.permanentRoom})`
-                    : `Space ${space} (hot)`;
-                  return (
-                    <option key={space} value={space}>{label}</option>
-                  );
-                })}
-              </select>
-            </div>
-          </section>
-
-          <hr className="border-gray-100" />
-
-          {/* 6. Rating */}
-          <section>
-            <SectionTitle source={reservation.syncedRating ? "Beds24" : undefined}>Guest Rating</SectionTitle>
-
+            <p className="text-[10px] text-gray-400 mt-2">
+              High Value (≥5 nights) and Repeat Customer are auto-assigned. Click to override.
+            </p>
+            <hr className="border-gray-100 my-4" />
+            <SubTitle source={reservation.syncedRating ? "Beds24" : undefined}>Guest Rating</SubTitle>
             {/* Synced review (Booking.com / Airbnb) — read-only, takes precedence */}
             {reservation.syncedRating && (
               <div className={`mb-3 rounded-md border p-3 ${
@@ -4368,200 +4503,17 @@ export default function ReservationDrawer({
                 onChange={handleManualRating}
               />
             </div>
-          </section>
+          </DrawerSection>
 
           <hr className="border-gray-100" />
 
-          {/* 7. Customer Flags */}
-          <section>
-            <SectionTitle>Customer Flags</SectionTitle>
-            <div className="flex flex-col gap-2">
-              {ALL_FLAGS.map((flag) => {
-                const isActive = effectiveFlags.includes(flag);
-                const isAuto = autoFlags.has(flag);
-                const isOverridden = reservation.manualFlagOverrides[flag] !== undefined;
-                const { label, activeClass, inactiveClass } = flagConfig[flag];
-
-                return (
-                  <button
-                    key={flag}
-                    onClick={() => handleToggleFlag(flag)}
-                    className={`px-3 py-2 rounded-md border text-sm font-medium text-left transition-colors flex items-center justify-between ${
-                      isActive ? activeClass : inactiveClass
-                    }`}
-                  >
-                    <span>{label}</span>
-                    <span className="text-[10px] opacity-60 font-normal ml-2">
-                      {isOverridden ? "manual" : isAuto && isActive ? "auto" : ""}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-[10px] text-gray-400 mt-2">
-              High Value (≥5 nights) and Repeat Customer are auto-assigned. Click to override.
-            </p>
-          </section>
-
-          <hr className="border-gray-100" />
-
-          {/* 8. Notes */}
-          <section>
-            <SectionTitle>Notes</SectionTitle>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={4}
-              placeholder="Add internal notes about this reservation..."
-              className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-            />
-            <button
-              onClick={saveNote}
-              className={`mt-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                noteSaved
-                  ? "bg-green-600 text-white hover:bg-green-700"
-                  : "bg-indigo-600 text-white hover:bg-indigo-700"
-              }`}
-            >
-              {noteSaved ? "✓ Saved" : "Save Note"}
-            </button>
-          </section>
-
-          <hr className="border-gray-100" />
-
-          {/* 9. Issue Log */}
-          <section>
-            <SectionTitle>Issue Log</SectionTitle>
-
-            {/* Existing issues sorted by actionable date */}
-            {(reservation.issues ?? []).length > 0 && (
-              <div className="space-y-2 mb-4">
-                {[...(reservation.issues ?? [])]
-                  .sort((a, b) => a.actionableDate.localeCompare(b.actionableDate))
-                  .map((issue) => {
-                    const cat = issue.category ?? "problem";
-                    const cfg = CATEGORY_CONFIG[cat];
-                    return (
-                      <div
-                        key={issue.id}
-                        className={`rounded-md border px-3 py-2.5 ${
-                          issue.resolved ? "border-gray-100 bg-gray-50" : `${cfg.cardBorder} ${cfg.cardBg}`
-                        }`}
-                      >
-                        <div className="flex items-start gap-2">
-                          {/* Category badge */}
-                          <span className={`mt-0.5 shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full text-white ${cfg.badgeBg}`}>
-                            {cfg.icon}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-xs font-semibold mb-0.5 ${issue.resolved ? "text-gray-400" : "text-gray-500"}`}>
-                              {cfg.label}
-                            </p>
-                            <p className={`text-sm ${issue.resolved ? "line-through text-gray-400" : "text-gray-800"}`}>
-                              {issue.text}
-                            </p>
-                            <p className="text-[11px] text-gray-400 mt-0.5">
-                              Actionable: {formatDate(issue.actionableDate)}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => toggleIssueResolved(issue.id)}
-                              className={`text-[11px] px-2 py-1 rounded border font-medium transition-colors ${
-                                issue.resolved
-                                  ? "border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-600"
-                                  : "border-green-200 text-green-700 bg-green-50 hover:bg-green-100"
-                              }`}
-                            >
-                              {issue.resolved ? "Reopen" : "Resolve"}
-                            </button>
-                            <button
-                              onClick={() => deleteIssue(issue.id)}
-                              className="p-1 text-gray-300 hover:text-red-400 transition-colors"
-                              title="Delete"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-
-            {/* New issue form */}
-            <div className="space-y-2">
-              {/* Category selector */}
-              <div className="flex gap-1.5 flex-wrap">
-                {(Object.keys(CATEGORY_CONFIG) as IssueCategory[]).map((cat) => {
-                  const cfg = CATEGORY_CONFIG[cat];
-                  const active = newIssueCategory === cat;
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => {
-                        setNewIssueCategory(cat);
-                        setNewIssueDate(defaultIssueDate(cat, reservation));
-                      }}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
-                        active
-                          ? `${cfg.badgeBg} text-white border-transparent`
-                          : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
-                      }`}
-                    >
-                      <span className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-full ${active ? "bg-white/20" : cfg.badgeBg} text-white`}>
-                        {cfg.icon}
-                      </span>
-                      {cfg.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <textarea
-                value={newIssueText}
-                onChange={(e) => setNewIssueText(e.target.value)}
-                rows={2}
-                placeholder="Describe the issue or task…"
-                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-              />
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <label className="text-[11px] text-gray-400 block mb-1">Actionable date</label>
-                  <input
-                    type="date"
-                    value={newIssueDate}
-                    onChange={(e) => setNewIssueDate(e.target.value)}
-                    className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-                <div className="flex items-end">
-                  <button
-                    onClick={addIssue}
-                    disabled={(
-                      newIssueCategory === "problem" ||
-                      newIssueCategory === "special"
-                    ) && !newIssueText.trim()}
-                    className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
-                      issueSaved ? "bg-green-600" : CATEGORY_CONFIG[newIssueCategory].buttonBg
-                    }`}
-                  >
-                    {issueSaved ? "✓ Added" : `Add ${CATEGORY_CONFIG[newIssueCategory].label}`}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <hr className="border-gray-100" />
-
-          {/* 10. Invoice */}
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <SectionTitle>Invoice</SectionTitle>
+          {/* ── 6. Invoice ── */}
+          <DrawerSection
+            title="Invoice"
+            defaultOpen={false}
+            summary={<span className="text-[11px] font-medium text-gray-500">{reservation.invoiceStatus}</span>}
+          >
+            <div className="flex items-center justify-end mb-3">
               <Badge
                 variant={
                   reservation.invoiceStatus === "Sent"
@@ -5134,7 +5086,310 @@ export default function ReservationDrawer({
                 </>)}
               </div>
             )}
-          </section>
+          </DrawerSection>
+
+          {/* Modals — overlays, so their position among these siblings is
+               immaterial; kept together at the end. */}
+          {showPaymentModal && (
+            <PaymentLinkModal
+              defaultEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
+              defaultPhone={reservation.phone}
+              defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
+              defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
+              reservationNumber={reservation.reservationNumber}
+              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
+              onPaymentCreated={onPaymentCreated}
+              onClose={() => setShowPaymentModal(false)}
+            />
+          )}
+
+
+
+          {showVoucherModal && (
+            <CreateVoucherModal
+              reservationNumber={reservation.reservationNumber}
+              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
+              guestEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
+              guestPhone={reservation.phone}
+              onVoucherCreated={onPaymentCreated}
+              onClose={() => setShowVoucherModal(false)}
+            />
+          )}
+
+          {showEmailGuestModal && (
+            <EmailGuestModal
+              reservation={reservation}
+              channel="email"
+              defaultEmail={
+                reservation.additionalEmail
+                  || reservation.invoiceData?.billingEmail
+                  || reservation.email
+                  || ''
+              }
+              onClose={() => setShowEmailGuestModal(false)}
+              onSent={() => {
+                setShowEmailGuestModal(false);
+                onPaymentCreated?.();
+              }}
+            />
+          )}
+
+          {showWhatsAppGuestModal && reservation.phone && (
+            <EmailGuestModal
+              reservation={reservation}
+              channel="whatsapp"
+              phone={reservation.phone}
+              onClose={() => setShowWhatsAppGuestModal(false)}
+              onSent={() => {
+                setShowWhatsAppGuestModal(false);
+                onPaymentCreated?.();
+              }}
+            />
+          )}
+
+          {showSmsGuestModal && reservation.phone && (
+            <EmailGuestModal
+              reservation={reservation}
+              channel="sms"
+              phone={reservation.phone}
+              onClose={() => setShowSmsGuestModal(false)}
+              onSent={() => {
+                setShowSmsGuestModal(false);
+                onPaymentCreated?.();
+              }}
+            />
+          )}
+
+          {/* Move-to-another-room confirmation modal — maintenance / ad-hoc.
+              Allows any room incl. cross-type and in-house guests. Occupied
+              targets are disabled unless the operator ticks "Ignore occupied",
+              which is how a multi-step swap/rotation gets its first leg done. */}
+          {showMoveModal && reservation && (() => {
+            const todayStr = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Prague" });
+            const inHouse =
+              reservation.checkInDate <= todayStr && reservation.checkOutDate > todayStr;
+            const targetOccupiers = occupiersDuringStay.get(moveTargetRoom) ?? [];
+            return (
+              <div
+                className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+                onClick={() => !moveSubmitting && setShowMoveModal(false)}
+              >
+                <div
+                  className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 className="text-base font-semibold text-gray-900">Move to another room</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {reservation.firstName} {reservation.lastName} ·{" "}
+                    {formatDate(reservation.checkInDate)} → {formatDate(reservation.checkOutDate)}
+                  </p>
+                  <p className="mt-3 text-sm text-gray-700">
+                    From <span className="font-medium">{reservation.room}</span>
+                  </p>
+
+                  <label className="block text-xs font-medium text-gray-600 mt-3 mb-1">Move to</label>
+                  <select
+                    value={moveTargetRoom}
+                    onChange={(e) => setMoveTargetRoom(e.target.value)}
+                    disabled={moveSubmitting || moveDone}
+                    className="w-full border border-gray-200 rounded-md px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
+                  >
+                    <option value="">Select a room…</option>
+                    {PHYSICAL_ROOMS.filter((u) => u.room !== reservation.room).map((u) => {
+                      const occupiers = occupiersDuringStay.get(u.room) ?? [];
+                      const occ = occupiers.length > 0;
+                      // One holder → name it; several → just the count, since a
+                      // native <option> has no room for two of them.
+                      const detail = !occ
+                        ? " — free"
+                        : occupiers.length === 1
+                          ? ` — occupied · ${occupierLabel(occupiers[0])}`
+                          : ` — occupied · ${occupiers.length} bookings`;
+                      return (
+                        <option key={u.room} value={u.room} disabled={occ && !moveIgnoreOccupied}>
+                          {u.room}{detail}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {/* The override. Deliberately unchecked on every open: forcing
+                      a double-booking is a per-move decision, not a preference. */}
+                  <label className="mt-2 flex items-start gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={moveIgnoreOccupied}
+                      disabled={moveSubmitting || moveDone}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setMoveIgnoreOccupied(on);
+                        setMoveError(null);
+                        // Turning it back OFF must not leave an occupied room
+                        // selected — the Move button would then just 409.
+                        if (!on && (occupiersDuringStay.get(moveTargetRoom)?.length ?? 0) > 0) {
+                          setMoveTargetRoom("");
+                        }
+                      }}
+                      className="mt-0.5 w-3.5 h-3.5 accent-rose-600 disabled:opacity-50"
+                    />
+                    <span className="text-[11px] leading-snug text-gray-600">
+                      <span className="font-medium text-gray-800">Ignore occupied</span> — allow moving into
+                      a unit that is already booked. For multi-step swaps and rotations, where every leg but
+                      the last lands on a taken room.
+                    </span>
+                  </label>
+
+                  {moveIgnoreOccupied && targetOccupiers.length > 0 && (
+                    <div className="mt-2 text-[11px] text-rose-800 bg-rose-50 border border-rose-300 rounded px-2 py-1.5">
+                      <p className="font-semibold">
+                        This creates a real double-booking in {moveTargetRoom}.
+                      </p>
+                      <ul className="mt-1 space-y-0.5">
+                        {targetOccupiers.map((o) => (
+                          <li key={o.reservationNumber}>
+                            · {o.reservationNumber} — {occupierLabel(o)}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1">Finish the remaining moves — Transactions will flag the clash until you do.</p>
+                    </div>
+                  )}
+
+                  {unallocatedDuringStay.length > 0 && (
+                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      {unallocatedDuringStay.length}{" "}
+                      {unallocatedDuringStay.length === 1 ? "booking" : "bookings"} overlapping this stay
+                      {unallocatedDuringStay.length === 1 ? " is" : " are"} still unallocated (
+                      {unallocatedDuringStay.map((r) => r.room).join(", ")}) — a unit shown as free may be
+                      claimed once Beds24 assigns {unallocatedDuringStay.length === 1 ? "it" : "them"}.
+                    </p>
+                  )}
+
+                  {inHouse && (
+                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      This guest is currently <strong>in-house</strong> — make sure they&apos;re physically moved.
+                    </p>
+                  )}
+                  {moveError && (
+                    <p className="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
+                      {moveError}
+                    </p>
+                  )}
+                  {moveDone && (
+                    <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
+                      ✓ Moved to {moveTargetRoom}. Syncing… A move notice now sits in the alert bar
+                      until you dismiss it.
+                    </p>
+                  )}
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      onClick={() => !moveSubmitting && setShowMoveModal(false)}
+                      disabled={moveSubmitting}
+                      className="px-3 py-2 text-sm text-gray-700 border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleMoveRoom}
+                      disabled={moveSubmitting || moveDone || !moveTargetRoom}
+                      className={`px-4 py-2 text-sm text-white rounded-md disabled:opacity-40 disabled:cursor-not-allowed ${
+                        targetOccupiers.length > 0
+                          ? "bg-rose-600 hover:bg-rose-700"
+                          : "bg-indigo-600 hover:bg-indigo-700"
+                      }`}
+                    >
+                      {moveSubmitting
+                        ? "Moving…"
+                        : targetOccupiers.length > 0
+                          ? `Force into ${moveTargetRoom}`
+                          : `Move to ${moveTargetRoom || "…"}`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Confirmation email preview modal — operator reviews rendered
+              email in an iframe, can Cancel or Send. */}
+          {showConfirmationPreview && (
+            <div
+              className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+              onClick={() => !sendingConfirmation && setShowConfirmationPreview(false)}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-amber-50">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <h2 className="text-sm font-semibold text-amber-900">Preview confirmation email</h2>
+                  </div>
+                  <button
+                    onClick={() => !sendingConfirmation && setShowConfirmationPreview(false)}
+                    disabled={sendingConfirmation}
+                    className="text-amber-700 hover:text-amber-900 disabled:opacity-50"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden bg-gray-100">
+                  {confirmationPreviewError ? (
+                    <p className="p-4 text-sm text-red-600">{confirmationPreviewError}</p>
+                  ) : confirmationPreviewHtml ? (
+                    <iframe
+                      title="Confirmation preview"
+                      srcDoc={confirmationPreviewHtml}
+                      sandbox=""
+                      className="w-full h-full bg-white"
+                    />
+                  ) : (
+                    <div className="p-8 text-center text-xs text-gray-500">
+                      <svg className="w-5 h-5 mx-auto mb-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      Loading preview…
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-gray-100 bg-white">
+                  <p className="text-xs text-gray-500 truncate">
+                    Will be sent to{' '}
+                    <span className="font-medium text-gray-700">
+                      {reservation.invoiceData?.billingEmail
+                        || reservation.additionalEmail
+                        || reservation.email
+                        || '(no email on file)'}
+                    </span>
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setShowConfirmationPreview(false)}
+                      disabled={sendingConfirmation}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSendConfirmation}
+                      disabled={sendingConfirmation || !confirmationPreviewHtml || !!confirmationPreviewError}
+                      className="px-4 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                    >
+                      {sendingConfirmation ? 'Sending…' : 'Send email'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>
