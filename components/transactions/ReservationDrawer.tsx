@@ -54,7 +54,6 @@ import type { Role } from "@/utils/roles";
 import {
   autoRatePerks,
   effectiveRatePerks,
-  WINE_TREATMENT_NOTE,
   EARLY_CHECKIN_TIME,
   LATE_CHECKOUT_TIME,
 } from "@/utils/ratePerks";
@@ -1411,16 +1410,16 @@ function RateTypeControl({
 }
 
 /**
- * Rate-driven perks with operator override. Shows the effective state of each
- * event (early check-in / late checkout / special treatment); the operator can
- * toggle any of them (manual wins over the rate default) or reset to auto. The
- * special-treatment note (e.g. the wine) is editable so a substitute can be
- * recorded, and it can be removed outright.
+ * Rate-driven perks. Shows the effective state of each event (early check-in /
+ * late checkout / special treatment) and lets the operator turn one off for
+ * this booking or reset it to the rate default.
  *
- * The note doubles as the ad-hoc channel to the cleaner: whatever is typed here
- * is published to the cleaning app and shown on that stay's cleanings (welcome
- * gift, extra minibar, ...), so it is written for the cleaner to read — in
- * Czech, since the cleaning app never rewrites operator-authored text.
+ * Deliberately NOT an authoring surface. The special-treatment note used to be
+ * free text here, which made two different controls both able to message a
+ * cleaner — and the quieter one silently didn't (see the Operations block in
+ * Reservation Management, which is now the single ad-hoc channel). What a rate
+ * grants is defined by the rate; what someone should do for one guest is a room
+ * task. Removal stays, because running out of wine is a real thing.
  */
 function PerksControl({
   rate,
@@ -1436,8 +1435,6 @@ function PerksControl({
   const auto = autoRatePerks(rate, reservationDate);
   const eff = effectiveRatePerks(auto, override);
   const ov: PerkOverrides = override ?? {};
-  const [editingWine, setEditingWine] = useState(false);
-  const [wineDraft, setWineDraft] = useState(eff.specialTreatment ?? WINE_TREATMENT_NOTE);
 
   function setBool(field: "earlyCheckIn" | "lateCheckout", next: boolean) {
     const copy: PerkOverrides = { ...ov };
@@ -1445,7 +1442,10 @@ function PerksControl({
     else copy[field] = next;
     onOverride(copy);
   }
-  function setSpecial(next: string | null | undefined) {
+  /** `null` = removed for this booking, `undefined` = back to the rate default.
+   *  A string is still accepted by the type for any historic stored value, but
+   *  nothing here writes one any more. */
+  function setSpecial(next: null | undefined) {
     const copy: PerkOverrides = { ...ov };
     if (next === undefined || next === auto.specialTreatment) delete copy.specialTreatment;
     else copy.specialTreatment = next;
@@ -1491,72 +1491,51 @@ function PerksControl({
     <div>
       <p className="text-[11px] text-gray-400 mb-1">Perks (rate-based · manual overrides)</p>
       <p className="text-[10px] text-gray-400 mb-1.5">
-        Rate-derived. For an ad-hoc request use Reservation Management → Operations. The note
-        here does still reach the cleaner, so write it in Czech.
+        Set by the rate. To ask a cleaner for something on this stay, add a room task under
+        Reservation Management → Operations.
       </p>
       <div className="space-y-1.5">
         {boolRow("earlyCheckIn", `Early check-in (from ${EARLY_CHECKIN_TIME})`, "bg-teal-500")}
         {boolRow("lateCheckout", `Late checkout (until ${LATE_CHECKOUT_TIME})`, "bg-orange-500")}
-        {/* Special treatment */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {eff.specialTreatment && !editingWine ? (
-            <>
-              <span className="inline-flex items-center gap-1 rounded-full bg-purple-500 px-2 py-0.5 text-[11px] font-medium text-white">
-                🍷 {eff.specialTreatment}
-              </span>
-              <button
-                onClick={() => { setWineDraft(eff.specialTreatment ?? WINE_TREATMENT_NOTE); setEditingWine(true); }}
-                className="text-[10px] text-gray-400 hover:text-indigo-500 underline underline-offset-2"
-              >
-                edit
-              </button>
-              <button
-                onClick={() => setSpecial(null)}
-                className="text-[10px] text-red-400 hover:text-red-600"
-                title="Remove special treatment"
-              >
-                remove
-              </button>
-              {specialOverridden && (
-                <button
-                  onClick={() => setSpecial(undefined)}
-                  className="text-[10px] text-amber-500 hover:text-indigo-500"
-                  title="Reset to rate default"
-                >
-                  ↺ auto
-                </button>
-              )}
-            </>
-          ) : editingWine ? (
-            <div className="flex items-center gap-1.5 w-full">
-              <input
-                autoFocus
-                value={wineDraft}
-                onChange={(e) => setWineDraft(e.target.value)}
-                placeholder="e.g. Připravit láhev vína / doplnit minibar"
-                className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && wineDraft.trim()) { setSpecial(wineDraft.trim()); setEditingWine(false); }
-                  if (e.key === "Escape") setEditingWine(false);
-                }}
-              />
-              <button
-                onClick={() => { if (wineDraft.trim()) { setSpecial(wineDraft.trim()); setEditingWine(false); } }}
-                className="text-xs px-2 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600"
-              >
-                Save
-              </button>
-              <button onClick={() => setEditingWine(false)} className="text-gray-400 hover:text-gray-600 text-xs">✕</button>
-            </div>
-          ) : (
+        {/* Special treatment — read-only from the rate; removable, not authorable. */}
+        {eff.specialTreatment ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple-500 px-2 py-0.5 text-[11px] font-medium text-white">
+              🍷 {eff.specialTreatment}
+            </span>
             <button
-              onClick={() => { setWineDraft(WINE_TREATMENT_NOTE); setEditingWine(true); }}
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border border-gray-200 bg-white text-gray-400 hover:border-purple-300"
+              onClick={() => setSpecial(null)}
+              className="text-[10px] text-red-400 hover:text-red-600"
+              title="Not happening for this booking (e.g. out of wine)"
             >
-              🍷 Add special treatment
+              remove
             </button>
-          )}
-        </div>
+            {specialOverridden && (
+              <button
+                onClick={() => setSpecial(undefined)}
+                className="text-[10px] text-amber-500 hover:text-indigo-500"
+                title="Reset to rate default"
+              >
+                ↺ auto
+              </button>
+            )}
+          </div>
+        ) : auto.specialTreatment ? (
+          // The rate grants one but the operator removed it — keep the row so
+          // it can be put back.
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-400 line-through">
+              🍷 {auto.specialTreatment}
+            </span>
+            <button
+              onClick={() => setSpecial(undefined)}
+              className="text-[10px] text-amber-500 hover:text-indigo-500"
+              title="Reset to rate default"
+            >
+              ↺ auto
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
