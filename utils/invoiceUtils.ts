@@ -1,5 +1,5 @@
 import QRCodeLib from "qrcode";
-import type { Reservation, InvoiceData, InvoiceModification, PaymentStatus } from "@/types/reservation";
+import type { Reservation, InvoiceData, InvoiceModification, InvoiceSplit, PaymentStatus } from "@/types/reservation";
 import { formatDate, formatCurrency } from "./formatters";
 
 /** Count calendar nights between two ISO date strings (exclusive end, same as reservations). */
@@ -45,6 +45,45 @@ export function generateInvoiceNumber(reservationNumber: string): string {
 }
 
 /**
+ * Invoice number for one part of a split booking: `INV-<beds24Id>-<seq>`.
+ * Keyed on the split's stable `seq`, not its position, so deleting one split
+ * never renumbers an invoice that has already gone out.
+ */
+export function splitInvoiceNumber(reservationNumber: string, seq: number): string {
+  return `${generateInvoiceNumber(reservationNumber)}-${seq}`;
+}
+
+/**
+ * How much of the booking the splits account for. `over` is the guard the
+ * drawer alerts on — the parts of a bill may add up to less than the booking
+ * (the rest is simply not invoiced) but never to more.
+ */
+export function splitTotals(bookingPrice: number, splits: InvoiceSplit[] | undefined): {
+  allocated: number;
+  remaining: number;
+  over: boolean;
+} {
+  const allocated = (splits ?? []).reduce((sum, s) => sum + (Number(s.amountCzk) || 0), 0);
+  const remaining = bookingPrice - allocated;
+  // 1 Kč tolerance: an even split of an odd price rounds, and that is not an error.
+  return { allocated, remaining, over: remaining < -1 };
+}
+
+/**
+ * Deterministic RevenueInvoice id. One per issued document: the booking itself,
+ * or one per split. Deterministic so re-issuing updates the record in place
+ * instead of double-counting the revenue.
+ */
+export function revenueInvoiceId(reservationNumber: string, seq?: number): string {
+  return seq == null ? `rev-${reservationNumber}` : `rev-${reservationNumber}-${seq}`;
+}
+
+/** Note printed on a split invoice so it cannot be mistaken for the whole booking. */
+export function splitShareNote(reservationNumber: string, seq: number, total: number): string {
+  return `Dílčí faktura ${seq} z ${total} k rezervaci ${reservationNumber} / Part ${seq} of ${total} for booking ${reservationNumber}`;
+}
+
+/**
  * Payment status as the drawer shows it: a manual override always wins over the
  * Beds24/Stripe-derived value. Read-only — this never changes payment state.
  */
@@ -82,7 +121,7 @@ export function resolvePaymentChannel(res: Reservation): { cs: string; en: strin
  * Status band: payment status, how it was paid, and the confirmed-and-valid
  * statement. Purely derived from the reservation — nothing here writes back.
  */
-function buildStatusBandHTML(res: Reservation, modification?: InvoiceModification): string {
+function buildStatusBandHTML(res: Reservation, ownTotal: boolean): string {
   const status = effectivePaymentStatus(res);
   const chip = status ? PAYMENT_STATUS_LABELS[status] : undefined;
   const paidChannel = resolvePaymentChannel(res);
@@ -93,9 +132,10 @@ function buildStatusBandHTML(res: Reservation, modification?: InvoiceModificatio
     : "";
 
   // Outstanding balance only makes sense against the booking's own price, so
-  // it is suppressed on invoice variants that carry their own total.
+  // it is suppressed on any document carrying its own total — a modified
+  // variant or one part of a split.
   const outstandingLine =
-    status === "Partially Paid" && modification?.amount == null && typeof res.amountPaid === "number"
+    status === "Partially Paid" && !ownTotal && typeof res.amountPaid === "number"
       ? `Uhrazeno / Paid: ${formatCurrency(res.amountPaid)} · Zbývá uhradit / Outstanding: ${formatCurrency(Math.max(0, res.price - res.amountPaid))}`
       : "";
 
@@ -117,13 +157,28 @@ function buildStatusBandHTML(res: Reservation, modification?: InvoiceModificatio
   </div>`;
 }
 
+/**
+ * Extras that don't belong to the booking itself — currently what a split
+ * invoice needs to say. Kept as an options bag so the six positional params
+ * above stay as they are for every existing caller.
+ */
+export interface InvoiceRenderOptions {
+  /** Bill this amount instead of the booking price (one part of a split). */
+  amountOverride?: number;
+  /** Name on the line item; defaults to the booking guest. */
+  guestName?: string;
+  /** Printed under the total, e.g. "Part 1 of 2 for booking BH-…". */
+  shareNote?: string;
+}
+
 export function buildInvoiceHTML(
   res: Reservation,
   invoiceData: InvoiceData,
   invoiceNum: string,
   payment?: { qrDataUrl: string; info: PaymentQRInfo },
   forEmail = false,
-  modification?: InvoiceModification
+  modification?: InvoiceModification,
+  opts?: InvoiceRenderOptions
 ): string {
   const today = new Date().toLocaleDateString("en-GB", {
     day: "numeric", month: "long", year: "numeric",
@@ -161,6 +216,7 @@ export function buildInvoiceHTML(
 
   // Resolve overridable line-item bits (defaults to Beds24-derived values).
   const guestNameLine = modification?.guestName?.trim()
+    || opts?.guestName?.trim()
     || `${res.firstName} ${res.lastName}`.trim();
   const lineDescription = modification?.lineDescription?.trim()
     || "Ubytování / Accommodation";
@@ -168,7 +224,11 @@ export function buildInvoiceHTML(
   // Invoice total: a modification may override the amount (self-contained to
   // this invoice — never touches res.price / the booking). Falls back to the
   // booking price when no override is set.
-  const invoiceTotal = modification?.amount != null ? modification.amount : res.price;
+  // A split bills its own share; a modification may override the total; both
+  // are self-contained to the document — neither touches res.price.
+  const invoiceTotal = opts?.amountOverride != null
+    ? opts.amountOverride
+    : modification?.amount != null ? modification.amount : res.price;
 
   // ── Line items ──────────────────────────────────────────────────────────────
   let lineItemsHtml: string;
@@ -200,17 +260,20 @@ export function buildInvoiceHTML(
     </div>`;
     }).join("");
   } else {
-    const unitPrice = res.numberOfNights > 0 ? res.price / res.numberOfNights : res.price;
+    const unitPrice = res.numberOfNights > 0 ? invoiceTotal / res.numberOfNights : invoiceTotal;
     lineItemsHtml = `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:8px;border-bottom:1px solid #EFEAE4;font-size:13px">
       <span>${lineDescription}<br/><span style="font-size:11px;color:${MID_BROWN}">${guestNameLine}</span></span>
       <span style="text-align:right;min-width:40px">${res.numberOfNights}</span>
       <span style="text-align:right;min-width:80px">${formatCurrency(unitPrice)}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(res.price)}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrency(invoiceTotal)}</span>
     </div>`;
   }
 
   // ── Payment + booking status band ──────────────────────────────────────────
-  const statusBandHtml = buildStatusBandHTML(res, modification);
+  const statusBandHtml = buildStatusBandHTML(
+    res,
+    opts?.amountOverride != null || modification?.amount != null,
+  );
 
   return `<!DOCTYPE html>
 <html lang="cs">
@@ -287,6 +350,7 @@ export function buildInvoiceHTML(
       <span>Celkem / Total</span>
       <span style="color:${GOLD}">${formatCurrency(invoiceTotal)}</span>
     </div>
+    ${opts?.shareNote ? `<div style="font-size:10px;color:${MID_BROWN};margin-top:5px;font-style:italic">${opts.shareNote}</div>` : ""}
   </div>
 ${statusBandHtml}
   ${payment ? `
@@ -324,9 +388,10 @@ export async function printInvoice(
   res: Reservation,
   invoiceData: InvoiceData,
   paymentQRInfo?: PaymentQRInfo,
-  modification?: InvoiceModification
+  modification?: InvoiceModification,
+  opts?: InvoiceRenderOptions & { invoiceNumber?: string }
 ): Promise<void> {
-  const invoiceNum = generateInvoiceNumber(res.reservationNumber);
+  const invoiceNum = opts?.invoiceNumber ?? generateInvoiceNumber(res.reservationNumber);
 
   let payment: { qrDataUrl: string; info: PaymentQRInfo } | undefined;
   if (paymentQRInfo) {
@@ -338,7 +403,7 @@ export async function printInvoice(
     payment = { qrDataUrl, info: paymentQRInfo };
   }
 
-  const html = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, false, modification);
+  const html = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, false, modification, opts);
   const printWindow = window.open("", "_blank", "width=900,height=700");
   if (!printWindow) {
     alert("Pop-up blocked — please allow pop-ups for this page to print invoices.");

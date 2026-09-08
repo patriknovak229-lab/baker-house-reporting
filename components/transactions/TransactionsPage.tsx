@@ -51,6 +51,7 @@ type LocalFields = {
   issues?: Issue[];
   parkingOverride?: string;
   invoiceModifications?: import('@/types/reservation').InvoiceModification[];
+  invoiceSplits?: import('@/types/reservation').InvoiceSplit[];
   postStayAcknowledgedAt?: string;
   postStaySnapshot?: import('@/types/reservation').BookingSnapshot;
   nonArrival?: import('@/types/reservation').NonArrival | null;
@@ -75,6 +76,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.issues && r.issues.length > 0) local.issues = r.issues;
   if (r.parkingOverride !== undefined) local.parkingOverride = r.parkingOverride;
   if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
+  if (r.invoiceSplits && r.invoiceSplits.length > 0) local.invoiceSplits = r.invoiceSplits;
   if (r.postStayAcknowledgedAt) local.postStayAcknowledgedAt = r.postStayAcknowledgedAt;
   if (r.postStaySnapshot) local.postStaySnapshot = r.postStaySnapshot;
   if (r.nonArrival) local.nonArrival = r.nonArrival;

@@ -151,6 +151,38 @@ export interface InvoiceModification {
 }
 
 /**
+ * One invoice in a split — a single booking billed to more than one party.
+ * The case it exists for: two colleagues share an apartment and each needs
+ * their own invoice to claim as an expense.
+ *
+ * Display + accounting only. A split NEVER changes the booking price, the
+ * payment status, or anything in Beds24 — it only decides how the amount
+ * already owed is presented across several documents.
+ *
+ * Persisted in `baker:reservation-overrides` alongside `invoiceModifications`.
+ */
+export interface InvoiceSplit {
+  id: string;
+  /**
+   * Stable 1-based sequence behind the invoice number (`INV-<beds24Id>-<seq>`).
+   * Assigned once at creation and never reused: deleting split 2 must not
+   * renumber split 3 onto an invoice number that has already been sent.
+   */
+  seq: number;
+  /** This invoice's own customer block — the whole point of splitting. */
+  invoiceData: InvoiceData;
+  /** This invoice's share of the booking, in CZK. */
+  amountCzk: number;
+  /** Name on the line item; falls back to the booking guest when empty. */
+  guestName?: string;
+  createdAt: string;   // ISO timestamp
+  /** ISO timestamp of the last successful email send of THIS split. */
+  sentAt?: string;
+  /** Address the last successful send went to. */
+  sentTo?: string;
+}
+
+/**
  * Non-arrival details, persisted in the `baker:reservation-overrides` map.
  * See the `nonArrival` field on Reservation.
  */
@@ -403,6 +435,12 @@ export interface Reservation {
   vouchers?: Voucher[]; // discount vouchers linked to this reservation
   parkingOverride?: string; // undefined = auto rules, "none" = no parking, "152"/"153"/etc = manual space
   invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
+  /**
+   * Split invoices — one booking billed to several parties (see InvoiceSplit).
+   * Non-empty means the Invoice section issues these INSTEAD of one invoice
+   * against `invoiceData`. Their amounts must not exceed the booking price.
+   */
+  invoiceSplits?: InvoiceSplit[];
   invoiceRequests?: InvoiceRequest[]; // auto-detected invoice requests from Booking.com guest messages
   emailSendLog?: EmailSendLogEntry[]; // template emails sent via "Email Guest" — append-only audit trail
   /**

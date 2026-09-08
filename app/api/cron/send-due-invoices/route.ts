@@ -29,7 +29,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
-import type { InvoiceData, Issue, InvoiceStatus, Reservation } from '@/types/reservation';
+import type { InvoiceData, Issue, InvoiceStatus, InvoiceSplit, Reservation } from '@/types/reservation';
 import { buildReservationSet } from '@/utils/beds24Reservations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { sendInvoiceEmail } from '@/utils/invoiceSend';
@@ -51,6 +51,7 @@ interface OverrideEntry {
   invoiceData?: InvoiceData | null;
   invoiceStatus?: InvoiceStatus;
   issues?: Issue[];
+  invoiceSplits?: InvoiceSplit[];
 }
 
 function todayUTC(): string {
@@ -123,6 +124,15 @@ export async function POST(req: NextRequest) {
 
     // Operator has generated it (mid-handling) → don't touch.
     if (ov.invoiceStatus === 'Issued') {
+      skippedManual += 1;
+      continue;
+    }
+
+    // Split invoices: the booking is billed to several parties, each with its
+    // own customer block and share. Auto-sending would email ONE invoice for
+    // the whole stay to whoever happens to sit in `invoiceData` — so this is
+    // deliberately the operator's to send from the drawer.
+    if ((ov.invoiceSplits?.length ?? 0) > 0) {
       skippedManual += 1;
       continue;
     }

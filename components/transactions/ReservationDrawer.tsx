@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import QRCodeLib from "qrcode";
 import PaymentLinkModal from "./PaymentLinkModal";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, RateType, StayShortening } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, InvoiceSplit, RateType, StayShortening } from "@/types/reservation";
 import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
@@ -42,6 +42,10 @@ import {
   printInvoice,
   buildInvoiceHTML,
   generateInvoiceNumber,
+  splitInvoiceNumber,
+  splitShareNote,
+  splitTotals,
+  revenueInvoiceId,
   PAYMENT_IBAN,
   PAYMENT_SWIFT,
   PAYMENT_ACCOUNT_DISPLAY,
@@ -76,8 +80,14 @@ function guestBillingEmail(res: Reservation): string {
   return usable(res.additionalEmail) || usable(res.email);
 }
 
-function buildPaymentQRInfo(reservationNumber: string, priceCZK: number): PaymentQRInfo {
-  const invoiceNum = generateInvoiceNumber(reservationNumber);
+/** `invoiceNumber` overrides the booking's own number — a split pays under its
+ *  own variable symbol, which is what the server puts on the sent PDF. */
+function buildPaymentQRInfo(
+  reservationNumber: string,
+  priceCZK: number,
+  invoiceNumber?: string,
+): PaymentQRInfo {
+  const invoiceNum = invoiceNumber ?? generateInvoiceNumber(reservationNumber);
   const vs = invoiceNum.replace(/\D/g, "");
   const amountCZK = priceCZK;
   const spdString = `SPD*1.0*ACC:${PAYMENT_IBAN}*AM:${amountCZK.toFixed(2)}*CC:CZK*VS:${vs}*MSG:Baker House Apartments`;
@@ -2149,10 +2159,15 @@ function InvoicePreview({
   res,
   invoiceData,
   includeQR,
+  split,
+  splitCount,
 }: {
   res: Reservation;
   invoiceData: InvoiceData;
   includeQR: boolean;
+  /** Preview one part of a split booking instead of the whole booking. */
+  split?: InvoiceSplit;
+  splitCount?: number;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [docHeight, setDocHeight] = useState(0);
@@ -2165,10 +2180,13 @@ function InvoicePreview({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const invoiceNum = generateInvoiceNumber(res.reservationNumber);
+      const invoiceNum = split
+        ? splitInvoiceNumber(res.reservationNumber, split.seq)
+        : generateInvoiceNumber(res.reservationNumber);
+      const amount = split ? split.amountCzk : res.price;
       let payment: { qrDataUrl: string; info: PaymentQRInfo } | undefined;
       if (includeQR) {
-        const info = buildPaymentQRInfo(res.reservationNumber, res.price);
+        const info = buildPaymentQRInfo(res.reservationNumber, amount, invoiceNum);
         const qrDataUrl = await QRCodeLib.toDataURL(info.spdString, {
           width: 200,
           margin: 1,
@@ -2176,13 +2194,20 @@ function InvoicePreview({
         });
         payment = { qrDataUrl, info };
       }
-      const next = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, true);
+      const renderOpts = split
+        ? {
+            amountOverride: split.amountCzk,
+            guestName: split.guestName,
+            shareNote: splitShareNote(res.reservationNumber, split.seq, splitCount ?? 1),
+          }
+        : undefined;
+      const next = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, true, undefined, renderOpts);
       // Identical strings bail out of the re-render, so an unrelated
       // reservation update doesn't reload the iframe.
       if (!cancelled) setHtml(next);
     })();
     return () => { cancelled = true; };
-  }, [res, invoiceData, includeQR]);
+  }, [res, invoiceData, includeQR, split, splitCount]);
 
   // Scale the full-width page down to whatever width the drawer gives us.
   useEffect(() => {
@@ -2232,6 +2257,220 @@ function InvoicePreview({
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ── Split invoice editor ─────────────────────────────────────────────────────
+/**
+ * The form for billing one booking to several parties — two colleagues sharing
+ * an apartment who each need their own invoice to expense.
+ *
+ * Each part carries its own customer block and its own share of the price. The
+ * parts may add up to less than the booking (the rest simply isn't invoiced)
+ * but never to more, which is the one hard rule enforced here and again
+ * server-side in /api/send-invoice.
+ */
+function SplitInvoiceEditor({
+  reservation,
+  splits,
+  onPatch,
+  onPatchInvoiceData,
+  onRemove,
+  onAdd,
+  onSplitEvenly,
+  onSaveDetails,
+  saved,
+  onGenerate,
+}: {
+  reservation: Reservation;
+  splits: InvoiceSplit[];
+  onPatch: (id: string, patch: Partial<InvoiceSplit>) => void;
+  onPatchInvoiceData: (id: string, patch: Partial<InvoiceData>) => void;
+  onRemove: (id: string) => void;
+  onAdd: () => void;
+  onSplitEvenly: () => void;
+  onSaveDetails: () => void;
+  saved: boolean;
+  onGenerate: () => void;
+}) {
+  const { allocated, remaining, over } = splitTotals(reservation.price, splits);
+  const missingEmail = splits.some((sp) => !sp.invoiceData.billingEmail.trim());
+  const missingAmount = splits.some((sp) => !(Number(sp.amountCzk) > 0));
+  const canGenerate = splits.length > 0 && !over && !missingEmail && !missingAmount;
+
+  const inputCls =
+    "w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
+
+  return (
+    <div className="space-y-3">
+      {splits.map((sp, i) => (
+        <div key={sp.id} className="border border-indigo-100 rounded-lg p-3 space-y-2.5 bg-indigo-50/30">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-indigo-800">
+              Invoice {i + 1}
+              <span className="ml-2 font-mono font-normal text-[10px] text-indigo-500">
+                {splitInvoiceNumber(reservation.reservationNumber, sp.seq)}
+              </span>
+            </span>
+            {splits.length > 1 && (
+              <button
+                onClick={() => onRemove(sp.id)}
+                className="text-gray-400 hover:text-red-600"
+                aria-label={`Remove invoice ${i + 1}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          <div>
+            <label className="text-[11px] text-gray-400 block mb-1">Company Name</label>
+            <input
+              type="text"
+              value={sp.invoiceData.companyName}
+              onChange={(e) => onPatchInvoiceData(sp.id, { companyName: e.target.value })}
+              className={inputCls}
+              placeholder="Acme s.r.o."
+            />
+          </div>
+          <div>
+            <label className="text-[11px] text-gray-400 block mb-1">Company Address</label>
+            <input
+              type="text"
+              value={sp.invoiceData.companyAddress}
+              onChange={(e) => onPatchInvoiceData(sp.id, { companyAddress: e.target.value })}
+              className={inputCls}
+              placeholder="Šumavská 10, 602 00, Brno"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">IČO</label>
+              <input
+                type="text"
+                value={sp.invoiceData.ico}
+                onChange={(e) => onPatchInvoiceData(sp.id, { ico: e.target.value })}
+                className={inputCls}
+                placeholder="19876107"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">DIČ / VAT</label>
+              <input
+                type="text"
+                value={sp.invoiceData.vatNumber}
+                onChange={(e) => onPatchInvoiceData(sp.id, { vatNumber: e.target.value })}
+                className={inputCls}
+                placeholder="CZ19876107"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Billing Email</label>
+              <input
+                type="email"
+                value={sp.invoiceData.billingEmail}
+                onChange={(e) => onPatchInvoiceData(sp.id, { billingEmail: e.target.value })}
+                className={`${inputCls} ${sp.invoiceData.billingEmail.trim() ? "" : "border-amber-300"}`}
+                placeholder="accounting@acme.cz"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Amount (CZK)</label>
+              <input
+                type="number"
+                min={0}
+                value={Number.isFinite(sp.amountCzk) ? sp.amountCzk : ""}
+                onChange={(e) => onPatch(sp.id, { amountCzk: Number(e.target.value) })}
+                className={`${inputCls} ${Number(sp.amountCzk) > 0 ? "" : "border-amber-300"}`}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Guest name (optional)</label>
+              <input
+                type="text"
+                value={sp.guestName ?? ""}
+                onChange={(e) => onPatch(sp.id, { guestName: e.target.value })}
+                className={inputCls}
+                placeholder={`${reservation.firstName} ${reservation.lastName}`.trim()}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <div className="flex gap-2">
+        <button
+          onClick={onAdd}
+          className="flex-1 py-1.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-50 transition-colors"
+        >
+          + Add invoice
+        </button>
+        <button
+          onClick={onSplitEvenly}
+          className="flex-1 py-1.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-50 transition-colors"
+        >
+          Split evenly
+        </button>
+      </div>
+
+      {/* Running total against the booking price */}
+      <div
+        className={`rounded-md px-2.5 py-2 text-xs border ${
+          over
+            ? "bg-red-50 border-red-200 text-red-700"
+            : Math.abs(remaining) <= 1
+              ? "bg-green-50 border-green-200 text-green-800"
+              : "bg-amber-50 border-amber-200 text-amber-800"
+        }`}
+      >
+        <div className="flex justify-between font-medium">
+          <span>Invoiced</span>
+          <span>
+            {formatCurrency(allocated)} of {formatCurrency(reservation.price)}
+          </span>
+        </div>
+        {over ? (
+          <p className="mt-1">
+            <span className="font-semibold">Over the booking price by {formatCurrency(-remaining)}.</span>{" "}
+            The parts of a bill can add up to less than the stay, never more — reduce an amount before generating.
+          </p>
+        ) : Math.abs(remaining) <= 1 ? (
+          <p className="mt-1">The whole booking is accounted for.</p>
+        ) : (
+          <p className="mt-1">{formatCurrency(remaining)} of the booking will not be invoiced.</p>
+        )}
+      </div>
+
+      {(missingEmail || missingAmount) && !over && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+          Every invoice needs a billing email and an amount above zero.
+        </p>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={onSaveDetails}
+          className={`flex-1 py-2 px-4 border text-sm font-medium rounded-md transition-colors ${
+            saved
+              ? "border-green-300 bg-green-50 text-green-700"
+              : "border-gray-300 text-gray-700 hover:bg-gray-50"
+          }`}
+        >
+          {saved ? "✓ Saved" : "Save details"}
+        </button>
+        <button
+          onClick={onGenerate}
+          disabled={!canGenerate}
+          className="flex-1 py-2 px-4 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Generate {splits.length} invoice{splits.length === 1 ? "" : "s"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2686,6 +2925,18 @@ export default function ReservationDrawer({
     }
   }
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
+  // ── Split invoices: one booking billed to several parties ──────────────────
+  // Editable drafts, mirroring how invoiceForm is held locally until the
+  // operator generates. Never written to the reservation on keystroke.
+  const [splitMode, setSplitMode] = useState(false);
+  const [splitForms, setSplitForms] = useState<InvoiceSplit[]>([]);
+  /** Which split the preview + QR panel are showing (issued state). */
+  const [previewSplitId, setPreviewSplitId] = useState<string | null>(null);
+  /** Which split is mid-send / mid-Drive-save (one at a time). */
+  const [sendingSplitId, setSendingSplitId] = useState<string | null>(null);
+  const [savingSplitDriveId, setSavingSplitDriveId] = useState<string | null>(null);
+  const [splitDriveResults, setSplitDriveResults] = useState<Record<string, { url: string; name: string }>>({});
+  const [splitDriveErrors, setSplitDriveErrors] = useState<Record<string, string>>({});
   // Check-Stripe button state
   const [checkingStripe, setCheckingStripe] = useState(false);
   const [checkStripeResult, setCheckStripeResult] = useState<
@@ -2766,6 +3017,12 @@ export default function ReservationDrawer({
       } else {
         setInvoiceForm({ companyName: "", companyAddress: "", ico: "", vatNumber: "", billingEmail: guestEmail });
       }
+      const splits = reservation.invoiceSplits ?? [];
+      setSplitForms(splits);
+      setSplitMode(splits.length > 0);
+      setPreviewSplitId(splits[0]?.id ?? null);
+      setSplitDriveResults({});
+      setSplitDriveErrors({});
     }
   }, [reservation]);
 
@@ -2936,7 +3193,7 @@ export default function ReservationDrawer({
         ),
       };
       onUpdate(updated);
-      upsertRevenueInvoice(updated, mod.amount);
+      syncRevenueInvoices(updated, mod.amount);
     } catch (err) {
       setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send');
     } finally {
@@ -2971,30 +3228,237 @@ export default function ReservationDrawer({
     }
   }
 
-  /** Upsert a revenue invoice for a QR-enabled issued invoice.
+  /** Make the revenue-invoice records match what this booking actually issued.
+   *
+   *  Sends the whole desired set rather than upserting one record, because the
+   *  count changes: one invoice for the booking, or one per split. Anything the
+   *  booking no longer issues is dropped server-side, so switching between the
+   *  two never leaves a stale record double-counting the stay in the P&L.
+   *
    *  `amountCZK` overrides the booking price when a modified version with its
    *  own total is the invoice that was actually issued. */
-  async function upsertRevenueInvoice(res: typeof reservation, amountCZK?: number) {
+  async function syncRevenueInvoices(res: typeof reservation, amountCZK?: number) {
     if (!res || !res.includeQR) return;
     try {
-      // Deterministic id: one revenue invoice per reservation
-      const id = `rev-${res.reservationNumber}`;
-      const invoiceNumber = generateInvoiceNumber(res.reservationNumber);
-      await fetch('/api/revenue-invoices', {
+      const invoiceDate = new Date().toISOString().slice(0, 10);
+      const guestName = `${res.firstName} ${res.lastName}`.trim();
+      const splits = res.invoiceSplits ?? [];
+      const invoices = splits.length > 0
+        ? splits.map((sp) => ({
+            id: revenueInvoiceId(res.reservationNumber, sp.seq),
+            invoiceNumber: splitInvoiceNumber(res.reservationNumber, sp.seq),
+            invoiceDate,
+            amountCZK: sp.amountCzk,
+            guestName: sp.guestName?.trim() || guestName,
+          }))
+        : [{
+            id: revenueInvoiceId(res.reservationNumber),
+            invoiceNumber: generateInvoiceNumber(res.reservationNumber),
+            invoiceDate,
+            amountCZK: amountCZK ?? res.price,
+            guestName,
+          }];
+      await fetch('/api/revenue-invoices/reservation-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id,
-          sourceType: 'issued',
-          category: 'accommodation_direct',
-          invoiceNumber,
-          invoiceDate: new Date().toISOString().slice(0, 10),
-          amountCZK: amountCZK ?? res.price,
-          reservationNumber: res.reservationNumber,
-          guestName: `${res.firstName} ${res.lastName}`.trim(),
-        }),
+        body: JSON.stringify({ reservationNumber: res.reservationNumber, invoices }),
       });
     } catch { /* non-fatal */ }
+  }
+
+  // ── Split invoices ─────────────────────────────────────────────────────────
+
+  /** Next unused sequence. Never reuses a number an invoice already carries. */
+  function nextSplitSeq(list: InvoiceSplit[]): number {
+    return list.reduce((max, sp) => Math.max(max, sp.seq), 0) + 1;
+  }
+
+  function blankSplit(seq: number, amountCzk: number, billingEmail = ""): InvoiceSplit {
+    return {
+      id: `${Date.now()}-${seq}`,
+      seq,
+      invoiceData: { companyName: "", companyAddress: "", ico: "", vatNumber: "", billingEmail },
+      amountCzk,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /** Turning the toggle on seeds the case it exists for: two colleagues, an
+   *  even share each, first one pre-filled with the guest's billing address. */
+  function toggleSplitMode() {
+    const next = !splitMode;
+    setSplitMode(next);
+    if (next && splitForms.length === 0) {
+      // Whole crowns on both parts: a booking price carrying haléře would
+      // otherwise seed a field with 13760.599999999999. The ≤1 Kč tolerance in
+      // splitTotals absorbs the rounding.
+      const price = Math.round(reservation?.price ?? 0);
+      const half = Math.round(price / 2);
+      setSplitForms([
+        blankSplit(1, half, invoiceForm.billingEmail),
+        blankSplit(2, price - half),
+      ]);
+    }
+  }
+
+  function addSplit() {
+    setSplitForms((list) => {
+      const { remaining } = splitTotals(reservation?.price ?? 0, list);
+      return [...list, blankSplit(nextSplitSeq(list), Math.max(0, Math.round(remaining)))];
+    });
+  }
+
+  function removeSplit(id: string) {
+    setSplitForms((list) => list.filter((sp) => sp.id !== id));
+  }
+
+  function patchSplit(id: string, patch: Partial<InvoiceSplit>) {
+    setSplitForms((list) => list.map((sp) => (sp.id === id ? { ...sp, ...patch } : sp)));
+  }
+
+  function patchSplitInvoiceData(id: string, patch: Partial<InvoiceData>) {
+    setSplitForms((list) =>
+      list.map((sp) => (sp.id === id ? { ...sp, invoiceData: { ...sp.invoiceData, ...patch } } : sp)),
+    );
+  }
+
+  /** Distribute the booking price evenly; the last part absorbs the rounding. */
+  function splitEvenly() {
+    setSplitForms((list) => {
+      if (list.length === 0) return list;
+      const price = Math.round(reservation?.price ?? 0);
+      const each = Math.round(price / list.length);
+      return list.map((sp, i) => ({
+        ...sp,
+        amountCzk: i === list.length - 1 ? price - each * (list.length - 1) : each,
+      }));
+    });
+  }
+
+  /** Persist the parts without issuing them — the split equivalent of
+   *  "Save details", so a half-filled set survives closing the drawer. */
+  function handleSaveSplitDetails() {
+    onUpdate({ ...reservation!, invoiceSplits: splitForms });
+    setSaveDetailsSaved(true);
+    setTimeout(() => setSaveDetailsSaved(false), 2500);
+  }
+
+  function handleGenerateSplitInvoices() {
+    const updated = {
+      ...reservation!,
+      invoiceSplits: splitForms,
+      invoiceStatus: "Issued" as const,
+    };
+    onUpdate(updated);
+    setPreviewSplitId(splitForms[0]?.id ?? null);
+    syncRevenueInvoices(updated);
+  }
+
+  /** Leave split mode: drops the parts and goes back to one invoice for the
+   *  whole booking.
+   *
+   *  Also clears the revenue records, because nothing is issued any more. If it
+   *  didn't, two split records would sit in the P&L counting the stay twice
+   *  until someone happened to generate again. Reconciled records survive —
+   *  the sync route refuses to strand a bank transaction. */
+  function handleClearSplits() {
+    const hadSplits = (reservation?.invoiceSplits ?? []).length > 0;
+    setSplitMode(false);
+    setSplitForms([]);
+    setPreviewSplitId(null);
+    if (hadSplits) {
+      onUpdate({ ...reservation!, invoiceSplits: [], invoiceStatus: "Not Issued" as const });
+      clearRevenueInvoices(reservation!);
+    }
+  }
+
+  /** Drop every issued revenue record for this booking — nothing is issued. */
+  async function clearRevenueInvoices(res: Reservation) {
+    if (!res.includeQR) return;
+    try {
+      await fetch('/api/revenue-invoices/reservation-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservationNumber: res.reservationNumber, invoices: [] }),
+      });
+    } catch { /* non-fatal */ }
+  }
+
+  async function handlePrintSplit(sp: InvoiceSplit) {
+    const invoiceNumber = splitInvoiceNumber(reservation!.reservationNumber, sp.seq);
+    const qrInfo = includePaymentQR
+      ? buildPaymentQRInfo(reservation!.reservationNumber, sp.amountCzk, invoiceNumber)
+      : undefined;
+    await printInvoice(reservation!, sp.invoiceData, qrInfo, undefined, {
+      invoiceNumber,
+      amountOverride: sp.amountCzk,
+      guestName: sp.guestName,
+      shareNote: splitShareNote(
+        reservation!.reservationNumber,
+        sp.seq,
+        (reservation!.invoiceSplits ?? []).length || 1,
+      ),
+    });
+  }
+
+  /** Send one part. Marks the booking Sent only once every part has gone out —
+   *  a half-sent split is still the operator's to finish. */
+  async function handleSendSplit(sp: InvoiceSplit) {
+    setSendInvoiceError(null);
+    setSendInvoiceDeferral(null);
+    setIsSendingInvoice(true);
+    setSendingSplitId(sp.id);
+    try {
+      const res = await fetch('/api/send-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR, split: sp }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      if (json.outcome === 'deferred') setSendInvoiceDeferral(json.deferral ?? 'Mail server deferred the message');
+
+      const sentAt = new Date().toISOString();
+      const splits = (reservation!.invoiceSplits ?? []).map((x) =>
+        x.id === sp.id ? { ...x, sentAt, sentTo: json.sentTo ?? sp.invoiceData.billingEmail } : x,
+      );
+      const allSent = splits.length > 0 && splits.every((x) => x.sentAt);
+      const updated: Reservation = {
+        ...reservation!,
+        invoiceSplits: splits,
+        invoiceStatus: allSent ? "Sent" : "Issued",
+      };
+      onUpdate(updated);
+      setSplitForms(splits);
+      syncRevenueInvoices(updated);
+    } catch (err) {
+      setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send');
+    } finally {
+      setIsSendingInvoice(false);
+      setSendingSplitId(null);
+    }
+  }
+
+  async function handleSaveSplitToDrive(sp: InvoiceSplit) {
+    setSavingSplitDriveId(sp.id);
+    setSplitDriveErrors((prev) => ({ ...prev, [sp.id]: '' }));
+    try {
+      const res = await fetch('/api/transactions/invoice-to-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation: reservation!, includeQR: includePaymentQR, split: sp }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      setSplitDriveResults((prev) => ({ ...prev, [sp.id]: { url: json.driveUrl, name: json.driveFileName } }));
+    } catch (err) {
+      setSplitDriveErrors((prev) => ({
+        ...prev,
+        [sp.id]: err instanceof Error ? err.message : 'Failed to save to Drive',
+      }));
+    } finally {
+      setSavingSplitDriveId(null);
+    }
   }
 
   function handleGenerateInvoice() {
@@ -3004,7 +3468,7 @@ export default function ReservationDrawer({
       invoiceStatus: "Issued" as const,
     };
     onUpdate(updated);
-    upsertRevenueInvoice(updated);
+    syncRevenueInvoices(updated);
   }
 
   async function handleSendInvoice() {
@@ -3027,7 +3491,7 @@ export default function ReservationDrawer({
       if (json.outcome === 'deferred') setSendInvoiceDeferral(json.deferral ?? 'Mail server deferred the message');
       const updated = { ...reservation!, invoiceStatus: "Sent" as const };
       onUpdate(updated);
-      upsertRevenueInvoice(updated);
+      syncRevenueInvoices(updated);
     } catch (err) {
       setSendInvoiceError(err instanceof Error ? err.message : 'Failed to send invoice');
     } finally {
@@ -3308,6 +3772,18 @@ export default function ReservationDrawer({
         "bg-white text-gray-500 border-gray-200 hover:border-red-400 hover:text-red-600",
     },
   };
+
+  const issuedSplits = reservation.invoiceSplits ?? [];
+  const hasSplits = issuedSplits.length > 0;
+  /** The part the preview + QR panel are showing; defaults to the first. */
+  const activeSplit = issuedSplits.find((sp) => sp.id === previewSplitId) ?? issuedSplits[0];
+  /** Bank details for whatever the panel is showing — a split pays its own
+   *  share under its own variable symbol. */
+  const activeSplitQR = buildPaymentQRInfo(
+    reservation.reservationNumber,
+    activeSplit ? activeSplit.amountCzk : reservation.price,
+    activeSplit ? splitInvoiceNumber(reservation.reservationNumber, activeSplit.seq) : undefined,
+  );
 
   const isOTAChannel = reservation.channel === "Booking.com" || reservation.channel === "Airbnb";
   const isDirectPhone = reservation.channel === "Direct-Phone";
@@ -4675,6 +5151,52 @@ export default function ReservationDrawer({
 
             {reservation.invoiceStatus === "Not Issued" ? (
               <div className="space-y-3">
+                {/* Split invoice — one booking billed to several parties */}
+                <button
+                  onClick={toggleSplitMode}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                    splitMode
+                      ? "bg-indigo-50 border-indigo-300 text-indigo-700"
+                      : "bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300"
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" />
+                    </svg>
+                    Split invoice
+                    <span className="text-[10px] font-normal text-gray-400">
+                      bill this stay to more than one party
+                    </span>
+                  </span>
+                  <span
+                    className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 transition-colors ${
+                      splitMode ? "bg-indigo-600 border-indigo-600" : "bg-gray-200 border-gray-200"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                        splitMode ? "translate-x-4" : "translate-x-0"
+                      }`}
+                    />
+                  </span>
+                </button>
+
+                {splitMode ? (
+                  <SplitInvoiceEditor
+                    reservation={reservation}
+                    splits={splitForms}
+                    onPatch={patchSplit}
+                    onPatchInvoiceData={patchSplitInvoiceData}
+                    onRemove={removeSplit}
+                    onAdd={addSplit}
+                    onSplitEvenly={splitEvenly}
+                    onSaveDetails={handleSaveSplitDetails}
+                    saved={saveDetailsSaved}
+                    onGenerate={handleGenerateSplitInvoices}
+                  />
+                ) : (<>
                 <div>
                   <label className="text-[11px] text-gray-400 block mb-1">Company Name</label>
                   <input
@@ -4752,6 +5274,7 @@ export default function ReservationDrawer({
                     Generate Invoice
                   </button>
                 </div>
+                </>)}
               </div>
             ) : (
               <div className="space-y-3">
@@ -4761,7 +5284,9 @@ export default function ReservationDrawer({
                   className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors"
                 >
                   <span className="text-sm font-medium text-gray-700 truncate">
-                    {reservation.invoiceData?.companyName || "Invoice"}
+                    {hasSplits
+                      ? `${issuedSplits.length} split invoices`
+                      : reservation.invoiceData?.companyName || "Invoice"}
                   </span>
                   <span className="flex items-center gap-2">
                     <Badge variant={reservation.invoiceStatus === "Sent" ? "green" : "blue"}>
@@ -4780,8 +5305,10 @@ export default function ReservationDrawer({
                 {/* PDF Preview */}
                 <InvoicePreview
                   res={reservation}
-                  invoiceData={reservation.invoiceData!}
+                  invoiceData={activeSplit ? activeSplit.invoiceData : reservation.invoiceData!}
                   includeQR={includePaymentQR}
+                  split={activeSplit}
+                  splitCount={issuedSplits.length}
                 />
 
                 {/* Payment QR toggle */}
@@ -4825,7 +5352,7 @@ export default function ReservationDrawer({
                     {/* QR code */}
                     <div className="shrink-0 bg-white p-2 rounded-lg border border-indigo-100 shadow-sm">
                       <QRCodeSVG
-                        value={buildPaymentQRInfo(reservation.reservationNumber, reservation.price).spdString}
+                        value={activeSplitQR.spdString}
                         size={110}
                         level="M"
                       />
@@ -4850,16 +5377,118 @@ export default function ReservationDrawer({
                       <div>
                         <span className="text-gray-400">VS</span>
                         <p className="font-mono text-gray-800">
-                          {buildPaymentQRInfo(reservation.reservationNumber, reservation.price).vs}
+                          {activeSplitQR.vs}
                         </p>
                       </div>
                       <div>
                         <span className="text-gray-400">Amount</span>
                         <p className="font-semibold text-indigo-700">
-                          {Math.round(reservation.price).toLocaleString("cs-CZ")} Kč
+                          {Math.round(activeSplitQR.amountCZK).toLocaleString("cs-CZ")} Kč
                         </p>
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* Per-split actions — replaces the single-invoice buttons */}
+                {hasSplits && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                      Invoices ({issuedSplits.length})
+                    </p>
+                    {issuedSplits.map((sp, i) => {
+                      const isPreviewing = activeSplit?.id === sp.id;
+                      return (
+                        <div
+                          key={sp.id}
+                          className={`rounded-lg border p-2.5 space-y-2 transition-colors ${
+                            isPreviewing ? "border-indigo-300 bg-indigo-50/40" : "border-gray-200 bg-white"
+                          }`}
+                        >
+                          <button
+                            onClick={() => setPreviewSplitId(sp.id)}
+                            className="w-full flex items-start justify-between gap-2 text-left"
+                          >
+                            <span className="min-w-0">
+                              <span className="block text-sm font-medium text-gray-800 truncate">
+                                {sp.invoiceData.companyName || `Invoice ${i + 1}`}
+                              </span>
+                              <span className="block font-mono text-[10px] text-gray-400">
+                                {splitInvoiceNumber(reservation.reservationNumber, sp.seq)}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-sm font-semibold text-gray-800">
+                              {formatCurrency(sp.amountCzk)}
+                            </span>
+                          </button>
+
+                          {sp.sentAt && (
+                            <p className="text-[11px] text-green-700">
+                              ✓ Sent {new Date(sp.sentAt).toLocaleString("en-GB", {
+                                day: "numeric", month: "short", year: "numeric",
+                                hour: "2-digit", minute: "2-digit",
+                              })} to {sp.sentTo}
+                            </p>
+                          )}
+
+                          <div className="flex gap-1.5">
+                            <button
+                              onClick={() => handlePrintSplit(sp)}
+                              className="flex-1 py-1.5 px-2 bg-gray-900 text-white text-xs font-medium rounded-md hover:bg-gray-700 transition-colors"
+                            >
+                              Print
+                            </button>
+                            <button
+                              onClick={() => handleSendSplit(sp)}
+                              disabled={isSendingInvoice}
+                              className="flex-1 py-1.5 px-2 bg-indigo-600 text-white text-xs font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {sendingSplitId === sp.id ? "Sending…" : sp.sentAt ? "Send again" : "Send"}
+                            </button>
+                            <button
+                              onClick={() => handleSaveSplitToDrive(sp)}
+                              disabled={savingSplitDriveId === sp.id}
+                              className="flex-1 py-1.5 px-2 border border-gray-200 text-gray-700 text-xs font-medium rounded-md hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                            >
+                              {savingSplitDriveId === sp.id ? "Saving…" : "Drive"}
+                            </button>
+                          </div>
+
+                          {splitDriveErrors[sp.id] && (
+                            <p className="text-[11px] text-red-600">{splitDriveErrors[sp.id]}</p>
+                          )}
+                          {splitDriveResults[sp.id] && (
+                            <a
+                              href={splitDriveResults[sp.id].url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block text-[11px] text-green-700 hover:underline truncate"
+                            >
+                              Saved to Drive — {splitDriveResults[sp.id].name}
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {(() => {
+                      const { allocated, remaining, over } = splitTotals(reservation.price, issuedSplits);
+                      return (
+                        <p
+                          className={`text-[11px] rounded px-2.5 py-1.5 border ${
+                            over
+                              ? "text-red-700 bg-red-50 border-red-200"
+                              : "text-gray-600 bg-gray-50 border-gray-200"
+                          }`}
+                        >
+                          {formatCurrency(allocated)} invoiced of {formatCurrency(reservation.price)}
+                          {over
+                            ? ` — ${formatCurrency(-remaining)} over the booking price.`
+                            : Math.abs(remaining) <= 1
+                              ? "."
+                              : ` — ${formatCurrency(remaining)} not invoiced.`}
+                        </p>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -4877,6 +5506,7 @@ export default function ReservationDrawer({
                     <span className="block mt-0.5 font-mono text-[10px] text-amber-700 break-all">{sendInvoiceDeferral}</span>
                   </p>
                 )}
+                {!hasSplits && (<>
                 <div className="flex gap-2">
                   <button
                     onClick={handleDownloadPDF}
@@ -5223,12 +5853,24 @@ export default function ReservationDrawer({
                   </div>
                 )}
 
-                <button
-                  onClick={() => onUpdate({ ...reservation!, invoiceStatus: "Not Issued" })}
-                  className="w-full py-1.5 px-3 border border-gray-200 text-gray-500 text-xs font-medium rounded-md hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  Re-issue with new details
-                </button>
+                </>)}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onUpdate({ ...reservation!, invoiceStatus: "Not Issued" })}
+                    className="flex-1 py-1.5 px-3 border border-gray-200 text-gray-500 text-xs font-medium rounded-md hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors"
+                  >
+                    Re-issue with new details
+                  </button>
+                  {hasSplits && (
+                    <button
+                      onClick={handleClearSplits}
+                      className="flex-1 py-1.5 px-3 border border-gray-200 text-gray-500 text-xs font-medium rounded-md hover:border-gray-400 hover:text-gray-700 transition-colors"
+                    >
+                      Back to one invoice
+                    </button>
+                  )}
+                </div>
                 </>)}
               </div>
             )}

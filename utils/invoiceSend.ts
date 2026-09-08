@@ -32,10 +32,12 @@
 
 import nodemailer from 'nodemailer';
 import QRCodeLib from 'qrcode';
-import type { Reservation, InvoiceModification } from '@/types/reservation';
+import type { Reservation, InvoiceModification, InvoiceSplit } from '@/types/reservation';
 import {
   buildInvoiceHTML,
   generateInvoiceNumber,
+  splitInvoiceNumber,
+  splitShareNote,
   PAYMENT_IBAN,
 } from '@/utils/invoiceUtils';
 import { generatePDF } from '@/utils/pdfGenerate';
@@ -62,6 +64,11 @@ function buildSPDString(iban: string, amountCZK: number, vs: string): string {
 export interface SendInvoiceOptions {
   includeQR?: boolean;
   modification?: InvoiceModification;
+  /** Split invoice to send instead of the whole booking. When set, its own
+   *  customer block, amount and invoice number are used throughout. */
+  split?: InvoiceSplit;
+  /** How many splits the booking has, for the "part N of M" note. */
+  splitCount?: number;
 }
 
 export interface SendInvoiceResult {
@@ -113,10 +120,13 @@ export async function sendInvoiceEmail(
   reservation: Reservation,
   opts: SendInvoiceOptions = {},
 ): Promise<SendInvoiceResult> {
-  if (!reservation.invoiceData) {
+  // A split brings its own customer block, so the booking-level one is only
+  // required when we are billing the booking as a whole.
+  const billTo = opts.split?.invoiceData ?? reservation.invoiceData;
+  if (!billTo) {
     throw new Error('No invoice data on reservation');
   }
-  if (!reservation.invoiceData.billingEmail) {
+  if (!billTo.billingEmail) {
     throw new Error('No billing email on invoice');
   }
 
@@ -126,11 +136,21 @@ export async function sendInvoiceEmail(
     throw new Error('SMTP not configured (SMTP_USER / SMTP_PASS missing)');
   }
 
-  const invoiceNum = generateInvoiceNumber(reservation.reservationNumber);
+  const split = opts.split;
+  const invoiceNum = split
+    ? splitInvoiceNumber(reservation.reservationNumber, split.seq)
+    : generateInvoiceNumber(reservation.reservationNumber);
   const vs = invoiceNum.replace(/\D/g, '');
-  // A modification may override the invoice total — the QR must ask for the
-  // amount the invoice actually shows, not the booking price.
-  const invoiceTotal = opts.modification?.amount ?? reservation.price;
+  // A split bills its share and a modification may override the total — the QR
+  // must ask for what the invoice actually shows, not the booking price.
+  const invoiceTotal = split?.amountCzk ?? opts.modification?.amount ?? reservation.price;
+  const renderOpts = split
+    ? {
+        amountOverride: split.amountCzk,
+        guestName: split.guestName,
+        shareNote: splitShareNote(reservation.reservationNumber, split.seq, opts.splitCount ?? 1),
+      }
+    : undefined;
 
   let payment:
     | { qrDataUrl: string; info: { spdString: string; vs: string; amountCZK: number } }
@@ -147,11 +167,12 @@ export async function sendInvoiceEmail(
 
   const html = buildInvoiceHTML(
     reservation,
-    reservation.invoiceData,
+    billTo,
     invoiceNum,
     payment,
     true, // forEmail — omits the window.print() script
     opts.modification,
+    renderOpts,
   );
 
   const pdfBuffer = await generatePDF(html);
@@ -167,7 +188,7 @@ export async function sendInvoiceEmail(
     ? `"Baker House Apartments" <${process.env.SMTP_FROM}>`
     : `"Baker House Apartments" <${smtpUser}>`;
 
-  const to = reservation.invoiceData.billingEmail;
+  const to = billTo.billingEmail;
   // Built once and reused across retries: identical Message-ID means a
   // recipient that receives both copies (mail-server race) can collapse them,
   // and the ID shows up in Gmail's Sent folder for after-the-fact checking.

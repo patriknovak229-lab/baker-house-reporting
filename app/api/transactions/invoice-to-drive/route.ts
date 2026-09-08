@@ -6,7 +6,8 @@
  * RevenueInvoice in Redis so it shows up (unreconciled) in the
  * Accounting → Revenue tab.
  *
- * Body: { reservation: Reservation; includeQR?: boolean; modification?: InvoiceModification }
+ * Body: { reservation: Reservation; includeQR?: boolean; modification?: InvoiceModification;
+ *         split?: InvoiceSplit }
  * Returns: { driveUrl, driveFileId, driveFileName, invoice: RevenueInvoice }
  *
  * A `modification` renders that "Modified Versions" variant instead of the
@@ -25,9 +26,12 @@ import { generatePDF } from '@/utils/pdfGenerate';
 import {
   buildInvoiceHTML,
   generateInvoiceNumber,
+  splitInvoiceNumber,
+  splitShareNote,
+  revenueInvoiceId,
   PAYMENT_IBAN,
 } from '@/utils/invoiceUtils';
-import type { InvoiceModification, Reservation } from '@/types/reservation';
+import type { InvoiceModification, InvoiceSplit, Reservation } from '@/types/reservation';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
@@ -82,21 +86,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No refresh token. Please sign out and sign in again.' }, { status: 401 });
   }
 
-  const { reservation, includeQR, modification }: {
+  const { reservation, includeQR, modification, split }: {
     reservation: Reservation;
     includeQR?: boolean;
     modification?: InvoiceModification;
+    /** One part of a split booking — own customer block, amount and number. */
+    split?: InvoiceSplit;
   } = await request.json();
 
-  if (!reservation.invoiceData) {
+  // A split carries its own billing party; only the whole-booking invoice
+  // needs the reservation-level one.
+  const billTo = split?.invoiceData ?? reservation.invoiceData;
+  if (!billTo) {
     return NextResponse.json({ error: 'No invoice data on reservation' }, { status: 400 });
   }
 
-  const invoiceNum = generateInvoiceNumber(reservation.reservationNumber);
+  const splitCount = (reservation.invoiceSplits ?? []).length;
+  const invoiceNum = split
+    ? splitInvoiceNumber(reservation.reservationNumber, split.seq)
+    : generateInvoiceNumber(reservation.reservationNumber);
   const vs         = invoiceNum.replace(/\D/g, '');
-  // A modification may override the invoice total — the QR, the filename and
-  // the RevenueInvoice must all follow what the invoice actually shows.
-  const invoiceTotal = modification?.amount ?? reservation.price;
+  // A split bills its share and a modification may override the total — the QR,
+  // the filename and the RevenueInvoice must all follow what the invoice shows.
+  const invoiceTotal = split?.amountCzk ?? modification?.amount ?? reservation.price;
+  const renderOpts = split
+    ? {
+        amountOverride: split.amountCzk,
+        guestName: split.guestName,
+        shareNote: splitShareNote(reservation.reservationNumber, split.seq, splitCount || 1),
+      }
+    : undefined;
 
   // Build QR payload if requested
   let payment: { qrDataUrl: string; info: { spdString: string; vs: string; amountCZK: number } } | undefined;
@@ -106,7 +125,7 @@ export async function POST(request: Request) {
     payment = { qrDataUrl, info: { spdString, vs, amountCZK: invoiceTotal } };
   }
 
-  const html      = buildInvoiceHTML(reservation, reservation.invoiceData, invoiceNum, payment, true, modification);
+  const html      = buildInvoiceHTML(reservation, billTo, invoiceNum, payment, true, modification, renderOpts);
   const pdfBuffer = await generatePDF(html);
 
   // ── Upload to Drive ──────────────────────────────────────────────────────
@@ -138,7 +157,7 @@ export async function POST(request: Request) {
 
   // ── Upsert RevenueInvoice ────────────────────────────────────────────────
   const invoices = await readAllRevenueInvoices();
-  const id       = `rev-${reservation.reservationNumber}`;
+  const id       = revenueInvoiceId(reservation.reservationNumber, split?.seq);
   const existing = invoices.findIndex((i) => i.id === id);
   const now      = new Date().toISOString();
 
