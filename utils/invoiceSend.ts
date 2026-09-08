@@ -37,7 +37,6 @@ import {
   buildInvoiceHTML,
   generateInvoiceNumber,
   splitInvoiceNumber,
-  splitShareNote,
   PAYMENT_IBAN,
 } from '@/utils/invoiceUtils';
 import { generatePDF } from '@/utils/pdfGenerate';
@@ -67,8 +66,6 @@ export interface SendInvoiceOptions {
   /** Split invoice to send instead of the whole booking. When set, its own
    *  customer block, amount and invoice number are used throughout. */
   split?: InvoiceSplit;
-  /** How many splits the booking has, for the "part N of M" note. */
-  splitCount?: number;
 }
 
 export interface SendInvoiceResult {
@@ -145,11 +142,7 @@ export async function sendInvoiceEmail(
   // must ask for what the invoice actually shows, not the booking price.
   const invoiceTotal = split?.amountCzk ?? opts.modification?.amount ?? reservation.price;
   const renderOpts = split
-    ? {
-        amountOverride: split.amountCzk,
-        guestName: split.guestName,
-        shareNote: splitShareNote(reservation.reservationNumber, split.seq, opts.splitCount ?? 1),
-      }
+    ? { amountOverride: split.amountCzk, guestName: split.guestName }
     : undefined;
 
   let payment:

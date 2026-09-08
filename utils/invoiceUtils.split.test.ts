@@ -92,9 +92,14 @@ describe("buildInvoiceHTML with a split's amount", () => {
     expect(html).not.toContain(formatCurrency(1800)); // 27000 / 15
   });
 
-  it("prints the share note so it cannot pass for the whole booking", () => {
-    const html = render({ amountOverride: 9000, shareNote: "Part 1 of 2 for booking BH-92538626" });
-    expect(html).toContain("Part 1 of 2 for booking BH-92538626");
+  it("reads as a standalone invoice — nothing marks it as part of a split", () => {
+    const html = render({ amountOverride: 9000 });
+    for (const marker of ["Dílčí", "Part 1", "of 2", "split", "Split"]) {
+      expect(html).not.toContain(marker);
+    }
+    // ...and it is still a complete invoice for the party receiving it.
+    expect(html).toContain("Acme s.r.o.");
+    expect(html).toContain("Celkem / Total");
   });
 
   it("uses the split's own guest name on the line item", () => {
@@ -114,6 +119,5 @@ describe("buildInvoiceHTML with a split's amount", () => {
   it("leaves the whole-booking invoice untouched when no split is passed", () => {
     const html = buildInvoiceHTML(res, invoiceData, "INV-92538626", undefined, true);
     expect(html).toContain(formatCurrency(27000));
-    expect(html).not.toContain("Part 1 of");
   });
 });

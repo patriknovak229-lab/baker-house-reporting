@@ -46,12 +46,7 @@ export async function POST(req: NextRequest) {
     // Generate + email via the shared util (same path the checkout-date cron uses).
     // Only throws when the message was genuinely not accepted — a transient
     // deferral comes back as outcome:'deferred', which is NOT a failure.
-    const result = await sendInvoiceEmail(reservation, {
-      includeQR,
-      modification,
-      split,
-      splitCount: splits.length,
-    });
+    const result = await sendInvoiceEmail(reservation, { includeQR, modification, split });
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

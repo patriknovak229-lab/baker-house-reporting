@@ -27,7 +27,6 @@ import {
   buildInvoiceHTML,
   generateInvoiceNumber,
   splitInvoiceNumber,
-  splitShareNote,
   revenueInvoiceId,
   PAYMENT_IBAN,
 } from '@/utils/invoiceUtils';
@@ -101,7 +100,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No invoice data on reservation' }, { status: 400 });
   }
 
-  const splitCount = (reservation.invoiceSplits ?? []).length;
   const invoiceNum = split
     ? splitInvoiceNumber(reservation.reservationNumber, split.seq)
     : generateInvoiceNumber(reservation.reservationNumber);
@@ -110,11 +108,7 @@ export async function POST(request: Request) {
   // the filename and the RevenueInvoice must all follow what the invoice shows.
   const invoiceTotal = split?.amountCzk ?? modification?.amount ?? reservation.price;
   const renderOpts = split
-    ? {
-        amountOverride: split.amountCzk,
-        guestName: split.guestName,
-        shareNote: splitShareNote(reservation.reservationNumber, split.seq, splitCount || 1),
-      }
+    ? { amountOverride: split.amountCzk, guestName: split.guestName }
     : undefined;
 
   // Build QR payload if requested

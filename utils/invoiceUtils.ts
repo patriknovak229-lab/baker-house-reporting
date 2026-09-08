@@ -78,11 +78,6 @@ export function revenueInvoiceId(reservationNumber: string, seq?: number): strin
   return seq == null ? `rev-${reservationNumber}` : `rev-${reservationNumber}-${seq}`;
 }
 
-/** Note printed on a split invoice so it cannot be mistaken for the whole booking. */
-export function splitShareNote(reservationNumber: string, seq: number, total: number): string {
-  return `Dílčí faktura ${seq} z ${total} k rezervaci ${reservationNumber} / Part ${seq} of ${total} for booking ${reservationNumber}`;
-}
-
 /**
  * Payment status as the drawer shows it: a manual override always wins over the
  * Beds24/Stripe-derived value. Read-only — this never changes payment state.
@@ -158,17 +153,18 @@ function buildStatusBandHTML(res: Reservation, ownTotal: boolean): string {
 }
 
 /**
- * Extras that don't belong to the booking itself — currently what a split
- * invoice needs to say. Kept as an options bag so the six positional params
+ * Extras that don't belong to the booking itself — what one part of a split
+ * bills, and to whom. Kept as an options bag so the six positional params
  * above stay as they are for every existing caller.
+ *
+ * Deliberately nothing that marks the document as part of a split: each
+ * invoice has to read as a standalone invoice to the party receiving it.
  */
 export interface InvoiceRenderOptions {
   /** Bill this amount instead of the booking price (one part of a split). */
   amountOverride?: number;
   /** Name on the line item; defaults to the booking guest. */
   guestName?: string;
-  /** Printed under the total, e.g. "Part 1 of 2 for booking BH-…". */
-  shareNote?: string;
 }
 
 export function buildInvoiceHTML(
@@ -350,7 +346,6 @@ export function buildInvoiceHTML(
       <span>Celkem / Total</span>
       <span style="color:${GOLD}">${formatCurrency(invoiceTotal)}</span>
     </div>
-    ${opts?.shareNote ? `<div style="font-size:10px;color:${MID_BROWN};margin-top:5px;font-style:italic">${opts.shareNote}</div>` : ""}
   </div>
 ${statusBandHtml}
   ${payment ? `

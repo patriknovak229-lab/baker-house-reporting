@@ -43,7 +43,6 @@ import {
   buildInvoiceHTML,
   generateInvoiceNumber,
   splitInvoiceNumber,
-  splitShareNote,
   splitTotals,
   revenueInvoiceId,
   PAYMENT_IBAN,
@@ -2160,14 +2159,12 @@ function InvoicePreview({
   invoiceData,
   includeQR,
   split,
-  splitCount,
 }: {
   res: Reservation;
   invoiceData: InvoiceData;
   includeQR: boolean;
   /** Preview one part of a split booking instead of the whole booking. */
   split?: InvoiceSplit;
-  splitCount?: number;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [docHeight, setDocHeight] = useState(0);
@@ -2195,11 +2192,7 @@ function InvoicePreview({
         payment = { qrDataUrl, info };
       }
       const renderOpts = split
-        ? {
-            amountOverride: split.amountCzk,
-            guestName: split.guestName,
-            shareNote: splitShareNote(res.reservationNumber, split.seq, splitCount ?? 1),
-          }
+        ? { amountOverride: split.amountCzk, guestName: split.guestName }
         : undefined;
       const next = buildInvoiceHTML(res, invoiceData, invoiceNum, payment, true, undefined, renderOpts);
       // Identical strings bail out of the re-render, so an unrelated
@@ -2207,7 +2200,7 @@ function InvoicePreview({
       if (!cancelled) setHtml(next);
     })();
     return () => { cancelled = true; };
-  }, [res, invoiceData, includeQR, split, splitCount]);
+  }, [res, invoiceData, includeQR, split]);
 
   // Scale the full-width page down to whatever width the drawer gives us.
   useEffect(() => {
@@ -3393,11 +3386,6 @@ export default function ReservationDrawer({
       invoiceNumber,
       amountOverride: sp.amountCzk,
       guestName: sp.guestName,
-      shareNote: splitShareNote(
-        reservation!.reservationNumber,
-        sp.seq,
-        (reservation!.invoiceSplits ?? []).length || 1,
-      ),
     });
   }
 
@@ -5308,7 +5296,6 @@ export default function ReservationDrawer({
                   invoiceData={activeSplit ? activeSplit.invoiceData : reservation.invoiceData!}
                   includeQR={includePaymentQR}
                   split={activeSplit}
-                  splitCount={issuedSplits.length}
                 />
 
                 {/* Payment QR toggle */}
