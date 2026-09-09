@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from "react";
+import { COUNTRY_OPTIONS, languageNameForCountry } from "@/utils/countries";
 
 // Operator-facing manual bookings target one of TWO unit kinds:
 //
@@ -96,6 +97,8 @@ interface FormState {
   lastName: string;
   email: string;
   phone: string;
+  /** ISO 3166-1 alpha-2 (uppercase), mandatory — see the Nationality field. */
+  nationality: string;
   notes: string;
 }
 
@@ -109,6 +112,7 @@ const DEFAULT_FORM: FormState = {
   lastName: "",
   email: "",
   phone: "",
+  nationality: "",
   notes: "",
 };
 
@@ -398,6 +402,10 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
       setError("Check-out must be after check-in");
       return;
     }
+    if (!form.nationality) {
+      setError("Nationality is required — Beds24 uses it to pick the language of the automated guest messages");
+      return;
+    }
 
     // Split payment validation
     if (includePaymentLink && splitPayment) {
@@ -475,6 +483,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         lastName: form.lastName,
         email: form.email,
         phone: form.phone,
+        nationality: form.nationality,
         notes: form.notes,
       };
       const res = await fetch("/api/bookings", {
@@ -891,6 +900,34 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 className={inputCls}
               />
             </Field>
+          </div>
+
+          {/* Nationality — mandatory. The server turns it into Beds24's
+              `country` + `lang`; `lang` is what selects the template language
+              for auto-actions, so leaving it unset made every automated guest
+              message go out in English. Same country→language mapping the
+              rental-site checkout uses. */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Nationality">
+              <select
+                required
+                value={form.nationality}
+                onChange={(e) => set("nationality", e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select country…</option>
+                {COUNTRY_OPTIONS.map((c) => (
+                  <option key={c.code} value={c.code}>{c.name}</option>
+                ))}
+              </select>
+            </Field>
+            <div className="flex items-end">
+              <p className="text-[11px] text-gray-500 leading-snug pb-2">
+                {form.nationality
+                  ? `Beds24 will send automated guest messages in ${languageNameForCountry(form.nationality)}.`
+                  : "Sets the guest country in Beds24 and the language of its automated messages."}
+              </p>
+            </div>
           </div>
 
           {/* Guests + Price */}

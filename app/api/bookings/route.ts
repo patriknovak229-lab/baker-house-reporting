@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { Reservation, RateType, Issue } from "@/types/reservation";
 import { readAllAdditionalPayments } from "@/utils/additionalPaymentsStore";
 import { getAccessToken } from "@/utils/beds24Auth";
+import { countryToLang, isValidCountryCode } from "@/utils/countries";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy, freeCancelDaysLeft } from "@/utils/cancellationPolicy";
@@ -257,7 +258,7 @@ export async function POST(req: NextRequest) {
     units,                    // new shape: [{ roomId, roomQty, price }, ...]
     roomId, roomQty, price,   // legacy single-row shape (back-compat)
     arrival, departure, numAdult, numChild,
-    firstName, lastName, email, phone, notes,
+    firstName, lastName, email, phone, nationality, notes,
   } = body as {
     units?: { roomId: number; roomQty?: number; price?: number }[];
     roomId?: number;
@@ -271,12 +272,26 @@ export async function POST(req: NextRequest) {
     lastName?: string;
     email?: string;
     phone?: string;
+    /** ISO 3166-1 alpha-2 country code of the guest. */
+    nationality?: string;
     notes?: string;
   };
 
   if (!arrival || !departure || !firstName) {
     return NextResponse.json({ error: "arrival, departure and firstName are required" }, { status: 400 });
   }
+
+  // Nationality is mandatory: Beds24 picks the auto-action template language
+  // from the booking's `lang`, and with no language on the booking every
+  // automated guest message goes out in English. `lang` is derived from the
+  // country using the same map the rental-site checkout uses.
+  if (!nationality || !isValidCountryCode(nationality)) {
+    return NextResponse.json(
+      { error: "nationality is required and must be a 2-letter ISO country code" },
+      { status: 400 },
+    );
+  }
+  const countryCode = nationality.trim().toUpperCase();
 
   // Normalise input — accept both new units[] shape and legacy single-row.
   const unitRows = Array.isArray(units) && units.length > 0
@@ -319,6 +334,10 @@ export async function POST(req: NextRequest) {
     lastName: lastName ?? "",
     email: email ?? "",
     phone: phone ?? "",
+    // Lowercase country mirrors what rental-site bookings write, so
+    // beds24Reservations reads the same field for every direct booking.
+    country: countryCode.toLowerCase(),
+    lang: countryToLang(countryCode),
     referer: "PhoneDirect",
     apiSource: "Direct",
     comments: buildComments(),
