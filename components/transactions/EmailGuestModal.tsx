@@ -16,6 +16,12 @@ import {
   isMobileDevice,
 } from '@/utils/whatsAppMessage';
 import { toE164 } from '@/utils/phone';
+import {
+  buildArrivalGuide,
+  arrivalGuideToBlocks,
+  ARRIVAL_GUIDE_SUBJECT,
+} from '@/utils/arrivalGuide';
+import { renderArrivalGuideEmail } from '@/utils/emailTemplates/arrivalGuide';
 
 type Channel = 'email' | 'whatsapp' | 'sms';
 type Lang = ThankYouLang; // 'en' | 'cs'
@@ -44,6 +50,8 @@ interface TemplateOption {
   description: string;
   icon: string;
   disabled?: boolean;
+  /** Channels this template is offered on. Omitted = every channel. */
+  channels?: Channel[];
 }
 
 const TEMPLATES: TemplateOption[] = [
@@ -52,6 +60,16 @@ const TEMPLATES: TemplateOption[] = [
     label: 'Thank You',
     description: 'Thanks the guest for their stay and includes a voucher code',
     icon: '🙏',
+  },
+  {
+    id: 'arrival-guide',
+    label: 'Arrival Guide',
+    description: 'Address, keys, parking space and WiFi — everything for the arrival',
+    icon: '🗝️',
+    // Email only. OTA guests get the same guide from the chat composer's
+    // template row; the text runs too long to read well as a WhatsApp wall
+    // or to be worth several SMS segments.
+    channels: ['email'],
   },
 ];
 
@@ -85,6 +103,10 @@ export default function EmailGuestModal({
 }: Props) {
   const [step, setStep] = useState<Step>('template');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const activeTemplate = TEMPLATES.find((t) => t.id === selectedTemplateId);
+  // The arrival guide carries no voucher, so it skips the voucher steps —
+  // every voucher-gated branch below has to allow for it.
+  const isArrivalGuide = selectedTemplateId === 'arrival-guide';
 
   // Voucher flow state
   const [voucherMode, setVoucherMode] = useState<VoucherMode | null>(null);
@@ -118,14 +140,30 @@ export default function EmailGuestModal({
   const [sendError, setSendError] = useState<string | null>(null);
   const [copiedHint, setCopiedHint] = useState(false);
 
+  /** The arrival guide for this booking's apartment, as the blank-line
+   *  separated text the body editor works with. */
+  const arrivalBodyForLang = (l: Lang) =>
+    arrivalGuideToBlocks(
+      buildArrivalGuide({
+        room: reservation.room,
+        guestFirstName: reservation.firstName,
+        lang: l,
+        channel: 'email',
+      }),
+    ).join('\n\n');
+
   // Pre-fill subject when we land on preview step (email only — WhatsApp
   // has no subject line)
   useEffect(() => {
     if (channel !== 'email') return;
     if (step === 'preview' && !subject) {
-      setSubject(THANK_YOU_SUBJECT(reservation.firstName, lang));
+      setSubject(
+        isArrivalGuide
+          ? ARRIVAL_GUIDE_SUBJECT(lang)
+          : THANK_YOU_SUBJECT(reservation.firstName, lang),
+      );
     }
-  }, [step, subject, reservation.firstName, channel, lang]);
+  }, [step, subject, reservation.firstName, channel, lang, isArrivalGuide]);
 
   /** Switch the static-copy language. Resets the body paragraphs AND the
    *  subject to the new language's defaults. Also clears the WhatsApp
@@ -135,13 +173,19 @@ export default function EmailGuestModal({
   function handleLangChange(next: Lang) {
     if (next === lang) return;
     setLang(next);
-    const nextBody = (channel !== 'email'
-      ? defaultWhatsAppBodyForLang(next)
-      : defaultBodyForLang(next)).join('\n\n');
+    const nextBody = isArrivalGuide
+      ? arrivalBodyForLang(next)
+      : (channel !== 'email'
+          ? defaultWhatsAppBodyForLang(next)
+          : defaultBodyForLang(next)).join('\n\n');
     setBodyText(nextBody);
     setWhatsAppTextOverride(null);
     if (channel === 'email') {
-      setSubject(THANK_YOU_SUBJECT(reservation.firstName, next));
+      setSubject(
+        isArrivalGuide
+          ? ARRIVAL_GUIDE_SUBJECT(next)
+          : THANK_YOU_SUBJECT(reservation.firstName, next),
+      );
     }
   }
 
@@ -156,8 +200,16 @@ export default function EmailGuestModal({
   // Live HTML render — re-computed on any edit. Cheap, no debounce needed.
   // Email-only; WhatsApp doesn't use this.
   const renderedHtml = useMemo(() => {
-    if (channel !== 'email' || !resolvedVoucher) return '';
+    if (channel !== 'email') return '';
     const paragraphs = bodyText.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+    if (isArrivalGuide) {
+      return renderArrivalGuideEmail({
+        firstName: reservation.firstName,
+        bodyBlocks: paragraphs,
+        lang,
+      });
+    }
+    if (!resolvedVoucher) return '';
     return renderThankYouEmail({
       firstName: reservation.firstName,
       voucherCode: resolvedVoucher.code,
@@ -165,7 +217,7 @@ export default function EmailGuestModal({
       bodyParagraphs: paragraphs,
       lang,
     });
-  }, [channel, resolvedVoucher, bodyText, reservation.firstName, lang]);
+  }, [channel, resolvedVoucher, bodyText, reservation.firstName, lang, isArrivalGuide]);
 
   // Live WhatsApp text render — reflects the same `bodyText` paragraphs as
   // the email path. The operator can also override this output directly via
@@ -198,12 +250,34 @@ export default function EmailGuestModal({
 
   function handlePickTemplate(id: string) {
     setSelectedTemplateId(id);
+    // Reset the draft to the picked template's defaults. Without this, going
+    // Back from a preview and choosing the other template carries the previous
+    // template's copy into it.
+    if (id === 'arrival-guide') {
+      setBodyText(arrivalBodyForLang(lang));
+      setSubject(ARRIVAL_GUIDE_SUBJECT(lang));
+    } else {
+      setBodyText(
+        (channel !== 'email'
+          ? defaultWhatsAppBodyForLang(lang)
+          : defaultBodyForLang(lang)
+        ).join('\n\n'),
+      );
+      setSubject(THANK_YOU_SUBJECT(reservation.firstName, lang));
+    }
+    setWhatsAppTextOverride(null);
   }
 
   function handleContinueFromTemplate() {
     if (!selectedTemplateId) return;
     if (selectedTemplateId === 'thank-you') {
       setStep('voucher-choice');
+      return;
+    }
+    if (selectedTemplateId === 'arrival-guide') {
+      // Nothing to attach — straight to the preview. handlePickTemplate has
+      // already filled the draft with this booking's guide.
+      setStep('preview');
     }
   }
 
@@ -312,7 +386,8 @@ export default function EmailGuestModal({
   }
 
   async function handleSend() {
-    if (!resolvedVoucher) return;
+    const voucher = resolvedVoucher;
+    if (!voucher && !isArrivalGuide) return;
     if (!subject.trim()) {
       setSendError('Subject is required');
       return;
@@ -320,20 +395,31 @@ export default function EmailGuestModal({
     setSending(true);
     setSendError(null);
     try {
-      // ── Step 1: persist the voucher (if not already)
-      const finalCode = await ensureVoucherPersisted();
-
-      // ── Step 2: render the email HTML using the final (server-confirmed) code.
-      //    Computing it fresh here avoids any stale-closure issue from the
-      //    useMemo'd renderedHtml when the code changed on a 409 retry.
       const paragraphs = bodyText.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-      const html = renderThankYouEmail({
-        firstName: reservation.firstName,
-        voucherCode: finalCode,
-        voucherAmount: formatAmount(resolvedVoucher),
-        bodyParagraphs: paragraphs,
-        lang,
-      });
+      let html: string;
+
+      if (isArrivalGuide || !voucher) {
+        // ── Arrival guide: nothing to stage, render whatever is in the editor.
+        html = renderArrivalGuideEmail({
+          firstName: reservation.firstName,
+          bodyBlocks: paragraphs,
+          lang,
+        });
+      } else {
+        // ── Step 1: persist the voucher (if not already)
+        const finalCode = await ensureVoucherPersisted();
+
+        // ── Step 2: render the email HTML using the final (server-confirmed) code.
+        //    Computing it fresh here avoids any stale-closure issue from the
+        //    useMemo'd renderedHtml when the code changed on a 409 retry.
+        html = renderThankYouEmail({
+          firstName: reservation.firstName,
+          voucherCode: finalCode,
+          voucherAmount: formatAmount(voucher),
+          bodyParagraphs: paragraphs,
+          lang,
+        });
+      }
 
       // ── Step 3: send the email
       const selectedTemplate = TEMPLATES.find((t) => t.id === selectedTemplateId);
@@ -529,7 +615,8 @@ export default function EmailGuestModal({
     } else if (step === 'voucher-config') {
       setStep('voucher-choice');
     } else if (step === 'preview') {
-      setStep('voucher-config');
+      // The arrival guide never passed through the voucher steps.
+      setStep(isArrivalGuide ? 'template' : 'voucher-config');
     }
   }
 
@@ -567,7 +654,7 @@ export default function EmailGuestModal({
           <div>
             <h2 className="text-base font-semibold text-gray-900">
               {channel === 'whatsapp' ? 'WhatsApp Guest' : channel === 'sms' ? 'SMS Guest' : 'Email Guest'}
-              {step !== 'template' ? ' · Thank You' : ''}
+              {step !== 'template' && activeTemplate ? ` · ${activeTemplate.label}` : ''}
             </h2>
             <p className="text-[11px] text-gray-500 mt-0.5">
               To: <span className="font-mono">{recipientDisplay}</span>
@@ -589,7 +676,7 @@ export default function EmailGuestModal({
             <>
               <p className="text-xs font-medium text-gray-600">Pick a template</p>
               <div className="space-y-2">
-                {TEMPLATES.map((tpl) => (
+                {TEMPLATES.filter((t) => !t.channels || t.channels.includes(channel)).map((tpl) => (
                   <button
                     key={tpl.id}
                     disabled={tpl.disabled}
@@ -722,7 +809,7 @@ export default function EmailGuestModal({
               channels. Switching resets body + (for email) subject to the
               new language's defaults so the operator never accidentally
               sends a mixed-language message. */}
-          {step === 'preview' && resolvedVoucher && (
+          {step === 'preview' && (resolvedVoucher || isArrivalGuide) && (
             <div className="flex items-center gap-2 text-xs">
               <span className="text-gray-500 font-medium">Language:</span>
               <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
@@ -754,7 +841,7 @@ export default function EmailGuestModal({
           )}
 
           {/* Step 4a: EMAIL preview + manual edit */}
-          {step === 'preview' && resolvedVoucher && channel === 'email' && (
+          {step === 'preview' && (resolvedVoucher || isArrivalGuide) && channel === 'email' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Left: editable fields */}
               <div className="space-y-3">
@@ -779,14 +866,16 @@ export default function EmailGuestModal({
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
                   />
                 </div>
-                <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-[11px] text-gray-600 space-y-1">
-                  <p><strong>Voucher attached:</strong></p>
-                  <p>
-                    Code <code className="font-mono bg-white px-1 py-0.5 rounded border border-gray-200">{resolvedVoucher.code}</code>
-                    {' · '}
-                    Value <strong>{formatAmount(resolvedVoucher)}</strong>
-                  </p>
-                </div>
+                {resolvedVoucher && (
+                  <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-[11px] text-gray-600 space-y-1">
+                    <p><strong>Voucher attached:</strong></p>
+                    <p>
+                      Code <code className="font-mono bg-white px-1 py-0.5 rounded border border-gray-200">{resolvedVoucher.code}</code>
+                      {' · '}
+                      Value <strong>{formatAmount(resolvedVoucher)}</strong>
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Right: live HTML preview */}
