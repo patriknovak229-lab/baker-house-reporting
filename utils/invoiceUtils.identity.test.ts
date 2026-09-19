@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveIcoFromDic, missingInvoiceFields } from "./invoiceUtils";
+import { deriveIcoFromDic, missingInvoiceFields, restoredInvoiceRequestStatus } from "./invoiceUtils";
 
 // The billing-identity rule decides when the chat agent stops asking the guest,
 // writes the details onto the reservation and lets the 09:00 cron mail the
@@ -78,5 +78,42 @@ describe("missingInvoiceFields", () => {
     // Address isn't even part of the rule's input — asserted here so a future
     // change that adds it has to come past this test.
     expect(missingInvoiceFields({ ...complete })).toEqual([]);
+  });
+});
+
+describe("restoredInvoiceRequestStatus", () => {
+  // Undoing a dismissal re-derives where the request belongs instead of
+  // remembering it, so the answer has to track the fields as they stand now.
+  it("sends a complete request back to done", () => {
+    expect(
+      restoredInvoiceRequestStatus({
+        companyName: "Acme s.r.o.",
+        ico: "19876107",
+        dic: null,
+        email: "fakturace@acme.cz",
+      }),
+    ).toBe("auto-completed");
+  });
+
+  it("sends a foreign-VAT request back to done too", () => {
+    expect(
+      restoredInvoiceRequestStatus({
+        companyName: "ViaPackaging UG",
+        ico: null,
+        dic: "DE366335248",
+        email: "marius@viapackaging.eu",
+      }),
+    ).toBe("auto-completed");
+  });
+
+  it("puts an incomplete request back in the agent's queue", () => {
+    expect(
+      restoredInvoiceRequestStatus({
+        companyName: "Acme s.r.o.",
+        ico: null,
+        dic: null,
+        email: "fakturace@acme.cz",
+      }),
+    ).toBe("awaiting-info");
   });
 });

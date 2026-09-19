@@ -47,6 +47,7 @@ import {
   revenueInvoiceId,
   deriveIcoFromDic,
   missingInvoiceFields,
+  restoredInvoiceRequestStatus,
   PAYMENT_IBAN,
   PAYMENT_SWIFT,
   PAYMENT_ACCOUNT_DISPLAY,
@@ -2173,6 +2174,8 @@ function InvoiceCollectionPanel({
   reservation,
   onUseDetails,
   onIssueAnyway,
+  onDismiss,
+  onRestore,
 }: {
   reservation: Reservation;
   /** Copy the collected details into the (still empty) invoice form fields. */
@@ -2180,7 +2183,13 @@ function InvoiceCollectionPanel({
   /** Commit the collected details and issue the invoice even though something
    *  mandatory is still missing — the operator's override of the agent. */
   onIssueAnyway?: (patch: Partial<InvoiceData>, requestId: string) => void;
+  /** Settled outside the app, or no longer wanted — close it off. */
+  onDismiss?: (requestId: string) => void;
+  /** Undo a dismissal. */
+  onRestore?: (requestId: string) => void;
 }) {
+  const [confirmingDismiss, setConfirmingDismiss] = useState(false);
+
   const requests = reservation.invoiceRequests ?? [];
   // Newest first, so a guest who asked twice shows the live request.
   const byRecency = [...requests].sort((a, b) => b.detectedAt.localeCompare(a.detectedAt));
@@ -2188,7 +2197,34 @@ function InvoiceCollectionPanel({
     byRecency.find((r) => r.status === "auto-completed") ??
     byRecency.find((r) => r.status === "accepted") ??
     byRecency.find((r) => r.status === "awaiting-info");
-  if (!req) return null;
+
+  // Nothing live, but the guest did ask once and the operator closed it off.
+  // Kept as a quiet one-liner rather than vanishing: the request happened, and
+  // a dismissal made by mistake needs a way back.
+  if (!req) {
+    const dismissed = byRecency.find((r) => r.status === "rejected");
+    if (!dismissed) return null;
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3.5 py-2 text-[11px] text-gray-500">
+        <svg className="w-3.5 h-3.5 shrink-0 text-gray-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+        <span>
+          Invoice request dismissed
+          {dismissed.processedAt ? ` · ${formatDate(dismissed.processedAt.slice(0, 10))}` : ""}
+        </span>
+        {onRestore && (
+          <button
+            type="button"
+            onClick={() => onRestore(dismissed.id)}
+            className="ml-auto font-medium underline underline-offset-2 hover:text-gray-700"
+          >
+            Undo
+          </button>
+        )}
+      </div>
+    );
+  }
 
   const collecting = req.status === "awaiting-info";
 
@@ -2334,9 +2370,9 @@ function InvoiceCollectionPanel({
         />
       </p>
 
-      {collected.length > 0 && (onUseDetails || canIssueAnyway) && (
+      {(collected.length > 0 || onDismiss) && (
         <div className="flex flex-wrap items-center gap-3 pt-0.5">
-          {canIssueAnyway && (
+          {canIssueAnyway && collected.length > 0 && (
             <button
               type="button"
               onClick={() => onIssueAnyway?.(patch, req.id)}
@@ -2346,7 +2382,7 @@ function InvoiceCollectionPanel({
               Issue anyway
             </button>
           )}
-          {onUseDetails && (
+          {onUseDetails && collected.length > 0 && (
             <button
               type="button"
               onClick={() => onUseDetails(patch)}
@@ -2354,6 +2390,36 @@ function InvoiceCollectionPanel({
             >
               Copy into the fields below
             </button>
+          )}
+          {onDismiss && (
+            confirmingDismiss ? (
+              <span className="ml-auto flex items-center gap-2 text-[11px]">
+                <span className={tone.sub}>Dismiss?</span>
+                <button
+                  type="button"
+                  onClick={() => { setConfirmingDismiss(false); onDismiss(req.id); }}
+                  className="px-2 py-0.5 rounded font-semibold bg-gray-700 text-white hover:bg-gray-900 transition-colors"
+                >
+                  Yes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDismiss(false)}
+                  className={`font-medium underline underline-offset-2 ${tone.sub} hover:opacity-80`}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingDismiss(true)}
+                className={`ml-auto text-[11px] font-medium underline underline-offset-2 ${tone.sub} hover:opacity-80`}
+                title="Handled outside the app, or no longer wanted — stops the agent chasing the guest and closes the Send-invoice task"
+              >
+                Dismiss
+              </button>
+            )
           )}
         </div>
       )}
@@ -3459,6 +3525,78 @@ export default function ReservationDrawer({
 
   function applyCollectedDetails(patch: Partial<InvoiceData>) {
     setInvoiceForm((prev) => mergeCollected(prev, patch));
+  }
+
+  /**
+   * Close off an invoice request the operator settled outside the app, or that
+   * is no longer wanted. `rejected` is terminal for the agent — neither the
+   * reminder pass nor the auto-complete sweep looks at it again.
+   *
+   * The open Send-invoice task goes with it. Leaving it would keep the booking
+   * in the "invoices unsent" alert and the pending-tasks pill, which is exactly
+   * the noise the operator is dismissing.
+   */
+  function dismissInvoiceRequest(requestId: string) {
+    const updated: Reservation = {
+      ...reservation!,
+      invoiceRequests: (reservation!.invoiceRequests ?? []).map((r) =>
+        r.id === requestId
+          ? { ...r, status: "rejected" as const, processedAt: new Date().toISOString() }
+          : r,
+      ),
+      issues: (reservation!.issues ?? []).map((i) =>
+        i.category === "invoice" && !i.resolved ? { ...i, resolved: true } : i,
+      ),
+    };
+    onUpdate(updated);
+    persistInvoiceRequestAction(requestId, "reject");
+  }
+
+  /**
+   * Undo a dismissal. The restored status is re-derived from the stored fields
+   * rather than remembered (the server does the same, so the two agree).
+   *
+   * Reopening the Send-invoice task is deliberately conditional: an invoice
+   * task on a reservation whose invoice was actually SENT was resolved on its
+   * own merits and stays resolved. Only an unsent one is reopened — which is
+   * precisely the dismissed-by-mistake case, and it means undo behaves the
+   * same way after a page reload as it does immediately.
+   */
+  function restoreInvoiceRequest(requestId: string) {
+    const req = (reservation!.invoiceRequests ?? []).find((r) => r.id === requestId);
+    if (!req) return;
+    const status = restoredInvoiceRequestStatus({
+      companyName: req.companyName,
+      ico: req.ico,
+      dic: req.dic,
+      email: req.email,
+    });
+    const reopenTasks = reservation!.invoiceStatus !== "Sent";
+    const updated: Reservation = {
+      ...reservation!,
+      invoiceRequests: (reservation!.invoiceRequests ?? []).map((r) =>
+        r.id === requestId ? { ...r, status, processedAt: undefined } : r,
+      ),
+      ...(reopenTasks
+        ? {
+            issues: (reservation!.issues ?? []).map((i) =>
+              i.category === "invoice" && i.resolved ? { ...i, resolved: false } : i,
+            ),
+          }
+        : {}),
+    };
+    onUpdate(updated);
+    persistInvoiceRequestAction(requestId, "restore");
+  }
+
+  /** Best-effort server write — local state is already optimistic, and the next
+   *  /api/invoice-requests sync re-attaches whatever actually persisted. */
+  function persistInvoiceRequestAction(requestId: string, action: "reject" | "restore") {
+    fetch(`/api/invoice-requests/${encodeURIComponent(requestId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    }).catch((err) => console.error(`[invoice-request] ${action} failed`, err));
   }
 
   /**
@@ -5558,6 +5696,8 @@ export default function ReservationDrawer({
                   reservation.invoiceStatus === "Not Issued" && !splitMode ? applyCollectedDetails : undefined
                 }
                 onIssueAnyway={splitMode ? undefined : issueWithPartialDetails}
+                onDismiss={dismissInvoiceRequest}
+                onRestore={restoreInvoiceRequest}
               />
             </div>
 

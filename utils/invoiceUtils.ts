@@ -47,6 +47,23 @@ export function missingInvoiceFields(
   return out;
 }
 
+/**
+ * Where a dismissed invoice request belongs if the operator undoes the
+ * dismissal. Derived from the stored fields rather than remembered, so there's
+ * no extra column to migrate and no chance of restoring a status the data no
+ * longer supports: a complete set is a finished request, an incomplete one goes
+ * back to the agent's queue.
+ *
+ * Only ever applied to requests the drawer's collection panel could dismiss
+ * (awaiting-info / accepted / auto-completed) — a legacy `pending` row is
+ * dismissed from the Accept/Reject banner, which has no undo.
+ */
+export function restoredInvoiceRequestStatus(
+  fields: InvoiceIdentityFields,
+): "auto-completed" | "awaiting-info" {
+  return missingInvoiceFields(fields).length === 0 ? "auto-completed" : "awaiting-info";
+}
+
 /** A past stay whose invoice still hasn't gone out. */
 export interface UnsentInvoice {
   reservation: Reservation;

@@ -89,6 +89,33 @@ describe("unsentInvoices", () => {
     ).toEqual([]);
   });
 
+  it("drops a dismissed booking only once its send task is resolved too", () => {
+    // Dismissing flips the request AND resolves the task; an open task alone is
+    // enough to keep the row, so a half-done dismissal must not hide it.
+    const dismissed = { invoiceRequests: [request({ status: "rejected" })] };
+    expect(unsentInvoices([res({ ...dismissed, issues: [task()] })], TODAY)).toHaveLength(1);
+    expect(
+      unsentInvoices([res({ ...dismissed, issues: [task({ resolved: true })] })], TODAY),
+    ).toEqual([]);
+  });
+
+  it("keeps a booking whose other request is still live", () => {
+    const rows = unsentInvoices(
+      [
+        res({
+          issues: [],
+          invoiceRequests: [
+            request({ id: "old", status: "rejected" }),
+            request({ id: "new", status: "awaiting-info", email: null }),
+          ],
+        }),
+      ],
+      TODAY,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].awaitingGuest).toBe(true);
+  });
+
   it("reports nothing missing when a send would have everything", () => {
     const rows = unsentInvoices(
       [
