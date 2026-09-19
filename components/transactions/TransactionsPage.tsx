@@ -740,25 +740,37 @@ export default function TransactionsPage() {
         try {
           const todayIso = pragueToday();
           const stamp = Date.now();
+          // Group by reservation before writing. A guest who booked several
+          // apartments is ONE visible reservation holding several units, so the
+          // solver addresses each unit as "BH-123#K.106" — and if two of their
+          // apartments move, two writes would each start from the same stale
+          // issues array and the second would drop the first one's task.
+          const issuesByRes = new Map<string, Issue[]>();
+          for (const m of plan.moves) {
+            const [resNum, legUnit] = m.reservationNumber.split("#");
+            const notice = m.needsGuestNotice
+              ? " — ⚠ guest already sent check-in info: inform them of the new room / door code"
+              : "";
+            const whichApartment = legUnit ? ` (their ${legUnit} apartment)` : "";
+            const issue: Issue = {
+              id: `${stamp}-${m.reservationNumber}`,
+              category: "problem",
+              text: `🔀 Room reassigned${whichApartment} ${m.from} → ${m.to} to fit an arriving guest${notice}`,
+              actionableDate: todayIso,
+              resolved: false,
+              createdAt: new Date().toISOString(),
+            };
+            issuesByRes.set(resNum, [...(issuesByRes.get(resNum) ?? []), issue]);
+          }
+
           await Promise.all(
-            plan.moves.map((m) => {
-              const r = reservations.find((x) => x.reservationNumber === m.reservationNumber);
+            [...issuesByRes.entries()].map(([resNum, newIssues]) => {
+              const r = reservations.find((x) => x.reservationNumber === resNum);
               if (!r) return Promise.resolve();
-              const notice = m.needsGuestNotice
-                ? " — ⚠ guest already sent check-in info: inform them of the new room / door code"
-                : "";
-              const issue: Issue = {
-                id: `${stamp}-${m.reservationNumber}`,
-                category: "problem",
-                text: `🔀 Room reassigned ${m.from} → ${m.to} to fit an arriving guest${notice}`,
-                actionableDate: todayIso,
-                resolved: false,
-                createdAt: new Date().toISOString(),
-              };
               const fields = extractLocalFields(r);
               return persistOverride(r.reservationNumber, {
                 ...fields,
-                issues: [...(fields.issues ?? []), issue],
+                issues: [...(fields.issues ?? []), ...newIssues],
               });
             }),
           );
@@ -1986,6 +1998,12 @@ export default function TransactionsPage() {
                                   <li key={m.reservationNumber} className="text-[11px] text-amber-800">
                                     ↪ Move <span className="font-medium">{m.label ?? m.reservationNumber}</span>{" "}
                                     {m.from} → {m.to}
+                                    {/* A guest holding several apartments only ever has ONE of
+                                        them moved here; say so, or the name alone reads as if
+                                        the whole booking is being relocated. */}
+                                    {m.reservationNumber.includes("#") && (
+                                      <span className="ml-1 text-amber-700">· just this one of their apartments</span>
+                                    )}
                                     {m.needsGuestNotice && (
                                       <span className="ml-1 font-medium text-rose-700">
                                         · ⚠ arriving soon — inform guest of new room

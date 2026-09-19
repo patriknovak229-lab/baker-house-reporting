@@ -159,8 +159,11 @@ function groupInputs(all: ResRef[], group: AllocationGroup, today: string): Real
     if (occupied.length === 0) continue;
 
     const inHouse = r.checkInDate <= today;
-    const isPackage = occupied.length > 1 || (r.linkedRooms?.length ?? 0) > 1;
-    const movable = !inHouse && !r.isBlackout && !isPackage;
+    // A guest holding several apartments contributes one row per unit, each
+    // movable on its own — swapping one apartment within the same room type is
+    // invisible to that guest. The legs share dates, so the solver's
+    // no-double-booking rule already keeps them in different units.
+    const movable = !inHouse && !r.isBlackout;
 
     for (const unit of occupied) {
       inputs.push({

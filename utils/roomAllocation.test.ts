@@ -183,3 +183,83 @@ describe("planForUnallocated (two-tier, guest-messaging aware)", () => {
     expect(plan.moves.some((m) => m.reservationNumber === "CANCELLED-X")).toBe(false);
   });
 });
+
+describe("multi-apartment reservations (one guest, several units)", () => {
+  /** A reservation holding two units, as `mapToReservation` emits it. */
+  function pkg(over: Partial<ResRef> & { reservationNumber: string; linkedRooms: string[] }): ResRef {
+    return {
+      room: over.linkedRooms.join(" + "),
+      checkInDate: "2026-09-25",
+      checkOutDate: "2026-09-27",
+      ...over,
+    };
+  }
+
+  it("moves ONE apartment of a two-apartment booking instead of declaring the type oversold", () => {
+    // The shape of the BH-93351977 case. K.102 is blacked out on the 24th, so
+    // the arriving guest must start in K.103 or K.106 — and on the 25th the
+    // pair needs two units, which only works if the leg sharing the arriving
+    // guest's unit shifts to K.102. With the pair pinned as one lump there is
+    // no arrangement at all, which is exactly what the operator hit.
+    const all: ResRef[] = [
+      { reservationNumber: "OV-1", room: "K.102", checkInDate: "2026-09-24", checkOutDate: "2026-09-25", isBlackout: true },
+      { reservationNumber: "ARRIVING", room: "1KK Urban Studios", checkInDate: "2026-09-24", checkOutDate: "2026-09-26", isUnallocatedVR: true, firstName: "Krzysztof", lastName: "K" },
+      pkg({ reservationNumber: "PAIR", linkedRooms: ["K.103", "K.106"], firstName: "Mihály", lastName: "V" }),
+    ];
+    const res = planForUnallocated(all, "ARRIVING", "2026-09-19");
+
+    expect("error" in res).toBe(false);
+    if ("error" in res) return;
+    expect(res.plan.feasible).toBe(true);
+    // Exactly one leg moves, into the unit the arriving guest cannot use.
+    expect(res.plan.moves).toHaveLength(1);
+    expect(res.plan.moves[0].reservationNumber).toMatch(/^PAIR#K\.(103|106)$/);
+    expect(res.plan.moves[0].to).toBe("K.102");
+    expect(res.plan.placements[0].room).toMatch(/^K\.(103|106)$/);
+    // The guest who booked two apartments still has two, and the arriving
+    // guest is not put in the blacked-out room.
+    expect(res.plan.assignment["ARRIVING"]).not.toBe("K.102");
+  });
+
+  it("never collapses two apartments of one booking into the same unit", () => {
+    // The legs share dates, so the no-double-booking rule must keep them apart
+    // — otherwise a two-apartment guest would be handed a single room.
+    const all: ResRef[] = [
+      { reservationNumber: "OV-1", room: "K.102", checkInDate: "2026-09-24", checkOutDate: "2026-09-25", isBlackout: true },
+      { reservationNumber: "ARRIVING", room: "1KK Urban Studios", checkInDate: "2026-09-24", checkOutDate: "2026-09-26", isUnallocatedVR: true },
+      pkg({ reservationNumber: "PAIR", linkedRooms: ["K.103", "K.106"] }),
+    ];
+    const res = planForUnallocated(all, "ARRIVING", "2026-09-19");
+    if ("error" in res) throw new Error(res.error);
+
+    const units = Object.entries(res.plan.assignment)
+      .filter(([id]) => id.startsWith("PAIR#"))
+      .map(([, unit]) => unit);
+    expect(units).toHaveLength(2);
+    expect(new Set(units).size).toBe(2);
+  });
+
+  it("still refuses to move an apartment whose guest has already checked in", () => {
+    // In-house pins the whole reservation, legs included.
+    const all: ResRef[] = [
+      { reservationNumber: "ARRIVING", room: "1KK Urban Studios", checkInDate: "2026-09-20", checkOutDate: "2026-09-22", isUnallocatedVR: true },
+      pkg({ reservationNumber: "PAIR", linkedRooms: ["K.103", "K.106"], checkInDate: "2026-09-18", checkOutDate: "2026-09-23" }),
+      { reservationNumber: "THIRD", room: "K.102", checkInDate: "2026-09-18", checkOutDate: "2026-09-23" },
+    ];
+    const res = planForUnallocated(all, "ARRIVING", "2026-09-19");
+    if ("error" in res) throw new Error(res.error);
+
+    expect(res.plan.feasible).toBe(false);
+    expect(res.plan.moves).toHaveLength(0);
+  });
+
+  it("leaves a blackout's units alone even when it spans several rooms", () => {
+    const all: ResRef[] = [
+      { reservationNumber: "ARRIVING", room: "1KK Urban Studios", checkInDate: "2026-09-25", checkOutDate: "2026-09-27", isUnallocatedVR: true },
+      pkg({ reservationNumber: "OV-X", linkedRooms: ["K.102", "K.103", "K.106"], isBlackout: true }),
+    ];
+    const res = planForUnallocated(all, "ARRIVING", "2026-09-19");
+    if ("error" in res) throw new Error(res.error);
+    expect(res.plan.feasible).toBe(false);
+  });
+});

@@ -398,16 +398,25 @@ export function planForUnallocated(
     if (occupiedUnits.length === 0) continue; // not in this group
 
     const inHouse = r.checkInDate <= today && r.checkOutDate > today;
-    const isPackage = (r.linkedRooms?.length ?? 0) > 1;
-    const movable = !inHouse && !r.isBlackout && !isPackage;
+    const movable = !inHouse && !r.isBlackout;
     // Arriving today is already `inHouse` (pinned); "messaged" catches the
     // next tier out — arriving tomorrow — whose check-in info has gone out.
     const messaged = movable && r.checkInDate <= tomorrow;
 
     for (const unit of occupiedUnits) {
       inputs.push({
-        // Synthetic id when a single booking blocks several units (package);
-        // such rows are always pinned, so they never appear in moves/placements.
+        // One guest booking several apartments arrives as ONE reservation
+        // holding several units, so each unit becomes its own row with a
+        // synthetic id. Each row moves INDEPENDENTLY: swapping one apartment
+        // of a two-apartment booking to a different unit of the same type is
+        // invisible to that guest (same room type, same dates) and is often
+        // the only way to fit an arriving guest in. Pinning the whole booking
+        // instead made real cases look oversold — BH-93351977 could not be
+        // placed until one leg of BH-92334430 was allowed to move.
+        //
+        // The legs share dates, so they overlap each other and the solver's
+        // own no-double-booking rule keeps them in DIFFERENT units. Nothing
+        // extra is needed to stop it collapsing two apartments into one.
         reservationNumber: occupiedUnits.length > 1 ? `${r.reservationNumber}#${unit}` : r.reservationNumber,
         checkIn: r.checkInDate,
         checkOut: r.checkOutDate,

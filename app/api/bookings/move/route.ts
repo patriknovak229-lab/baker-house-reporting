@@ -4,7 +4,10 @@
  * behind the unallocated-reservation resolver.
  *
  * Body: { moves: [{ reservationNumber, toRoom }], reason? }
- *   - reservationNumber: "BH-<id>"
+ *   - reservationNumber: "BH-<id>", or "BH-<id>#<unit>" for ONE apartment of a
+ *     guest who booked several. Such a reservation is a single visible booking
+ *     holding several units, so the solver addresses each unit separately and
+ *     this endpoint resolves the leg back to its own Beds24 booking (below).
  *   - toRoom: physical unit name, e.g. "K.203"
  *   The list includes the unallocated booking's placement AND any shuffle.
  *
@@ -40,6 +43,19 @@ interface Beds24Booking {
   status: string;
   firstName?: string;
   lastName?: string;
+}
+
+interface ParsedMove {
+  /** Exactly what the client sent, for error messages. */
+  ref: string;
+  /** The visible reservation's Beds24 id (the master of a merged group). */
+  masterId: number;
+  /** Set when the ref addressed one apartment of a multi-unit reservation. */
+  legUnit: string | null;
+  toRoom: string;
+  toRoomId: number;
+  /** The Beds24 booking actually being moved — resolved before execution. */
+  bookingId: number;
 }
 
 interface MoveInput {
@@ -85,17 +101,26 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Parse + within-type validation ──
-  const parsed: { bookingId: number; toRoom: string; toRoomId: number }[] = [];
+  const parsed: ParsedMove[] = [];
   let group: AllocationGroup | null = null;
   for (const m of moves) {
-    const bookingId = Number(String(m.reservationNumber ?? "").replace(/^BH-/, ""));
+    const ref = String(m.reservationNumber ?? "");
+    // "BH-123#K.106" addresses one apartment of a multi-apartment reservation.
+    const [idPart, legUnit = null] = ref.split("#");
+    const masterId = Number(idPart.replace(/^BH-/, ""));
     const toRoomId = roomIdForName(m.toRoom);
     const g = groupForRoom(m.toRoom);
-    if (!Number.isFinite(bookingId) || bookingId <= 0) {
-      return NextResponse.json({ error: `Bad reservation number: ${m.reservationNumber}` }, { status: 400 });
+    if (!Number.isFinite(masterId) || masterId <= 0) {
+      return NextResponse.json({ error: `Bad reservation number: ${ref}` }, { status: 400 });
     }
     if (toRoomId === null || !g) {
       return NextResponse.json({ error: `"${m.toRoom}" is not a shuffleable unit` }, { status: 400 });
+    }
+    if (legUnit !== null && groupForRoom(legUnit) !== g) {
+      return NextResponse.json(
+        { error: `"${legUnit}" is not a unit of ${g.typeLabel} — a leg can only move within its own room type` },
+        { status: 400 },
+      );
     }
     if (group && g !== group) {
       return NextResponse.json(
@@ -104,7 +129,8 @@ export async function POST(req: NextRequest) {
       );
     }
     group = g;
-    parsed.push({ bookingId, toRoom: m.toRoom, toRoomId });
+    // Resolved after the live fetch; masterId is right for a single-unit booking.
+    parsed.push({ ref, masterId, legUnit, toRoom: m.toRoom, toRoomId, bookingId: masterId });
   }
   group = group!;
 
@@ -117,7 +143,7 @@ export async function POST(req: NextRequest) {
 
   // ── Fetch the bookings being moved (live), to learn dates + status ──
   const idParams = new URLSearchParams();
-  parsed.forEach((p) => idParams.append("id", String(p.bookingId)));
+  [...new Set(parsed.map((p) => p.masterId))].forEach((id) => idParams.append("id", String(id)));
   for (const s of ["confirmed", "new", "request", "cancelled"]) idParams.append("status", s);
   let movedBookings: Beds24Booking[];
   try {
@@ -132,17 +158,8 @@ export async function POST(req: NextRequest) {
   const today = pragueToday();
 
   for (const p of parsed) {
-    const b = movedById.get(p.bookingId);
-    if (!b) return NextResponse.json({ error: `Booking ${p.bookingId} not found` }, { status: 404 });
-    if (b.status === "cancelled") {
-      return NextResponse.json({ error: `Booking ${p.bookingId} is cancelled` }, { status: 409 });
-    }
-    // In-house = already arrived and not yet departed → must not be moved.
-    if (b.arrival <= today && b.departure > today) {
-      return NextResponse.json(
-        { error: `Booking ${p.bookingId} is an in-house guest and cannot be moved` },
-        { status: 409 },
-      );
+    if (!movedById.has(p.masterId)) {
+      return NextResponse.json({ error: `Booking ${p.masterId} not found` }, { status: 404 });
     }
   }
 
@@ -169,6 +186,68 @@ export async function POST(req: NextRequest) {
   }
 
   const roomIdToName = new Map(group.units.map((u) => [u.roomId, u.room]));
+  const byId = new Map<number, Beds24Booking>();
+  for (const b of [...movedBookings, ...groupBookings]) byId.set(b.id, b);
+
+  // ── Resolve each leg of a multi-apartment reservation to its own booking ──
+  // One guest booking two apartments is two Beds24 bookings merged into one
+  // visible reservation, and only the master's id survives that merge. The leg
+  // is identified from LIVE state instead: the booking sitting in that unit for
+  // exactly the reservation's dates. Two bookings cannot share a unit over the
+  // same nights, so a match is unique — and if it somehow is not, refusing
+  // beats moving a stranger's booking.
+  for (const p of parsed) {
+    if (!p.legUnit) continue;
+    const master = movedById.get(p.masterId)!;
+    const candidates = groupBookings.filter(
+      (b) =>
+        roomIdToName.get(b.roomId) === p.legUnit &&
+        b.arrival === master.arrival &&
+        b.departure === master.departure &&
+        b.status !== "cancelled",
+    );
+    if (candidates.length !== 1) {
+      return NextResponse.json(
+        {
+          error:
+            `Could not identify which booking of ${p.ref} occupies ${p.legUnit} ` +
+            `(${candidates.length} candidates for ${master.arrival}→${master.departure}). ` +
+            `Move that apartment in Beds24 by hand.`,
+        },
+        { status: 409 },
+      );
+    }
+    p.bookingId = candidates[0].id;
+  }
+
+  for (const p of parsed) {
+    const b = byId.get(p.bookingId);
+    if (!b) return NextResponse.json({ error: `Booking ${p.bookingId} not found` }, { status: 404 });
+    if (b.status === "cancelled") {
+      return NextResponse.json({ error: `Booking ${p.bookingId} is cancelled` }, { status: 409 });
+    }
+    // In-house = already arrived and not yet departed → must not be moved.
+    if (b.arrival <= today && b.departure > today) {
+      return NextResponse.json(
+        { error: `Booking ${p.bookingId} is an in-house guest and cannot be moved` },
+        { status: 409 },
+      );
+    }
+  }
+
+  // Two legs of one reservation must not be sent to the same unit — that would
+  // ask Beds24 to put one guest's two apartments into a single room.
+  const targetsByBooking = new Map<number, string>();
+  for (const p of parsed) {
+    if (targetsByBooking.has(p.bookingId)) {
+      return NextResponse.json(
+        { error: `Booking ${p.bookingId} appears twice in this reshuffle` },
+        { status: 400 },
+      );
+    }
+    targetsByBooking.set(p.bookingId, p.toRoom);
+  }
+
   const moveTargetById = new Map(parsed.map((p) => [p.bookingId, p.toRoom]));
 
   // Build post-move unit → intervals (only physically-allocated bookings count).
@@ -187,7 +266,8 @@ export async function POST(req: NextRequest) {
   // add them at their target unit using the dates we already fetched.
   for (const p of parsed) {
     if (seen.has(p.bookingId)) continue;
-    const b = movedById.get(p.bookingId)!;
+    const b = byId.get(p.bookingId);
+    if (!b) continue; // already reported as missing above
     perUnit[p.toRoom].push({ ...b, roomId: p.toRoomId });
   }
 
@@ -235,11 +315,13 @@ export async function POST(req: NextRequest) {
   const stamp = Date.now();
   await recordRoomMoves(
     parsed.map((p) => {
-      const b = movedById.get(p.bookingId)!;
+      const b = byId.get(p.bookingId)!;
       const guestName = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
       return {
         id: roomMoveId(String(p.bookingId), stamp),
-        reservationNumber: `BH-${p.bookingId}`,
+        // The master id is what the operator sees in Transactions; a leg's own
+        // booking id would point at a reservation the app never displays.
+        reservationNumber: `BH-${p.masterId}`,
         guestName: guestName || null,
         // Unallocated placements come off the virtual room, which has no unit name.
         fromRoom: roomIdToName.get(b.roomId) ?? group.typeLabel,
@@ -258,7 +340,9 @@ export async function POST(req: NextRequest) {
     }),
   );
 
-  const summary = parsed.map((p) => `#${p.bookingId} → ${p.toRoom}`).join(", ");
+  const summary = parsed
+    .map((p) => (p.legUnit ? `#${p.masterId} (${p.legUnit}) → ${p.toRoom}` : `#${p.bookingId} → ${p.toRoom}`))
+    .join(", ");
   await sendTelegram(
     [
       `🔀 <b>Room reallocation</b> (${group.typeLabel})`,
