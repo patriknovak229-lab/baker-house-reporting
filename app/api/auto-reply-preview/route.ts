@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
         language,
       );
     } else if (category === 'invoice-missing') {
-      const missing: InvoiceMandatory[] = ['companyName', 'ico'];
+      const missing: InvoiceMandatory[] = ['companyName', 'companyId'];
       rendered = await renderMissingFieldsReply(firstName, missing, language);
     } else {
       // Parking / wifi / minibar / early-checkin / late-checkout

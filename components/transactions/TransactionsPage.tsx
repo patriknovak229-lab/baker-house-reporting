@@ -5,6 +5,8 @@ import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
+import { unsentInvoices } from "@/utils/invoiceUtils";
+import UnsentInvoicesPanel from "./UnsentInvoicesPanel";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { RoomMoveNotice } from "@/types/roomMove";
 import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
@@ -605,6 +607,7 @@ export default function TransactionsPage() {
   const [removingBlackoutId, setRemovingBlackoutId] = useState<string | null>(null);
   const [postStayPanelOpen, setPostStayPanelOpen] = useState(false);
   const [ackingPostStayId, setAckingPostStayId] = useState<string | null>(null);
+  const [unsentInvoicePanelOpen, setUnsentInvoicePanelOpen] = useState(false);
 
   interface DataIssue {
     reservation: Reservation;
@@ -641,14 +644,20 @@ export default function TransactionsPage() {
   }, [reservations]);
 
   /** "Generic" pending tasks = everything that isn't the dedicated
-   *  early-checkin / late-checkout request lanes. Keeps the original red
-   *  pill focused on operator-actionable items: problems, invoices to
-   *  send, mid-stay cleanings, special-treatment notes. */
+   *  early-checkin / late-checkout / unsent-invoice request lanes. Keeps the
+   *  original red pill focused on operator-actionable items: problems,
+   *  invoices still coming up, mid-stay cleanings, special-treatment notes.
+   *
+   *  An OVERDUE invoice task moves to the "invoices unsent" pill instead of
+   *  being counted twice — a past stay whose invoice never went out is a
+   *  different job (chase details, send by hand) from a task due next week. */
   const upcomingUnresolved = useMemo(
     () =>
       allUpcomingUnresolved.filter((x) => {
         const cat = x.issue.category ?? "problem";
-        return cat !== "earlyCheckin" && cat !== "lateCheckout";
+        if (cat === "earlyCheckin" || cat === "lateCheckout") return false;
+        if (cat === "invoice" && x.overdue) return false;
+        return true;
       }),
     [allUpcomingUnresolved],
   );
@@ -665,6 +674,12 @@ export default function TransactionsPage() {
   const upcomingLateCheckouts = useMemo(
     () => allUpcomingUnresolved.filter((x) => x.issue.category === "lateCheckout" && !x.overdue),
     [allUpcomingUnresolved],
+  );
+
+  /** Past stays the guest asked to be invoiced for, where nothing went out. */
+  const unsentInvoiceRows = useMemo(
+    () => unsentInvoices(reservations, pragueToday()),
+    [reservations],
   );
 
   const overdueCount = useMemo(
@@ -1338,6 +1353,7 @@ export default function TransactionsPage() {
         || unallocatedReservations.length > 0
         || activeBlackouts.length > 0
         || roomMoves.length > 0
+        || unsentInvoiceRows.length > 0
         || postStayChanges.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row */}
@@ -1369,6 +1385,25 @@ export default function TransactionsPage() {
                 <span className={`font-normal ${overdueCount > 0 ? 'text-red-500' : 'text-amber-600'}`}>· next 7 days</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {unsentInvoiceRows.length > 0 && (
+              <button
+                onClick={() => setUnsentInvoicePanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                {unsentInvoiceRows.length} {unsentInvoiceRows.length === 1 ? "invoice" : "invoices"} unsent
+                <span className="text-red-500 font-normal">· stay already over</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${unsentInvoicePanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1567,6 +1602,14 @@ export default function TransactionsPage() {
               );
             })()}
           </div>
+
+          {/* Unsent invoices panel — past stays the guest asked to be invoiced for */}
+          {unsentInvoiceRows.length > 0 && unsentInvoicePanelOpen && (
+            <UnsentInvoicesPanel
+              rows={unsentInvoiceRows}
+              onSelect={(r) => { setSelectedReservation(r); setUnsentInvoicePanelOpen(false); }}
+            />
+          )}
 
           {/* Early check-ins panel — expanded below pill row, full width */}
           {upcomingEarlyCheckins.length > 0 && earlyCheckinPanelOpen && (

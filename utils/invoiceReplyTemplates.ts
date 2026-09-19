@@ -13,10 +13,12 @@
 
 import { translateText } from '@/utils/googleTranslate';
 import { formalGreeting } from '@/utils/greeting';
+import type { InvoiceMandatoryField } from '@/utils/invoiceUtils';
 
 const SIGN_OFF = '\n\n— Zuzana';
 
-export type InvoiceMandatory = 'companyName' | 'ico' | 'email';
+/** Alias of the shared rule's field names — one vocabulary end to end. */
+export type InvoiceMandatory = InvoiceMandatoryField;
 
 /**
  * Ask the guest for missing mandatory fields. The list is built dynamically
@@ -79,8 +81,10 @@ function labelForField(field: InvoiceMandatory): string {
   switch (field) {
     case 'companyName':
       return 'Company name';
-    case 'ico':
-      return 'Company ID (IČO)';
+    case 'companyId':
+      // IČO for Czech/Slovak companies; foreign companies have no IČO, so the
+      // VAT number is offered in the same breath rather than in a later ask.
+      return 'Company ID (IČO), or your VAT number if the company is not Czech';
     case 'email':
       // Per operator instruction: generic phrasing, no channel name
       return 'Your email address (we are not getting it from the booking)';

@@ -45,11 +45,13 @@ import {
   splitInvoiceNumber,
   splitTotals,
   revenueInvoiceId,
+  deriveIcoFromDic,
+  missingInvoiceFields,
   PAYMENT_IBAN,
   PAYMENT_SWIFT,
   PAYMENT_ACCOUNT_DISPLAY,
 } from "@/utils/invoiceUtils";
-import type { PaymentQRInfo } from "@/utils/invoiceUtils";
+import type { PaymentQRInfo, InvoiceMandatoryField } from "@/utils/invoiceUtils";
 import { formatPhoneDisplay } from "@/utils/stringUtils";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
@@ -2151,6 +2153,315 @@ function TaskBlock({
 /** A4 (210mm) minus the 18mm side margins `buildInvoiceHTML` sets via @page,
  *  at 96dpi — the width the invoice actually occupies on the printed page. */
 const PRINT_CONTENT_WIDTH_PX = 658;
+// ── What the AI agent collected from the guest, and what happens next ────────
+/**
+ * The chat agent asks a guest who wants an invoice for their company details,
+ * merges the answers across however many messages it takes, and — once it has
+ * everything — writes them onto the reservation and queues the checkout-dated
+ * Send-invoice task that the 09:00 cron mails out.
+ *
+ * All of that used to happen with no trace in the drawer: the Accept/Reject
+ * banner only renders `pending` rows, so a request the agent handled end to end
+ * was invisible and the Invoice section just looked empty. This panel is the
+ * record — what was collected, whether the agent is still waiting on the guest,
+ * and when the invoice actually goes out.
+ *
+ * Deliberately NOT shown for `pending` (the banner at the top of the drawer owns
+ * that one) or `rejected` (dismissed — nothing to report).
+ */
+function InvoiceCollectionPanel({
+  reservation,
+  onUseDetails,
+  onIssueAnyway,
+}: {
+  reservation: Reservation;
+  /** Copy the collected details into the (still empty) invoice form fields. */
+  onUseDetails?: (patch: Partial<InvoiceData>) => void;
+  /** Commit the collected details and issue the invoice even though something
+   *  mandatory is still missing — the operator's override of the agent. */
+  onIssueAnyway?: (patch: Partial<InvoiceData>, requestId: string) => void;
+}) {
+  const requests = reservation.invoiceRequests ?? [];
+  // Newest first, so a guest who asked twice shows the live request.
+  const byRecency = [...requests].sort((a, b) => b.detectedAt.localeCompare(a.detectedAt));
+  const req =
+    byRecency.find((r) => r.status === "auto-completed") ??
+    byRecency.find((r) => r.status === "accepted") ??
+    byRecency.find((r) => r.status === "awaiting-info");
+  if (!req) return null;
+
+  const collecting = req.status === "awaiting-info";
+
+  // Same cross-fill the accept/auto-complete paths store, so the panel shows
+  // exactly what landed (or would land) on the reservation.
+  const company = (req.companyName ?? "")
+    .replace(/\[link removed\]/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const ico = req.ico || deriveIcoFromDic(req.dic) || "";
+  const dic = req.dic || "";
+  const address = req.companyAddress ?? "";
+
+  // "Still missing" has to match what the pipeline is actually still asking the
+  // guest for, and the pipeline only counts an email the guest gave IN CHAT.
+  // The reservation's own address is a fallback applied later, when the details
+  // are written — shown here, but it doesn't stop the agent asking.
+  const missing = missingInvoiceFields({
+    companyName: company || null,
+    ico: ico || null,
+    dic: dic || null,
+    email: req.email,
+  });
+
+  const fallbackEmail = req.email ? "" : guestBillingEmail(reservation);
+  const email = req.email || fallbackEmail;
+
+  const collected: Array<[string, string]> = [
+    ["Company", company],
+    ["Address", address],
+    ["IČO", ico],
+    ["DIČ / VAT", dic],
+    [fallbackEmail ? "Email (from reservation)" : "Email", email],
+  ].filter((pair): pair is [string, string] => Boolean(pair[1]));
+
+  const tone = collecting
+    ? {
+        box: "border-amber-200 bg-amber-50",
+        heading: "text-amber-900",
+        sub: "text-amber-700",
+        label: "text-amber-600",
+        value: "text-amber-950",
+      }
+    : {
+        box: "border-emerald-200 bg-emerald-50",
+        heading: "text-emerald-900",
+        sub: "text-emerald-700",
+        label: "text-emerald-600",
+        value: "text-emerald-950",
+      };
+
+  const asks = req.asksCount ?? 0;
+
+  const patch: Partial<InvoiceData> = {
+    companyName: company,
+    companyAddress: address,
+    ico,
+    vatNumber: dic,
+    billingEmail: email,
+  };
+
+  // The operator's override: none of IČO, VAT or company name is technically
+  // required to raise and email the document, so a human can finish what the
+  // agent won't. Offered while the invoice is unissued and the agent hasn't
+  // delivered — either it's still chasing the guest, or something mandatory is
+  // missing. Once it has handed over a full set, the ordinary Generate button
+  // below already does the job and a second one would just be noise.
+  const canIssueAnyway =
+    !!onIssueAnyway &&
+    reservation.invoiceStatus === "Not Issued" &&
+    (collecting || missing.length > 0);
+
+  return (
+    <div className={`rounded-lg border px-3.5 py-3 space-y-2.5 ${tone.box}`}>
+      <div className="flex items-start gap-2">
+        <span className={`mt-0.5 shrink-0 ${tone.sub}`}>
+          {collecting ? (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l2.5 2.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          )}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className={`text-xs font-semibold uppercase tracking-wide ${tone.heading}`}>
+            {collecting
+              ? "Collecting details from guest"
+              : req.status === "accepted"
+                ? "Details taken from guest request"
+                : "Details collected automatically"}
+          </p>
+          <p className={`text-[10px] mt-0.5 ${tone.sub}`}>
+            {collecting
+              ? `Agent asked the guest in chat${asks > 1 ? ` (${asks}×)` : ""} — waiting on a reply`
+              : "Agent asked the guest in chat and got everything it needed"}
+            {req.detectedAt ? ` · requested ${formatDate(req.detectedAt.slice(0, 10))}` : ""}
+          </p>
+        </div>
+      </div>
+
+      {collected.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+          {collected.map(([label, value]) => (
+            <div key={label} className={label === "Company" || label === "Address" ? "col-span-2" : ""}>
+              <span className={`text-[10px] block ${tone.label}`}>{label}</span>
+              <span
+                className={`block break-words ${tone.value} ${
+                  label === "IČO" || label === "DIČ / VAT" ? "font-mono" : "font-medium"
+                }`}
+              >
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {collecting && missing.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] text-amber-600">Still missing</span>
+          {missing.map((f) => (
+            <span
+              key={f}
+              className="px-1.5 py-0.5 rounded bg-amber-200/70 text-amber-900 text-[10px] font-medium"
+            >
+              {MISSING_FIELD_LABEL[f]}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <p className={`text-[11px] leading-snug ${tone.sub}`}>
+        <NextStepLine
+          reservation={reservation}
+          collecting={collecting}
+          asks={asks}
+          // The saved address is what the send actually uses; the collected one
+          // is only a preview of what would be saved.
+          email={reservation.invoiceData?.billingEmail?.trim() || email}
+        />
+      </p>
+
+      {collected.length > 0 && (onUseDetails || canIssueAnyway) && (
+        <div className="flex flex-wrap items-center gap-3 pt-0.5">
+          {canIssueAnyway && (
+            <button
+              type="button"
+              onClick={() => onIssueAnyway?.(patch, req.id)}
+              className="px-2.5 py-1 rounded text-[11px] font-semibold bg-gray-900 text-white hover:bg-gray-700 transition-colors"
+              title="Commit these details and mark the invoice issued, missing fields and all"
+            >
+              Issue anyway
+            </button>
+          )}
+          {onUseDetails && (
+            <button
+              type="button"
+              onClick={() => onUseDetails(patch)}
+              className={`text-[11px] font-medium underline underline-offset-2 ${tone.sub} hover:opacity-80`}
+            >
+              Copy into the fields below
+            </button>
+          )}
+        </div>
+      )}
+
+      {canIssueAnyway && !email && (
+        <p className={`text-[10px] ${tone.sub}`}>
+          Issuing works without the rest, but emailing needs an address — fill Billing Email in below
+          before you send.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const MISSING_FIELD_LABEL: Record<InvoiceMandatoryField, string> = {
+  companyName: "Company name",
+  companyId: "IČO or VAT number",
+  email: "Billing email",
+};
+
+/** How many days past checkout the send cron still catches up — mirrors
+ *  CATCHUP_DAYS in app/api/cron/send-due-invoices/route.ts. */
+const INVOICE_CATCHUP_DAYS = 3;
+
+/**
+ * The "and then what?" sentence. The automatic send is real but conditional —
+ * it needs an open invoice task, complete details, and a checkout inside the
+ * cron's catch-up window — so each condition that would silently stop it is
+ * spelled out rather than left for the operator to discover on the day.
+ */
+function NextStepLine({
+  reservation,
+  collecting,
+  asks,
+  email,
+}: {
+  reservation: Reservation;
+  collecting: boolean;
+  asks: number;
+  email: string;
+}) {
+  if (collecting) {
+    return (
+      <>
+        {asks >= 2
+          ? "The guest has been asked twice — no further automatic reminders. Fill the rest in below and send it yourself."
+          : "One reminder goes out automatically 24 h after the first ask. Nothing is sent to the guest until every field is in."}
+      </>
+    );
+  }
+
+  if (reservation.invoiceStatus === "Sent") {
+    return <>Invoice already sent{email ? ` to ${email}` : ""}. Nothing further to do.</>;
+  }
+  if (reservation.invoiceStatus === "Issued") {
+    return <>Invoice generated — the automatic run leaves it alone, send it below when you&rsquo;re ready.</>;
+  }
+
+  const task = (reservation.issues ?? []).find((i) => i.category === "invoice" && !i.resolved);
+  if (!task) {
+    return <>No send task on this reservation — generate and send the invoice below.</>;
+  }
+
+  const data = reservation.invoiceData;
+  const hasCompanyId = Boolean(data?.ico?.trim() || data?.vatNumber?.trim());
+  const hasEmail = Boolean(data?.billingEmail?.trim());
+  if (!hasCompanyId || !hasEmail) {
+    return (
+      <>
+        Automatic send is on hold — the saved invoice details have no{" "}
+        {!hasCompanyId ? "IČO or VAT number" : "billing email"}. Fill it in below and it goes out on the next run.
+      </>
+    );
+  }
+
+  if ((reservation.invoiceSplits?.length ?? 0) > 0) {
+    return <>Split invoice — the automatic run never sends these. Send each part below.</>;
+  }
+
+  const today = pragueToday();
+  const due = task.actionableDate;
+  if (due > today) {
+    return (
+      <>
+        Invoice will be sent automatically on <strong className="font-semibold">{formatDate(due)}</strong>
+        {email ? ` to ${email}` : ""} — the guest has been told the same.
+      </>
+    );
+  }
+
+  const cutoff = new Date(`${today}T00:00:00Z`);
+  cutoff.setUTCDate(cutoff.getUTCDate() - INVOICE_CATCHUP_DAYS);
+  if (due < cutoff.toISOString().slice(0, 10)) {
+    return (
+      <>
+        Due since <strong className="font-semibold">{formatDate(due)}</strong> — too old for the automatic run, so it
+        needs sending by hand below.
+      </>
+    );
+  }
+  return (
+    <>
+      Due <strong className="font-semibold">{formatDate(due)}</strong> — goes out{email ? ` to ${email}` : ""} in the
+      next automatic run (daily, 09:00).
+    </>
+  );
+}
+
 /** Placeholder box height until the iframe reports its real content height. */
 const PREVIEW_PLACEHOLDER_HEIGHT = 420;
 
@@ -2918,6 +3229,22 @@ export default function ReservationDrawer({
     }
   }
   const [invoiceExpanded, setInvoiceExpanded] = useState(false);
+
+  /**
+   * Survives the Invoice section's fold: the agent's collection state is the
+   * one thing the operator wants to see WITHOUT opening it — "Auto-collected"
+   * means it's handled, "Collecting" means the guest still owes us something.
+   */
+  const collectionChip = useMemo<{ label: string; tone: "amber" | "emerald" } | null>(() => {
+    const requests = reservation?.invoiceRequests ?? [];
+    if (requests.some((r) => r.status === "auto-completed")) {
+      return { label: "Auto-collected", tone: "emerald" };
+    }
+    if (requests.some((r) => r.status === "awaiting-info")) {
+      return { label: "Collecting", tone: "amber" };
+    }
+    return null;
+  }, [reservation?.invoiceRequests]);
   // ── Split invoices: one booking billed to several parties ──────────────────
   // Editable drafts, mirroring how invoiceForm is held locally until the
   // operator generates. Never written to the reservation on keystroke.
@@ -3113,6 +3440,70 @@ export default function ReservationDrawer({
     onUpdate({ ...reservation!, invoiceData: invoiceForm });
     setSaveDetailsSaved(true);
     setTimeout(() => setSaveDetailsSaved(false), 2500);
+  }
+
+  /**
+   * Pull what the chat agent collected into the invoice form. Only fills fields
+   * the operator has left blank — a value already typed here is a deliberate
+   * correction and outranks the extraction. Not saved until "Save details".
+   */
+  function mergeCollected(prev: InvoiceData, patch: Partial<InvoiceData>): InvoiceData {
+    return {
+      companyName: prev.companyName.trim() || patch.companyName || "",
+      companyAddress: prev.companyAddress.trim() || patch.companyAddress || "",
+      ico: prev.ico.trim() || patch.ico || "",
+      vatNumber: prev.vatNumber.trim() || patch.vatNumber || "",
+      billingEmail: prev.billingEmail.trim() || patch.billingEmail || "",
+    };
+  }
+
+  function applyCollectedDetails(patch: Partial<InvoiceData>) {
+    setInvoiceForm((prev) => mergeCollected(prev, patch));
+  }
+
+  /**
+   * Operator override: issue the invoice on partial details. The agent stops
+   * short of a missing IČO / company name / guest-confirmed email, but none of
+   * those is actually required to raise the document — so this commits what we
+   * do have and flips the invoice to Issued, putting Send one click away.
+   *
+   * A request the agent was still chasing is marked `accepted` at the same
+   * time: the human has taken it over, so it should stop reading as "waiting
+   * on the guest" here and stop being a candidate for the auto-complete sweep.
+   */
+  function issueWithPartialDetails(patch: Partial<InvoiceData>, requestId: string) {
+    const merged = mergeCollected(invoiceForm, patch);
+    setInvoiceForm(merged);
+
+    const request = (reservation!.invoiceRequests ?? []).find((r) => r.id === requestId);
+    const takeOver = request?.status === "awaiting-info";
+
+    const updated: Reservation = {
+      ...reservation!,
+      invoiceData: merged,
+      invoiceStatus: "Issued" as const,
+      ...(takeOver
+        ? {
+            invoiceRequests: (reservation!.invoiceRequests ?? []).map((r) =>
+              r.id === requestId
+                ? { ...r, status: "accepted" as const, processedAt: new Date().toISOString() }
+                : r,
+            ),
+          }
+        : {}),
+    };
+    onUpdate(updated);
+    syncRevenueInvoices(updated);
+
+    if (takeOver) {
+      // Best-effort — local state is already optimistic, and a failed flip only
+      // means the agent keeps the request in its own queue.
+      fetch(`/api/invoice-requests/${encodeURIComponent(requestId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accept" }),
+      }).catch((err) => console.error("[invoice-request] take-over failed", err));
+    }
   }
 
   function saveModification() {
@@ -3596,7 +3987,10 @@ export default function ReservationDrawer({
 
       // Apply IČO/DIČ cross-fallback for already-stored requests (parser handles new ones,
       // but requests detected before the fix won't have both fields populated).
-      const effectiveIco = request.ico || (request.dic ? request.dic.replace(/^(CZ|SK)/i, '') : '');
+      // Only a CZECH/SLOVAK DIČ carries an IČO — "PL5251985295" must not be
+      // mangled into an IČO of "5251985295", and a foreign company simply has
+      // none, so the VAT number stands alone on the invoice.
+      const effectiveIco = request.ico || deriveIcoFromDic(request.dic) || '';
       const effectiveDic = request.dic || (request.ico ? `CZ${request.ico}` : '');
 
       // Email: use message email first, then fall back to drawer's additionalEmail
@@ -5120,8 +5514,27 @@ export default function ReservationDrawer({
           <DrawerSection
             title="Invoice"
             icon={SECTION_ICON.invoice}
-            defaultOpen={false}
-            summary={<span className="text-[11px] font-medium text-gray-500">{reservation.invoiceStatus}</span>}
+            // Normally a record-keeping section that starts closed. Opens on
+            // arrival when a guest asked to be invoiced and it hasn't gone out
+            // — that's the reason the operator clicked into the reservation,
+            // usually straight from the "invoices unsent" alert.
+            defaultOpen={!!collectionChip && reservation.invoiceStatus !== "Sent"}
+            summary={
+              <>
+                {collectionChip && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                      collectionChip.tone === "amber"
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-emerald-100 text-emerald-800"
+                    }`}
+                  >
+                    {collectionChip.label}
+                  </span>
+                )}
+                <span className="text-[11px] font-medium text-gray-500">{reservation.invoiceStatus}</span>
+              </>
+            }
           >
             <div className="flex items-center justify-end mb-3">
               <Badge
@@ -5135,6 +5548,17 @@ export default function ReservationDrawer({
               >
                 {reservation.invoiceStatus}
               </Badge>
+            </div>
+
+            {/* What the chat agent collected, and when the invoice goes out. */}
+            <div className="mb-3">
+              <InvoiceCollectionPanel
+                reservation={reservation}
+                onUseDetails={
+                  reservation.invoiceStatus === "Not Issued" && !splitMode ? applyCollectedDetails : undefined
+                }
+                onIssueAnyway={splitMode ? undefined : issueWithPartialDetails}
+              />
             </div>
 
             {reservation.invoiceStatus === "Not Issued" ? (

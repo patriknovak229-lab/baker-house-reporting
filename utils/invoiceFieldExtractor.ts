@@ -16,13 +16,14 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { missingInvoiceFields, type InvoiceMandatoryField } from '@/utils/invoiceUtils';
 
 export interface ExtractedInvoiceFields {
   companyName: string | null;
   companyAddress: string | null;
   /** 8-digit Czech/Slovak company ID. */
   ico: string | null;
-  /** Tax ID, e.g. "CZ12345678" or "SK12345678". */
+  /** Tax / VAT ID of any country, e.g. "CZ12345678", "PL5251985295", "DE366335248". */
   dic: string | null;
   email: string | null;
 }
@@ -40,8 +41,8 @@ const SYSTEM_PROMPT = `You extract invoice-related billing details from a guest 
 Identify ONLY these fields if present:
 - companyName       — the legal entity name (often ends with "s.r.o.", "a.s.", "Ltd", "GmbH", etc.). Strip any "[link removed]" artifacts.
 - companyAddress    — physical billing address; null when only a single town name is given without a street.
-- ico               — Czech/Slovak company ID, ALWAYS exactly 8 digits. Strip any prefix/suffix.
-- dic               — Tax/VAT ID. Czech: "CZ" followed by digits. Slovak: "SK" followed by digits. Keep the country prefix.
+- ico               — Czech/Slovak company ID, ALWAYS exactly 8 digits. Strip any prefix/suffix. Foreign companies do NOT have one — leave null rather than putting a VAT number here.
+- dic               — Tax/VAT ID of ANY country, not just Czech. Czech "CZ…", Slovak "SK…", but equally "PL5251985295", "DE366335248", "ATU12345678", "GB123456789". Keep the country prefix and drop the spaces.
 - email             — a real email address ending in @domain.tld. Ignore @stayforlong.com, @guest.booking.com, @guest.airbnb.com (those are channel-conduit aliases, not real).
 
 Output ONLY a single JSON object on one line, no preamble:
@@ -107,17 +108,14 @@ export function mergeInvoiceFields(
 }
 
 /**
- * Mandatory fields per operator policy: companyName, ico, email.
- * companyAddress and dic are optional and never block auto-completion.
+ * Mandatory fields per operator policy. Thin re-export of the shared rule in
+ * `utils/invoiceUtils` — the drawer and the send cron apply the same one, so
+ * the definition of "complete" can't drift between the pipeline and the UI.
  */
 export function missingMandatoryFields(
   fields: ExtractedInvoiceFields,
-): Array<'companyName' | 'ico' | 'email'> {
-  const out: Array<'companyName' | 'ico' | 'email'> = [];
-  if (!fields.companyName) out.push('companyName');
-  if (!fields.ico) out.push('ico');
-  if (!fields.email) out.push('email');
-  return out;
+): InvoiceMandatoryField[] {
+  return missingInvoiceFields(fields);
 }
 
 function parseJson(raw: string): ExtractedInvoiceFields {
@@ -139,7 +137,7 @@ function parseJson(raw: string): ExtractedInvoiceFields {
     companyName: cleanString(obj.companyName),
     companyAddress: cleanString(obj.companyAddress),
     ico: cleanIco(obj.ico),
-    dic: cleanString(obj.dic),
+    dic: cleanVat(obj.dic),
     email: cleanEmail(obj.email),
   };
 }
@@ -155,6 +153,20 @@ function cleanIco(v: unknown): string | null {
   // ICO is exactly 8 digits — strip everything else, then verify length
   const digits = String(v).replace(/\D/g, '');
   return digits.length === 8 ? digits : null;
+}
+
+/**
+ * Normalise a VAT / tax ID from any country: uppercase, drop the spaces and
+ * dots guests type ("DE 366 335 248" → "DE366335248"). Kept permissive on the
+ * country prefix — we bill companies from all over the EU and can't enumerate
+ * every national format. Requires at least one letter-or-digit run of 6+ chars
+ * so a stray word doesn't land in the field.
+ */
+function cleanVat(v: unknown): string | null {
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const s = String(v).toUpperCase().replace(/[\s.\-/]/g, '').trim();
+  if (!/^[A-Z]{0,3}[0-9A-Z]{6,15}$/.test(s)) return null;
+  return s;
 }
 
 function cleanEmail(v: unknown): string | null {

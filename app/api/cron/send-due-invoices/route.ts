@@ -11,8 +11,8 @@
  *   - invoiceStatus === "Sent"      → already emailed (manually or a prior run);
  *                                      just resolve the task. NEVER re-send.
  *   - invoiceStatus === "Issued"    → operator is mid-handling it → leave alone.
- *   - details incomplete (no IČO /   → leave the task open for the operator
- *     billing email)                   (same as today).
+ *   - details incomplete (no IČO or  → leave the task open for the operator
+ *     VAT, or no billing email)         (same as today).
  *   - checkout older than the        → stale backlog → leave for the operator
  *     catch-up window                   (so go-live doesn't blast old invoices).
  *   - otherwise                      → generate + email via the SAME util the
@@ -64,9 +64,16 @@ function ymdDaysAgo(base: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** IČO + billing email are the mandatory fields to issue an invoice unattended. */
+/**
+ * A company identifier + a billing email are the mandatory fields to issue an
+ * invoice unattended. The identifier is IČO **or** a VAT/DIČ number: foreign
+ * companies (Polish, German, Slovak…) have no Czech 8-digit IČO, and requiring
+ * one left their invoices sitting unsent even after the guest had given us
+ * everything. The invoice PDF prints whichever identifier is present.
+ */
 function invoiceDataComplete(d: InvoiceData | null | undefined): d is InvoiceData {
-  return !!d && !!d.ico?.trim() && !!d.billingEmail?.trim();
+  const hasCompanyId = !!d?.ico?.trim() || !!d?.vatNumber?.trim();
+  return !!d && hasCompanyId && !!d.billingEmail?.trim();
 }
 
 export async function POST(req: NextRequest) {

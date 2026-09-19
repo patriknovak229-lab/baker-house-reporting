@@ -487,6 +487,9 @@ function actionClass(action: string): string {
     case 'sent':
     case 'sent-with-task':
       return 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200';
+    // Handled end to end, but deliberately without messaging the guest.
+    case 'task-only':
+      return 'bg-sky-100 text-sky-800 ring-1 ring-sky-200';
     case 'skipped-other':
     case 'skipped-no-template':
     case 'skipped-rate-limit':

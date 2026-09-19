@@ -2,6 +2,106 @@ import QRCodeLib from "qrcode";
 import type { Reservation, InvoiceData, InvoiceModification, InvoiceSplit, PaymentStatus } from "@/types/reservation";
 import { formatDate, formatCurrency } from "./formatters";
 
+/**
+ * A Czech/Slovak DIČ for a *company* is the country prefix plus its 8-digit
+ * IČO, so the IČO is recoverable when the guest only gave us the DIČ. Returns
+ * null for foreign VAT numbers ("PL5251985295" — no IČO exists, and stripping
+ * the prefix would invent one) and for Czech personal tax IDs (birth number:
+ * 9-10 digits, not an IČO).
+ */
+export function deriveIcoFromDic(dic: string | null | undefined): string | null {
+  if (!dic) return null;
+  const m = dic.toUpperCase().replace(/\s/g, "").match(/^(?:CZ|SK)(\d{8})$/);
+  return m ? m[1] : null;
+}
+
+/** The billing identity we need before an invoice can be raised unattended. */
+export interface InvoiceIdentityFields {
+  companyName: string | null;
+  ico: string | null;
+  dic: string | null;
+  email: string | null;
+}
+
+/** What a mandatory field is called in the ask to the guest and in the drawer. */
+export type InvoiceMandatoryField = "companyName" | "companyId" | "email";
+
+/**
+ * SINGLE SOURCE OF TRUTH for "do we have enough to invoice this guest?" —
+ * shared by the chat flow's auto-complete gate, the daily send cron and the
+ * drawer's collection panel, so the operator never sees "collected" next to a
+ * request the pipeline still thinks is incomplete.
+ *
+ * companyAddress is never mandatory. The identifier is IČO **or** a VAT/DIČ:
+ * a Polish, German or Slovak company has no Czech 8-digit IČO, and demanding
+ * one stranded every foreign request in awaiting-info while we nagged the
+ * guest for a number that does not exist.
+ */
+export function missingInvoiceFields(
+  fields: InvoiceIdentityFields,
+): InvoiceMandatoryField[] {
+  const out: InvoiceMandatoryField[] = [];
+  if (!fields.companyName) out.push("companyName");
+  if (!fields.ico && !fields.dic) out.push("companyId");
+  if (!fields.email) out.push("email");
+  return out;
+}
+
+/** A past stay whose invoice still hasn't gone out. */
+export interface UnsentInvoice {
+  reservation: Reservation;
+  checkOut: string;
+  daysOverdue: number;
+  /** What a send is short of, from what a send would actually use. */
+  missing: InvoiceMandatoryField[];
+  /** The chat agent is still waiting on the guest for the rest. */
+  awaitingGuest: boolean;
+}
+
+/**
+ * Past stays the guest asked to be invoiced for, where nothing has been
+ * emailed. Two ways a booking lands here, and both were invisible once the
+ * stay was over:
+ *   - the agent collected the details and queued the checkout-dated send task,
+ *     but the send never happened (details incomplete for the unattended run,
+ *     or the checkout fell outside its 3-day catch-up window);
+ *   - the agent is still stuck waiting on the guest, so no task exists at all.
+ *
+ * Oldest first: the longest-unsent invoice is the one to chase.
+ */
+export function unsentInvoices(reservations: Reservation[], today: string): UnsentInvoice[] {
+  const rows: UnsentInvoice[] = [];
+  for (const r of reservations) {
+    if (r.isCancelled) continue;
+    if (r.invoiceStatus === "Sent") continue;
+    if (!r.checkOutDate || r.checkOutDate >= today) continue;
+
+    // A rejected request means the operator already said "no invoice wanted".
+    const live = (r.invoiceRequests ?? []).find((ir) => ir.status !== "rejected");
+    const hasOpenTask = (r.issues ?? []).some((i) => i.category === "invoice" && !i.resolved);
+    if (!hasOpenTask && !live) continue;
+
+    const d = r.invoiceData;
+    rows.push({
+      reservation: r,
+      checkOut: r.checkOutDate,
+      daysOverdue: Math.round(
+        (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${r.checkOutDate}T00:00:00Z`)) / 86_400_000,
+      ),
+      // Saved details are what a send uses; the collected ones are the fallback
+      // for a request the agent never got to write onto the reservation.
+      missing: missingInvoiceFields({
+        companyName: d?.companyName?.trim() || live?.companyName || null,
+        ico: d?.ico?.trim() || live?.ico || null,
+        dic: d?.vatNumber?.trim() || live?.dic || null,
+        email: d?.billingEmail?.trim() || live?.email || null,
+      }),
+      awaitingGuest: live?.status === "awaiting-info",
+    });
+  }
+  return rows.sort((a, b) => a.checkOut.localeCompare(b.checkOut));
+}
+
 /** Count calendar nights between two ISO date strings (exclusive end, same as reservations). */
 function nightsBetween(from: string, to: string): number {
   const a = new Date(from + "T00:00:00");

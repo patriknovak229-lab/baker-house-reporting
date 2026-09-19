@@ -61,6 +61,7 @@ import {
   sanitizeInvoiceEmail,
   type ExtractedInvoiceFields,
 } from '@/utils/invoiceFieldExtractor';
+import { deriveIcoFromDic } from '@/utils/invoiceUtils';
 import {
   renderMissingFieldsReply,
   renderInvoiceConfirmation,
@@ -106,6 +107,9 @@ const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 // then stop — it's the guest's request, not ours.
 const INVOICE_REMINDER_AFTER_MS = 24 * 60 * 60 * 1000;
 const INVOICE_MAX_ASKS = 2; // initial ask + one 24h reminder
+// Past this many days after checkout, the "your invoice is coming" confirmation
+// is no longer worth sending — mirrors CATCHUP_DAYS in the send-due-invoices cron.
+const CONFIRMATION_GRACE_DAYS = 3;
 
 export const maxDuration = 60;
 
@@ -267,6 +271,7 @@ interface AutoReplyLogEntry {
   action:
     | 'sent'
     | 'sent-with-task'
+    | 'task-only'            // task + details recorded, but nothing said to the guest
     | 'skipped-other'        // legacy; superseded by 'queued-other'
     | 'skipped-rate-limit'
     | 'skipped-no-template'
@@ -1886,10 +1891,13 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   // assumed we already have their email on file). Same OTA-conduit
   // rejection applies so we never write back @guest.booking.com etc.
   const fallbackEmail = sanitizeInvoiceEmail(reservation?.additionalEmail);
+  // A Czech/Slovak company's DIČ carries its IČO, so recover it when the guest
+  // only gave the DIČ. A foreign VAT number yields nothing here — that's fine:
+  // the invoice prints DIČ alone and the VAT number is the legal identifier.
   const newInvoiceData: InvoiceData = {
     companyName: existing.companyName || request.companyName || '',
     companyAddress: existing.companyAddress || request.companyAddress || '',
-    ico: existing.ico || request.ico || '',
+    ico: existing.ico || request.ico || deriveIcoFromDic(request.dic) || '',
     vatNumber: existing.vatNumber || request.dic || '',
     billingEmail: existing.billingEmail || request.email || fallbackEmail || '',
   };
@@ -1937,20 +1945,29 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     replaceOrAppendInvoiceRequest(allRequests, completedRequest),
   );
 
-  // Send confirmation reply
-  const replyText = await renderInvoiceConfirmation(
-    firstName,
-    newInvoiceData.billingEmail,
-    checkoutDate,
-    lang,
-  );
-  await sleep(10_000);
+  // Confirmation reply — "the invoice will be sent after your checkout on X".
+  // Only makes sense while that sentence is still true. The self-heal pass can
+  // complete a request whose stay ended months ago (it was stranded by an
+  // older, stricter completeness rule); messaging that guest now would be
+  // bewildering, so the record + task are created silently instead.
+  const stale = !!checkoutDate && checkoutDate < ymdDaysAgo(todayUTC(), CONFIRMATION_GRACE_DAYS);
+
+  let replyText: string | null = null;
   let sentMessageId: number | null = null;
-  try {
-    const result = await sendBeds24Message(bookingId, replyText);
-    sentMessageId = result.messageId;
-  } catch (err) {
-    console.error(`[invoice flow] confirmation send failed for booking ${bookingId}:`, err);
+  if (!stale) {
+    replyText = await renderInvoiceConfirmation(
+      firstName,
+      newInvoiceData.billingEmail,
+      checkoutDate,
+      lang,
+    );
+    await sleep(10_000);
+    try {
+      const result = await sendBeds24Message(bookingId, replyText);
+      sentMessageId = result.messageId;
+    } catch (err) {
+      console.error(`[invoice flow] confirmation send failed for booking ${bookingId}:`, err);
+    }
   }
 
   await appendLog(redis, {
@@ -1962,58 +1979,102 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     category: 'invoice-request',
     confidence: 1,
     language: lang,
-    action: 'sent-with-task',
+    action: stale ? 'task-only' : 'sent-with-task',
     sentText: replyText,
-    detail: `auto-completed; invoiceData + issue created for checkout ${checkoutDate}`,
+    detail: stale
+      ? `auto-completed silently (checkout ${checkoutDate} long past); invoiceData + issue created`
+      : `auto-completed; invoiceData + issue created for checkout ${checkoutDate}`,
     decidedAt: new Date().toISOString(),
   });
-  console.log(`[invoice flow] booking ${bookingId}: auto-completed, invoice task created`);
+  console.log(
+    `[invoice flow] booking ${bookingId}: auto-completed, invoice task created${stale ? ' (no guest message — stay long over)' : ''}`,
+  );
+}
+
+/** Today in UTC as YYYY-MM-DD — matches the send cron's date basis. */
+function todayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function ymdDaysAgo(base: string, days: number): string {
+  const d = new Date(`${base}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Current mandatory-field state of a stored request. */
+function requestFields(r: InvoiceRequest): ExtractedInvoiceFields {
+  return {
+    companyName: r.companyName,
+    companyAddress: r.companyAddress ?? null,
+    ico: r.ico,
+    dic: r.dic,
+    email: r.email,
+  };
 }
 
 /**
- * Scan all awaiting-info invoice requests for any whose initial ask was
- * sent more than 24 hours ago and have only had one ask. Send the
- * single reminder, bump asksCount. After this, the request stays at
- * status='awaiting-info' indefinitely — operator handles in the drawer
- * if the guest never replies. Per operator policy: no further nudges.
+ * Housekeeping pass over awaiting-info invoice requests. Two jobs:
+ *
+ *   1. SELF-HEAL — any request that already has every mandatory field but is
+ *      still sitting at awaiting-info gets auto-completed straight away, no
+ *      24h wait. This is what rescues requests stranded by an earlier, stricter
+ *      completeness rule (foreign companies blocked on a Czech IČO they never
+ *      had): the moment the rule loosens, the next webhook fire finishes them.
+ *   2. REMINDER — requests still genuinely missing something, whose initial ask
+ *      went out more than 24 hours ago and have only been asked once, get the
+ *      single reminder and a bumped asksCount. After that the request stays at
+ *      awaiting-info indefinitely — operator handles it in the drawer. Per
+ *      operator policy: no further nudges.
  */
 async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
   const all = await readAllInvoiceRequests();
   const now = Date.now();
-  const due = all.filter(
+
+  // ── 1. Self-heal: complete-but-stuck requests ──
+  // autoCompleteInvoiceRequest persists the whole array itself, so feed each
+  // call the running copy AND mirror the completion into it — otherwise the
+  // reminder pass's own write at the end would revert what it just completed.
+  let updated = [...all];
+  const stuck = all.filter(
+    (r) => r.status === 'awaiting-info' && missingMandatoryFields(requestFields(r)).length === 0,
+  );
+  for (const r of stuck) {
+    const completed: InvoiceRequest = {
+      ...r,
+      status: 'auto-completed',
+      processedAt: new Date().toISOString(),
+    };
+    await autoCompleteInvoiceRequest({
+      redis,
+      request: { ...r, status: 'auto-completed' },
+      language: '',
+      allRequests: updated,
+    });
+    updated = replaceOrAppendInvoiceRequest(updated, completed);
+    console.log(
+      `[invoice flow] ${r.reservationNumber}: stranded awaiting-info had all fields — auto-completed`,
+    );
+  }
+
+  // ── 2. Reminders for the ones still genuinely missing something ──
+  const due = updated.filter(
     (r) =>
       r.status === 'awaiting-info' &&
       (r.asksCount ?? 0) < INVOICE_MAX_ASKS &&
       r.lastAskedAt &&
       now - new Date(r.lastAskedAt).getTime() >= INVOICE_REMINDER_AFTER_MS,
   );
-  if (due.length === 0) return;
+  if (due.length === 0) {
+    if (stuck.length > 0) await persistInvoiceRequests(updated);
+    return;
+  }
 
-  const updated = [...all];
   for (const r of due) {
     const bookingId = Number(r.reservationNumber.replace(/^BH-/, ''));
     const reservation = await buildReservationContext(redis, bookingId);
     const firstName = reservation?.firstName ?? '';
-    // Re-derive missing fields from current request state
-    const fields: ExtractedInvoiceFields = {
-      companyName: r.companyName,
-      companyAddress: r.companyAddress ?? null,
-      ico: r.ico,
-      dic: r.dic,
-      email: r.email,
-    };
-    const missing = missingMandatoryFields(fields);
-    if (missing.length === 0) {
-      // Edge case: status drifted out of sync — request says
-      // awaiting-info but actually has all fields. Auto-complete now.
-      await autoCompleteInvoiceRequest({
-        redis,
-        request: { ...r, status: 'auto-completed' },
-        language: '',
-        allRequests: updated,
-      });
-      continue;
-    }
+    const missing = missingMandatoryFields(requestFields(r));
 
     // Detect language from the most recent raw message
     const detection = await detectAutoReplyCategory(r.rawMessage);
