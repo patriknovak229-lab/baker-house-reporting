@@ -28,6 +28,36 @@ const ROOM_PARKING_SPACE: Record<string, string> = {
   'K.106': '17',
 };
 
+// Which building each physical room sits in. Guests collect keys at reception
+// and then walk themselves over, so the guide has to name the right door.
+function buildingOf(room: string): { cs: string; en: string } {
+  // Czech needs the locative ("v Karlově domě"), English the plain name.
+  return room.startsWith('O.')
+    ? { cs: 'Ottově domě', en: 'Ottův dům' }
+    : { cs: 'Karlově domě', en: 'Karlův dům' };
+}
+
+/**
+ * The physical rooms inside a (possibly combined) room label —
+ * "K.202 + K.203" -> ["K.202", "K.203"]. Anything we don't have a parking
+ * space for (virtual room types, unallocated bookings) yields an empty list,
+ * and the arrival guide then drops the space/WiFi specifics rather than
+ * guessing them.
+ */
+function physicalRooms(room?: string): string[] {
+  if (!room) return [];
+  return room
+    .split('+')
+    .map((r) => r.trim())
+    .filter((r) => r in ROOM_PARKING_SPACE);
+}
+
+/** WiFi credentials follow the room code: K.201 -> Apartment_K201 / Bakerhouse@K201. */
+function wifiFor(room: string): { ssid: string; password: string } {
+  const code = room.replace('.', '');
+  return { ssid: `Apartment_${code}`, password: `Bakerhouse@${code}` };
+}
+
 interface Template {
   id: string;
   label: string;
@@ -48,7 +78,108 @@ function buildTemplates(args: { room?: string; guestFirstName?: string }): Templ
   // or combined ("K.202 + K.203"). For combined we just say "underground level 2".
   const parkingSpace = args.room ? ROOM_PARKING_SPACE[args.room] : null;
 
+  // ── Arrival-guide facts, resolved from this booking's room(s) ──
+  // A combined booking ("K.202 + K.203") has its own parking space and its own
+  // WiFi network PER apartment, so both are lists. When the label isn't a
+  // physical room we hold a space for (virtual room type, still unallocated),
+  // the guide promises the details instead of inventing a space number.
+  const guideRooms = physicalRooms(args.room);
+  const guideBuildings = Array.from(new Set(guideRooms.map((r) => buildingOf(r).en)));
+  const guideBuilding = guideBuildings.length === 1 ? buildingOf(guideRooms[0]) : null;
+  const spacesCs =
+    guideRooms.length === 1
+      ? `č. ${ROOM_PARKING_SPACE[guideRooms[0]]}`
+      : guideRooms.map((r) => `č. ${ROOM_PARKING_SPACE[r]} (${r})`).join(', ');
+  const spacesEn =
+    guideRooms.length === 1
+      ? `#${ROOM_PARKING_SPACE[guideRooms[0]]}`
+      : guideRooms.map((r) => `#${ROOM_PARKING_SPACE[r]} (${r})`).join(', ');
+  const wifiLines = guideRooms.map((r) => {
+    const { ssid, password } = wifiFor(r);
+    return guideRooms.length === 1 ? `${ssid} / ${password}` : `${r}: ${ssid} / ${password}`;
+  });
+
   const templates: Template[] = [
+    {
+      id: 'arrival-guide',
+      label: 'Arrival guide',
+      textCs: [
+        greeting('cs'),
+        '',
+        'Posíláme vše, co budete k příjezdu potřebovat — už se na Vás těšíme!',
+        '',
+        '📍 ADRESA (pro GPS / taxi)',
+        'Bratislavská 946/82, 602 00 Brno',
+        'https://maps.app.goo.gl/9JywehHDff4exfWq8',
+        '',
+        '🔑 KLÍČE A CHECK-IN',
+        'Check-in je od 15:00 (pokud Vaše sazba zahrnuje early check-in, apartmán je připravený už od 13:00).',
+        'Klíče si vyzvednete na recepci u hlavního vchodu do areálu — stačí zazvonit. Recepce je otevřená 24/7, takže pozdní ani noční příjezd není žádný problém a nepotřebujete žádné doklady ani registraci.',
+        ...(guideBuilding
+          ? [`Váš apartmán je v ${guideBuilding.cs}. Budovy jsou jasně označené a od recepce na ně uvidíte — je to jen pár kroků přes dvůr.`]
+          : []),
+        '',
+        '🚗 PARKOVÁNÍ (podzemní garáž)',
+        guideRooms.length > 0
+          ? guideRooms.length === 1
+            ? `Vaše rezervované místo je ${spacesCs}, ve spodním podlaží garáže, blízko výtahů.`
+            : `Vaše rezervovaná místa jsou ${spacesCs} — ve spodním podlaží garáže, blízko výtahů.`
+          : 'Parkujete v podzemní garáži, ve spodním podlaží blízko výtahů. Konkrétní číslo místa Vám pošleme před příjezdem.',
+        'Nejdřív si prosím vyzvedněte klíče na recepci — jejich součástí je čip, který otevírá vjezd do garáže. Na chvíli můžete zastavit přímo před recepcí.',
+        'Vrata hned vedle hlavního vchodu jsou jen servisní vchod, ne garáž. Vjezd do garáže je na stejné straně, asi o 20 m dál po ulici — u vchodu se teď staví, takže od něj nemusí být vidět.',
+        'Maximální výška vozidla je 200 cm. Při odjezdu se vrata otevřou automaticky, čip není potřeba.',
+        'Zaparkovat můžete už od 13:00 v den příjezdu.',
+        '',
+        '📶 WIFI',
+        ...(wifiLines.length > 0
+          ? wifiLines
+          : ['Každý apartmán má vlastní síť — název a heslo Vám pošleme před příjezdem.']),
+        '',
+        '🧳 ZAVAZADLA',
+        'Přijedete dřív? Recepce Vám zavazadla obvykle uschová — stačí se zeptat (kapacita je omezená).',
+        '',
+        'Kdyby cokoli, napište nám sem.',
+        'Patrik & Zuzana',
+      ].join('\n'),
+      textEn: [
+        greeting('en'),
+        '',
+        "Here's everything you need for your arrival — we're looking forward to having you!",
+        '',
+        '📍 ADDRESS (for GPS / taxi)',
+        'Bratislavská 946/82, 602 00 Brno',
+        'https://maps.app.goo.gl/9JywehHDff4exfWq8',
+        '',
+        '🔑 KEYS & CHECK-IN',
+        'Check-in is from 15:00 (if your rate includes early check-in, the apartment is ready from 13:00).',
+        'Collect your keys at the reception by the main entrance of the complex — just ring the doorbell. Reception is staffed 24/7, so arriving late or at night is no problem, and no ID or registration is needed.',
+        ...(guideBuilding
+          ? [`Your apartment is in ${guideBuilding.en}. The buildings are clearly named and visible from reception — a short walk across the courtyard.`]
+          : []),
+        '',
+        '🚗 PARKING (underground garage)',
+        guideRooms.length > 0
+          ? guideRooms.length === 1
+            ? `Your reserved space is ${spacesEn}, on the lower level of the garage, close to the lifts.`
+            : `Your reserved spaces are ${spacesEn} — on the lower level of the garage, close to the lifts.`
+          : "You'll park in the underground garage, on the lower level close to the lifts. We'll send you your space number before arrival.",
+        'Please collect your keys at reception first — they include the chip that opens the garage gate. You can stop in front of reception for a minute or two while you do.',
+        'The gate right beside the main entrance is only a service door, not the garage. The garage gate is on the same side, about 20 m further along the street — there is construction by the entrance, so it may not be visible from there.',
+        'Maximum vehicle height is 200 cm. On the way out the gate opens automatically, no chip needed.',
+        'You can park from 13:00 on arrival day.',
+        '',
+        '📶 WIFI',
+        ...(wifiLines.length > 0
+          ? wifiLines
+          : ["Each apartment has its own network — we'll send you the name and password before arrival."]),
+        '',
+        '🧳 LUGGAGE',
+        'Arriving before check-in? Reception can usually keep your bags — just ask (space is limited).',
+        '',
+        'If anything comes up, just message us here.',
+        'Patrik & Zuzana',
+      ].join('\n'),
+    },
     {
       id: 'ask-email',
       label: 'Ask for email',
