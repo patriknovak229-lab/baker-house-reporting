@@ -112,9 +112,11 @@ export function effectiveRateType(r: {
  * Real signal formats found:
  *   Booking.com — per-night lines, plan name in parens, e.g.
  *     "2026-09-04 (65571638 Flexible 1 day Urban …) CZK 2727.63 genius".
- *     Vocabulary seen: "Standard Rate", "Non-Refundable …"/"Non Refundable …",
+ *     Vocabulary seen: "Standard Rate", "Non-Refundable …"/"Non Refundable …"/
+ *     "Non-Ref …" (abbreviated — K.201 and some Deluxe plans, added 2026-09-20),
  *     "Weekly rate …", "Flexible …"/"Flexibl …". A bare "<date> Rate (<id>)"
- *     with no plan name → null → alert + manual.
+ *     with no plan name → null → alert + manual. Note Booking.com often suffixes
+ *     "… rewritten from <promo>" (e.g. "Limited Time Deal") — promo noise, ignored.
  *   Airbnb — plan is in the cancel policy: "Cancel policy
  *     tiered_pricing_non_refundable" → Non-Refundable; "moderate"/other →
  *     Standard. NOTE the underscore in "non_refundable".
@@ -147,9 +149,14 @@ export function detectRateType(input: {
 
   const has = (re: RegExp) => re.test(hay);
 
-  // Non-refundable — both channels. Allow space/underscore/hyphen so Airbnb's
-  // cancel-policy code "non_refundable" matches alongside "Non-Refundable".
-  if (has(/non[\s_-]?refundable|nonref/)) return "Non-Refundable";
+  // Non-refundable — both channels. Match the full word AND the abbreviated
+  // "Non-Ref" form: Booking.com rate-plan names for some rooms read
+  // "Non-Ref K201 …" / "Non-Ref 1KK Deluxe …", whereas others use the full
+  // "Non-Refundable …" / "Non Refundable …"; Airbnb's cancel-policy code is
+  // "non_refundable". The optional separator covers space/underscore/hyphen, the
+  // optional "undable" covers the abbreviation, and the trailing \b stops
+  // "non ref…" from matching an unrelated word such as "reference".
+  if (has(/non[\s_-]?ref(?:undable)?\b/)) return "Non-Refundable";
 
   // Airbnb has only two plans; anything not non-refundable is Standard (its
   // length-of-stay discounts ride on Standard — same rate type).
