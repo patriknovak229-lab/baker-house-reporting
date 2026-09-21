@@ -28,6 +28,14 @@ interface QuoteRequestSegment {
   roomId: number;
   from: string;
   to: string;
+  /**
+   * Guests in THIS segment's apartment. A party split across two apartments
+   * must be priced per apartment — asking Beds24 for four people in a
+   * two-person studio returns no offer at all, so the whole quote would come
+   * back empty. Omitted (the single-apartment case) = the body-level party.
+   */
+  adults: number;
+  children: number;
 }
 
 export interface QuotedSegment extends QuoteRequestSegment, SegmentPrice {
@@ -74,7 +82,18 @@ export async function POST(req: NextRequest) {
     if (!isYmd(s.from) || !isYmd(s.to) || nightsBetween(s.from, s.to) <= 0) {
       return NextResponse.json({ error: 'each segment needs from < to as YYYY-MM-DD' }, { status: 400 });
     }
-    segments.push({ roomId, from: s.from, to: s.to });
+    const segAdults = s.adults === undefined ? adults : Number(s.adults);
+    const segChildren = s.children === undefined ? children : Number(s.children);
+    if (
+      !Number.isInteger(segAdults) || segAdults < 1 ||
+      !Number.isInteger(segChildren) || segChildren < 0
+    ) {
+      return NextResponse.json(
+        { error: 'each segment needs adults ≥ 1 and children ≥ 0' },
+        { status: 400 },
+      );
+    }
+    segments.push({ roomId, from: s.from, to: s.to, adults: segAdults, children: segChildren });
   }
 
   // Sequential, not parallel: Beds24 bills per request against a rolling
@@ -84,7 +103,7 @@ export async function POST(req: NextRequest) {
   for (const seg of segments) {
     const nights = nightsBetween(seg.from, seg.to);
     try {
-      const price = await priceSegment(seg.roomId, seg.from, seg.to, adults, children);
+      const price = await priceSegment(seg.roomId, seg.from, seg.to, seg.adults, seg.children);
       quoted.push({
         ...seg,
         nights,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planStayRequest, nightsBetween, SELLABLE_UNITS } from "./stayRequest";
+import { planStayRequest, nightsBetween, splitPartyForPricing, SELLABLE_UNITS } from "./stayRequest";
 import type { ResRef } from "./roomAllocation";
 
 const TODAY = "2026-08-19";
@@ -388,5 +388,165 @@ describe("nightsBetween", () => {
     expect(nightsBetween("2026-09-01", "2026-09-02")).toBe(1);
     expect(nightsBetween("2026-10-24", "2026-10-27")).toBe(3); // CEST → CET
     expect(nightsBetween("2026-09-05", "2026-09-05")).toBe(0);
+  });
+});
+
+describe("party size and multi-apartment splits", () => {
+  /** Segments of one apartment, in date order. */
+  const apt = <T extends { apartment: number; from: string }>(segments: T[], i: number): T[] =>
+    segments.filter((s) => s.apartment === i).sort((a, b) => a.from.localeCompare(b.from));
+
+  it("never sells a 2-person studio to a party of four", () => {
+    // The house is empty, so before capacity existed the greedy planner took
+    // the Urban type (3 units, longest reach) and quoted a studio for four.
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, { guests: 4 });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(1);
+    expect(plan.segments.every((s) => s.guests === 4)).toBe(true);
+    expect(["K.201", "O.308"]).toContain(plan.segments[0].room);
+  });
+
+  it("keeps a party of four in ONE apartment when a 4-sleeper is free, even with splitting allowed", () => {
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, { guests: 4, maxApartments: 7 });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(1);
+    expect(plan.partySizes).toEqual([4]);
+  });
+
+  it("splits four guests into two studios when both 4-sleepers are taken", () => {
+    const world = [
+      stay({ reservationNumber: "BH-1", room: "K.201", checkInDate: "2026-08-25", checkOutDate: "2026-09-20" }),
+      stay({ reservationNumber: "BH-2", room: "O.308", checkInDate: "2026-08-25", checkOutDate: "2026-09-20" }),
+    ];
+    const opts = { guests: 4 };
+
+    // One apartment: nothing left that sleeps four.
+    expect(planStayRequest(world, "2026-09-01", "2026-09-08", TODAY, opts).feasible).toBe(false);
+
+    const plan = planStayRequest(world, "2026-09-01", "2026-09-08", TODAY, { ...opts, maxApartments: 7 });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(2);
+    expect(plan.partySizes).toEqual([2, 2]);
+    // Two parallel itineraries, each covering the whole stay in its own unit.
+    for (const i of [0, 1]) {
+      expect(coversSpan(apt(plan.segments, i), "2026-09-01", "2026-09-08")).toBe(true);
+    }
+    const rooms = plan.segments.map((s) => s.room);
+    expect(new Set(rooms).size).toBe(2); // never the same unit twice
+    expect(plan.segments.every((s) => s.guests === 2)).toBe(true);
+  });
+
+  it("puts two apartments in the SAME group into different units", () => {
+    // Both halves want the Urban type; the id used to commit a placement must
+    // carry the apartment, or the second one overwrites the first's hold.
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, {
+      guests: 4,
+      maxApartments: 7,
+      allowedRoomIds: [679714], // 1KK Urban Studios only
+    });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(2);
+    expect(new Set(plan.segments.map((s) => s.room)).size).toBe(2);
+    expect(plan.segments.every((s) => s.sellableLabel === "1KK Urban Studios")).toBe(true);
+  });
+
+  it("explains a capacity refusal instead of blaming rooms that are free", () => {
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, {
+      guests: 4,
+      allowedRoomIds: [648816], // 1KK Deluxe Studios — two units, two beds each
+    });
+    expect(plan.feasible).toBe(false);
+    if (plan.feasible) return;
+    expect(plan.holders).toEqual([]); // nobody is in the way
+    expect(plan.reason).toMatch(/sleeps 4|allow splitting/i);
+  });
+
+  it("spends the scarce 4-sleepers last: six guests go 4+2, not 3+3", () => {
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, { guests: 6, maxApartments: 7 });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(2);
+    expect(plan.partySizes).toEqual([4, 2]); // [3,3] would burn BOTH 4-sleepers
+  });
+
+  it("fills the whole house for a party of eighteen", () => {
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, { guests: 18, maxApartments: 7 });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(7);
+    expect(plan.partySizes.reduce((a, b) => a + b, 0)).toBe(18);
+    expect(new Set(plan.segments.map((s) => s.room)).size).toBe(7);
+  });
+
+  it("refuses a party bigger than the house, splitting or not", () => {
+    const plan = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, { guests: 19, maxApartments: 7 });
+    expect(plan.feasible).toBe(false);
+    if (plan.feasible) return;
+    expect(plan.reason).toMatch(/18/); // the house holds 18
+  });
+
+  it("leaves the unknown-party case exactly as it was", () => {
+    const withoutGuests = planStayRequest([], "2026-09-01", "2026-09-08", TODAY);
+    const withZero = planStayRequest([], "2026-09-01", "2026-09-08", TODAY, { guests: 0, maxApartments: 7 });
+    expect(withoutGuests.feasible).toBe(true);
+    if (!withoutGuests.feasible || !withZero.feasible) return;
+    expect(withZero.apartments).toBe(1);
+    expect(withZero.segments.map((s) => s.room)).toEqual(withoutGuests.segments.map((s) => s.room));
+  });
+
+  it("still shuffles other guests to keep a split party in one unit each", () => {
+    // Urban only, four guests → two studios. One studio is blocked mid-stay by
+    // a movable booking; the shuffle should absorb it rather than split a half
+    // of the party across two units.
+    const world = [
+      stay({ reservationNumber: "BH-9", room: "K.102", checkInDate: "2026-09-03", checkOutDate: "2026-09-05" }),
+    ];
+    const plan = planStayRequest(world, "2026-09-01", "2026-09-08", TODAY, {
+      guests: 4,
+      maxApartments: 7,
+      allowedRoomIds: [679714],
+    });
+    expect(plan.feasible).toBe(true);
+    if (!plan.feasible) return;
+    expect(plan.apartments).toBe(2);
+    // One segment per apartment — nobody in the party changes room.
+    expect(apt(plan.segments, 0)).toHaveLength(1);
+    expect(apt(plan.segments, 1)).toHaveLength(1);
+  });
+});
+
+describe("splitPartyForPricing", () => {
+  it("gives every apartment an adult before filling beds", () => {
+    expect(splitPartyForPricing(2, 2, [2, 2])).toEqual([
+      { adults: 1, children: 1 },
+      { adults: 1, children: 1 },
+    ]);
+    expect(splitPartyForPricing(4, 0, [2, 2])).toEqual([
+      { adults: 2, children: 0 },
+      { adults: 2, children: 0 },
+    ]);
+  });
+
+  it("keeps the whole party, and the headcount per apartment, intact", () => {
+    const per = splitPartyForPricing(2, 4, [4, 2]);
+    expect(per[0].adults + per[0].children).toBe(4);
+    expect(per[1].adults + per[1].children).toBe(2);
+    expect(per.reduce((n, p) => n + p.adults + p.children, 0)).toBe(6);
+  });
+
+  it("never quotes an apartment with no adult in it", () => {
+    // One adult, three children, two apartments: somebody has to be priced as
+    // an adult, and pricing a child up never under-quotes the stay.
+    const per = splitPartyForPricing(1, 3, [2, 2]);
+    expect(per.every((p) => p.adults >= 1)).toBe(true);
+    expect(per.reduce((n, p) => n + p.adults + p.children, 0)).toBe(4);
+  });
+
+  it("passes a single apartment through untouched", () => {
+    expect(splitPartyForPricing(2, 1, [3])).toEqual([{ adults: 2, children: 1 }]);
   });
 });

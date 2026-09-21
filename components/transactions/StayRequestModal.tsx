@@ -13,12 +13,14 @@
  * Read-only throughout: this reserves nothing and moves nobody. The shuffle
  * moves it lists are what the operator WOULD have to do, not what it did.
  */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { Reservation } from '@/types/reservation';
 import { pragueToday } from '@/utils/periodUtils';
 import {
   planStayRequest,
   nightsBetween,
+  splitPartyForPricing,
+  MAX_APARTMENTS,
   SELLABLE_UNITS,
   type StaySegment,
   type StayRequestPlan,
@@ -63,6 +65,13 @@ export default function StayRequestModal({
   const [adults, setAdults] = useState(2);
   const [children, setChildren] = useState(0);
   const [allowShuffle, setAllowShuffle] = useState(true);
+  /**
+   * Off by default: one apartment is one key, one arrival, one thing to get
+   * wrong. Splitting is for the party that otherwise gets refused — four
+   * guests on a night both 4-sleepers are taken — so it is opt-in, and even
+   * then the planner only splits when one apartment genuinely cannot do it.
+   */
+  const [multiApartment, setMultiApartment] = useState(false);
   const [discount, setDiscount] = useState(0);
   /** Which types the operator is willing to offer — all of them until narrowed. */
   const [allowedIds, setAllowedIds] = useState<number[]>(SELLABLE_UNITS.map((s) => s.roomId));
@@ -92,9 +101,15 @@ export default function StayRequestModal({
       allowedRoomIds: allowedIds,
       preferredRoomId: preferredId || undefined,
       maxRoomChanges: maxChanges === '' ? undefined : Number(maxChanges),
+      guests: adults + children,
+      maxApartments: multiApartment ? MAX_APARTMENTS : 1,
     });
     setPlan(result);
     if (!result.feasible) return;
+
+    // Each apartment is its own booking, so each is priced for the people
+    // actually in it — the whole party sent against a studio returns no offer.
+    const perApartment = splitPartyForPricing(adults, children, result.partySizes);
 
     setLoading(true);
     try {
@@ -104,7 +119,13 @@ export default function StayRequestModal({
         body: JSON.stringify({
           adults,
           children,
-          segments: result.segments.map((s) => ({ roomId: s.sellableRoomId, from: s.from, to: s.to })),
+          segments: result.segments.map((s) => ({
+            roomId: s.sellableRoomId,
+            from: s.from,
+            to: s.to,
+            adults: perApartment[s.apartment].adults,
+            children: perApartment[s.apartment].children,
+          })),
         }),
       });
       const data = await res.json();
@@ -124,16 +145,33 @@ export default function StayRequestModal({
   const anyPriced = (quote?.segments ?? []).some((s) => s.price !== null);
 
   /** Plain-text summary, ready to paste into a reply to the guest. */
-  function quoteText(segments: StaySegment[], q: QuoteResponse): string {
-    const lines = segments.map((s, i) => {
+  function quoteText(segments: StaySegment[], apartments: number, q: QuoteResponse): string {
+    const line = (s: StaySegment, i: number) => {
       const priced = q.segments[i];
       const amount = priced?.price == null ? 'price on request' : formatCZK(priced.price * factor);
       return `${i + 1}. ${s.from} → ${s.to} (${s.nights} nights) · ${s.sellableLabel} · ${amount}`;
-    });
+    };
+    const body: string[] = [];
+    if (apartments === 1) {
+      body.push(
+        segments.length === 1 ? 'One reservation:' : `${segments.length} reservations (room change between them):`,
+        ...segments.map(line),
+      );
+    } else {
+      // Parallel itineraries: the guest reads this as "you get N apartments",
+      // so the split has to lead, not a flat list of N reservations.
+      body.push(`${apartments} apartments, ${segments.length} reservations:`);
+      for (let a = 0; a < apartments; a++) {
+        const mine = segments.filter((s) => s.apartment === a);
+        if (mine.length === 0) continue;
+        const guests = mine[0].guests;
+        body.push(`Apartment ${a + 1} (${guests} guest${guests === 1 ? '' : 's'}):`);
+        body.push(...mine.map((s) => '  ' + line(s, segments.indexOf(s))));
+      }
+    }
     return [
       `Stay request ${arrival} → ${departure} (${nights} nights, ${adults} adults${children ? ` + ${children} children` : ''})`,
-      segments.length === 1 ? 'One reservation:' : `${segments.length} reservations (room change between them):`,
-      ...lines,
+      ...body,
       discount ? `Total after ${discount}% discount: ${formatCZK(quoteTotal)}` : `Total: ${formatCZK(listTotal)}`,
     ].join('\n');
   }
@@ -211,6 +249,7 @@ export default function StayRequestModal({
                   className="rounded"
                 />
                 {s.label}
+                <span className="text-xs text-gray-400">· sleeps {s.sleeps}</span>
               </label>
             ))}
             <label className="flex items-center gap-1.5 text-sm text-gray-600 ml-auto">
@@ -252,6 +291,18 @@ export default function StayRequestModal({
               <input type="checkbox" checked={allowShuffle} onChange={(e) => setAllowShuffle(e.target.checked)} className="rounded" />
               Allow moving other guests within a room type
             </label>
+            <label
+              className="flex items-center gap-2 text-sm text-gray-600"
+              title="Housing the party in several apartments at once, as separate simultaneous reservations. Only used when one apartment cannot take them — four guests still go in a single 4-sleeper whenever one is free."
+            >
+              <input
+                type="checkbox"
+                checked={multiApartment}
+                onChange={(e) => setMultiApartment(e.target.checked)}
+                className="rounded"
+              />
+              Allow splitting across apartments
+            </label>
             <label className="flex items-center gap-2 text-sm text-gray-600">
               Discount
               <input
@@ -278,13 +329,22 @@ export default function StayRequestModal({
           {plan && !plan.feasible && (
             <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
               <p className="text-sm font-semibold text-rose-800">
-                Not possible — blocked on {plan.blockedAt}
+                {plan.reason ? 'Not possible' : `Not possible — blocked on ${plan.blockedAt}`}
               </p>
-              <p className="text-xs text-rose-700 mt-0.5">
-                {allowedIds.length === SELLABLE_UNITS.length ? 'No room type' : 'None of the selected room types'} has a
-                free unit that night{allowShuffle ? ', even after shuffling movable guests' : ' (shuffling is switched off)'}.
-                {allowShuffle && ' A shuffle only changes which unit a guest occupies — it cannot add one.'}
-              </p>
+              {plan.reason ? (
+                <p className="text-xs text-rose-700 mt-0.5">
+                  {plan.reason}
+                  {!multiApartment && ' Tick “Allow splitting across apartments” to house them in two smaller ones.'}
+                </p>
+              ) : (
+                <p className="text-xs text-rose-700 mt-0.5">
+                  {allowedIds.length === SELLABLE_UNITS.length ? 'No room type' : 'None of the selected room types'} has a
+                  free unit that night{allowShuffle ? ', even after shuffling movable guests' : ' (shuffling is switched off)'}.
+                  {allowShuffle && ' A shuffle only changes which unit a guest occupies — it cannot add one.'}
+                  {!multiApartment && adults + children > 2 &&
+                    ' Splitting the party across apartments is switched off — turning it on may find room in smaller units.'}
+                </p>
+              )}
               {plan.holders.length > 0 && (
                 <table className="mt-3 w-full text-xs">
                   <tbody>
@@ -308,11 +368,22 @@ export default function StayRequestModal({
           {plan?.feasible && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 overflow-hidden">
               <div className="px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
-                <p className="text-sm font-semibold text-emerald-800">
-                  Possible — {plan.segments.length === 1
-                    ? '1 reservation, no room change'
-                    : `${plan.segments.length} reservations, ${plan.segments.length - 1} room change${plan.segments.length > 2 ? 's' : ''} for the guest`}
-                </p>
+                {/* Room changes are per apartment: each apartment's FIRST segment
+                    is an arrival, not a change. Counting them globally told a
+                    party of four in two studios they had "one room change". */}
+                {(() => {
+                  const changes = plan.segments.length - plan.apartments;
+                  const changeText =
+                    changes === 0
+                      ? 'no room change'
+                      : `${changes} room change${changes > 1 ? 's' : ''} for the guest`;
+                  return (
+                    <p className="text-sm font-semibold text-emerald-800">
+                      Possible — {plan.apartments > 1 && `${plan.apartments} apartments (${plan.partySizes.join(' + ')} guests), `}
+                      {plan.segments.length} reservation{plan.segments.length > 1 ? 's' : ''}, {changeText}
+                    </p>
+                  );
+                })()}
                 {/* An empty Unit column is ambiguous — say plainly whether anyone is disturbed. */}
                 {(() => {
                   const moves = plan.segments.flatMap((s) => s.moves);
@@ -350,8 +421,21 @@ export default function StayRequestModal({
                 <tbody>
                   {plan.segments.map((s, i) => {
                     const priced = quote?.segments[i];
+                    // Segments arrive grouped by apartment, so a change of
+                    // apartment is the start of a new parallel itinerary.
+                    const opensApartment =
+                      plan.apartments > 1 && (i === 0 || plan.segments[i - 1].apartment !== s.apartment);
                     return (
-                      <tr key={`${s.from}-${s.room}`} className="border-b border-emerald-100 align-top">
+                      <Fragment key={`${s.apartment}-${s.from}-${s.room}`}>
+                      {opensApartment && (
+                        <tr className="bg-emerald-50">
+                          <td colSpan={7} className="py-1.5 px-3 text-[11px] font-semibold text-emerald-800">
+                            Apartment {s.apartment + 1} · {s.guests} guest{s.guests === 1 ? '' : 's'}
+                            <span className="font-normal text-emerald-700"> · own reservation, same dates</span>
+                          </td>
+                        </tr>
+                      )}
+                      <tr className="border-b border-emerald-100 align-top">
                         <td className="py-2 px-3 text-gray-500">{i + 1}</td>
                         <td className="py-2 px-3 text-gray-700 whitespace-nowrap">{s.from} → {s.to}</td>
                         <td className="py-2 px-3 text-right text-gray-700">{s.nights}</td>
@@ -381,6 +465,7 @@ export default function StayRequestModal({
                           {priced?.adr == null ? '—' : formatCZK(priced.adr * factor)}
                         </td>
                       </tr>
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -391,7 +476,13 @@ export default function StayRequestModal({
                 <div className="px-4 py-3 bg-white border-t border-emerald-100 space-y-1 text-sm">
                   {/* Nothing priced at all: show "—", never a 0 Kč that reads as free. */}
                   <div className="flex justify-between text-gray-600">
-                    <span>List total ({quote.totalNights} nights)</span>
+                    <span>
+                      List total (
+                      {plan.apartments > 1
+                        ? `${plan.apartments} apartments · ${quote.totalNights} apartment-nights`
+                        : `${quote.totalNights} nights`}
+                      )
+                    </span>
                     <span>{anyPriced ? formatCZK(listTotal) : '—'}</span>
                   </div>
                   {discount > 0 && anyPriced && (
@@ -404,7 +495,9 @@ export default function StayRequestModal({
                     <span>Quote</span>
                     <span>
                       {anyPriced
-                        ? `${formatCZK(quoteTotal)} · ${formatCZK(quoteTotal / (quote.totalNights || 1))}/night`
+                        ? `${formatCZK(quoteTotal)} · ${formatCZK(quoteTotal / (plan.totalNights || 1))}/night${
+                            plan.apartments > 1 ? ' (whole party)' : ''
+                          }`
                         : 'no price available'}
                     </span>
                   </div>
@@ -429,7 +522,7 @@ export default function StayRequestModal({
                   <div className="pt-2">
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(quoteText(plan.segments, quote));
+                        navigator.clipboard.writeText(quoteText(plan.segments, plan.apartments, quote));
                         setCopied(true);
                       }}
                       className="px-3 py-1.5 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50"
