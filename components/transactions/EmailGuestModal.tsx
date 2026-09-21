@@ -148,7 +148,6 @@ export default function EmailGuestModal({
         room: reservation.room,
         guestFirstName: reservation.firstName,
         lang: l,
-        channel: 'email',
       }),
     ).join('\n\n');
 

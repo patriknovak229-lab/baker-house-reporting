@@ -54,10 +54,10 @@ function buildTemplates(args: { room?: string; guestFirstName?: string }): Templ
       id: 'arrival-guide',
       label: 'Arrival guide',
       textCs: arrivalGuideToText(
-        buildArrivalGuide({ ...args, lang: 'cs', channel: 'chat' }),
+        buildArrivalGuide({ ...args, lang: 'cs' }),
       ),
       textEn: arrivalGuideToText(
-        buildArrivalGuide({ ...args, lang: 'en', channel: 'chat' }),
+        buildArrivalGuide({ ...args, lang: 'en' }),
       ),
     },
     {

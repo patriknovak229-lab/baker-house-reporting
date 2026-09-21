@@ -4,10 +4,8 @@
  * direct-phone bookings).
  *
  * The body arrives as plain-text blocks (the same ones the operator edits in
- * the modal's textarea) rather than as structured sections, so whatever they
- * type survives verbatim. A block whose first line opens with one of the
- * guide's emoji markers renders as a section heading; everything else is a
- * paragraph with its line breaks preserved.
+ * the modal's textarea) rather than as structured data, so whatever they type
+ * survives verbatim — one block per paragraph, line breaks preserved.
  *
  * The page chrome (header, sign-off, footer) intentionally mirrors
  * ./thankYou.ts rather than being factored out of it — the thank-you email is
@@ -46,10 +44,6 @@ const I18N = {
     signOff: 'Patrik & Zuzana',
   },
 } as const;
-
-/** Leading markers used by buildArrivalGuide's sections. A block starting with
- *  one of these gets the heading treatment. */
-const SECTION_ICONS = ['📍', '🔑', '🚗', '📶', '🧳'];
 
 export function renderArrivalGuideEmail(vars: ArrivalGuideEmailVars): string {
   const lang: GuideLang = vars.lang === 'cs' ? 'cs' : 'en';
@@ -115,22 +109,10 @@ export function renderArrivalGuideEmail(vars: ArrivalGuideEmailVars): string {
 </html>`;
 }
 
-/** One editor block -> one HTML chunk. Heading blocks get the gold label
- *  treatment; everything else is a paragraph that keeps its line breaks. */
+/** One editor block -> one paragraph, keeping its line breaks. */
 function renderBlock(block: string): string {
   const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
-  const [first, ...rest] = lines;
-  const isHeading = SECTION_ICONS.some((icon) => first.startsWith(icon));
-
-  if (!isHeading) {
-    return `<p style="margin:0 0 14px">${lines.map(linkify).join('<br>')}</p>`;
-  }
-
-  const body = rest.length
-    ? `<p style="margin:0 0 16px">${rest.map(linkify).join('<br>')}</p>`
-    : '';
-  return `<div style="font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:${GOLD};margin:0 0 6px">${linkify(first)}</div>
-          ${body}`;
+  return `<p style="margin:0 0 12px">${lines.map(linkify).join('<br>')}</p>`;
 }
 
 /** Escape, then turn bare http(s) URLs into links — guests get the maps pin
