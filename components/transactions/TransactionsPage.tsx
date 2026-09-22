@@ -212,14 +212,27 @@ function langLabel(code: string): string {
   return LANG_LABELS[code.toLowerCase()] ?? code.toUpperCase();
 }
 
+/**
+ * Cross-remount session cache. AppShell mounts/unmounts each tab's component on
+ * switch, so without this the page re-ran its full load — and a Beds24 sync —
+ * every time the operator came back to Transactions. We keep the last loaded
+ * data at module scope and hydrate from it on remount, so a sync happens ONLY
+ * on first load, a hard page reload (which re-inits the module and clears
+ * these), or an explicit "Sync". The cache is kept current with optimistic
+ * edits via an effect below, so returning shows the latest local state.
+ */
+let cachedReservations: Reservation[] = [];
+let cachedLastSynced: Date | null = null;
+let hasLoadedOnce = false;
+
 export default function TransactionsPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: Role } | undefined)?.role;
 
-  const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [reservations, setReservations] = useState<Reservation[]>(cachedReservations);
+  const [isLoading, setIsLoading] = useState(!hasLoadedOnce);
   const [error, setError] = useState<string | null>(null);
-  const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [lastSynced, setLastSynced] = useState<Date | null>(cachedLastSynced);
   const [unreadBookingIds, setUnreadBookingIds] = useState<Set<number>>(new Set());
   // Enriched per-booking metadata fetched alongside the unread badge poll.
   // Drives the "X unread messages" pill panel near the top of the page.
@@ -381,7 +394,11 @@ export default function TransactionsPage() {
         };
       });
       setReservations(merged);
-      setLastSynced(new Date());
+      const now = new Date();
+      setLastSynced(now);
+      // Populate the cross-remount cache so a tab switch back doesn't re-sync.
+      cachedLastSynced = now;
+      hasLoadedOnce = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load reservations");
     } finally {
@@ -390,8 +407,17 @@ export default function TransactionsPage() {
   }, []);
 
   useEffect(() => {
-    fetchReservations();
+    // Sync only on first load. Tab-switch remounts hydrate from the module
+    // cache (above); an explicit "Sync"/Retry or a hard page reload re-syncs.
+    if (!hasLoadedOnce) fetchReservations();
   }, [fetchReservations]);
+
+  // Keep the cross-remount cache in step with the current reservations —
+  // including optimistic onUpdate edits — so returning to this tab shows the
+  // latest local state without triggering a fresh sync.
+  useEffect(() => {
+    if (hasLoadedOnce) cachedReservations = reservations;
+  }, [reservations]);
 
   // ── Room-move notices ──
   const fetchRoomMoves = useCallback(async () => {
