@@ -42,13 +42,23 @@ export const config = {
   // runner on the operator's Mac — no session cookie, authenticated inside the
   // route by the PRICING_INGEST_SECRET header instead.
   //
-  // `api/analytics/market/refresh` is exempt because Vercel cron requests
-  // carry no session and were being 307'd to /login before the handler ran —
-  // verified 2026-08-30: the 06:30 refresh never executed and the PriceLabs
-  // snapshot only moved on manual runs. The route gates itself (x-vercel-cron
-  // header, which Vercel reserves, or admin/super session). The OTHER cron
-  // routes (scheduled payments, due invoices, review checks) are still behind
-  // the middleware and therefore still dormant — unblocking those is a
-  // business decision, not a plumbing one.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh).*)'],
+  // Cron routes are exempt because Vercel cron requests carry no session and
+  // were being 307'd to /login before the handler ran. Exemption does NOT make
+  // them public: each gates itself on the `x-vercel-cron` header (which Vercel
+  // reserves and strips from external callers) or an admin/super session.
+  //   - `api/analytics/market/refresh` — verified 2026-08-30: the 06:30 refresh
+  //     never executed and the PriceLabs snapshot only moved on manual runs.
+  //   - `api/cron/send-due-invoices` + `api/cron/check-reviews` — same bug,
+  //     found 2026-09-28 when three past-stay invoices with complete details
+  //     sat unsent: the 09:00 job had never once reached its handler, so the
+  //     chat agent's whole collect-then-invoice flow dead-ended at the last
+  //     step. Diagnosed by the 307-vs-401 difference against market/refresh.
+  //
+  // `api/cron/send-scheduled-payments` is DELIBERATELY still behind the
+  // middleware. It charges guests and emails them, it has never run in
+  // production, and switching it on is a business decision that wants its own
+  // review — list it here only after that happens. This is why the exemptions
+  // are per-path rather than a blanket `api/cron`: a prefix would have turned
+  // it on silently.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews).*)'],
 };
