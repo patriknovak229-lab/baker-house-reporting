@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { requireRole } from "@/utils/authGuard";
+import { writeCronHeartbeat } from "@/data-access/cronHeartbeat";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { fetchReviews, reviewsFromDate, mergeReviews } from "@/utils/beds24Reviews";
 import { notifyNewReviews } from "@/utils/reviewAlerts";
@@ -54,6 +55,8 @@ export async function POST(req: NextRequest) {
   // Empty almost always means a transient fetch failure (an active property has
   // ~90 reviews). Don't clobber the cache or seed off an empty set — bail.
   if (Object.keys(byRef).length === 0) {
+    // Still a completed run: the job is alive, it just had nothing usable.
+    await beat({ skipped: "no reviews returned" });
     return NextResponse.json({ ok: true, skipped: "no reviews returned" });
   }
 
@@ -66,5 +69,18 @@ export async function POST(req: NextRequest) {
   await redis.set(REVIEWS_CACHE_KEY, reviewsCache);
 
   const result = await notifyNewReviews(redis, byRef);
+  await beat(result as Record<string, unknown>);
   return NextResponse.json({ ok: true, ...result });
+}
+
+/**
+ * Liveness — see utils/cronHeartbeat.ts. Written on every completed run,
+ * including the empty-fetch bail, so silence means "not running" rather than
+ * "ran and found nothing". Swallowed so it can never fail the run itself.
+ */
+function beat(summary: Record<string, unknown>): Promise<void> {
+  return writeCronHeartbeat("check-reviews", {
+    ranAt: new Date().toISOString(),
+    summary,
+  }).catch((err) => console.error("[cron/check-reviews] heartbeat write failed:", err));
 }

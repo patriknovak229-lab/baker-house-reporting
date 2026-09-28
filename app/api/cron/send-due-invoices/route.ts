@@ -39,6 +39,7 @@ import {
   bookingsMirrorAlert,
   type BookingsMirrorHealth,
 } from '@/utils/bookingsMirrorHealth';
+import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 
 export const maxDuration = 60;
 
@@ -235,7 +236,7 @@ export async function POST(req: NextRequest) {
     await sendTelegram(`⚠️ Bookings archive health check could not run: ${reason}`).catch(() => {});
   }
 
-  return NextResponse.json({
+  const result = {
     today,
     sent,
     deferred,
@@ -247,5 +248,16 @@ export async function POST(req: NextRequest) {
     failed,
     errors: errors.length > 0 ? errors : undefined,
     mirrorHealth,
-  });
+  };
+
+  // Liveness. Recorded even when the queue was empty — "ran, nothing due" and
+  // "never ran" are otherwise indistinguishable, and that ambiguity is what let
+  // this job stay dead for months. Swallowed: a heartbeat write failing must
+  // never turn a successful send run into a 500.
+  await writeCronHeartbeat('send-due-invoices', {
+    ranAt: new Date().toISOString(),
+    summary: { sent, deferred, failed, skippedStale, skippedIncomplete },
+  }).catch((err) => console.error('[cron/send-due-invoices] heartbeat write failed:', err));
+
+  return NextResponse.json(result);
 }

@@ -63,6 +63,12 @@ import {
 } from '@/utils/invoiceFieldExtractor';
 import { deriveIcoFromDic } from '@/utils/invoiceUtils';
 import {
+  WATCHED_CRON_JOBS,
+  staleCronJobs,
+  unseededCronJobs,
+  staleCronAlert,
+} from '@/utils/cronHeartbeat';
+import {
   renderMissingFieldsReply,
   renderInvoiceConfirmation,
   type InvoiceMandatory,
@@ -390,6 +396,20 @@ export async function POST(req: NextRequest) {
  * handled exactly once even when SYNC_ROOM fires repeatedly.
  */
 async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> {
+  // Pass 0 — is the Vercel cron scheduler still reaching its jobs? This lives
+  // HERE, not in the crons, because a watchdog inside the thing it watches is
+  // not a watchdog: the bookings-archive check was parked inside the invoice
+  // cron for exactly this purpose and died with it. This poll is driven by the
+  // dashboard every ~30s and by an external cron-job.org ping every 5 min, so
+  // it keeps ticking through the precise failure that stops the crons.
+  if (redis) {
+    try {
+      await checkCronLiveness(redis);
+    } catch (err) {
+      console.error('[auto-reply] cron liveness check failed:', err);
+    }
+  }
+
   // Pass 1 — chase any 24-hour invoice reminders. Independent of any
   // incoming message; runs on every webhook fire so reminders are sent
   // promptly without needing a separate cron slot.
@@ -1488,6 +1508,60 @@ function makeLogId(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+// ─── Cron liveness watchdog ──────────────────────────────────────────────────
+
+/** Throttles the DB read — a 36h threshold does not need a check every 30s. */
+const CRON_CHECK_KEY = 'baker:cron-watchdog:checked';
+const CRON_CHECK_EVERY_MS = 60 * 60 * 1000; // 1h
+/** One alert per job per day: a dead cron stays dead, and hourly nagging about
+ *  it would train the operator to ignore the channel. */
+const CRON_ALERT_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * Alert when a watched Vercel cron job has gone quiet. See utils/cronHeartbeat.
+ *
+ * Jobs we have never heard from are SEEDED rather than alerted on: on first
+ * deploy no job has a heartbeat, and firing immediately would be noise. The
+ * seed is the baseline the next check measures against, so a job that then
+ * fails to run still trips the alarm one window later.
+ */
+async function checkCronLiveness(redis: Redis): Promise<void> {
+  const last = await redis.get<number>(CRON_CHECK_KEY);
+  if (last && Date.now() - last < CRON_CHECK_EVERY_MS) return;
+  await redis.set(CRON_CHECK_KEY, Date.now(), { ex: 7200 });
+
+  // Lazily imported, matching how the invoice-request store keeps the Postgres
+  // client off this route's hot path — the watchdog runs at most hourly and
+  // shouldn't weigh on every message poll's cold start.
+  const { readCronHeartbeats, writeCronHeartbeat } = await import('@/data-access/cronHeartbeat');
+
+  const jobs = WATCHED_CRON_JOBS.map((j) => j.job);
+  const heartbeats = await readCronHeartbeats(jobs);
+
+  for (const job of unseededCronJobs(heartbeats)) {
+    await writeCronHeartbeat(job, { ranAt: new Date().toISOString(), seeded: true });
+    console.log(`[cron watchdog] seeded baseline for ${job}`);
+  }
+
+  const stale = staleCronJobs(heartbeats, new Date());
+  if (stale.length === 0) return;
+
+  // Drop any we have already shouted about today.
+  const fresh: typeof stale = [];
+  for (const s of stale) {
+    const key = `baker:cron-watchdog:alerted:${s.job}`;
+    if (await redis.get(key)) continue;
+    await redis.set(key, 1, { ex: CRON_ALERT_TTL_SECONDS });
+    fresh.push(s);
+  }
+
+  const body = staleCronAlert(fresh);
+  if (body) {
+    await sendTelegram(body).catch(() => {});
+    console.warn(`[cron watchdog] ${fresh.map((s) => s.job).join(', ')} silent`);
+  }
 }
 
 // ─── Multi-turn invoice request flow ─────────────────────────────────────────
