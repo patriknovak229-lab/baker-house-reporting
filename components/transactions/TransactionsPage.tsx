@@ -18,6 +18,8 @@ import ReservationTable from "./ReservationTable";
 import ReservationDrawer from "./ReservationDrawer";
 import CreateBookingModal from "./CreateBookingModal";
 import BlackoutModal from "./BlackoutModal";
+import StayRestrictionModal from "./StayRestrictionModal";
+import { RESTRICTION_LABEL, type StayRestriction } from "@/utils/stayRestrictions";
 import PaymentLinkModal from "./PaymentLinkModal";
 import CreateVoucherModal from "./CreateVoucherModal";
 import PriceCheckModal from "./PriceCheckModal";
@@ -223,6 +225,7 @@ function langLabel(code: string): string {
  */
 let cachedReservations: Reservation[] = [];
 let cachedLastSynced: Date | null = null;
+let cachedRestrictions: StayRestriction[] = [];
 let hasLoadedOnce = false;
 
 export default function TransactionsPage() {
@@ -265,6 +268,10 @@ export default function TransactionsPage() {
   >({});
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlackoutModal, setShowBlackoutModal] = useState(false);
+  const [showRestrictionModal, setShowRestrictionModal] = useState(false);
+  // Beds24 check-in/out restrictions. Kept apart from `reservations` because
+  // they close no night, so nothing that counts stays should ever see them.
+  const [restrictions, setRestrictions] = useState<StayRestriction[]>(cachedRestrictions);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showVoucherModal, setShowVoucherModal] = useState(false);
   const [showPriceCheck, setShowPriceCheck] = useState(false);
@@ -276,7 +283,22 @@ export default function TransactionsPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const saveStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const fetchRestrictions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/bookings/restrictions");
+      if (!res.ok) return; // keep what we had; the calendar just misses the grey marks
+      const body: { restrictions?: StayRestriction[] } = await res.json();
+      cachedRestrictions = body.restrictions ?? [];
+      setRestrictions(cachedRestrictions);
+    } catch {
+      /* same: a failed read never blocks the reservations load */
+    }
+  }, []);
+
   const fetchReservations = useCallback(async (opts?: { fullSync?: boolean }) => {
+    // Restrictions refresh alongside every reservations load, but on their own:
+    // they're a separate Beds24 read and must never fail the bookings sync.
+    void fetchRestrictions();
     // A forced sync (manual "Sync", error/conflict "Retry/Refresh", phone-booking
     // creation) appends ?fullSync=true to bypass the server's 90s min-sync guard.
     // Automatic refetches (mount / tab-switch remount) omit it so they coalesce.
@@ -404,7 +426,7 @@ export default function TransactionsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [fetchRestrictions]);
 
   useEffect(() => {
     // Sync only on first load. Tab-switch remounts hydrate from the module
@@ -631,6 +653,8 @@ export default function TransactionsPage() {
    *  "Remove" button responsive when the operator clicks multiple in
    *  quick succession. */
   const [removingBlackoutId, setRemovingBlackoutId] = useState<string | null>(null);
+  const [restrictionsPanelOpen, setRestrictionsPanelOpen] = useState(false);
+  const [removingRestrictionId, setRemovingRestrictionId] = useState<string | null>(null);
   const [postStayPanelOpen, setPostStayPanelOpen] = useState(false);
   const [ackingPostStayId, setAckingPostStayId] = useState<string | null>(null);
   const [unsentInvoicePanelOpen, setUnsentInvoicePanelOpen] = useState(false);
@@ -939,6 +963,36 @@ export default function TransactionsPage() {
     }
   }
 
+  /** Restrictions still ahead (last day today or later), soonest first. */
+  const activeRestrictions = useMemo(() => {
+    const today = pragueToday();
+    return restrictions
+      .filter((r) => r.to >= today)
+      .sort((a, b) => a.from.localeCompare(b.from) || a.unitLabel.localeCompare(b.unitLabel));
+  }, [restrictions]);
+
+  async function removeRestriction(r: StayRestriction) {
+    if (removingRestrictionId) return; // one at a time
+    const days = r.from === r.to ? r.from : `${r.from} – ${r.to}`;
+    const scope = r.rooms.length > 1 ? `all ${r.unitLabel} (${r.rooms.join(', ')})` : r.rooms[0];
+    if (!confirm(`Remove "${RESTRICTION_LABEL[r.kind]}" on ${days} for ${scope}?`)) return;
+    setRemovingRestrictionId(r.id);
+    try {
+      const res = await fetch(`/api/bookings/restrictions?id=${encodeURIComponent(r.id)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      await fetchRestrictions();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to remove restriction');
+    } finally {
+      setRemovingRestrictionId(null);
+    }
+  }
+
   // ── Unpaid additional payments (Stripe payment links not yet paid) ───────────
   const unpaidAdditionalPayments = useMemo(() => {
     const items: { reservation: Reservation; payment: AdditionalPayment }[] = [];
@@ -1098,6 +1152,8 @@ export default function TransactionsPage() {
         <OccupancyCalendar
           reservations={reservations}
           onReservationClick={setSelectedReservation}
+          restrictions={restrictions}
+          onRestrictionClick={role && canMutate(role, "transactions") ? removeRestriction : undefined}
         />
       )}
 
@@ -1204,6 +1260,16 @@ export default function TransactionsPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
               </svg>
               Black Out
+            </button>
+            <button
+              onClick={() => setShowRestrictionModal(true)}
+              title="Stop check-ins and/or check-outs on chosen days (e.g. cleaners off) without closing the nights"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2zM10 14l4 4m0-4l-4 4" />
+              </svg>
+              No Check-in/out
             </button>
             <button
               onClick={() => setShowMassMessageModal(true)}
@@ -1378,6 +1444,7 @@ export default function TransactionsPage() {
         || turnoverClashes.length > 0
         || unallocatedReservations.length > 0
         || activeBlackouts.length > 0
+        || activeRestrictions.length > 0
         || roomMoves.length > 0
         || unsentInvoiceRows.length > 0
         || postStayChanges.length > 0) && (
@@ -1521,6 +1588,27 @@ export default function TransactionsPage() {
                 <span className="text-rose-600 font-normal">· manage</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${blackoutsPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {activeRestrictions.length > 0 && (
+              <button
+                onClick={() => setRestrictionsPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-sm font-medium hover:bg-amber-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2zM10 14l4 4m0-4l-4 4" />
+                </svg>
+                {activeRestrictions.length} check-in/out {activeRestrictions.length === 1 ? "restriction" : "restrictions"}
+                {activeRestrictions.some((r) => !r.effective) && (
+                  <span className="text-amber-700" title="At least one is set on a single studio unit in Beds24 and restricts nothing">⚠</span>
+                )}
+                <span className="text-amber-600 font-normal">· manage</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${restrictionsPanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1909,6 +1997,69 @@ export default function TransactionsPage() {
                           >
                             {pending ? 'Removing…' : 'Remove'}
                           </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Check-in/out restrictions panel: the ones still ahead, each with an
+              inline Remove that resets those days to "none" in Beds24. */}
+          {activeRestrictions.length > 0 && restrictionsPanelOpen && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+              <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                  Check-in/out restrictions
+                </span>
+                <span className="text-[11px] text-amber-700">
+                  Nights stay on sale; only arrivals and/or departures on these days are blocked · {activeRestrictions.length} total
+                </span>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-amber-200">
+                    {["Rooms", "Blocks", "From", "To", ""].map((h, i) => (
+                      <th
+                        key={i}
+                        className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-200">
+                  {activeRestrictions.map((r) => {
+                    const pending = removingRestrictionId === r.id;
+                    return (
+                      <tr key={r.id}>
+                        <td className="px-4 py-2 font-medium text-amber-900 whitespace-nowrap">
+                          {r.rooms.length > 1 ? `${r.unitLabel} (${r.rooms.join(", ")})` : r.rooms[0]}
+                          {!r.effective && (
+                            <span
+                              className="ml-2 text-[11px] font-normal text-red-700"
+                              title={`Set on this unit only in Beds24. Booking.com, Airbnb and the website sell the ${r.unitLabel} type, so it restricts nothing. Remove it and set it here instead.`}
+                            >
+                              ⚠ unit only, has no effect
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-amber-800 text-xs whitespace-nowrap">{RESTRICTION_LABEL[r.kind]}</td>
+                        <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.from}</td>
+                        <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.to}</td>
+                        <td className="px-4 py-2 text-right whitespace-nowrap">
+                          {role && canMutate(role, "transactions") && (
+                            <button
+                              onClick={() => removeRestriction(r)}
+                              disabled={pending || removingRestrictionId !== null}
+                              className="px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-40 transition-colors"
+                            >
+                              {pending ? 'Removing…' : 'Remove'}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -2656,6 +2807,17 @@ export default function TransactionsPage() {
           onCreated={() => {
             setShowBlackoutModal(false);
             fetchReservations();
+          }}
+        />
+      )}
+
+      {/* No check-in/out modal: restrict arrivals/departures without closing nights */}
+      {showRestrictionModal && (
+        <StayRestrictionModal
+          onClose={() => setShowRestrictionModal(false)}
+          onCreated={() => {
+            setShowRestrictionModal(false);
+            fetchRestrictions();
           }}
         />
       )}

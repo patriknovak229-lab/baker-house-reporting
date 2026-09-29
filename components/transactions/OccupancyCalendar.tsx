@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, type ReactNode, type CSSProperties } from 'react';
+import { useState, useMemo, type ReactNode, type CSSProperties, type KeyboardEvent } from 'react';
 import type { Reservation, Room, CustomerFlag } from "@/types/reservation";
 import { computeParking, PARKING_SPACES } from "@/utils/parkingUtils";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@/utils/roomCategory";
 import { effectiveRateType } from "@/utils/rateType";
 import { getEffectiveFlags } from "@/utils/flagUtils";
+import { RESTRICTION_LABEL, RESTRICTION_SHORT, type StayRestriction } from "@/utils/stayRestrictions";
 
 interface Props {
   reservations: Reservation[];
@@ -17,6 +18,12 @@ interface Props {
    * Empty days aren't clickable.
    */
   onReservationClick?: (reservation: Reservation) => void;
+  /**
+   * Beds24 check-in/out restrictions. Drawn only on cells nothing else occupies:
+   * they close no night, so they never count towards occupancy.
+   */
+  restrictions?: StayRestriction[];
+  onRestrictionClick?: (restriction: StayRestriction) => void;
 }
 
 // All rooms across both categories — used for the overall occupancy counters
@@ -71,6 +78,11 @@ const NA_PAL: Palette = { f: '#CECBF6', b: '#534AB7', t: '#26215C', a: '#3C3489'
 const BLACKOUT_PAL: Palette = { f: '#444441', b: '#2C2C2A', t: '#F1EFE8', a: '#2C2C2A' };
 const NA_STRIPE = 'repeating-linear-gradient(45deg,rgba(60,52,137,0.22) 0 5px,transparent 5px 10px)';
 const BLACKOUT_STRIPE = 'repeating-linear-gradient(45deg,rgba(255,255,255,0.14) 0 5px,transparent 5px 10px)';
+// Check-in/out restriction: lighter than a blackout and unstriped, like Beds24's
+// grey override cell, because the night is still for sale. A stray one set on a
+// single studio unit restricts nothing (utils/stayRestrictions.ts), so it's dashed.
+const RESTRICTION_PAL: Palette = { f: '#7A7974', b: '#5F5E5A', t: '#FFFFFF', a: '#5F5E5A' };
+const RESTRICTION_STRAY_PAL: Palette = { f: '#E4E3DE', b: '#7A7974', t: '#3D3D3A', a: '#7A7974' };
 
 // Layout — a comfortable row height with breathing room, and a minimum column
 // width so the grid stays legible and scrolls horizontally on small screens.
@@ -131,13 +143,13 @@ function shiftMonth(monthStr: string, delta: number): string {
   return new Date(Date.UTC(y, m - 1 + delta, 1)).toISOString().slice(0, 7);
 }
 
+function formatDay(s: string): string {
+  return new Date(s + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
 function formatDateRange(days: string[]): string {
   if (days.length === 0) return "";
-  const fmt = (s: string) => {
-    const d = new Date(s + "T00:00:00");
-    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  };
-  return `${fmt(days[0])} – ${fmt(days[days.length - 1])}`;
+  return `${formatDay(days[0])} – ${formatDay(days[days.length - 1])}`;
 }
 
 // ─── Cell resolution ────────────────────────────────────────────────────────────
@@ -201,6 +213,13 @@ interface Segment {
   startIdx: number;
   endIdx: number;
   resold: boolean;
+}
+
+/** A contiguous run of otherwise-empty visible days carrying one restriction. */
+interface RestrictionRun {
+  restriction: StayRestriction;
+  startIdx: number;
+  endIdx: number;
 }
 
 function initialsOf(r: Reservation): string {
@@ -293,7 +312,12 @@ function formatRoomForTooltip(room: string): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function OccupancyCalendar({ reservations, onReservationClick }: Props) {
+export default function OccupancyCalendar({
+  reservations,
+  onReservationClick,
+  restrictions = [],
+  onRestrictionClick,
+}: Props) {
   const todayStr = getTodayStr();
   const [startOffset, setStartOffset] = useState(0);
   // Month picker — idle ("") by default so the calendar keeps its rolling
@@ -429,6 +453,135 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     }
     return m;
   }, [reservations, days]);
+
+  // The restriction on each room's visible day. One that is actually enforced
+  // wins over a stray one set on a single studio unit in Beds24.
+  const restrictionAt = useMemo(() => {
+    const m = new Map<string, StayRestriction>();
+    if (restrictions.length === 0 || days.length === 0) return m;
+    const first = days[0];
+    const last = days[days.length - 1];
+    for (const r of restrictions) {
+      if (r.to < first || r.from > last) continue;
+      for (const date of days) {
+        if (date < r.from || date > r.to) continue;
+        for (const room of r.rooms) {
+          const key = `${room}|${date}`;
+          const prev = m.get(key);
+          if (!prev || (!prev.effective && r.effective)) m.set(key, r);
+        }
+      }
+    }
+    return m;
+  }, [restrictions, days]);
+
+  // Restriction bars fill only the days no booking / blackout / non-arrival bar
+  // is on, so they can never cover a reservation.
+  const restrictionRunsByRoom = useMemo(() => {
+    const m: Record<string, RestrictionRun[]> = {};
+    if (restrictionAt.size === 0) return m;
+    for (const room of ROOMS) {
+      const taken = new Array<boolean>(days.length).fill(false);
+      for (const s of segmentsByRoom[room] ?? []) {
+        for (let i = s.startIdx; i <= s.endIdx; i++) taken[i] = true;
+      }
+      const runs: RestrictionRun[] = [];
+      let cur: RestrictionRun | null = null;
+      days.forEach((date, idx) => {
+        const restriction = taken[idx] ? undefined : restrictionAt.get(`${room}|${date}`);
+        if (!restriction) { cur = null; return; }
+        if (cur && cur.restriction.id === restriction.id && cur.endIdx === idx - 1) {
+          cur.endIdx = idx;
+        } else {
+          cur = { restriction, startIdx: idx, endIdx: idx };
+          runs.push(cur);
+        }
+      });
+      m[room] = runs;
+    }
+    return m;
+  }, [segmentsByRoom, restrictionAt, days]);
+
+  function restrictionTitle(room: string, r: StayRestriction): string {
+    const span = r.from === r.to ? formatDay(r.from) : `${formatDay(r.from)} – ${formatDay(r.to)}`;
+    const scope = !r.effective
+      ? ` · ⚠ set on ${room} only in Beds24. Booking.com, Airbnb and the website sell the ${r.unitLabel} type, so this restricts nothing`
+      : r.rooms.length > 1
+      ? ` · applies to all ${r.unitLabel}`
+      : '';
+    return `${room} — ${RESTRICTION_LABEL[r.kind]} · ${span}${scope}${onRestrictionClick ? ' · click to remove' : ''}`;
+  }
+
+  function restrictionClickProps(r: StayRestriction) {
+    if (!onRestrictionClick) return {};
+    return {
+      role: 'button' as const,
+      tabIndex: 0,
+      onClick: () => onRestrictionClick(r),
+      onKeyDown: (e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRestrictionClick(r); }
+      },
+    };
+  }
+
+  function renderRestrictionBar(room: Room, run: RestrictionRun): ReactNode {
+    const r = run.restriction;
+    const pal = r.effective ? RESTRICTION_PAL : RESTRICTION_STRAY_PAL;
+    const isTrueStart = r.from === days[run.startIdx];
+    const isTrueEnd = r.to === days[run.endIdx];
+    // One day is ~30–40 px wide: the short code only, no warning glyph (the
+    // dashed style and the tooltip carry that). Wider bars get words.
+    const single = run.startIdx === run.endIdx;
+    const words = r.kind === 'noCheckInOrCheckOut' ? 'No check-in/out' : RESTRICTION_LABEL[r.kind];
+    const label = single ? RESTRICTION_SHORT[r.kind] : `${r.effective ? '' : '⚠ '}${words}`;
+    const start = isTrueStart ? 8 : 0;
+    const end = isTrueEnd ? 8 : 0;
+    return (
+      <div
+        key={`rs-${r.id}-${run.startIdx}`}
+        {...restrictionClickProps(r)}
+        title={restrictionTitle(room, r)}
+        className={`relative flex items-center justify-center ${single ? 'px-0' : 'px-1'} overflow-hidden ${onRestrictionClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
+        style={{
+          gridColumn: `${run.startIdx + 1} / ${run.endIdx + 2}`,
+          gridRow: 1,
+          alignSelf: 'center',
+          zIndex: 1,
+          height: BAR_H,
+          margin: '0 2px',
+          background: pal.f,
+          border: `1px ${r.effective ? 'solid' : 'dashed'} ${pal.b}`,
+          borderRadius: `${start}px ${end}px ${end}px ${start}px`,
+          color: pal.t,
+        }}
+      >
+        <span className={`${single ? 'text-[9px]' : 'text-[10px]'} font-medium leading-none truncate select-none`}>{label}</span>
+      </div>
+    );
+  }
+
+  function renderRestrictionTile(room: Room, idx: number, r: StayRestriction): ReactNode {
+    const pal = r.effective ? RESTRICTION_PAL : RESTRICTION_STRAY_PAL;
+    return (
+      <div
+        key={days[idx]}
+        {...restrictionClickProps(r)}
+        title={restrictionTitle(room, r)}
+        className={`flex items-center justify-center overflow-hidden ${onRestrictionClick ? 'cursor-pointer hover:ring-2 hover:ring-indigo-400' : ''}`}
+        style={{
+          gridColumn: `${idx + 1} / ${idx + 2}`,
+          height: BAR_H,
+          margin: '0 1px',
+          borderRadius: 6,
+          background: pal.f,
+          border: `1px ${r.effective ? 'solid' : 'dashed'} ${pal.b}`,
+          color: pal.t,
+        }}
+      >
+        <span className="text-[9px] font-medium leading-none select-none">{RESTRICTION_SHORT[r.kind]}</span>
+      </div>
+    );
+  }
 
   function segPalette(seg: Segment): { pal: Palette; transparent: boolean } {
     if (seg.kind === 'blackout') return { pal: BLACKOUT_PAL, transparent: false };
@@ -581,6 +734,8 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
     const date = days[idx];
     const isToday = date === todayStr;
     if (!cover) {
+      const restriction = restrictionAt.get(`${room}|${date}`);
+      if (restriction) return renderRestrictionTile(room, idx, restriction);
       const dayNum = new Date(date + 'T00:00:00').getDate();
       return (
         <div
@@ -824,6 +979,10 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                   <span className="inline-block w-3 h-3 rounded" style={{ background: BLACKOUT_PAL.f, backgroundImage: BLACKOUT_STRIPE }} />
                   <span className="hidden lg:inline">Blackout</span>
                 </span>
+                <span className="flex items-center gap-1.5" title="No check-in / check-out (the night is still for sale)">
+                  <span className="inline-block w-3 h-3 rounded" style={{ background: RESTRICTION_PAL.f, border: `1px solid ${RESTRICTION_PAL.b}` }} />
+                  <span className="hidden lg:inline">No in/out</span>
+                </span>
               </>
             )}
           </div>
@@ -962,6 +1121,7 @@ export default function OccupancyCalendar({ reservations, onReservationClick }: 
                             );
                           })}
                           {(segmentsByRoom[room] ?? []).map((seg) => renderBar(room as Room, seg))}
+                          {(restrictionRunsByRoom[room] ?? []).map((run) => renderRestrictionBar(room as Room, run))}
                         </>
                       )}
                     </div>
