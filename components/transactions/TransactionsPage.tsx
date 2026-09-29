@@ -2021,7 +2021,7 @@ export default function TransactionsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-amber-200">
-                    {["Rooms", "Blocks", "From", "To", ""].map((h, i) => (
+                    {["Rooms", "Blocks", "First day", "Last day", ""].map((h, i) => (
                       <th
                         key={i}
                         className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left"

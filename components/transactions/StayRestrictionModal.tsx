@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { RESTRICTION_LABEL, unitForRoomId, type RestrictionKind } from '@/utils/stayRestrictions';
+import { RESTRICTION_LABEL, eachDay, unitForRoomId, type RestrictionKind } from '@/utils/stayRestrictions';
 
 // Same chips as BlackoutModal. The difference is where the change lands: a
 // restriction goes on the room each unit is SOLD as, so picking one Urban or
@@ -57,6 +57,32 @@ const DEFAULT_FORM: FormState = {
 const inputCls =
   'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300';
 
+const KIND_VERB: Record<RestrictionKind, string> = {
+  noCheckIn: 'check-ins',
+  noCheckOut: 'check-outs',
+  noCheckInOrCheckOut: 'check-ins and check-outs',
+};
+
+function dayLabel(ymd: string): string {
+  return new Date(ymd + 'T00:00:00').toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+/**
+ * The days in words, before saving. Black Out's "To" is the departure morning,
+ * so an operator used to it enters the NEXT day here and blocks two days; this
+ * sentence is what makes that visible.
+ */
+function daysSummary(kind: RestrictionKind, from: string, to: string): string | null {
+  if (!from || !to || to < from) return null;
+  const count = eachDay(from, to).length;
+  const span = count === 1 ? dayLabel(from) : `${count} days, ${dayLabel(from)} – ${dayLabel(to)}`;
+  return `Blocks ${KIND_VERB[kind]} on ${span}.`;
+}
+
 /** Every chip in the same sold unit as `roomId` (the whole type for the studios). */
 function unitChipIds(roomId: number): number[] {
   const unit = unitForRoomId(roomId);
@@ -101,11 +127,11 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
       return;
     }
     if (!form.from || !form.to) {
-      setError('Pick both a “From” and a “To” day.');
+      setError('Pick the first and the last day.');
       return;
     }
     if (form.to < form.from) {
-      setError('“To” must be on or after “From”.');
+      setError('The last day must be on or after the first day.');
       return;
     }
 
@@ -135,6 +161,7 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
   const urbanRooms = ROOM_OPTIONS.filter((r) => r.category === 'Urban');
   const deluxeRooms = ROOM_OPTIONS.filter((r) => r.category === 'Deluxe');
   const kindHint = KIND_OPTIONS.find((o) => o.kind === form.kind)?.hint;
+  const summary = daysSummary(form.kind, form.from, form.to);
 
   return (
     <div
@@ -254,7 +281,7 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
           <div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">From *</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">First day *</label>
                 <input
                   type="date"
                   value={form.from}
@@ -267,7 +294,9 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">To *</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Last day * <span className="text-gray-400 font-normal">(included)</span>
+                </label>
                 <input
                   type="date"
                   value={form.to}
@@ -277,9 +306,16 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
                 />
               </div>
             </div>
-            <p className="text-[10px] text-gray-400 mt-1">
-              Both days included. Existing bookings aren&apos;t affected.
-            </p>
+            {summary ? (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2">
+                {summary}{' '}
+                <span className="text-amber-700/80">Existing bookings aren&apos;t affected.</span>
+              </p>
+            ) : (
+              <p className="text-[10px] text-gray-400 mt-1">
+                One day? Leave the last day the same as the first. Unlike Black Out, the last day is blocked too.
+              </p>
+            )}
           </div>
 
           {/* Reason */}

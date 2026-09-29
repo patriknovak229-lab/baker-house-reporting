@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'from and to must be YYYY-MM-DD' }, { status: 400 });
   }
   if (to < from) {
-    return NextResponse.json({ error: '"To" must be on or after "From"' }, { status: 400 });
+    return NextResponse.json({ error: 'The last day must be on or after the first day' }, { status: 400 });
   }
   if (from < pragueToday()) {
     return NextResponse.json({ error: 'Restrictions can only be set from today onwards' }, { status: 400 });
