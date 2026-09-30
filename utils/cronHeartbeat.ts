@@ -42,14 +42,26 @@ export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
 ];
 
 export interface CronHeartbeat {
-  /** ISO timestamp of the last completed run. */
+  /** ISO timestamp of the last INVOCATION (not necessarily a successful one). */
   ranAt: string;
-  /** Whatever the job wants on the record — counts, mostly. Never load-bearing. */
+  /** Whatever the job wants on the record — counts, mostly. Never load-bearing.
+   *  `summary.phase` carries 'started' | 'completed' | 'failed' when the job
+   *  reports it; absent means a legacy write and is treated as completed. */
   summary?: Record<string, unknown>;
   /** True when this row was written by the watchdog to establish a baseline
    *  rather than by a real run. Keeps a fresh deploy from alerting instantly. */
   seeded?: boolean;
 }
+
+/**
+ * A run that dies partway now writes a heartbeat too — otherwise a failure and
+ * a no-show leave the same (absent) trace. But that means freshness alone no
+ * longer proves health: a job timing out daily would keep stamping `started`
+ * and look alive forever. So a heartbeat that has not reached `completed`
+ * counts as a failure once this much time has passed. Generous next to a 60s
+ * maxDuration, so a genuinely in-flight run is never flagged.
+ */
+const NOT_COMPLETING_AFTER_HOURS = 2;
 
 export interface StaleCronJob {
   job: string;
@@ -57,6 +69,10 @@ export interface StaleCronJob {
   /** null when we have never heard from it at all. */
   lastRanAt: string | null;
   hoursSilent: number | null;
+  /** 'silent' = not invoked at all. 'not-completing' = invoked, never finishes. */
+  reason: 'silent' | 'not-completing';
+  /** Error text from the job, when it reported one. */
+  error?: string;
 }
 
 /**
@@ -80,8 +96,24 @@ export function staleCronJobs(
     const ms = now.getTime() - new Date(hb.ranAt).getTime();
     if (!Number.isFinite(ms)) continue; // unparseable timestamp: don't alert on junk
     const hoursSilent = ms / 3_600_000;
+    const base = { job, label, lastRanAt: hb.ranAt, hoursSilent: Math.round(hoursSilent) };
+
     if (hoursSilent > maxAgeHours) {
-      out.push({ job, label, lastRanAt: hb.ranAt, hoursSilent: Math.round(hoursSilent) });
+      out.push({ ...base, reason: 'silent' });
+      continue;
+    }
+
+    // Invoked recently, but never got to the end. A missing phase is a legacy
+    // write from before phases existed — treat as healthy rather than alarm on
+    // old rows.
+    const phase = hb.summary?.phase;
+    if (phase != null && phase !== 'completed' && hoursSilent > NOT_COMPLETING_AFTER_HOURS) {
+      const error = hb.summary?.error;
+      out.push({
+        ...base,
+        reason: 'not-completing',
+        ...(typeof error === 'string' ? { error } : {}),
+      });
     }
   }
   return out;
@@ -95,18 +127,24 @@ export function unseededCronJobs(
   return jobs.filter(({ job }) => !heartbeats[job]?.ranAt).map(({ job }) => job);
 }
 
-/** Telegram body for a set of silent jobs. Null when there is nothing to say. */
+/** Telegram body for a set of unhealthy jobs. Null when there is nothing to say. */
 export function staleCronAlert(stale: StaleCronJob[]): string | null {
   if (stale.length === 0) return null;
   const lines = [
-    '⚠️ A scheduled job has gone quiet — it is not running, so nothing it does is happening:',
-    ...stale.map(
-      (s) =>
-        `• ${s.label} — last ran ${s.hoursSilent}h ago (${s.lastRanAt?.slice(0, 16).replace('T', ' ')} UTC)`,
-    ),
+    '⚠️ A scheduled job is not doing its work:',
+    ...stale.map((s) => {
+      const when = `${s.lastRanAt?.slice(0, 16).replace('T', ' ')} UTC`;
+      return s.reason === 'silent'
+        ? `• ${s.label} — not invoked for ${s.hoursSilent}h (last ${when})`
+        : `• ${s.label} — invoked ${s.hoursSilent}h ago but never finished${s.error ? `: ${s.error}` : ''} (${when})`;
+    }),
     '',
-    'Check it is still reachable: a GET should answer 405, not 307.',
-    'A 307 means the auth middleware is eating the cron request again — see proxy.ts.',
+    // The diagnosis that took two days and three separate causes to find.
+    'If it is not being invoked, probe the path with a plain GET:',
+    '  401 = healthy · 405 = route is POST-only, Vercel cron sends GET',
+    '  307 = the auth middleware is eating it again (see proxy.ts)',
+    'Note this project is on Vercel Hobby: cron timing is ±59 min, so allow the',
+    'full hour past the schedule before calling a run missing.',
   ];
   return lines.join('\n');
 }

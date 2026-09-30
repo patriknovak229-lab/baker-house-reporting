@@ -57,7 +57,7 @@ async function run(req: NextRequest) {
   // ~90 reviews). Don't clobber the cache or seed off an empty set — bail.
   if (Object.keys(byRef).length === 0) {
     // Still a completed run: the job is alive, it just had nothing usable.
-    await beat({ skipped: "no reviews returned" });
+    await beat({ phase: "completed", skipped: "no reviews returned" });
     return NextResponse.json({ ok: true, skipped: "no reviews returned" });
   }
 
@@ -70,7 +70,7 @@ async function run(req: NextRequest) {
   await redis.set(REVIEWS_CACHE_KEY, reviewsCache);
 
   const result = await notifyNewReviews(redis, byRef);
-  await beat(result as Record<string, unknown>);
+  await beat({ phase: "completed", ...(result as Record<string, unknown>) });
   return NextResponse.json({ ok: true, ...result });
 }
 

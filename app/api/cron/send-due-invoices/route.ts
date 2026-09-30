@@ -78,6 +78,19 @@ function invoiceDataComplete(d: InvoiceData | null | undefined): d is InvoiceDat
   return !!d && hasCompanyId && !!d.billingEmail?.trim();
 }
 
+/**
+ * Liveness write. Every exit path calls this, including the failures, because
+ * an ABSENT heartbeat is how we detect "never invoked" — so a run that starts
+ * and then dies must not leave the same trace as one that never happened. That
+ * ambiguity is the whole bug this job kept re-teaching us.
+ */
+function beat(summary: Record<string, unknown>): Promise<void> {
+  return writeCronHeartbeat('send-due-invoices', {
+    ranAt: new Date().toISOString(),
+    summary,
+  }).catch((err) => console.error('[cron/send-due-invoices] heartbeat write failed:', err));
+}
+
 async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, 'send-due-invoices');
   if (!isCron) {
@@ -85,6 +98,27 @@ async function run(req: NextRequest) {
     if ('error' in auth) return auth.error;
   }
 
+  // Claim the invocation up front, before any work that could throw. Overwritten
+  // with the real summary on success; replaced with the error on failure.
+  await beat({ phase: 'started' });
+
+  try {
+    return await sendDueInvoices();
+  } catch (err) {
+    // Nothing below re-raises on purpose, so reaching here means an unforeseen
+    // throw. Previously that returned a bare 500 with no heartbeat and no
+    // Telegram: invisible, and indistinguishable from the cron not firing.
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error('[cron/send-due-invoices] run failed:', err);
+    await beat({ phase: 'failed', error: reason });
+    await sendTelegram(
+      `⚠️ Invoice auto-send crashed before completing: ${reason}\nNo invoices were sent by this run.`,
+    ).catch(() => {});
+    return NextResponse.json({ error: reason }, { status: 500 });
+  }
+}
+
+async function sendDueInvoices() {
   const today = todayUTC();
   const earliest = ymdDaysAgo(today, CATCHUP_DAYS);
 
@@ -93,8 +127,15 @@ async function run(req: NextRequest) {
   try {
     reservations = await buildReservationSet();
   } catch (err) {
+    // Was silent: no heartbeat, no Telegram, just a 502 into Vercel's logs. A
+    // Beds24 outage on checkout day would have looked exactly like the cron
+    // being dead again.
     const reason = err instanceof Error ? err.message : String(err);
     console.error('[cron/send-due-invoices] buildReservationSet failed:', reason);
+    await beat({ phase: 'failed', step: 'buildReservationSet', error: reason });
+    await sendTelegram(
+      `⚠️ Invoice auto-send could not load bookings: ${reason}\nNo invoices were sent by this run.`,
+    ).catch(() => {});
     return NextResponse.json({ error: `Load failed: ${reason}` }, { status: 502 });
   }
 
@@ -251,14 +292,21 @@ async function run(req: NextRequest) {
     mirrorHealth,
   };
 
-  // Liveness. Recorded even when the queue was empty — "ran, nothing due" and
-  // "never ran" are otherwise indistinguishable, and that ambiguity is what let
-  // this job stay dead for months. Swallowed: a heartbeat write failing must
-  // never turn a successful send run into a 500.
-  await writeCronHeartbeat('send-due-invoices', {
-    ranAt: new Date().toISOString(),
-    summary: { sent, deferred, failed, skippedStale, skippedIncomplete },
-  }).catch((err) => console.error('[cron/send-due-invoices] heartbeat write failed:', err));
+  // Recorded even when the queue was empty — that case is the point: "ran,
+  // nothing due" and "never ran" are otherwise indistinguishable. `alreadySent`
+  // and `skippedManual` are in here because without them the first real run
+  // (30 Sep) reported all zeros despite resolving three tasks, which reads as
+  // "did nothing" when it had in fact done its job.
+  await beat({
+    phase: 'completed',
+    sent,
+    deferred,
+    failed,
+    alreadySent,
+    skippedManual,
+    skippedStale,
+    skippedIncomplete,
+  });
 
   return NextResponse.json(result);
 }
