@@ -43,9 +43,16 @@ export const config = {
   // route by the PRICING_INGEST_SECRET header instead.
   //
   // Cron routes are exempt because Vercel cron requests carry no session and
-  // were being 307'd to /login before the handler ran. Exemption does NOT make
-  // them public: each gates itself on the `x-vercel-cron` header (which Vercel
-  // reserves and strips from external callers) or an admin/super session.
+  // were being 307'd to /login before the handler ran. Each re-gates itself via
+  // utils/cronAuth.
+  //
+  // ⚠️ That gate is only as strong as CRON_SECRET. `x-vercel-cron` and the cron
+  // user-agent are NOT stripped from external requests — a one-line curl forges
+  // either — so with no secret configured these paths are effectively open to
+  // anyone who knows the header name. When CRON_SECRET is set, Vercel sends
+  // `Authorization: Bearer <secret>` and cronAuth requires it, refusing the
+  // forgeable signals. Exempting a path here means removing the ONLY session
+  // check in front of it, so weigh what the route does before adding one.
   //   - `api/analytics/market/refresh` — verified 2026-08-30: the 06:30 refresh
   //     never executed and the PriceLabs snapshot only moved on manual runs.
   //   - `api/cron/send-due-invoices` + `api/cron/check-reviews` — same bug,
@@ -53,6 +60,10 @@ export const config = {
   //     sat unsent: the 09:00 job had never once reached its handler, so the
   //     chat agent's whole collect-then-invoice flow dead-ended at the last
   //     step. Diagnosed by the 307-vs-401 difference against market/refresh.
+  //     NOTE: exempting them was necessary but NOT sufficient — they were
+  //     POST-only and Vercel invokes cron paths with GET, so they kept
+  //     answering 405 to every run. Fixed 2026-09-30. A route added here must
+  //     export GET, or it stays just as dead and looks reachable.
   //
   // `api/cron/send-scheduled-payments` is DELIBERATELY still behind the
   // middleware. It charges guests and emails them, it has never run in
