@@ -26,10 +26,16 @@ export interface TranslationResult {
  * Translate `text` into `targetLang`. Returns the translated text and the
  * source language Google detected. Throws on API errors so the caller can
  * decide whether to bubble or fall back to the original.
+ *
+ * `sourceLang` pins the source instead of auto-detecting — short or
+ * diacritic-free Czech ("diky moc") is easily detected as Slovak. Google
+ * reports no detected language when the source is pinned, so
+ * `detectedLanguage` is then an empty string.
  */
 export async function translateText(
   text: string,
   targetLang: string,
+  sourceLang?: string,
 ): Promise<TranslationResult | null> {
   if (!text.trim()) return null;
   const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY;
@@ -41,7 +47,12 @@ export async function translateText(
   const res = await fetch(`${GOOGLE_TRANSLATE_URL}?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: text, target: targetLang, format: 'text' }),
+    body: JSON.stringify({
+      q: text,
+      target: targetLang,
+      format: 'text',
+      ...(sourceLang ? { source: sourceLang } : {}),
+    }),
   });
 
   const data = await res.json().catch(() => null);

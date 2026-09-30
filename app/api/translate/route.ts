@@ -5,7 +5,7 @@ import { translateText } from '@/utils/googleTranslate';
 /**
  * POST /api/translate
  *
- * Body: { text: string, targetLang?: string (defaults to 'cs') }
+ * Body: { text: string, targetLang?: string (defaults to 'cs'), sourceLang?: string (auto-detect when omitted) }
  * Returns: { translatedText, detectedLanguage }
  *
  * Thin wrapper around utils/googleTranslate.ts. Server-side callers (the
@@ -15,9 +15,10 @@ export async function POST(req: NextRequest) {
   const authResult = await requireRole(['admin', 'super']);
   if ('error' in authResult) return authResult.error;
 
-  const { text, targetLang = 'cs' } = (await req.json()) as {
+  const { text, targetLang = 'cs', sourceLang } = (await req.json()) as {
     text?: string;
     targetLang?: string;
+    sourceLang?: string;
   };
 
   if (!text || !text.trim()) {
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await translateText(text, targetLang);
+    const result = await translateText(text, targetLang, sourceLang);
     if (!result) {
       return NextResponse.json({ error: 'Translation service not configured' }, { status: 500 });
     }

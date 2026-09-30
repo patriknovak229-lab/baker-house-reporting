@@ -25,6 +25,7 @@ import CreateVoucherModal from "./CreateVoucherModal";
 import PriceCheckModal from "./PriceCheckModal";
 import MassMessageModal from "./MassMessageModal";
 import StayRequestModal from "./StayRequestModal";
+import TranslateModal from "./TranslateModal";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
@@ -277,6 +278,7 @@ export default function TransactionsPage() {
   const [showPriceCheck, setShowPriceCheck] = useState(false);
   const [showMassMessageModal, setShowMassMessageModal] = useState(false);
   const [showStayRequest, setShowStayRequest] = useState(false);
+  const [showTranslate, setShowTranslate] = useState(false);
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
   // Single source of truth for "are we saving / did we save / did it fail" so
   // the drawer can render one consistent toast for any onUpdate-driven write.
@@ -1280,6 +1282,16 @@ export default function TransactionsPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
               </svg>
               Message Guests
+            </button>
+            <button
+              onClick={() => setShowTranslate(true)}
+              title="Translate a message from Czech or English into any language, then copy it into WhatsApp or an email"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-sky-200 text-sky-700 text-sm font-medium transition-colors hover:bg-sky-50 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+              </svg>
+              Translate
             </button>
             </>
           )}
@@ -2854,6 +2866,9 @@ export default function TransactionsPage() {
           onClose={() => setShowMassMessageModal(false)}
         />
       )}
+
+      {/* Stand-alone translator for WhatsApp / email messages */}
+      {showTranslate && <TranslateModal onClose={() => setShowTranslate(false)} />}
 
       {/* Create voucher modal */}
       {showVoucherModal && (
