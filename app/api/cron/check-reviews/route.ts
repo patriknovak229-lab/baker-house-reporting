@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { requireRole } from "@/utils/authGuard";
+import { cronAuth } from "@/utils/cronAuth";
 import { writeCronHeartbeat } from "@/data-access/cronHeartbeat";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { fetchReviews, reviewsFromDate, mergeReviews } from "@/utils/beds24Reviews";
@@ -34,10 +35,10 @@ function getRedis(): Redis {
  * notifier, so alerts normally fire as soon as a review reaches the app; this
  * cron just guarantees coverage even if nobody opens the dashboard.
  *
- * Auth: Vercel cron requests carry "x-vercel-cron: 1"; manual triggers need admin/super.
+ * Auth: platform cron via utils/cronAuth; manual triggers need admin/super.
  */
-export async function POST(req: NextRequest) {
-  const isCron = req.headers.get("x-vercel-cron") === "1";
+async function run(req: NextRequest) {
+  const { isCron } = cronAuth(req, "check-reviews");
   if (!isCron) {
     const authResult = await requireRole(["admin", "super"]);
     if ("error" in authResult) return authResult.error;
@@ -84,3 +85,7 @@ function beat(summary: Record<string, unknown>): Promise<void> {
     summary,
   }).catch((err) => console.error("[cron/check-reviews] heartbeat write failed:", err));
 }
+
+// Vercel invokes cron paths with GET (see utils/cronAuth).
+export const POST = run;
+export const GET = run;

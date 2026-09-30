@@ -23,12 +23,13 @@
  * banner) and fire a Telegram alert. Idempotency = invoiceStatus + resolved
  * task, so a re-run never double-sends.
  *
- * Auth: Vercel cron carries "x-vercel-cron: 1"; otherwise admin/super (manual
- * trigger for testing).
+ * Auth: platform cron via utils/cronAuth (CRON_SECRET when set, else Vercel's
+ * documented header/user-agent); otherwise admin/super for a manual trigger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
+import { cronAuth } from '@/utils/cronAuth';
 import type { InvoiceData, Issue, InvoiceStatus, InvoiceSplit, Reservation } from '@/types/reservation';
 import { buildReservationSet } from '@/utils/beds24Reservations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
@@ -77,8 +78,8 @@ function invoiceDataComplete(d: InvoiceData | null | undefined): d is InvoiceDat
   return !!d && hasCompanyId && !!d.billingEmail?.trim();
 }
 
-export async function POST(req: NextRequest) {
-  const isCron = req.headers.get('x-vercel-cron') === '1';
+async function run(req: NextRequest) {
+  const { isCron } = cronAuth(req, 'send-due-invoices');
   if (!isCron) {
     const auth = await requireRole(['admin', 'super']);
     if ('error' in auth) return auth.error;
@@ -261,3 +262,8 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json(result);
 }
+
+// Vercel invokes cron paths with GET (see utils/cronAuth). POST stays for the
+// manual/admin trigger, so the schedule and the button share one code path.
+export const POST = run;
+export const GET = run;

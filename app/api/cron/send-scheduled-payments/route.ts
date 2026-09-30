@@ -108,6 +108,27 @@ async function sendPaymentEmail(args: {
  *   - Vercel cron requests carry "x-vercel-cron: 1" header — accepted without session.
  *   - Otherwise requires admin/super (manual trigger from dashboard for testing).
  */
+/**
+ * ⚠️ BEFORE UNBLOCKING THIS ROUTE, READ THIS.
+ *
+ * It is POST-only and still behind the auth middleware (`proxy.ts`), so it has
+ * never run. Removing it from the matcher is NOT enough to make it work, and
+ * NOT safe on its own:
+ *
+ *  1. Vercel invokes cron paths with GET. A POST-only route answers 405 to
+ *     every scheduled run and does nothing, silently — this is what kept
+ *     send-due-invoices + check-reviews dead even after they were unblocked.
+ *     Export GET (see utils/cronAuth for the pattern).
+ *  2. It gates on `x-vercel-cron`, which is NOT stripped from external
+ *     requests and is therefore forgeable. For a route that CHARGES GUESTS,
+ *     set CRON_SECRET first so utils/cronAuth requires the Bearer token, and
+ *     use cronAuth here rather than the raw header check below.
+ *  3. Add it to WATCHED_CRON_JOBS in utils/cronHeartbeat and write a heartbeat,
+ *     or its silence goes unnoticed the way the others' did.
+ *
+ * Deliberately left as-is: switching on unattended guest charges is a business
+ * decision, and a 405 is a safer resting state for it than a working endpoint.
+ */
 export async function POST(req: NextRequest) {
   const isCron = req.headers.get('x-vercel-cron') === '1';
   if (!isCron) {
