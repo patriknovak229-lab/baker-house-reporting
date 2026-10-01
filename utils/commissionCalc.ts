@@ -12,7 +12,7 @@ import type {
   SubscriptionItem,
 } from '@/utils/variableCostsShared';
 import type { DateRange } from '@/utils/periodUtils';
-import { isReservationInPeriod } from '@/utils/periodUtils';
+import { isReservationInPeriod, getNightsInPeriod } from '@/utils/periodUtils';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import { computeGrossProfit } from '@/utils/grossProfit';
 import {
@@ -154,6 +154,29 @@ export function computeSettlement(
     rooms,
   );
 
+  /**
+   * Guests whose last night was in the previous month check out on the 1st.
+   * Costs are on a checkout-date basis, so their cleaning is billed to THIS
+   * month — but the stay has zero nights here, so `isReservationInPeriod`
+   * (which is `nights > 0`) drops them in the pre-filter above, before the
+   * shared engine's own carry-in branch can ever see them. Counted here off the
+   * unfiltered list instead, or every 1st-of-month checkout reads as an
+   * unexplained extra cleaning.
+   *
+   * This mirrors `cleaningNextMonthCount`: the month the stay belongs to
+   * subtracts a checkout that lands after its end, and the month the checkout
+   * lands in adds it back. Deliberately NOT conditional on a cleaning having
+   * been billed, so a 1st-of-month cleaning that was never assigned still
+   * raises a Δ — which is the whole point of the badge.
+   */
+  const carryInCheckouts = expandLinkedReservations(reservations).filter((r) => {
+    if (r.isBlackout || !rooms.includes(r.room)) return false;
+    if (r.paymentStatus === 'Refunded') return false;
+    if (r.isCancelled) return false;         // incl. non-arrivals: nobody stayed
+    if (getNightsInPeriod(r, range) > 0) return false;
+    return r.checkOutDate >= range.start && r.checkOutDate <= range.end;
+  }).length;
+
   const share = (v: number) => v / divisor;
 
   const commissionRate = unitCommissionRate(unit);
@@ -165,12 +188,20 @@ export function computeSettlement(
 
   // Cleaning-app reconciliation (pool-level): does the number of billed
   // cleanings match what the reservations imply?
+  //
+  // Non-arrivals are subtracted because they imply no cleaning: the guest never
+  // came, and flagging one cancels the booking in Beds24, which already drops
+  // its checkout task from the cleaning app's schedule. Counting it here was
+  // raising a Δ1 on every non-arrival. Note this subtracts the BOOKING, never
+  // the (date, room) cell — when the freed nights are resold, the replacement
+  // guest departs on the same date and their cleaning must still be expected.
   const expectedCleanings =
     t.reservationCount -
     t.cleaningNextMonthCount -
+    t.nonArrivalCount -
     t.removedCleaningCount +
     t.extraCleaningCount +
-    t.carryInCount;
+    carryInCheckouts;
   const reconciles = expectedCleanings === t.cleaningCount;
   const reconcileNote = reconciles
     ? `${t.cleaningCount} cleanings match ${t.reservationCount} reservations`

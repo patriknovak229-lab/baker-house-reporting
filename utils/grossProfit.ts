@@ -75,6 +75,11 @@ export interface GrossProfitTotals {
   cleaningCount: number;
   laundryCount: number;
   cleaningNextMonthCount: number;
+  /** Reservations kept for revenue but which never produced a stay — a guest
+   *  who did not arrive leaves no room to clean, so they must not raise the
+   *  expected-cleanings count. Only those departing inside the period, so the
+   *  next-month exclusion can't subtract the same booking twice. */
+  nonArrivalCount: number;
   extraCleaningCount: number;
   noLaundryCount: number;
   removedCleaningCount: number;
@@ -135,6 +140,7 @@ export function computeGrossProfit(
   let netSales = 0;
   let reservationCount = 0;
   let cleaningNextMonthCount = 0;
+  let nonArrivalCount = 0;
   let carryInCount = 0;
   for (const r of reservations) {
     if (r.paymentStatus === 'Refunded') continue;
@@ -153,7 +159,10 @@ export function computeGrossProfit(
     const roomInScopeForRes = allRoomsSelected || (selectedRooms?.includes(r.room) ?? true);
     if (nights > 0 && roomInScopeForRes) {
       reservationCount += 1;
+      // `else if`: a non-arrival departing next month is already excluded by
+      // the line above, and subtracting it twice would under-state the count.
       if (r.checkOutDate > dateRange.end) cleaningNextMonthCount += 1;
+      else if (r.nonArrival) nonArrivalCount += 1;
     }
     if (
       nights === 0 &&
@@ -254,6 +263,7 @@ export function computeGrossProfit(
     cleaningCount,
     laundryCount,
     cleaningNextMonthCount,
+    nonArrivalCount,
     extraCleaningCount,
     noLaundryCount,
     removedCleaningCount,
