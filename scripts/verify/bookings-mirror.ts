@@ -128,11 +128,24 @@ async function main() {
 
   const mismatches: { reservationNumber: string; field: string; expected: unknown; actual: unknown }[] = [];
   const staleCleaningStatus: string[] = [];
+  const preservedByCoalesce: string[] = [];
   const missingInPg: string[] = [];
   const archivedBeyondCache: string[] = [];
 
   // Archive bookkeeping, not projected data — excluded from the field diff.
   const SKIP_FIELDS = new Set<keyof BookingsMirrorInsert>(['syncedAt', 'firstSeenAt', 'raw']);
+
+  /**
+   * Fields the upsert COALESCEs, so the archive deliberately KEEPS a value a
+   * fresh sync can no longer produce. A null expectation against a stored value
+   * is the guard doing its job, not drift — the archive is the more correct side.
+   * The big one is rateType: detection is scope-gated to current+future stays
+   * (isRateTypeInScope), so every past booking recomputes to undefined while the
+   * archive still holds the plan it was booked under. Same for synced_rating once
+   * a review ages out of Beds24's rolling window. Two DIFFERENT non-null values
+   * are still a genuine mismatch and still reported.
+   */
+  const COALESCED_FIELDS = new Set<keyof BookingsMirrorInsert>(['rateType', 'syncedRating', 'apiReference']);
 
   for (const [rn, exp] of expected) {
     const act = actual.get(rn);
@@ -145,6 +158,10 @@ async function main() {
       if (same(exp[field], (act as Record<string, unknown>)[field])) continue;
       if (field === 'cleaningStatus') {
         staleCleaningStatus.push(rn);
+        continue;
+      }
+      if (COALESCED_FIELDS.has(field) && exp[field] == null && (act as Record<string, unknown>)[field] != null) {
+        preservedByCoalesce.push(`${rn}.${String(field)}`);
         continue;
       }
       mismatches.push({ reservationNumber: rn, field: String(field), expected: exp[field], actual: (act as Record<string, unknown>)[field] });
@@ -171,6 +188,10 @@ async function main() {
         missingInPg: missingInPg.length,
         archivedBeyondCache: archivedBeyondCache.length,
         staleCleaningStatus: staleCleaningStatus.length,
+        // Values the archive keeps that a fresh sync can no longer produce —
+        // expected, and the reason the COALESCE guard exists.
+        preservedByCoalesce: preservedByCoalesce.length,
+        samplePreserved: preservedByCoalesce.slice(0, 5),
         // Which columns drifted — a bare count can hide a single field failing
         // across every row (e.g. a comparator bug) behind a scary total.
         mismatchesByField: mismatches.reduce<Record<string, number>>((acc, m) => {

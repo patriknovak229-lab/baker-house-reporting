@@ -6,6 +6,10 @@
 // The bookings route imports these back; dashboard-only enrichments
 // (guest reviews, Stripe fees, overlap flags, rate-map publish,
 // inventory-override blackouts) stay in the route.
+//
+// NOTE: both paths that refresh the shared Redis bookings cache must also
+// publish the Postgres bookings archive, or it silently falls behind - see
+// archiveReservationSet at the bottom of this file.
 import { Redis } from "@upstash/redis";
 import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
@@ -13,6 +17,7 @@ import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
+import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 
 export const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -847,5 +852,50 @@ export async function buildReservationSet(
   const grouped = mergeGroupedBookings(raw.filter((b) => !isCancelledStatus(b)));
   const active = grouped.map(mapToReservation);
   const cancelled = raw.filter(isCancelledStatus).map(mapToReservation);
-  return attachNonArrivalOverlay([...active, ...cancelled]);
+  const reservations = [...active, ...cancelled];
+  await archiveReservationSet(reservations, grouped, raw.filter(isCancelledStatus));
+  return attachNonArrivalOverlay(reservations);
+}
+
+/**
+ * Publish this sync's reservations to the Postgres bookings archive.
+ *
+ * fetchAllBookings above just refreshed the SHARED Redis cache, and this
+ * function is the second of the two paths that do so (the other is the
+ * /api/bookings GET). Until 2026-10-02 only that GET archived, so a booking
+ * pulled in by this path - the invoice cron, the occupancy page, Message Guests -
+ * sat in Redis unarchived until someone next opened the dashboard. The daily
+ * health check then correctly, but uselessly, alerted that Postgres was behind
+ * (first seen with BH-94060689). The archive must follow the cache on EVERY
+ * refresh path, so it follows it here too.
+ *
+ * Safe to run from here even though this path has no guest-review data: the
+ * upsert COALESCEs synced_rating, rate_type, api_reference and raw, so a null
+ * from this path can never erase a value the archive already holds. A later
+ * dashboard sync fills the rating in.
+ *
+ * Deliberately NOT passed: inventory-override blackouts. This path never fetches
+ * the calendar, so it has no evidence about them and must leave those rows alone.
+ *
+ * Best-effort, exactly like the GET: a failure is logged and never affects the
+ * reservations returned to the caller.
+ */
+async function archiveReservationSet(
+  reservations: Reservation[],
+  grouped: Beds24Booking[],
+  cancelled: Beds24Booking[],
+): Promise<void> {
+  if (!bookingsMirrorWriteEnabled()) return;
+  const apiReferenceByReservation: Record<string, string> = {};
+  const rawByReservation: Record<string, Beds24Booking> = {};
+  for (const b of [...grouped, ...cancelled]) {
+    if (b.apiReference) apiReferenceByReservation[`BH-${b.id}`] = String(b.apiReference);
+    rawByReservation[`BH-${b.id}`] = b;
+  }
+  await publishBookingsMirror({
+    reservations,
+    apiReferenceByReservation,
+    rawByReservation,
+    overrideBlackouts: null,
+  }).catch((err) => console.error("[beds24] bookings archive publish failed:", err));
 }
