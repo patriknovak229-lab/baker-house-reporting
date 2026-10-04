@@ -2130,6 +2130,11 @@ export default function TransactionsPage() {
                               reshuffle
                             </span>
                           )}
+                          {m.effectiveFrom && (
+                            <span className="ml-1 px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[10px] font-semibold uppercase tracking-wide">
+                              mid-stay from {m.effectiveFrom}
+                            </span>
+                          )}
                         </p>
                         <p className="text-xs text-sky-700 mt-0.5">
                           {m.checkInDate} → {m.checkOutDate} ·{' '}

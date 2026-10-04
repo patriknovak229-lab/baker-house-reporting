@@ -11,6 +11,7 @@
  * which reads as a dead button rather than as bad data.
  */
 import type { Reservation } from "@/types/reservation";
+import { occupancySpans } from "@/utils/roomSegments";
 
 /** Half-open night ranges [in, out) overlap iff each starts before the other ends. */
 function overlaps(
@@ -22,7 +23,9 @@ function overlaps(
 
 /**
  * Map of physical unit → the bookings holding it during `target`'s nights.
- * A unit absent from the map is free as far as the client can tell.
+ * A unit absent from the map is free as far as the client can tell. For a
+ * mid-stay move pass `target` with `checkInDate` = the move date — the unit
+ * only has to be free from then on.
  *
  * Counted:
  *   - blackouts (they block the unit for real), and
@@ -48,11 +51,13 @@ export function occupiersByRoom(
     if (r.reservationNumber === target.reservationNumber) continue;
     if (r.isCancelled) continue;
     if (!overlaps(r, target)) continue;
-    const rooms = r.linkedRooms && r.linkedRooms.length > 0 ? r.linkedRooms : [r.room];
-    for (const room of rooms) {
-      const list = byRoom.get(room);
-      if (list) list.push(r);
-      else byRoom.set(room, [r]);
+    // Per physical span: a guest moved mid-stay holds each unit only for its
+    // own nights there (utils/roomSegments), not the whole stay.
+    for (const span of occupancySpans(r)) {
+      if (!overlaps({ checkInDate: span.from, checkOutDate: span.to }, target)) continue;
+      const list = byRoom.get(span.room);
+      if (!list) byRoom.set(span.room, [r]);
+      else if (!list.includes(r)) list.push(r);
     }
   }
   return byRoom;

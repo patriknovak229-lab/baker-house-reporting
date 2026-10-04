@@ -17,8 +17,20 @@
  * check. Transactions' existing same-room-conflict banner then keeps shouting
  * until the sequence is finished.
  *
- * Body: { reservationNumber, toRoom, reason?, allowOccupied? }
- * Returns: { ok, from, to, inHouse, forced, conflicts }.
+ * `effectiveFrom` (YYYY-MM-DD) makes it a MID-STAY move: the guest slept in
+ * the old unit until that date and moves in on it (broken door, leak…). Beds24
+ * still gets the plain whole-booking roomId change — nothing about the booking,
+ * its dates or its money is rewritten — and the date is recorded on the move
+ * notice, from which the app re-derives where each night was really spent
+ * (utils/roomSegments.ts): the target only has to be free FROM that date, the
+ * revenue is split by nights between the two units, and the vacated unit gets a
+ * cleaning on the move date in the cleaning app. Allowed range:
+ * arrival < effectiveFrom ≤ today (Prague) and < departure. Never a future
+ * date: Beds24 frees the old unit the moment the roomId changes, so a move
+ * recorded ahead of time would put the guest's remaining nights there on sale.
+ *
+ * Body: { reservationNumber, toRoom, reason?, allowOccupied?, effectiveFrom? }
+ * Returns: { ok, from, to, inHouse, forced, conflicts, effectiveFrom }.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -26,7 +38,9 @@ import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
 import { physicalRoomIdForName, physicalRoomName } from "@/utils/roomAllocation";
 import { pragueToday } from "@/utils/periodUtils";
-import { recordRoomMoves, roomMoveId } from "@/data-access/roomMoves";
+import { listMidStayMoveHistory, recordRoomMoves, roomMoveId } from "@/data-access/roomMoves";
+import { buildRoomSegments } from "@/utils/roomSegments";
+import { moveCleaningEntries, publishMoveCleaningsEntry } from "@/utils/moveCleaningsPublish";
 import type { RoomMoveConflict } from "@/lib/db/schema/roomMoves";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
@@ -51,6 +65,10 @@ function overlaps(a: { arrival: string; departure: string }, b: { arrival: strin
   return a.arrival < b.departure && b.arrival < a.departure;
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 async function sendTelegram(message: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -66,7 +84,13 @@ export async function POST(req: NextRequest) {
   const guard = await requireRole(["admin", "super"]);
   if ("error" in guard) return guard.error;
 
-  let body: { reservationNumber?: string; toRoom?: string; reason?: string; allowOccupied?: boolean };
+  let body: {
+    reservationNumber?: string;
+    toRoom?: string;
+    reason?: string;
+    allowOccupied?: boolean;
+    effectiveFrom?: string | null;
+  };
   try {
     body = await req.json();
   } catch {
@@ -120,6 +144,33 @@ export async function POST(req: NextRequest) {
   const inHouse = booking.arrival <= today && booking.departure > today;
   const fromRoom = physicalRoomName(booking.roomId) ?? `room ${booking.roomId}`;
 
+  // ── Mid-stay move date ──
+  // A date on/before arrival is just a whole-stay move; anything else must sit
+  // strictly inside the stay and not in the future (see the header note).
+  const rawFrom = body.effectiveFrom?.trim() || null;
+  if (rawFrom && !/^\d{4}-\d{2}-\d{2}$/.test(rawFrom)) {
+    return NextResponse.json({ error: "effectiveFrom must be YYYY-MM-DD" }, { status: 400 });
+  }
+  const effectiveFrom = rawFrom && rawFrom > booking.arrival ? rawFrom : null;
+  if (effectiveFrom) {
+    if (effectiveFrom >= booking.departure) {
+      return NextResponse.json(
+        { error: `Move date ${effectiveFrom} is not before checkout (${booking.departure})` },
+        { status: 400 },
+      );
+    }
+    if (effectiveFrom > today) {
+      return NextResponse.json(
+        {
+          error: `Move date ${effectiveFrom} is in the future. Do the move on the day — Beds24 frees ${fromRoom} the moment the room changes, so the nights before it would go on sale.`,
+        },
+        { status: 400 },
+      );
+    }
+  }
+  /** Nights the target must be free for. */
+  const mustBeFree = { arrival: effectiveFrom ?? booking.arrival, departure: booking.departure };
+
   // ── Is the target free for the stay? ──
   // Always computed. Only the REACTION to a conflict depends on allowOccupied:
   // reject by default, record-and-continue when the operator has overridden.
@@ -135,12 +186,32 @@ export async function POST(req: NextRequest) {
     const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, { headers: { token }, cache: "no-store" });
     if (!res.ok) throw new Error(`Beds24 ${res.status}: ${await res.text()}`);
     conflicts = asArray(await res.json())
-      .filter((b) => b.id !== bookingId && overlaps(b, booking!))
+      .filter((b) => b.id !== bookingId && overlaps(b, mustBeFree))
       .map((b) => ({ reservationNumber: `BH-${b.id}`, arrival: b.arrival, departure: b.departure }));
   } catch (err) {
     // An unreadable availability check is never waved through, override or not:
     // "I accept a conflict I can see" is a different decision from "move blind".
     return NextResponse.json({ error: err instanceof Error ? err.message : "Availability check failed" }, { status: 502 });
+  }
+
+  // A booking in the target that was itself moved in MID-STAY only holds it
+  // from its own move date — Beds24 shows it there for the whole stay. Drop the
+  // "conflicts" that are only those earlier nights. Best-effort: if the history
+  // can't be read, the raw Beds24 view stands (stricter, never laxer).
+  if (conflicts.length > 0) {
+    try {
+      const history = await listMidStayMoveHistory();
+      conflicts = conflicts.filter((c) => {
+        const segs = buildRoomSegments(
+          { room: toRoom, checkInDate: c.arrival, checkOutDate: c.departure },
+          history.filter((m) => m.reservationNumber === c.reservationNumber),
+        );
+        if (!segs) return true;
+        return segs.some((sg) => sg.room === toRoom && overlaps({ arrival: sg.from, departure: sg.to }, mustBeFree));
+      });
+    } catch (err) {
+      console.error("[relocate] mid-stay history read failed — keeping raw conflicts:", err);
+    }
   }
 
   if (conflicts.length > 0 && !allowOccupied) {
@@ -191,23 +262,50 @@ export async function POST(req: NextRequest) {
       forced,
       conflicts: forced ? conflicts : null,
       reason: body.reason?.trim() || null,
+      effectiveFrom,
     },
   ]);
 
+  // Mid-stay: hand the vacated unit's cleaning to the cleaning app right away
+  // (the bookings sync republishes the whole map later; this just saves the
+  // wait). Derived from the recorded history, same as the sync, so the two
+  // writers can't disagree.
+  let cleaningNote = "";
+  if (effectiveFrom) {
+    try {
+      const history = (await listMidStayMoveHistory()).filter((m) => m.reservationNumber === `BH-${bookingId}`);
+      const roomSegments =
+        buildRoomSegments({ room: toRoom, checkInDate: booking.arrival, checkOutDate: booking.departure }, history) ??
+        undefined;
+      const entries = moveCleaningEntries({ roomSegments, firstName: booking.firstName ?? "", lastName: booking.lastName ?? "" });
+      await publishMoveCleaningsEntry(`BH-${bookingId}`, entries);
+      cleaningNote = entries.some((e) => e.room === fromRoom && e.date === effectiveFrom)
+        ? `🧹 Cleaning of ${fromRoom} added to the cleaning app for ${effectiveFrom}. Not needed or later? Dismiss / re-date it in the cleaning app.`
+        : `⚠️ Couldn't add the ${fromRoom} cleaning automatically — add it in the cleaning app.`;
+    } catch (err) {
+      console.error("[relocate] move-cleaning publish failed:", err);
+      cleaningNote = `⚠️ Couldn't add the ${fromRoom} cleaning automatically — add it in the cleaning app.`;
+    }
+  }
+
   await sendTelegram(
     [
-      `🚪 <b>Room move</b>`,
-      `#${bookingId}: ${fromRoom} → ${toRoom}`,
+      effectiveFrom ? `🔀 <b>Mid-stay room move</b>` : `🚪 <b>Room move</b>`,
+      `#${bookingId}${guestName ? ` ${escapeHtml(guestName)}` : ""}: ${fromRoom} → ${toRoom}`,
+      effectiveFrom
+        ? `📅 ${booking.arrival} → ${effectiveFrom} in ${fromRoom}, ${effectiveFrom} → ${booking.departure} in ${toRoom}. Revenue split by nights.`
+        : "",
+      cleaningNote,
       inHouse ? "⚠️ guest is currently in-house" : "",
       forced
         ? `🚨 FORCED onto an occupied unit — ${toRoom} still holds ${conflicts
             .map((c) => `${c.reservationNumber} (${c.arrival}→${c.departure})`)
             .join(", ")}. Finish the reshuffle.`
         : "",
-      body.reason ? `🗒 ${body.reason}` : "",
+      body.reason ? `🗒 ${escapeHtml(body.reason)}` : "",
       `👤 by ${guard.email}`,
     ].filter(Boolean).join("\n"),
   );
 
-  return NextResponse.json({ ok: true, from: fromRoom, to: toRoom, inHouse, forced, conflicts });
+  return NextResponse.json({ ok: true, from: fromRoom, to: toRoom, inHouse, forced, conflicts, effectiveFrom });
 }

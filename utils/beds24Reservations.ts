@@ -18,6 +18,8 @@ import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
+import { listMidStayMoveHistory } from "@/data-access/roomMoves";
+import { attachRoomSegments } from "@/utils/roomSegments";
 
 export const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -842,6 +844,7 @@ export async function fetchAllBookings(
 // MINUS the dashboard-only enrichments (reviews, Stripe fees, overlap flags,
 // rate-map publish, inventory-override blackouts) - none of which affect a
 // booking's room, dates or status, so occupancy is identical either way.
+// Mid-stay room segments DO affect rooms, so they are attached here too.
 export async function buildReservationSet(
   options: { fullSync?: boolean } = {},
 ): Promise<Reservation[]> {
@@ -854,7 +857,13 @@ export async function buildReservationSet(
   const cancelled = raw.filter(isCancelledStatus).map(mapToReservation);
   const reservations = [...active, ...cancelled];
   await archiveReservationSet(reservations, grouped, raw.filter(isCancelledStatus));
-  return attachNonArrivalOverlay(reservations);
+  // Mid-stay moves DO change which unit held which night, so this path needs
+  // them as much as the dashboard does. Same degrade-to-unsplit rule as the GET.
+  const moveHistory = await listMidStayMoveHistory().catch((err) => {
+    console.error("[beds24] mid-stay move history read failed:", err);
+    return [];
+  });
+  return attachNonArrivalOverlay(attachRoomSegments(reservations, moveHistory));
 }
 
 /**

@@ -34,4 +34,6 @@ export interface RoomMoveNotice {
   forced: boolean;
   conflicts: RoomMoveConflictInfo[] | null;
   reason: string | null;
+  /** Mid-stay move: first night in `toRoom`. null = the whole stay moved. */
+  effectiveFrom: string | null;
 }

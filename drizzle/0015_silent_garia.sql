@@ -1,0 +1,1 @@
+ALTER TABLE "room_moves" ADD COLUMN "effective_from" date;

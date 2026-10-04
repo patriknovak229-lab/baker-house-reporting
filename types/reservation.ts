@@ -451,4 +451,32 @@ export interface Reservation {
    * should always verify on Beds24. Empty/undefined = no conflict.
    */
   overlapWith?: string[];
+  /**
+   * Set only when the guest was moved MID-STAY (drawer "Move to another room"
+   * with a move date): the physical unit per night range, in order. The last
+   * segment's room is `room` (what Beds24 holds). Derived server-side from
+   * `room_moves.effective_from` — see utils/roomSegments.ts. Per-apartment
+   * money and occupancy must read these, not `room`.
+   */
+  roomSegments?: RoomSegment[];
+  /**
+   * Set only on the per-apartment PIECES `splitBySegments` makes of a
+   * mid-stay-moved reservation (never on a real reservation). Pieces share the
+   * reservationNumber, so anything that counts bookings or adds a
+   * per-reservation amount must count the booking once — see
+   * `isRepeatSegmentPiece` / `isFinalSegmentPiece` in utils/roomSegments.
+   */
+  segmentPiece?: { index: number; of: number };
+}
+
+/** One stretch of a mid-stay-moved reservation spent in one physical unit. */
+export interface RoomSegment {
+  room: string;
+  /** First night (YYYY-MM-DD). */
+  from: string;
+  /** Exclusive end — the move date, or the checkout for the last segment. */
+  to: string;
+  nights: number;
+  /** nights / total nights — the share of the booking's money this room earns. */
+  share: number;
 }

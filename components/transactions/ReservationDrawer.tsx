@@ -3243,6 +3243,12 @@ export default function ReservationDrawer({
   const [moveDone, setMoveDone] = useState(false);
   /** Operator override: offer occupied units too (see the modal's own note). */
   const [moveIgnoreOccupied, setMoveIgnoreOccupied] = useState(false);
+  /**
+   * Mid-stay move date (YYYY-MM-DD) — the first night in the new unit. "" =
+   * the whole stay moves. Defaults to today for a guest already in-house.
+   * Nights before it stay attributed to the old unit (utils/roomSegments).
+   */
+  const [moveFrom, setMoveFrom] = useState("");
 
   /**
    * Who holds each unit during this stay, and which overlapping bookings are
@@ -3250,13 +3256,25 @@ export default function ReservationDrawer({
    * cancelled-booking exclusion in there is what makes this picker usable at
    * all; see that module's notes.
    */
+  // A mid-stay move only needs the target free from the move date on.
+  const moveWindow = useMemo(
+    () =>
+      reservation
+        ? {
+            reservationNumber: reservation.reservationNumber,
+            checkInDate: moveFrom && moveFrom > reservation.checkInDate ? moveFrom : reservation.checkInDate,
+            checkOutDate: reservation.checkOutDate,
+          }
+        : null,
+    [reservation, moveFrom],
+  );
   const occupiersDuringStay = useMemo(
-    () => (reservation ? occupiersByRoom(reservation, allReservations) : new Map<string, Reservation[]>()),
-    [reservation, allReservations],
+    () => (moveWindow ? occupiersByRoom(moveWindow, allReservations) : new Map<string, Reservation[]>()),
+    [moveWindow, allReservations],
   );
   const unallocatedDuringStay = useMemo(
-    () => (reservation ? unallocatedOverlapping(reservation, allReservations) : []),
-    [reservation, allReservations],
+    () => (moveWindow ? unallocatedOverlapping(moveWindow, allReservations) : []),
+    [moveWindow, allReservations],
   );
 
   const occupierLabel = (r: Reservation): string => {
@@ -3276,6 +3294,7 @@ export default function ReservationDrawer({
           reservationNumber: reservation.reservationNumber,
           toRoom: moveTargetRoom,
           allowOccupied: moveIgnoreOccupied,
+          effectiveFrom: moveFrom || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -4528,6 +4547,12 @@ export default function ReservationDrawer({
                   setMoveError(null);
                   setMoveDone(false);
                   setMoveIgnoreOccupied(false);
+                  // In-house → default to moving them from today; otherwise
+                  // the classic whole-stay move.
+                  {
+                    const t = pragueToday();
+                    setMoveFrom(reservation.checkInDate < t && reservation.checkOutDate > t ? t : "");
+                  }
                   setShowMoveModal(true);
                 }}
                 className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
@@ -6508,6 +6533,25 @@ export default function ReservationDrawer({
             const inHouse =
               reservation.checkInDate <= todayStr && reservation.checkOutDate > todayStr;
             const targetOccupiers = occupiersDuringStay.get(moveTargetRoom) ?? [];
+            // Mid-stay is offered once at least one night has been slept, and
+            // never for a multi-apartment booking (its units move separately).
+            const canMoveMidStay =
+              reservation.checkInDate < todayStr &&
+              reservation.checkOutDate > todayStr &&
+              !(reservation.linkedRooms && reservation.linkedRooms.length > 1);
+            const dayAfter = (d: string) => {
+              const x = new Date(d + "T00:00:00Z");
+              x.setUTCDate(x.getUTCDate() + 1);
+              return x.toISOString().slice(0, 10);
+            };
+            const dayBefore = (d: string) => {
+              const x = new Date(d + "T00:00:00Z");
+              x.setUTCDate(x.getUTCDate() - 1);
+              return x.toISOString().slice(0, 10);
+            };
+            const midStayMin = dayAfter(reservation.checkInDate);
+            const midStayMax = [todayStr, dayBefore(reservation.checkOutDate)].sort()[0];
+            const midStay = canMoveMidStay && !!moveFrom;
             return (
               <div
                 className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
@@ -6525,6 +6569,58 @@ export default function ReservationDrawer({
                   <p className="mt-3 text-sm text-gray-700">
                     From <span className="font-medium">{reservation.room}</span>
                   </p>
+
+                  {canMoveMidStay && (
+                    <div className="mt-3 rounded-md border border-violet-200 bg-violet-50/60 px-2.5 py-2">
+                      <label className="flex items-start gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={!!moveFrom}
+                          disabled={moveSubmitting || moveDone}
+                          onChange={(e) => {
+                            setMoveFrom(e.target.checked ? midStayMax : "");
+                            setMoveError(null);
+                            // The whole stay needs a wider free window — a room
+                            // picked as free from the move date may not be.
+                            if (!e.target.checked && !moveIgnoreOccupied) setMoveTargetRoom("");
+                          }}
+                          className="mt-0.5 w-3.5 h-3.5 accent-violet-600 disabled:opacity-50"
+                        />
+                        <span className="text-[11px] leading-snug text-gray-700">
+                          <span className="font-medium text-gray-900">Move mid-stay</span> — nights already
+                          spent stay in {reservation.room}. The new room only has to be free from the move date.
+                        </span>
+                      </label>
+                      {midStay && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <label className="text-[11px] font-medium text-gray-600" htmlFor="move-from">
+                            Move from
+                          </label>
+                          <input
+                            id="move-from"
+                            type="date"
+                            value={moveFrom}
+                            min={midStayMin}
+                            max={midStayMax}
+                            disabled={moveSubmitting || moveDone}
+                            onChange={(e) => {
+                              setMoveFrom(e.target.value);
+                              setMoveError(null);
+                            }}
+                            className="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-violet-400 disabled:opacity-50"
+                          />
+                        </div>
+                      )}
+                      {midStay && moveFrom && (
+                        <p className="mt-1.5 text-[11px] leading-snug text-violet-900">
+                          {formatDate(reservation.checkInDate)} → {formatDate(moveFrom)} in {reservation.room},{" "}
+                          {formatDate(moveFrom)} → {formatDate(reservation.checkOutDate)} in{" "}
+                          {moveTargetRoom || "the new room"}. Revenue is split by nights, and a cleaning of{" "}
+                          {reservation.room} is added to the cleaning app for {formatDate(moveFrom)}.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <label className="block text-xs font-medium text-gray-600 mt-3 mb-1">Move to</label>
                   <select
@@ -6616,8 +6712,9 @@ export default function ReservationDrawer({
                   )}
                   {moveDone && (
                     <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5">
-                      ✓ Moved to {moveTargetRoom}. Syncing… A move notice now sits in the alert bar
-                      until you dismiss it.
+                      ✓ Moved to {moveTargetRoom}
+                      {midStay ? ` from ${formatDate(moveFrom)}` : ""}. Syncing… A move notice now sits in the
+                      alert bar until you dismiss it.
                     </p>
                   )}
 

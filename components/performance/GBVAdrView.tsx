@@ -13,6 +13,7 @@ import { getNightsInPeriod } from "@/utils/periodUtils";
 import { reservationRevenue } from "@/utils/reservationRevenue";
 import type { DateRange } from "@/utils/periodUtils";
 import { CHANNEL_COLORS, CHANNEL_COLOR_FALLBACK as FALLBACK_COLOR } from "@/utils/channelColors";
+import { isRepeatSegmentPiece } from "@/utils/roomSegments";
 
 interface Props {
   reservations: Reservation[];
@@ -36,12 +37,13 @@ interface ChannelStat {
 
 function buildStats(reservations: Reservation[], dateRange: DateRange): ChannelStat[] {
   const map: Record<string, { reservations: number; nights: number; gbv: number }> = {};
+  const counted = new Set<string>();
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0, gbv: 0 };
-    map[r.channel].reservations += 1;
+    if (!isRepeatSegmentPiece(r, counted)) map[r.channel].reservations += 1;
     map[r.channel].nights += nights;
     map[r.channel].gbv += reservationRevenue(r).gbv * fraction;
   }

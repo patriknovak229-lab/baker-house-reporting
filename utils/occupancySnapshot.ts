@@ -20,6 +20,7 @@ import { daysBetween, getNightsInPeriod, isReservationInPeriod } from '@/utils/p
 import { reservationRevenue } from '@/utils/reservationRevenue';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import type { SnapshotData } from '@/types/occupancySnapshot';
+import { isRepeatSegmentPiece } from "@/utils/roomSegments";
 
 function pct(sold: number, available: number): number {
   if (available <= 0) return 0;
@@ -119,6 +120,7 @@ export function computeSnapshotData(
     }),
   };
 
+  const countedPieces = new Set<string>();
   return {
     period: { start: range.start, end: range.end, label: opts.label },
     rooms: [...rooms],
@@ -127,7 +129,8 @@ export function computeSnapshotData(
       occupancyPct: pct(soldTotal, availableTotal),
       soldNights: soldTotal,
       availableNights: availableTotal,
-      reservationsCount: inScope.length,
+      // A mid-stay move's two apartment pieces are one booking.
+      reservationsCount: inScope.filter((r) => !isRepeatSegmentPiece(r, countedPieces)).length,
       ...(grossSalesCzk !== undefined ? { grossSalesCzk } : {}),
     },
     perRoom,

@@ -51,6 +51,17 @@ export const roomMoves = pgTable(
     forced: boolean('forced').notNull().default(false),
     conflicts: jsonb('conflicts').$type<RoomMoveConflict[]>(),
     reason: text('reason'),
+    /**
+     * MID-STAY move: the first night spent in `toRoom` (YYYY-MM-DD). Nights
+     * before it were spent in `fromRoom`. null = the whole stay moved.
+     *
+     * Unlike the notice fields, this is lasting DATA, not a to-do: Beds24 only
+     * knows the booking's current room, so this column is the sole record of
+     * where the earlier nights were spent. It drives per-apartment revenue,
+     * occupancy checks and the vacated unit's cleaning (utils/roomSegments.ts)
+     * and keeps doing so after the notice is dismissed.
+     */
+    effectiveFrom: date('effective_from', { mode: 'string' }),
     /** null = still showing in the operator's alert bar. */
     dismissedAt: timestamp('dismissed_at', { withTimezone: true, mode: 'date' }),
     dismissedBy: text('dismissed_by'),

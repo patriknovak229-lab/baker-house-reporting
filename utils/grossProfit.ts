@@ -25,6 +25,7 @@ import type {
   SubscriptionLine,
 } from '@/utils/variableCostsShared';
 import { ROOM_TO_BEDS24_ID } from '@/utils/variableCostsShared';
+import { isFinalSegmentPiece, isRepeatSegmentPiece } from "@/utils/roomSegments";
 
 /** Count distinct calendar months in inclusive [from, to] that overlap
  *  with a subscription's active window. Mirrors cleaning-types.ts. */
@@ -142,6 +143,7 @@ export function computeGrossProfit(
   let cleaningNextMonthCount = 0;
   let nonArrivalCount = 0;
   let carryInCount = 0;
+  const countedPieces = new Set<string>();
   for (const r of reservations) {
     if (r.paymentStatus === 'Refunded') continue;
     // Plain cancellations contribute nothing. A non-arrival is kept but counted
@@ -158,7 +160,8 @@ export function computeGrossProfit(
     netSales += (price - commission - fees) * fraction;
     const roomInScopeForRes = allRoomsSelected || (selectedRooms?.includes(r.room) ?? true);
     if (nights > 0 && roomInScopeForRes) {
-      reservationCount += 1;
+      // A mid-stay move is one booking split over two apartments — one count.
+      if (!isRepeatSegmentPiece(r, countedPieces)) reservationCount += 1;
       // `else if`: a non-arrival departing next month is already excluded by
       // the line above, and subtracting it twice would under-state the count.
       if (r.checkOutDate > dateRange.end) cleaningNextMonthCount += 1;
@@ -210,6 +213,8 @@ export function computeGrossProfit(
     if (r.paymentStatus === 'Refunded' || r.isCancelled) continue;
     if (r.checkOutDate < dateRange.start || r.checkOutDate > dateRange.end) continue;
     if (selectedRooms && !selectedRooms.includes(r.room)) continue;
+    // Mid-stay move: the reservation's own costs go with its real checkout.
+    if (!isFinalSegmentPiece(r)) continue;
     const res = byReservation[r.reservationNumber];
     if (!res) continue;
     cleaning += res.cleaning;

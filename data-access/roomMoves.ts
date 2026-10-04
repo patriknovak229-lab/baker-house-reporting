@@ -9,10 +9,11 @@
  * successful move into an error response. `recordRoomMoves` swallows and logs
  * instead of throwing — the move is the transaction, the notice is the receipt.
  */
-import { and, desc, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { roomMoves } from '@/lib/db/schema';
 import type { RoomMoveInsert, RoomMoveRow } from '@/lib/db/schema/roomMoves';
+import type { RoomMoveRecord } from '@/utils/roomSegments';
 
 /** Cap on the open-notice read — the alert bar is a to-do list, not an archive. */
 const OPEN_LIMIT = 100;
@@ -61,4 +62,32 @@ export async function dismissRoomMoves(
     .where(all ? isNull(roomMoves.dismissedAt) : and(isNull(roomMoves.dismissedAt), inArray(roomMoves.id, ids)))
     .returning({ id: roomMoves.id });
   return rows.length;
+}
+
+/**
+ * Every move of every reservation that has ever been moved MID-STAY — the
+ * whole-stay moves too, because a later whole-stay move supersedes the earlier
+ * split (see `buildRoomSegments`). Read regardless of dismissal: dismissing the
+ * notice acknowledges the hand-off, it doesn't undo where the guest slept.
+ *
+ * Throws on a DB error; the caller decides (the bookings sync logs and serves
+ * the unsplit view rather than failing the whole response).
+ */
+export async function listMidStayMoveHistory(): Promise<RoomMoveRecord[]> {
+  const split = db
+    .selectDistinct({ rn: roomMoves.reservationNumber })
+    .from(roomMoves)
+    .where(isNotNull(roomMoves.effectiveFrom));
+  const rows = await db
+    .select({
+      reservationNumber: roomMoves.reservationNumber,
+      fromRoom: roomMoves.fromRoom,
+      toRoom: roomMoves.toRoom,
+      effectiveFrom: roomMoves.effectiveFrom,
+      movedAt: roomMoves.movedAt,
+    })
+    .from(roomMoves)
+    .where(inArray(roomMoves.reservationNumber, split))
+    .orderBy(asc(roomMoves.movedAt));
+  return rows.map((r) => ({ ...r, movedAt: r.movedAt.toISOString() }));
 }

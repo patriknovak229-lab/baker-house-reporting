@@ -16,6 +16,9 @@ import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, att
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { RATE_PERKS_KEY, RATE_TYPES_KEY } from "@/utils/ratePerksPublish";
 import { OPS_TASKS_KEY, buildOpsTasksMap } from "@/utils/opsTasksPublish";
+import { MOVE_CLEANINGS_KEY, buildMoveCleaningsMap } from "@/utils/moveCleaningsPublish";
+import { attachRoomSegments, occupancySpans } from "@/utils/roomSegments";
+import { listMidStayMoveHistory } from "@/data-access/roomMoves";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 
 // Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
@@ -155,10 +158,14 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   const live = new Set(reservations.filter((r) => !r.isCancelled).map((r) => r.reservationNumber));
   const opsMap = buildOpsTasksMap(overrides, (rn) => live.has(rn));
 
+  // Vacated-unit cleanings from mid-stay moves (utils/moveCleaningsPublish).
+  const moveCleanings = buildMoveCleaningsMap(reservations);
+
   await Promise.all([
     redis.set(RATE_TYPES_KEY, rateMap),
     redis.set(RATE_PERKS_KEY, perkMap),
     redis.set(OPS_TASKS_KEY, opsMap),
+    redis.set(MOVE_CLEANINGS_KEY, moveCleanings),
   ]);
 }
 
@@ -192,20 +199,21 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
  */
 function tagOverlappingReservations(reservations: Reservation[]): Reservation[] {
   // Build (reservation, rooms) tuples once
+  // One item per (reservation, room, night span). A mid-stay-moved guest
+  // contributes one span per room it actually slept in (`occupancySpans`), so
+  // the nights spent in the OLD unit no longer collide with whoever really
+  // held the new one — while an overlap after the move date still flags.
   type Item = { res: Reservation; rooms: Set<string>; inMs: number; outMs: number };
   const items: Item[] = reservations
     .filter((r) => !r.isBlackout && !r.isCancelled && r.checkInDate && r.checkOutDate)
-    .map((r) => {
-      const rooms = new Set<string>();
-      if (r.room) rooms.add(r.room);
-      for (const lr of r.linkedRooms ?? []) rooms.add(lr);
-      return {
+    .flatMap((r) =>
+      occupancySpans(r).map((span) => ({
         res: r,
-        rooms,
-        inMs: new Date(r.checkInDate + "T00:00:00Z").getTime(),
-        outMs: new Date(r.checkOutDate + "T00:00:00Z").getTime(),
-      };
-    })
+        rooms: new Set(span.room ? [span.room] : []),
+        inMs: new Date(span.from + "T00:00:00Z").getTime(),
+        outMs: new Date(span.to + "T00:00:00Z").getTime(),
+      })),
+    )
     .filter((i) => Number.isFinite(i.inMs) && Number.isFinite(i.outMs) && i.outMs > i.inMs);
 
   // Accumulate overlap relationships
@@ -224,7 +232,7 @@ function tagOverlappingReservations(reservations: Reservation[]): Reservation[] 
       if (!shared) continue;
       const aNum = a.res.reservationNumber;
       const bNum = b.res.reservationNumber;
-      if (!aNum || !bNum) continue;
+      if (!aNum || !bNum || aNum === bNum) continue;
       if (!overlaps.has(aNum)) overlaps.set(aNum, new Set());
       if (!overlaps.has(bNum)) overlaps.set(bNum, new Set());
       overlaps.get(aNum)!.add(bNum);
@@ -556,7 +564,15 @@ export async function GET(req: NextRequest) {
     }
 
     const withStripeFees = await aggregateStripeFees(reservations);
-    const withOverlapFlags = tagOverlappingReservations(withStripeFees);
+    // Mid-stay moves: which unit each night was really spent in. A failed read
+    // degrades to the plain one-room view (and may re-raise the overlap banner)
+    // rather than failing the whole sync.
+    const moveHistory = await listMidStayMoveHistory().catch((err) => {
+      console.error("[bookings] mid-stay move history read failed:", err);
+      return [];
+    });
+    const withSegments = attachRoomSegments(withStripeFees, moveHistory);
+    const withOverlapFlags = tagOverlappingReservations(withSegments);
     const withNonArrival = await attachNonArrivalOverlay(withOverlapFlags);
 
     // Publish effective rate types for the cleaning app (rate-based perks).
