@@ -17,6 +17,7 @@ interface Props {
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
   icloudFileName?: string;
+  driveSourceFileId?: string;
   extractionFailed?: boolean;
   duplicateOf?: SupplierInvoice | null;   // set when server returned 409
   onSave: (inv: SupplierInvoice, force?: boolean) => void;
@@ -103,6 +104,7 @@ export default function InvoiceReviewDrawer({
   sourceType,
   gmailMessageId,
   icloudFileName,
+  driveSourceFileId,
   extractionFailed = false,
   duplicateOf = null,
   onSave,
@@ -253,6 +255,7 @@ export default function InvoiceReviewDrawer({
       driveUrl: driveUrl ?? existing?.driveUrl,
       gmailMessageId: gmailMessageId ?? existing?.gmailMessageId,
       icloudFileName: icloudFileName ?? existing?.icloudFileName,
+      driveSourceFileId: driveSourceFileId ?? existing?.driveSourceFileId,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     };
   }

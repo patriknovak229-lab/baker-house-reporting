@@ -40,6 +40,7 @@ interface DrawerState {
   sourceType: SupplierInvoiceSource;
   gmailMessageId?: string;
   icloudFileName?: string;
+  driveSourceFileId?: string;
   extractionFailed?: boolean;
   duplicateOf?: SupplierInvoice;   // set when API returned 409 Conflict
 }
@@ -54,6 +55,7 @@ interface QueueItem {
   file: File;
   gmailMessageId?: string;
   icloudFileName?: string;
+  driveSourceFileId?: string;
   sourceType?: SupplierInvoiceSource;
 }
 
@@ -342,6 +344,7 @@ export default function AccountingPage() {
     gmailMessageId?: string,
     invoiceSourceType: SupplierInvoiceSource = 'email',
     icloudFileName?: string,
+    driveSourceFileId?: string,
   ): Promise<void> {
     // Drive upload first
     let driveFileId: string | undefined;
@@ -378,6 +381,7 @@ export default function AccountingPage() {
       sourceType: invoiceSourceType,
       gmailMessageId,
       icloudFileName,
+      driveSourceFileId,
       driveFileId,
       driveFileName,
       driveUrl,
@@ -456,17 +460,17 @@ export default function AccountingPage() {
         const matched = matchWhitelist(extracted.supplierName, extracted.supplierICO, whitelistRef.current);
         if (matched && canAutoSave(extracted)) {
           setExtracting(false);
-          await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId, next.sourceType ?? 'email', next.icloudFileName);
+          await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId, next.sourceType ?? 'email', next.icloudFileName, next.driveSourceFileId);
           // Continue with next item
           processNextInQueue(rest);
           return;
         }
-        setDrawerState({ extracted, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName });
+        setDrawerState({ extracted, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, driveSourceFileId: next.driveSourceFileId });
       } else {
-        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, extractionFailed: true });
+        setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, driveSourceFileId: next.driveSourceFileId, extractionFailed: true });
       }
     } catch {
-      setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, extractionFailed: true });
+      setDrawerState({ extracted: null, file: next.file, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, driveSourceFileId: next.driveSourceFileId, extractionFailed: true });
     } finally {
       setExtracting(false);
     }
@@ -1008,6 +1012,7 @@ export default function AccountingPage() {
           sourceType={drawerState.sourceType}
           gmailMessageId={drawerState.gmailMessageId}
           icloudFileName={drawerState.icloudFileName}
+          driveSourceFileId={drawerState.driveSourceFileId}
           extractionFailed={drawerState.extractionFailed}
           duplicateOf={drawerState.duplicateOf}
           onSave={handleSave}

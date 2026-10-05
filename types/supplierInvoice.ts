@@ -19,7 +19,7 @@ export interface WhitelistedSupplier {
 
 export type SupplierInvoiceStatus = 'pending' | 'reconciled' | 'review_needed';
 
-export type SupplierInvoiceSource = 'email' | 'upload' | 'portal' | 'manual';
+export type SupplierInvoiceSource = 'email' | 'upload' | 'portal' | 'manual' | 'drive';
 
 export interface SupplierInvoice {
   id: string;
@@ -41,7 +41,9 @@ export interface SupplierInvoice {
   driveFileName?: string;
   driveUrl?: string;
   gmailMessageId?: string;   // prevents duplicate Gmail import
-  icloudFileName?: string;   // prevents duplicate iCloud folder import
+  icloudFileName?: string;   // prevents duplicate iCloud folder import (legacy — iCloud source retired)
+  /** Drive file ID of the source file in the inbox — prevents duplicate Drive-folder import */
+  driveSourceFileId?: string;
   autoProcessed?: boolean;   // true when saved automatically via whitelist
   createdAt: string;         // ISO timestamp
   invoiceCurrency?: string;      // e.g. 'USD', 'EUR' — absent or 'CZK' means CZK

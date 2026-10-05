@@ -1,8 +1,12 @@
 import type { drive_v3 } from 'googleapis';
 import type { Redis } from '@upstash/redis';
 
-const FOLDER_CACHE_KEY = 'baker:drive-invoices-folder-id';
-const FOLDER_NAME = 'Baker House - Faktury';
+// Supplier-invoice inbox/archive = "Faktury Přijaté" inside the Truthseeker Drive
+// parent folder the accountant set up. (Replaces the old name-searched
+// "Baker House - Faktury" folder; fresh cache key so the switch is clean.)
+const INVOICE_PARENT_ID = '1kAnzfDCteZwfav1x9CjeGjj-r4krXNdt';
+const FOLDER_NAME = 'Faktury Přijaté';
+const FOLDER_CACHE_KEY = 'baker:drive-faktury-prijate-id';
 
 /** Sanitise a string for use in a Drive filename segment */
 function safe(str: string): string {
@@ -26,10 +30,13 @@ export async function getOrCreateInvoiceFolder(drive: drive_v3.Drive, redis: Red
   const cached = await redis.get<string>(FOLDER_CACHE_KEY);
   if (cached) return cached;
 
+  const escaped = FOLDER_NAME.replace(/'/g, "\\'");
   const search = await drive.files.list({
-    q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    q: `name='${escaped}' and mimeType='application/vnd.google-apps.folder' and '${INVOICE_PARENT_ID}' in parents and trashed=false`,
     fields: 'files(id,name)',
     spaces: 'drive',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   if (search.data.files && search.data.files.length > 0) {
@@ -39,8 +46,9 @@ export async function getOrCreateInvoiceFolder(drive: drive_v3.Drive, redis: Red
   }
 
   const folder = await drive.files.create({
-    requestBody: { name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' },
+    requestBody: { name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [INVOICE_PARENT_ID] },
     fields: 'id',
+    supportsAllDrives: true,
   });
   const id = folder.data.id!;
   await redis.set(FOLDER_CACHE_KEY, id);

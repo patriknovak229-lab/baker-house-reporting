@@ -5,51 +5,16 @@ import sharp from 'sharp';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
+import { getOrCreateInvoiceFolder } from '@/utils/driveInvoice';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
 });
 
-const FOLDER_CACHE_KEY = 'baker:drive-invoices-folder-id';
-const FOLDER_NAME = 'Baker House - Faktury';
-
 /** Sanitise a string for use in a Drive filename segment */
 function safe(str: string): string {
   return str.replace(/[^a-zA-Z0-9\u00C0-\u024F\u0400-\u04FF._-]/g, '_').slice(0, 50);
-}
-
-/** Get or create the invoices folder, caching the ID in Redis */
-async function getOrCreateFolder(drive: ReturnType<typeof google.drive>): Promise<string> {
-  // Check Redis cache first
-  const cached = await redis.get<string>(FOLDER_CACHE_KEY);
-  if (cached) return cached;
-
-  // Try to find existing folder by name
-  const search = await drive.files.list({
-    q: `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-    fields: 'files(id,name)',
-    spaces: 'drive',
-  });
-
-  if (search.data.files && search.data.files.length > 0) {
-    const id = search.data.files[0].id!;
-    await redis.set(FOLDER_CACHE_KEY, id);
-    return id;
-  }
-
-  // Create the folder
-  const folder = await drive.files.create({
-    requestBody: {
-      name: FOLDER_NAME,
-      mimeType: 'application/vnd.google-apps.folder',
-    },
-    fields: 'id',
-  });
-
-  const id = folder.data.id!;
-  await redis.set(FOLDER_CACHE_KEY, id);
-  return id;
 }
 
 export async function POST(request: Request) {
@@ -134,8 +99,8 @@ export async function POST(request: Request) {
 
   const drive = google.drive({ version: 'v3', auth: oauth2 });
 
-  // Get or auto-create the invoices folder
-  const folderId = await getOrCreateFolder(drive);
+  // Get or auto-create the "Faktury Přijaté" inbox/archive folder
+  const folderId = await getOrCreateInvoiceFolder(drive, redis);
 
   const { Readable } = await import('stream');
   const readable = Readable.from(buffer);
@@ -151,6 +116,7 @@ export async function POST(request: Request) {
       body: readable,
     },
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const { id, name, webViewLink } = res.data;
