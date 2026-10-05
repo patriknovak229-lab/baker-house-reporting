@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ThreadMessage } from '@/app/api/messages/route';
 import { buildArrivalGuide, arrivalGuideToText } from '@/utils/arrivalGuide';
+import { czechGreetingLine } from '@/utils/czechVocative';
 
 const ACTIVE_WINDOW_MS = 120 * 60 * 1000; // 120 minutes
 const POLL_INTERVAL_MS = 30_000;
@@ -41,7 +42,7 @@ function buildTemplates(args: { room?: string; guestFirstName?: string }): Templ
   const greeting = (lang: 'cs' | 'en') => {
     if (!args.guestFirstName) return lang === 'cs' ? 'Dobrý den,' : 'Hello,';
     return lang === 'cs'
-      ? `Dobrý den ${args.guestFirstName},`
+      ? czechGreetingLine(args.guestFirstName)
       : `Hi ${args.guestFirstName},`;
   };
 

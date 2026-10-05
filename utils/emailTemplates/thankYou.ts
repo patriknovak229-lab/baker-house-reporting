@@ -7,6 +7,7 @@ import {
   CURSIVE_FONT_STACK,
   BODY_FONT_STACK,
 } from './palette';
+import { czechGreetingLine } from '@/utils/czechVocative';
 
 export type ThankYouLang = 'en' | 'cs';
 
@@ -73,7 +74,8 @@ const I18N_EMAIL = {
     fallbackAmount: 'Special discount',
   },
   cs: {
-    greeting: (name: string) => `Milý ${name},`,
+    // 'there' is the renderer's no-name fallback — English only.
+    greeting: (name: string) => czechGreetingLine(name === 'there' ? '' : name),
     voucherHeading: 'Váš poukaz',
     voucherCopyHint: 'Klepněte nebo vyberte ke zkopírování',
     voucherValidUntil: (date: string) => `Platnost do ${date}`,

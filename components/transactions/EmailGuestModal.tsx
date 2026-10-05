@@ -147,6 +147,7 @@ export default function EmailGuestModal({
       buildArrivalGuide({
         room: reservation.room,
         guestFirstName: reservation.firstName,
+        guestLastName: reservation.lastName,
         lang: l,
       }),
     ).join('\n\n');

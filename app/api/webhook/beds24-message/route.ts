@@ -44,8 +44,9 @@ import { sendBeds24Message } from '@/utils/beds24Messages';
 import { translateReplyToGuest } from '@/utils/translateReply';
 import { readAutoSendCategories } from '@/data-access/autoSendCategories';
 import {
-  detectAutoReplyCategory,
+  detectAutoReplyCategory as detectAutoReplyCategoryUncached,
   type AutoReplyCategory,
+  type DetectionResult,
   type ParkingIntent,
 } from '@/utils/messageAutoReplyDetector';
 import {
@@ -76,6 +77,13 @@ import {
 import { computeParking } from '@/utils/parkingUtils';
 import { composeAiReply } from '@/utils/aiReplyComposer';
 import { fetchRecentConversation } from '@/utils/beds24Conversation';
+import { mapToReservation, type Beds24Booking } from '@/utils/beds24Reservations';
+import { autoRatePerks, effectiveRatePerks, type PerkOverrides } from '@/utils/ratePerks';
+import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
+import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
+import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
+import { escapeHtml } from '@/utils/telegram';
+import type { RateType } from '@/types/reservation';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 const POLL_DEBOUNCE_MS = 15_000; // 15s — collapses bursts of SYNC_ROOM events
@@ -387,6 +395,38 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, branch: 'sync-room-poll' });
 }
 
+// ─── Automatic-send + classification helpers ─────────────────────────────────
+
+/**
+ * Every message this route sends is automatic. Mark it by Beds24 id so the
+ * operator-activity check (utils/operatorActivity) doesn't mistake our own
+ * replies for the operator stepping in.
+ */
+async function sendAutoMessage(
+  bookingId: number,
+  text: string,
+): Promise<Awaited<ReturnType<typeof sendBeds24Message>>> {
+  const result = await sendBeds24Message(bookingId, text);
+  await markAutoSent(getRedis(), result.messageId);
+  return result;
+}
+
+/**
+ * One classifier call per message text per poll. The urgency check, the
+ * invoice flow and the reply composer all need the same answer; without this
+ * a single message cost up to three Sonnet calls. Cleared at the start of
+ * every poll so it never grows.
+ */
+const detectionMemo = new Map<string, Promise<DetectionResult>>();
+function detectAutoReplyCategory(text: string): Promise<DetectionResult> {
+  let p = detectionMemo.get(text);
+  if (!p) {
+    p = detectAutoReplyCategoryUncached(text);
+    detectionMemo.set(text, p);
+  }
+  return p;
+}
+
 // ─── Pull-style: unread guest messages ───────────────────────────────────────
 
 /**
@@ -396,6 +436,7 @@ export async function POST(req: NextRequest) {
  * handled exactly once even when SYNC_ROOM fires repeatedly.
  */
 async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> {
+  detectionMemo.clear();
   // Pass 0 — is the Vercel cron scheduler still reaching its jobs? This lives
   // HERE, not in the crons, because a watchdog inside the thing it watches is
   // not a watchdog: the bookings-archive check was parked inside the invoice
@@ -438,6 +479,17 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
       await redis.sadd(PROCESSED_KEY, String(m.id));
     }
 
+    // Urgent? (lockout, no power / heating / water, "we can't stay here"…)
+    // → Telegram the ops group straight away, before any reply logic, and
+    // keep the message out of auto-send so a human answers it.
+    let urgency: UrgencyResult = { urgent: false, labels: [] };
+    try {
+      urgency = assessUrgency(m.message, await detectAutoReplyCategory(m.message));
+      if (urgency.urgent) await notifyUrgentMessage(redis, m, urgency);
+    } catch (err) {
+      console.error(`[urgent] check failed for msg ${m.id}:`, err);
+    }
+
     try {
       // The invoice flow ALWAYS runs (even in review mode): it collects the
       // invoice details and creates the checkout-dated "Send invoice" task.
@@ -459,6 +511,7 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
           bookingId: m.bookingId,
           messageId: m.id,
           messageText: m.message,
+          urgent: urgency.urgent,
         });
         continue;
       }
@@ -638,10 +691,12 @@ interface AiReviewArgs {
   bookingId: number;
   messageId: number;
   messageText: string;
+  /** Urgent messages are always answered by a human — never auto-sent. */
+  urgent?: boolean;
 }
 
 async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
-  const { redis, bookingId, messageId, messageText } = args;
+  const { redis, bookingId, messageId, messageText, urgent } = args;
   const reservationNumber = `BH-${bookingId}`;
 
   // Detect the guest's language (+ category for a nicer panel label). The
@@ -663,24 +718,9 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     }
   }
 
-  // Rate-driven perks (early check-in / late checkout) for THIS booking, read
-  // from the map the bookings sync publishes. Absent → no perks. Lets the AI
-  // answer early-checkin / late-checkout correctly for the booked rate instead
-  // of guessing. (Map only refreshes on a bookings sync, so a brand-new booking
-  // may briefly read as no-perk — acceptable while review-gated.)
-  let perks: { earlyCheckIn: boolean; lateCheckout: boolean } | undefined;
-  if (redis) {
-    try {
-      const perkMap =
-        (await redis.get<Record<string, { earlyCheckIn?: boolean; lateCheckout?: boolean }>>(
-          RATE_PERKS_KEY,
-        )) ?? {};
-      const p = perkMap[reservationNumber];
-      perks = { earlyCheckIn: !!p?.earlyCheckIn, lateCheckout: !!p?.lateCheckout };
-    } catch (err) {
-      console.warn(`[ai-review] perk lookup failed for ${bookingId}:`, err);
-    }
-  }
+  // Rate-driven perks (early check-in / late checkout) for THIS booking, so the
+  // AI grants a late checkout to a Flexi guest but not to a Non-Refundable one.
+  const perks = await resolveRatePerks(redis, reservationNumber, reservation);
 
   const history = await fetchRecentConversation(bookingId, 12);
 
@@ -693,6 +733,7 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
       parkingSpace,
       perks,
       history,
+      language: detection.language,
     });
     draftText = result.draftText;
     model = result.model;
@@ -706,7 +747,22 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
   // to the guest. Everything else — plus 'other', empty/SKIP drafts, and
   // low-confidence detections — still queues for approval. Fail-safe: any error
   // (config read, translate, or send) falls through to the review queue.
-  if (draftText && detection.category !== 'other' && detection.confidence >= CONFIDENCE_THRESHOLD) {
+  // Two more reasons to hold back even an enabled category: the message is
+  // urgent (a human answers those), or the operator has written to this guest
+  // in the last 24 h (a canned reply on top of a human conversation reads as
+  // a bot butting in — e.g. "thanks!" after the operator fixed something).
+  let holdReason = '';
+  if (urgent) holdReason = 'urgent message — auto-send held for the operator';
+  else if (await isOperatorActive(redis, bookingId, history)) {
+    holdReason = 'operator replied in the last 24 h — auto-send paused';
+  }
+
+  if (
+    !holdReason &&
+    draftText &&
+    detection.category !== 'other' &&
+    detection.confidence >= CONFIDENCE_THRESHOLD
+  ) {
     let enabled = false;
     try {
       enabled = (await readAutoSendCategories()).includes(detection.category);
@@ -720,7 +776,7 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
           targetLang && targetLang.toLowerCase() !== 'cs'
             ? await translateReplyToGuest(draftText, targetLang)
             : draftText;
-        const result = await sendBeds24Message(bookingId, textToSend);
+        const result = await sendAutoMessage(bookingId, textToSend);
         await appendLog(redis, {
           id: makeLogId(),
           beds24MessageId: messageId,
@@ -793,9 +849,11 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     action: 'queued-draft',
     sentText: null,
     guestMessage: messageText,
-    detail: draftText
-      ? `AI review-mode draft in Czech (${model}); sends in ${detection.language || 'guest language'}`
-      : `AI review-mode: no draft produced (${model}) — operator to handle`,
+    detail:
+      (draftText
+        ? `AI review-mode draft in Czech (${model}); sends in ${detection.language || 'guest language'}`
+        : `AI review-mode: no draft produced (${model}) — operator to handle`) +
+      (holdReason ? ` · ${holdReason}` : ''),
     decidedAt: new Date().toISOString(),
   });
 
@@ -1122,7 +1180,7 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 
   let sentMessageId: number | null = null;
   try {
-    const sendResult = await sendBeds24Message(bookingId, finalText);
+    const sendResult = await sendAutoMessage(bookingId, finalText);
     sentMessageId = sendResult.messageId;
   } catch (err) {
     console.error(`[auto-reply] send failed for booking ${bookingId}:`, err);
@@ -1188,6 +1246,49 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 // ─── Reservation context helpers ─────────────────────────────────────────────
 
 /**
+ * Effective early check-in / late checkout for one booking.
+ *
+ *   1. The perk map the bookings sync publishes is authoritative — it carries
+ *      the operator's overrides and the dashboard's merged-group rate.
+ *   2. A booking the sync HAS seen (it's in the rate-types map) but that has no
+ *      perk entry genuinely has no perks (Non-Refundable, One-Night, …).
+ *   3. A booking the sync hasn't seen yet (made minutes ago — the maps only
+ *      refresh when the dashboard syncs) is derived on the spot with the same
+ *      formula, instead of being told "not included" just for being new.
+ *
+ * Returns undefined only when nothing at all is known, which the composer
+ * treats as "don't promise either way".
+ */
+async function resolveRatePerks(
+  redis: Redis | null,
+  reservationNumber: string,
+  reservation: Reservation | null,
+): Promise<{ earlyCheckIn: boolean; lateCheckout: boolean } | undefined> {
+  if (redis) {
+    try {
+      const [perkMap, rateMap] = await Promise.all([
+        redis.get<Record<string, { earlyCheckIn?: boolean; lateCheckout?: boolean }>>(RATE_PERKS_KEY),
+        redis.get<Record<string, RateType>>(RATE_TYPES_KEY),
+      ]);
+      const p = perkMap?.[reservationNumber];
+      if (p) return { earlyCheckIn: !!p.earlyCheckIn, lateCheckout: !!p.lateCheckout };
+      if (rateMap && reservationNumber in rateMap) return { earlyCheckIn: false, lateCheckout: false };
+    } catch (err) {
+      console.warn(`[ai-review] perk lookup failed for ${reservationNumber}:`, err);
+    }
+  }
+  if (reservation?.rateType) {
+    const eff = effectiveRatePerks(
+      autoRatePerks(reservation.rateType, reservation.reservationDate),
+      reservation.perkOverrides,
+    );
+    return { earlyCheckIn: eff.earlyCheckIn, lateCheckout: eff.lateCheckout };
+  }
+  return undefined;
+}
+
+
+/**
  * Build a minimal Reservation shape for template purposes from the cached
  * Beds24 booking + local-state overrides. Avoids re-running the full
  * bookings/route.ts pipeline (mergeGroupedBookings + mapToReservation etc.)
@@ -1249,11 +1350,31 @@ async function buildReservationContext(
   // no longer gated on the webhook's Redis client being present.
   let parkingOverride: string | undefined;
   let additionalEmail = '';
-  const overrides =
-    await readAllReservationOverrides<{ parkingOverride?: string; additionalEmail?: string }>();
+  const overrides = await readAllReservationOverrides<{
+    parkingOverride?: string;
+    additionalEmail?: string;
+    rateTypeOverride?: RateType;
+    perkOverrides?: PerkOverrides;
+  }>();
   const own = overrides[`BH-${bookingId}`];
   parkingOverride = own?.parkingOverride;
   additionalEmail = own?.additionalEmail ?? '';
+
+  // Nationality (drives the Czech vocative greeting), rate plan and booking
+  // date (drive early check-in / late checkout perks) come from the SAME
+  // mapper the dashboard uses, so the chat sees exactly what Transactions
+  // shows. Best-effort: a mapping failure just leaves them blank.
+  let nationality = '';
+  let rateType: RateType | undefined;
+  let reservationDate = '';
+  try {
+    const mapped = mapToReservation(b as unknown as Beds24Booking);
+    nationality = mapped.nationality ?? '';
+    rateType = own?.rateTypeOverride ?? mapped.rateType ?? undefined;
+    reservationDate = mapped.reservationDate ?? '';
+  } catch (err) {
+    console.warn(`[auto-reply] reservation mapping failed for ${bookingId}:`, err);
+  }
 
   // Build a minimal Reservation just for what the templates need.
   // Fields not used by buildTemplate are left as sensible defaults.
@@ -1267,14 +1388,16 @@ async function buildReservationContext(
     linkedRooms: linkedRooms.length > 0 ? linkedRooms : undefined,
     checkInDate: b.arrival ?? webhookBooking?.arrival ?? '',
     checkOutDate: b.departure ?? webhookBooking?.departure ?? '',
-    reservationDate: '',
+    reservationDate,
     bookingTimestamp: '',
     numberOfNights: 0,
     numberOfGuests: 0,
     email: '',
     phone: '',
     price: 0,
-    nationality: '',
+    nationality,
+    ...(rateType ? { rateType } : {}),
+    ...(own?.perkOverrides ? { perkOverrides: own.perkOverrides } : {}),
     cleaningStatus: 'Pending',
     paymentStatus: 'Unpaid',
     amountPaid: 0,
@@ -1704,6 +1827,12 @@ async function tryInvoiceFollowUpAutoSend(args: InvoiceFollowUpArgs): Promise<bo
     return false;
   }
 
+  // Operator has been talking to this guest in the last 24 h → don't send a
+  // canned acknowledgement on top; the regular queue drafts it for approval.
+  if (await isOperatorActive(redis, bookingId, await fetchRecentConversation(bookingId, 12))) {
+    return false;
+  }
+
   // Build reservation context for the drafter (guest name + room).
   const reservation = await buildReservationContext(redis, bookingId);
   if (!reservation) {
@@ -1739,7 +1868,7 @@ async function tryInvoiceFollowUpAutoSend(args: InvoiceFollowUpArgs): Promise<bo
 
   let sentMessageId: number | null = null;
   try {
-    const result = await sendBeds24Message(bookingId, replyText);
+    const result = await sendAutoMessage(bookingId, replyText);
     sentMessageId = result.messageId;
   } catch (err) {
     console.error(`[invoice follow-up] auto-send failed for ${bookingId}:`, err);
@@ -1829,7 +1958,7 @@ async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<void> {
   await sleep(10_000); // natural-feel delay
   let sentMessageId: number | null = null;
   try {
-    const result = await sendBeds24Message(bookingId, replyText);
+    const result = await sendAutoMessage(bookingId, replyText);
     sentMessageId = result.messageId;
   } catch (err) {
     console.error(`[invoice flow] missing-fields send failed for booking ${bookingId}:`, err);
@@ -2037,7 +2166,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     );
     await sleep(10_000);
     try {
-      const result = await sendBeds24Message(bookingId, replyText);
+      const result = await sendAutoMessage(bookingId, replyText);
       sentMessageId = result.messageId;
     } catch (err) {
       console.error(`[invoice flow] confirmation send failed for booking ${bookingId}:`, err);
@@ -2157,7 +2286,7 @@ async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
     await sleep(10_000);
     let sentMessageId: number | null = null;
     try {
-      const result = await sendBeds24Message(bookingId, replyText);
+      const result = await sendAutoMessage(bookingId, replyText);
       sentMessageId = result.messageId;
     } catch (err) {
       console.error(`[invoice flow] reminder send failed for booking ${bookingId}:`, err);
@@ -2301,6 +2430,60 @@ async function maybeNotifyNewBooking(
   // is well under our 60s maxDuration, so the original concern about
   // stretching the function isn't worth the silent-drop risk.
   await sendTelegram(text);
+}
+
+// ─── Urgent guest message Telegram notification ──────────────────────────────
+
+/** Re-fires are harmless to dedupe for a week — the message id never repeats. */
+const URGENT_NOTIFIED_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Telegram the ops group about an urgent guest message. One alert per Beds24
+ * message id (lock set BEFORE sending so overlapping polls can't double-fire;
+ * the send itself is awaited — see maybeNotifyNewBooking for why).
+ */
+async function notifyUrgentMessage(
+  redis: Redis | null,
+  m: UnreadGuestMessage,
+  urgency: UrgencyResult,
+): Promise<void> {
+  if (redis) {
+    const key = `notified:urgent:${m.id}`;
+    const fresh = await redis.set(key, '1', { nx: true, ex: URGENT_NOTIFIED_TTL_SECONDS });
+    if (fresh !== 'OK') return;
+  }
+
+  // Best-effort booking context — a virtual-room or uncached booking still
+  // gets an alert, just with the booking number instead of name/apartment.
+  let who = `Booking BH-${m.bookingId}`;
+  let stay = '';
+  try {
+    const r = await buildReservationContext(redis, m.bookingId);
+    if (r) {
+      const name = `${r.firstName} ${r.lastName}`.trim();
+      const rooms = [r.room, ...(r.linkedRooms ?? [])].join(' + ');
+      who = `${name || 'Guest'} — ${rooms} (BH-${m.bookingId})`;
+      if (r.checkInDate) stay = `📅 ${formatDate(r.checkInDate)} → ${formatDate(r.checkOutDate)}`;
+    }
+  } catch (err) {
+    console.warn(`[urgent] context failed for ${m.bookingId}:`, err);
+  }
+
+  const excerpt = m.message.length > 700 ? `${m.message.slice(0, 700)}…` : m.message;
+  const reasons = [...new Set(urgency.labels)].slice(0, 3).join(' · ');
+  const text = [
+    `🚨 <b>Urgent guest message</b>`,
+    `👤 ${escapeHtml(who)}`,
+    ...(stay ? [stay] : []),
+    ...(reasons ? [`⚠️ ${escapeHtml(reasons)}`] : []),
+    '',
+    `<i>${escapeHtml(excerpt)}</i>`,
+    '',
+    'Not auto-answered — reply from the Transactions inbox.',
+  ].join('\n');
+
+  await sendTelegram(text);
+  console.log(`[urgent] alerted ops group for msg ${m.id} (booking ${m.bookingId}): ${reasons}`);
 }
 
 // ─── Cancellation Telegram notification ──────────────────────────────────────

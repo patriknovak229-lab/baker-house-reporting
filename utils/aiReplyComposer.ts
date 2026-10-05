@@ -20,6 +20,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Reservation } from '@/types/reservation';
 import { getKnowledgeBase } from '@/utils/knowledgeBase';
 import type { ConversationMessage } from '@/utils/beds24Conversation';
+import { czechGreetingLine, repliesInCzech } from '@/utils/czechVocative';
 
 const MODEL = 'claude-sonnet-4-6';
 const SIGN_OFF = '\n\n— Zuzana';
@@ -43,6 +44,10 @@ export interface ComposeInput {
   perks?: { earlyCheckIn: boolean; lateCheckout: boolean };
   /** Recent thread (oldest first), for follow-up context. */
   history: ConversationMessage[];
+  /** Detected language of the guest's message (ISO 639-1). Decides whether the
+   *  greeting uses the Czech vocative ("Dobrý den Ivane") — only when the
+   *  reply goes out in Czech. */
+  language?: string;
 }
 
 export interface ComposeResult {
@@ -57,12 +62,35 @@ How to reply:
 - Use ONLY the facts in the KNOWLEDGE BASE below and the BOOKING facts that follow. If something isn't covered, warmly say you'll check and get back to them — NEVER invent amenities, prices, policies, or details.
 - Use the exact per-booking values you are given (parking space, WiFi name/password) verbatim. Never guess them; if a value isn't provided, say you'll send it.
 - Write your reply in CZECH. A Czech-speaking host reviews and edits it, and the system translates it into the guest's language before sending — so write naturally in Czech (it is not sent as-is unless the guest also writes Czech).
-- Tone: **polite, professional, kind and caring — but short and efficient.** Greet the guest by first name when you know it, then answer exactly what was asked in as few words as read naturally. No padding, no over-explaining, no extra offers or pleasantries the guest didn't ask for — usually 1–3 short sentences is plenty.
-- **The guest's name — use it EXACTLY as given in the BOOKING facts.** Never change its spelling, gender, or ending — e.g. NEVER turn "Kamil" into "Kamila". The ONE exception: when the guest is clearly **Czech** (they are writing to you in Czech), you may use the correct Czech vocative when addressing them (Pavel → "Ahoj Pavle", Jana → "Jano"). For a guest of any other nationality / language, use the first name **verbatim**, with no inflection.
+- Tone: **polite, professional, kind and caring — but short and efficient.** Answer exactly what was asked in as few words as read naturally. No padding, no over-explaining, no extra offers or pleasantries the guest didn't ask for — usually 1–3 short sentences is plenty.
+- **Formal address, always.** Write in the formal register — in Czech that means **vykání** (Vy / Vám / Váš, "můžete", "dejte vědět"), NEVER tykání (ty / tobě / tvůj, "můžeš", "dej vědět") and never "Ahoj" / "Čau". This holds even if the guest writes informally.
+- **Do NOT write a greeting line** ("Dobrý den …", "Ahoj …") — the greeting with the guest's name is prepended automatically. Start directly with the answer, and don't repeat the guest's name in the body.
 - Do NOT commit to anything involving money or exceptions (refunds, special late checkout, discounts, anything not stated) — say you'll confirm and come back to them.
 - Never reveal you are an AI, and never mention an "operator", "team", "system" or anyone other than yourself. You are Zuzana.
 - Do NOT add a sign-off — it is appended automatically.
-- **Thanks / conversation-enders:** when the guest only sends thanks, an acknowledgement, or a sign-off with nothing actually asked, follow §16 of the KNOWLEDGE BASE — reply with ONE short, warm "reach out anytime if anything comes up" line. BUT never send this twice in a row: if your own most recent message in the CONVERSATION above was already such a closing line, reply with exactly SKIP. If there is otherwise genuinely nothing to respond to, also reply SKIP.`;
+- **Thanks / conversation-enders:** when the guest only sends thanks, an acknowledgement, or a sign-off with nothing actually asked, follow §16 of the KNOWLEDGE BASE — reply with ONE short line, at most ~10 words (e.g. "Rádo se stalo, kdyby cokoli, dejte vědět."). No repeating what was resolved, no wishes for the stay unless they're leaving/arriving, no emoji. BUT never send this twice in a row: if your own most recent message in the CONVERSATION above was already such a closing line, reply with exactly SKIP. If there is otherwise genuinely nothing to respond to, also reply SKIP.`;
+
+/**
+ * The opening line, built deterministically rather than left to the model so
+ * the name is always right: "Dobrý den Ivane," for a reply going out in Czech
+ * (vocative), "Dobrý den Ivan," otherwise — the draft is Czech either way and
+ * Google Translate turns that into "Hello Ivan," without touching the name.
+ */
+function greetingFor(input: ComposeInput): string {
+  const r = input.reservation;
+  const first = (r?.firstName ?? '').trim();
+  if (!first) return 'Dobrý den,';
+  return repliesInCzech(input.language, r?.nationality)
+    ? czechGreetingLine(first, r?.lastName)
+    : `Dobrý den ${first},`;
+}
+
+/** Drop a greeting the model wrote anyway, so it isn't doubled. */
+function stripGreeting(text: string): string {
+  return text
+    .replace(/^(dobrý den|dobrý večer|dobré ráno|ahoj|čau|zdravím|hello|hi)\b[^\n]{0,40}?[,!.]?\s*\n+/i, '')
+    .trim();
+}
 
 function roomCode(room: string): string {
   return room.replace(/\./g, '');
@@ -88,7 +116,11 @@ function buildBookingBlock(input: ComposeInput): string {
   // Rate perks — authoritative per-booking facts for early check-in / late
   // checkout questions. Follow the KNOWLEDGE BASE for exactly how to phrase each
   // case; never grant a perk that isn't marked INCLUDED here.
-  if (input.perks) {
+  if (!input.perks) {
+    lines.push(
+      'Early check-in / late checkout: this booking’s rate perks are UNKNOWN — do not confirm or decline either; say you’ll check and get back to them.',
+    );
+  } else {
     lines.push(
       input.perks.earlyCheckIn
         ? 'Early check-in: INCLUDED in this booking’s rate — guest may arrive from 13:00.'
@@ -145,7 +177,7 @@ export async function composeAiReply(input: ComposeInput): Promise<ComposeResult
     if (!block || block.type !== 'text') return { draftText: '', model: MODEL };
     const text = block.text.trim();
     if (!text || text === 'SKIP') return { draftText: '', model: MODEL };
-    return { draftText: `${text}${SIGN_OFF}`, model: MODEL };
+    return { draftText: `${greetingFor(input)}\n${stripGreeting(text)}${SIGN_OFF}`, model: MODEL };
   } catch (err) {
     console.error('[aiReplyComposer] failed:', err instanceof Error ? err.message : err);
     return { draftText: '', model: MODEL };

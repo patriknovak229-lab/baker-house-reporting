@@ -13,6 +13,9 @@ export interface ConversationMessage {
   role: 'guest' | 'host';
   text: string;
   time: string;
+  /** Beds24 message id — lets callers tell our automatic sends apart from
+   *  the operator's own replies (utils/operatorActivity). */
+  id?: number;
 }
 
 export async function fetchRecentConversation(
@@ -43,10 +46,11 @@ export async function fetchRecentConversation(
   if (!res.ok) return [];
 
   const json = await res.json().catch(() => null);
-  const raw: Array<{ source?: string; message?: string; time?: string }> = Array.isArray(json)
+  type RawMessage = { id?: number | string; source?: string; message?: string; time?: string };
+  const raw: RawMessage[] = Array.isArray(json)
     ? json
     : Array.isArray((json as { data?: unknown[] })?.data)
-      ? (json as { data: Array<{ source?: string; message?: string; time?: string }> }).data
+      ? (json as { data: RawMessage[] }).data
       : [];
 
   return raw
@@ -62,5 +66,6 @@ export async function fetchRecentConversation(
       role: m.source === 'host' ? ('host' as const) : ('guest' as const),
       text: (m.message ?? '').trim(),
       time: m.time ?? '',
+      ...(Number.isFinite(Number(m.id)) && m.id != null ? { id: Number(m.id) } : {}),
     }));
 }

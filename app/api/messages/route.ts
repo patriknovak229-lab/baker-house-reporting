@@ -5,6 +5,7 @@ import { getAccessToken } from '@/utils/beds24Auth';
 import { requireRole } from '@/utils/authGuard';
 import { isInvoiceRequest, parseInvoiceRequest } from '@/utils/invoiceRequestParser';
 import { sendBeds24Message } from '@/utils/beds24Messages';
+import { markOperatorActive } from '@/utils/operatorActivity';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 
@@ -219,6 +220,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await sendBeds24Message(bookingId, message);
+    // A person just wrote to this guest — pause auto-replies for 24 h so a
+    // canned answer doesn't land on top of the conversation.
+    await markOperatorActive(getRedis(), bookingId);
     return NextResponse.json({ ok: true, messageId: result.messageId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';

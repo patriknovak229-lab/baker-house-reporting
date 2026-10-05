@@ -22,6 +22,7 @@ import {
   BODY_FONT_STACK,
 } from './palette';
 import type { GuideLang } from '@/utils/arrivalGuide';
+import { czechGreetingLine } from '@/utils/czechVocative';
 
 export interface ArrivalGuideEmailVars {
   /** Guest's first name for the greeting. */
@@ -39,7 +40,8 @@ const I18N = {
     signOff: 'Patrik & Zuzana',
   },
   cs: {
-    greeting: (name: string) => `Milý ${name},`,
+    // 'there' is the renderer's no-name fallback — English only.
+    greeting: (name: string) => czechGreetingLine(name === 'there' ? '' : name),
     title: 'Váš příjezd — Baker House Apartments',
     signOff: 'Patrik & Zuzana',
   },

@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { requireRole } from '@/utils/authGuard';
 import { sendBeds24Message } from '@/utils/beds24Messages';
+import { markOperatorActive } from '@/utils/operatorActivity';
 import { translateReplyToGuest } from '@/utils/translateReply';
 import {
   readAllAutoReplyLog,
@@ -246,6 +247,10 @@ export async function POST(
     });
     return NextResponse.json({ error: msg }, { status: 502 });
   }
+
+  // The operator approved (and possibly edited) this reply — a person is now
+  // handling the chat, so auto-replies pause for 24 h.
+  await markOperatorActive(redis, pending.entry.bookingId);
 
   await removePending(redis, messageId);
   await appendLog({

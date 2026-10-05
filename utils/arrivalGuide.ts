@@ -22,6 +22,7 @@
  */
 
 import { PARKING_SPACES } from '@/utils/parkingUtils';
+import { czechGreetingLine } from '@/utils/czechVocative';
 
 export type GuideLang = 'cs' | 'en';
 
@@ -73,6 +74,8 @@ export const ARRIVAL_GUIDE_SUBJECT = (lang: GuideLang = 'en') =>
 export function buildArrivalGuide(args: {
   room?: string;
   guestFirstName?: string;
+  /** Only a gender hint for the Czech vocative (feminine -ová surnames). */
+  guestLastName?: string;
   lang: GuideLang;
 }): ArrivalGuide {
   const cs = args.lang === 'cs';
@@ -114,7 +117,7 @@ export function buildArrivalGuide(args: {
   return {
     greeting: args.guestFirstName
       ? cs
-        ? `Dobrý den ${args.guestFirstName},`
+        ? czechGreetingLine(args.guestFirstName, args.guestLastName)
         : `Hi ${args.guestFirstName},`
       : cs
         ? 'Dobrý den,'

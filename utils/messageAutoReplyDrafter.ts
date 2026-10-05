@@ -22,6 +22,7 @@ import type { Reservation } from '@/types/reservation';
 import type { AutoReplyCategory } from './messageAutoReplyDetector';
 import { getFactsForCategory } from './autoReplyFacts';
 import { formalGreeting } from './greeting';
+import { czechVocative, repliesInCzech } from './czechVocative';
 
 /**
  * Drafter modes:
@@ -134,6 +135,11 @@ function buildSystemPrompt(input: DraftInput): string {
 
   const greeting = formalGreeting(language);
   const guestName = (reservation.firstName || 'there').trim();
+  // Czech replies address the guest in the vocative ("Dobrý den Ivane").
+  const addressedName =
+    reservation.firstName && repliesInCzech(language, reservation.nationality)
+      ? czechVocative(reservation.firstName, reservation.lastName)
+      : guestName;
   const room = reservation.room || 'their apartment';
 
   // Mode-specific guidance. Standard = goes to operator queue, can be a
@@ -154,7 +160,8 @@ Your draft will be REVIEWED by a human (Zuzana) before sending. Stay grounded �
 Guest: ${guestName} (apartment ${room})
 
 # How to write the reply
-- Start with: "${greeting} ${guestName}!"
+- Start with: "${greeting} ${addressedName},"
+- Formal register throughout (in Czech: vykání — Vy/Vám, never tykání or "Ahoj").
 - Be concise — 1–4 short paragraphs. No filler.
 - Answer ONLY what the guest asked. Don't volunteer extra information.
 - For policy questions (late checkout exceptions, refunds, anything not in the facts below): draft a holding reply in YOUR voice — "I'll check and get back to you", "Let me confirm and I'll come back to you shortly". Never say someone else will follow up.

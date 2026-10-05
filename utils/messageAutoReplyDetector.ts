@@ -61,6 +61,11 @@ export interface DetectionResult {
   /** Only set when category === 'parking' (defaults to 'general'); undefined
    *  for every other category. Lets the template path pick the right reply. */
   parkingIntent?: ParkingIntent;
+  /** Needs the operator NOW (lockout, no power/heating/water, safety, "we
+   *  can't stay here"…). Independent of category. Drives the Telegram alert. */
+  urgent?: boolean;
+  /** Few-word English reason when urgent, for the alert. */
+  urgentReason?: string;
 }
 
 const SYSTEM_PROMPT = `You categorise hotel guest messages for Baker House Apartments in Brno.
@@ -85,8 +90,10 @@ Pick ONE category that best matches the guest's INTENT:
 - acknowledgement — the guest's message is JUST thanks, an acknowledgement, or a sign-off with nothing actually asked ("Thank you!", "Perfect, see you then", "Great, looking forward to it", a thumbs-up). Nothing is being requested. If they thank you AND ask something, classify by what they asked — not acknowledgement.
 - other — anything else (greetings, complaints, restaurant tips, lost items, etc.). When the message asks about TWO categories at once (e.g. parking AND wifi), return "other" — the operator handles compound queries.
 
+SEPARATELY from the category, decide whether the message is URGENT — the host must act now, not at their next check of the inbox. Urgent examples: an emergency or explicit urgency; the guest is locked out, can't get in, or a door/lock/key/chip doesn't work; power outage; heating not working; no water or no hot water; a leak/flood; blocked toilet; fire, gas smell, smoke, break-in, theft, injury; the apartment is not ready / occupied / dirty on arrival; strong complaints like "we cannot stay here", "unacceptable", "serious problem". NOT urgent: ordinary questions, requests, thanks, future plans, mild suggestions.
+
 Output ONLY a single JSON object on one line, no preamble:
-{"category": "<one of the above>", "parkingIntent": "<general|ev|outside-hours|taken|multiple>", "confidence": <0.0-1.0>, "language": "<ISO 639-1>"}
+{"category": "<one of the above>", "parkingIntent": "<general|ev|outside-hours|taken|multiple>", "confidence": <0.0-1.0>, "language": "<ISO 639-1>", "urgent": <true|false>, "urgentReason": "<3-6 English words, only when urgent>"}
 
 Only include "parkingIntent" when category is "parking"; omit it for every other category.
 
@@ -125,7 +132,7 @@ export async function detectAutoReplyCategory(
     const client = getClient();
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 100,
+      max_tokens: 160,
       system: SYSTEM_PROMPT,
       messages: [
         { role: 'user', content: guestMessage.slice(0, 2000) },
@@ -168,10 +175,19 @@ function parseJsonBlock(raw: string): DetectionResult | null {
   if (!category) return null;
   const confidence = Math.max(0, Math.min(1, Number(obj.confidence) || 0));
   const language = typeof obj.language === 'string' ? obj.language.trim().toLowerCase() : '';
+  const urgent = obj.urgent === true || obj.urgent === 'true';
+  const urgency = urgent
+    ? {
+        urgent: true,
+        ...(typeof obj.urgentReason === 'string' && obj.urgentReason.trim()
+          ? { urgentReason: obj.urgentReason.trim().slice(0, 80) }
+          : {}),
+      }
+    : {};
   if (category === 'parking') {
-    return { category, confidence, language, parkingIntent: normaliseParkingIntent(obj.parkingIntent) };
+    return { category, confidence, language, parkingIntent: normaliseParkingIntent(obj.parkingIntent), ...urgency };
   }
-  return { category, confidence, language };
+  return { category, confidence, language, ...urgency };
 }
 
 function normaliseCategory(v: unknown): AutoReplyCategory | null {

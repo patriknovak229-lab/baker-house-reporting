@@ -10,6 +10,8 @@
  * Used by EmailGuestModal when `channel === 'whatsapp'`.
  */
 
+import { czechGreetingLine } from '@/utils/czechVocative';
+
 export type WhatsAppLang = 'en' | 'cs';
 
 export interface WhatsAppMessageVars {
@@ -61,7 +63,8 @@ const I18N_WA = {
     signOff: 'Patrik & Zuzana',
   },
   cs: {
-    greeting: (name: string) => `Milý ${name},`,
+    // 'there' is the renderer's no-name fallback — English only.
+    greeting: (name: string) => czechGreetingLine(name === 'there' ? '' : name),
     voucherHeading: '🎁 *Váš poukaz*',
     voucherLine: (code: string, amount: string) => `\`\`\`${code}\`\`\`  (sleva ${amount})`,
     validUntil: (date: string) => `Platnost do ${date}`,
