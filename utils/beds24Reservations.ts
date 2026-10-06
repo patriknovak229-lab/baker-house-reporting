@@ -17,6 +17,7 @@ import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
 import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUtils";
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
+import { parseCorporateMarker } from "@/utils/corporateShared";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 import { listMidStayMoveHistory } from "@/data-access/roomMoves";
 import { attachRoomSegments } from "@/utils/roomSegments";
@@ -566,6 +567,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
 
   const blackoutMeta = isBlackout ? parseBlackoutMeta(b.comments ?? '') : {};
 
+  const corporateAgreementId = parseCorporateMarker(b.comments);
   const channel = mapChannel(b.apiSource, b.referer, b.comments ?? "");
   // Rate plan — only for current+future OTA stays (no backfill). Blackouts skip.
   const rateType = isBlackout ? undefined : deriveRateType(b, channel);
@@ -628,6 +630,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     ...(cancellationPolicy ? { cancellationPolicy } : {}),
     ...(b.status ? { status: b.status } : {}),
     ...(isCancelled ? { isCancelled: true } : {}),
+    ...(corporateAgreementId ? { corporateAgreementId } : {}),
     // Locally managed — Redis will layer these in Phase 3
     additionalEmail: "",
     paymentStatusOverride: null,

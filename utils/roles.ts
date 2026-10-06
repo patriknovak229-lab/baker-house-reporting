@@ -1,5 +1,5 @@
 export type Role = 'admin' | 'super' | 'viewer' | 'accountant' | 'occupancy';
-export type Tab = 'transactions' | 'performance' | 'accounting' | 'pricing';
+export type Tab = 'transactions' | 'corporate' | 'performance' | 'accounting' | 'pricing';
 
 // The stakeholder occupancy page (/occupancy) is viewable by every valid role.
 // `occupancy` is the standalone stakeholder role — it can see ONLY that page and
@@ -8,6 +8,10 @@ export const OCCUPANCY_VIEW_ROLES: Role[] = ['admin', 'super', 'viewer', 'accoun
 
 const TAB_ACCESS: Record<Tab, Role[]> = {
   transactions: ['admin', 'super'],
+  // Corporate agreements create and cancel real Beds24 bookings in bulk. Admin
+  // only, per the house rule for new tabs; widen to super once the operators
+  // have run a few agreements.
+  corporate: ['admin'],
   performance: ['admin', 'super', 'viewer'],
   accounting: ['admin', 'accountant'],
   pricing: ['admin', 'super'],
@@ -58,7 +62,7 @@ export function getDefaultTab(role: Role): Tab {
   return 'accounting';
 }
 
-/** Transactions mutations: admin + super. Performance/accounting mutations: admin only. */
+/** Transactions mutations: admin + super. Corporate, Performance and accounting mutations: admin only. */
 export function canMutate(role: Role, area: Tab): boolean {
   if (area === 'transactions') return role === 'admin' || role === 'super';
   return role === 'admin';

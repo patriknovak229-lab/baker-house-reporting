@@ -8,6 +8,7 @@ import TransactionsPage from '@/components/transactions/TransactionsPage';
 import PerformancePage from '@/components/performance/PerformancePage';
 import AccountingPage from '@/components/accounting/AccountingPage';
 import PricingPage from '@/components/pricing/PricingPage';
+import CorporatePage from '@/components/corporate/CorporatePage';
 
 function ComingSoon({ tab }: { tab: string }) {
   return (
@@ -56,6 +57,9 @@ export default function AppShell({ devRole }: AppShellProps) {
       <Nav activeTab={activeTab} onTabChange={handleTabChange} />
       <main>
         {activeTab === 'transactions' && <TransactionsPage />}
+        {/* Receives the role so the tab works under the local DEV_ADMIN_EMAIL
+            bypass too, where useSession() has no role to offer. */}
+        {activeTab === 'corporate' && <CorporatePage role={role} />}
         {activeTab === 'performance' && <PerformancePage />}
         {activeTab === 'accounting' && <AccountingPage />}
         {activeTab === 'pricing' && <PricingPage />}

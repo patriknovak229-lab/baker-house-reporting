@@ -366,6 +366,13 @@ export interface Reservation {
    * and from revenue/occupancy/commission — UNLESS flagged as a non-arrival.
    */
   isCancelled?: boolean;
+  /**
+   * Set when this booking was created by a corporate agreement (Corporate tab):
+   * the agreement's id, parsed from the `[CORPORATE:<id>]` comment marker the
+   * app writes on every booking it creates for one. Server-derived on each
+   * sync, never stored in the overrides map. See utils/corporateShared.ts.
+   */
+  corporateAgreementId?: string;
 
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)

@@ -11,6 +11,7 @@ interface NavProps {
 
 const ALL_TABS: { id: Tab; label: string }[] = [
   { id: 'transactions', label: 'Transactions' },
+  { id: 'corporate', label: 'Corporate' },
   { id: 'performance', label: 'Performance' },
   { id: 'accounting', label: 'Accounting' },
   { id: 'pricing', label: 'Pricing' },
