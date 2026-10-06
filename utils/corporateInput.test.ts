@@ -88,28 +88,27 @@ describe('parseAgreementInput', () => {
 });
 
 describe('parseStayInputs', () => {
-  const a = agreement();
 
   it('accepts rows and defaults include to true', () => {
-    const r = parseStayInputs([{ seq: 1, roomId: 679714, priceCzk: '3825', listPriceCzk: 4500, priceSource: 'offers' }], a);
+    const r = parseStayInputs([{ seq: 1, roomId: 679714, priceCzk: '3825', listPriceCzk: 4500, priceSource: 'offers' }]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value[0]).toMatchObject({ seq: 1, roomId: 679714, priceCzk: 3825, listPriceCzk: 4500, priceSource: 'offers', include: true });
   });
 
   it('treats a missing list as no rows', () => {
-    expect(parseStayInputs(undefined, a)).toEqual({ ok: true, value: [] });
+    expect(parseStayInputs(undefined)).toEqual({ ok: true, value: [] });
   });
 
   it.each([
     [[{ seq: 0 }], /positive integer seq/],
     [[{ seq: 1 }, { seq: 1 }], /twice/],
-    [[{ seq: 1, roomId: 656437 }], /not one of the agreement/],
+    [[{ seq: 1, roomId: 123 }], /not a sellable room/],
     [[{ seq: 1, priceCzk: -5 }], /negative/],
     [[{ seq: 1, priceSource: 'guess' }], /price source/],
     ['nope', /array/],
   ])('rejects %j', (rows, re) => {
-    const r = parseStayInputs(rows, a);
+    const r = parseStayInputs(rows);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(re);
   });

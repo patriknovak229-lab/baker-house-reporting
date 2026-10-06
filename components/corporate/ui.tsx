@@ -6,6 +6,7 @@ import { SELLABLE_UNITS } from '@/utils/stayRequest';
 import {
   AGREEMENT_STATUS_LABELS,
   STAY_STATUS_LABELS,
+  roomShortLabel,
   type AgreementStatus,
   type StayPriceSource,
   type StayStatus,
@@ -43,21 +44,7 @@ export function roomLabelFor(roomId: number): string {
   return SELLABLE_UNITS.find((u) => u.roomId === roomId)?.label ?? `room ${roomId}`;
 }
 
-/** Short label for tight table cells: "Urban 1KK", "Deluxe 1KK", "K.201", "O.308". */
-export function roomShortLabel(roomId: number): string {
-  switch (roomId) {
-    case 679714:
-      return 'Urban 1KK';
-    case 648816:
-      return 'Deluxe 1KK';
-    case 656437:
-      return 'K.201 2KK';
-    case 674672:
-      return 'O.308 2BR';
-    default:
-      return roomLabelFor(roomId);
-  }
-}
+export { roomShortLabel };
 
 const STAY_VARIANT: Record<StayStatus, 'gray' | 'green' | 'red' | 'amber' | 'coral'> = {
   planned: 'gray',
@@ -121,5 +108,34 @@ export function CopyText({ value, className = '' }: { value: string; className?:
     >
       {value}
     </button>
+  );
+}
+
+/**
+ * <option>s for a stay's room type: the agreement's own types first, then
+ * every other sellable type — so a week the agreed types cannot host can go
+ * wherever there is vacancy. Any sellable id is accepted by the API.
+ */
+export function RoomTypeOptions({ agreed }: { agreed: number[] }) {
+  const others = SELLABLE_UNITS.map((u) => u.roomId).filter((id) => !agreed.includes(id));
+  return (
+    <>
+      <optgroup label="Agreed types">
+        {agreed.map((id) => (
+          <option key={id} value={id}>
+            {roomShortLabel(id)}
+          </option>
+        ))}
+      </optgroup>
+      {others.length > 0 && (
+        <optgroup label="Other types">
+          {others.map((id) => (
+            <option key={id} value={id}>
+              {roomShortLabel(id)}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </>
   );
 }

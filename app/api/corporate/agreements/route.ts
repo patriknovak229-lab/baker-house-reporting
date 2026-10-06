@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const rows = parseStayInputs((body as { stays?: unknown }).stays, input);
+  const rows = parseStayInputs((body as { stays?: unknown }).stays);
   if (!rows.ok) return NextResponse.json({ error: rows.error }, { status: 400 });
   const materialised = materialiseStays(input, occurrences, rows.value);
   if (!materialised.ok) return NextResponse.json({ error: materialised.error }, { status: 400 });

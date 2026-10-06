@@ -37,12 +37,24 @@ but never invent one.
 
 1. **Form** — live line "N stays · M nights · first … · last …".
 2. **Preview** — one row per stay: dates, nights, room type (planner's pick,
-   editable), **availability** (from `planStayRequest` over `/api/bookings`,
-   the same solver as the Transactions room panel: *Free · K.102* / *Needs
-   shuffle* / *Blocked* / *In the past*), optional guest, price (flat computed;
-   dynamic fetched from `POST /api/corporate/quote`, sequential Beds24 offers,
-   ≤ 60 stays), include/exclude. Totals: reservations, nights, price per
-   reservation, total.
+   editable — the agreed types first, every other sellable type under "Other
+   types"), **availability**, optional guest, price (flat computed; dynamic
+   fetched from `POST /api/corporate/quote`, sequential Beds24 offers, ≤ 60
+   stays), include/exclude. Totals: reservations, nights, price per
+   reservation, **average rate per night** (over priced stays), total.
+   **Download offer PDF** produces the company-facing quote from the rows as
+   they stand, before anything is saved.
+
+   Availability (`utils/corporateAvailability.ts`, tested) asks the Stay
+   Request planner one type at a time, in preference order, and a plan only
+   counts if it keeps the guest in ONE unit (the planner otherwise answers with
+   a split itinerary even at `maxRoomChanges 0`). A type that is free without
+   moving anyone always beats one that needs a shuffle. Verdicts:
+   *Free · K.102* / *Needs shuffle · K.203 (1 move)* + "Free without moves: …" /
+   *Blocked in agreed types* + **"Vacancy: K.201 2KK (K.201) · O.308 2BR (O.308)"**
+   (or "Vacancy after a shuffle: …", or "No apartment is free for these dates") /
+   *In the past*. Blocked stays are also listed in a notice above the table so
+   the operator can switch the row to a type with vacancy or untick it.
 3. **Save & create** → `POST /api/corporate/agreements` then
    `POST …/[id]/create-bookings` → per-stay result (BH number or refusal).
    "Save as draft only" skips Beds24.
@@ -73,12 +85,13 @@ duplicate.
 | Action | Endpoint | Rule |
 |---|---|---|
 | Edit guest (name/phone/email) | `PATCH /api/corporate/stays/[id]` | Any time. On a created stay the effective guest is pushed to Beds24 first (master + sub-bookings via `includeBookingGroup`); saved only if Beds24 accepted. |
-| Change price / room type | same | Only while planned/failed — once created, edit in Beds24 (same rule as shorten-stay). |
+| Change price / room type | same | Only while planned/failed — once created, edit in Beds24 (same rule as shorten-stay). Any sellable type is allowed, not only the agreed ones. |
 | Skip / unskip | same (`status`) | Only before anything exists in Beds24. |
 | Create / Retry | `POST …/[id]/create-bookings { stayIds }` | Needs price > 0. |
 | Cancel a created stay | `POST /api/corporate/stays/[id]/cancel` | Sets `cancelled` on the whole booking group; nights go back on sale. Telegram. |
 | Edit contacts / billing / notes / status | `PATCH /api/corporate/agreements/[id]` | Default-guest changes do **not** touch existing bookings. |
 | Delete | `DELETE /api/corporate/agreements/[id]` | Only while no stay was ever created. |
+| Offer PDF | `POST /api/corporate/offer-pdf` | Stateless: renders `utils/corporateOfferHtml.ts` (bilingual CZ/EN, invoice branding) via `generatePDF`; listed in `CHROMIUM_ROUTES`. Number `OFF-<yyyymmdd>-<agreement suffix>`, valid 14 days by default. Shows period, nights pattern, apartment types, stays, total nights, **rate per night** (flat rate, or the average with the discount note), guests, invoicing rhythm, the stay table and the total. The detail header also shows the average rate per night. |
 
 Every create run and every cancel posts one Telegram summary to the ops group.
 After a create/cancel the UI fires `GET /api/bookings?fullSync=true` so
@@ -97,12 +110,18 @@ Money is `numeric` (string in Drizzle; converted in `data-access/corporate.ts`).
   arrival / monthly / up front). The data is there; the sender is not.
 - Extending or re-patterning an existing agreement (today: new agreement).
 - A Corporate filter chip in Transactions (badge only for now).
+- Availability hints in the agreement DETAIL for failed stays (the preview has
+  them; the detail would need to load `/api/bookings`).
 - Opening the tab to `super`.
 
 ## 7. Verifying live
 
-Local dev has no `BEDS24_REFRESH_TOKEN`: the wizard, preview, availability and
-the draft path work; dynamic pricing and booking creation only work on Vercel.
+Local dev has no `BEDS24_REFRESH_TOKEN`: the wizard, preview and the draft
+path work; availability reads "unknown" (no reservations), dynamic pricing and
+booking creation only work on Vercel. The offer PDF also fails locally with
+"Attempted to use detached Frame" — the desktop Chrome in
+`CHROME_EXECUTABLE_PATH` rejects the serverless Chromium flags; every PDF
+route behaves the same locally and works on Vercel.
 `POST …/create-bookings { dryRun: true }` returns the exact payload without
 sending it. First live run: one short agreement (2–3 stays), check the Beds24
 calendar shows the bookings with the indigo Corporate flag and the right price,

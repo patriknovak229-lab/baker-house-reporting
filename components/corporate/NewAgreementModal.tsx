@@ -21,7 +21,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Reservation } from '@/types/reservation';
 import { COUNTRY_OPTIONS } from '@/utils/countries';
 import { pragueToday } from '@/utils/periodUtils';
-import { SELLABLE_UNITS, planStayRequest } from '@/utils/stayRequest';
+import { SELLABLE_UNITS } from '@/utils/stayRequest';
+import { describeAlternatives, evaluateAvailability, type Availability } from '@/utils/corporateAvailability';
 import { computeStayPrice, describeNights, generateStays, validateSchedule, type StayOccurrence } from '@/utils/corporateSchedule';
 import {
   BILLING_CADENCE_LABELS,
@@ -34,7 +35,8 @@ import {
   type PricingMode,
   type StayPriceSource,
 } from '@/utils/corporateShared';
-import { Field, inputCls, roomShortLabel, smallInputCls, splitGuestName } from './ui';
+import { Field, RoomTypeOptions, inputCls, roomShortLabel, smallInputCls, splitGuestName } from './ui';
+import { downloadOfferPdf, type OfferPayload } from './offer';
 
 // ─── State shapes ────────────────────────────────────────────────────────────
 
@@ -95,12 +97,6 @@ const DEFAULT_FORM: FormState = {
   notes: '',
 };
 
-type Availability =
-  | { kind: 'free'; unit: string }
-  | { kind: 'shuffle'; unit: string; moves: number }
-  | { kind: 'blocked'; note: string }
-  | { kind: 'past' }
-  | { kind: 'unknown' };
 
 interface PreviewRow extends StayOccurrence {
   include: boolean;
@@ -140,43 +136,7 @@ const toNum = (s: string): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-// ─── Availability from the shared planner ────────────────────────────────────
-
-function evaluateAvailability(
-  reservations: Reservation[] | null,
-  occ: StayOccurrence,
-  roomIds: number[],
-  preferredRoomId: number | null,
-  guests: number,
-  today: string,
-): { roomId: number; availability: Availability } {
-  const fallbackRoom = preferredRoomId && roomIds.includes(preferredRoomId) ? preferredRoomId : roomIds[0];
-  if (occ.arrival < today) return { roomId: fallbackRoom, availability: { kind: 'past' } };
-  if (!reservations) return { roomId: fallbackRoom, availability: { kind: 'unknown' } };
-
-  const plan = planStayRequest(reservations, occ.arrival, occ.departure, today, {
-    allowedRoomIds: roomIds,
-    preferredRoomId: preferredRoomId ?? undefined,
-    maxRoomChanges: 0, // one type for the whole stay — this is ONE booking
-    allowShuffle: true,
-    guests,
-  });
-  if (!plan.feasible) {
-    const who = plan.holders
-      .filter((h) => h.who)
-      .map((h) => `${h.room}: ${h.who}${h.inHouse ? ' (in-house)' : ''}`)
-      .join(', ');
-    const note = plan.reason ?? (who ? `${formatStayDate(plan.blockedAt)} — ${who}` : `blocked on ${formatStayDate(plan.blockedAt)}`);
-    return { roomId: fallbackRoom, availability: { kind: 'blocked', note } };
-  }
-  const seg = plan.segments[0];
-  if (!seg) return { roomId: fallbackRoom, availability: { kind: 'unknown' } };
-  return {
-    roomId: seg.sellableRoomId,
-    availability:
-      seg.moves.length > 0 ? { kind: 'shuffle', unit: seg.room, moves: seg.moves.length } : { kind: 'free', unit: seg.room },
-  };
-}
+// ─── Availability chip (logic lives in utils/corporateAvailability.ts) ──────
 
 function AvailabilityChip({ a }: { a: Availability }) {
   switch (a.kind) {
@@ -184,19 +144,40 @@ function AvailabilityChip({ a }: { a: Availability }) {
       return <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] bg-green-100 text-green-800">Free · {a.unit}</span>;
     case 'shuffle':
       return (
-        <span
-          className="inline-flex rounded px-1.5 py-0.5 text-[11px] bg-amber-100 text-amber-800"
-          title="Fits only if other not-yet-arrived guests are moved between units of the same type. Beds24 may leave this booking unassigned; the Transactions room panel resolves it."
-        >
-          Needs shuffle · {a.unit} ({a.moves} move{a.moves === 1 ? '' : 's'})
-        </span>
+        <div className="space-y-0.5">
+          <span
+            className="inline-flex rounded px-1.5 py-0.5 text-[11px] bg-amber-100 text-amber-800"
+            title="Fits only if other not-yet-arrived guests are moved between units of the same type. Beds24 may leave this booking unassigned; the Transactions room panel resolves it."
+          >
+            Needs shuffle · {a.unit} ({a.moves} move{a.moves === 1 ? '' : 's'})
+          </span>
+          {a.alternatives.length > 0 && (
+            <div className="text-[10px] text-green-700 max-w-[240px] whitespace-normal">
+              Free without moves: {describeAlternatives(a.alternatives)}
+            </div>
+          )}
+        </div>
       );
-    case 'blocked':
+    case 'blocked': {
+      const free = a.alternatives.filter((x) => x.moves === 0);
+      const shuffled = a.alternatives.filter((x) => x.moves > 0);
       return (
-        <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] bg-red-100 text-red-700" title={a.note}>
-          Blocked
-        </span>
+        <div className="space-y-0.5">
+          <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] bg-red-100 text-red-700" title={a.note}>
+            Blocked in agreed types
+          </span>
+          {free.length > 0 ? (
+            <div className="text-[10px] text-green-700 max-w-[240px] whitespace-normal">Vacancy: {describeAlternatives(free)}</div>
+          ) : shuffled.length > 0 ? (
+            <div className="text-[10px] text-amber-700 max-w-[240px] whitespace-normal">
+              Vacancy after a shuffle: {describeAlternatives(shuffled)}
+            </div>
+          ) : (
+            <div className="text-[10px] text-red-600 max-w-[240px] whitespace-normal">No apartment is free for these dates</div>
+          )}
+        </div>
       );
+    }
     case 'past':
       return <span className="inline-flex rounded px-1.5 py-0.5 text-[11px] bg-gray-100 text-gray-500">In the past</span>;
     default:
@@ -225,6 +206,7 @@ export default function NewAgreementModal({
   const [quoteNote, setQuoteNote] = useState<string | null>(null);
   const [saving, setSaving] = useState<'draft' | 'create' | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [offerBusy, setOfferBusy] = useState(false);
 
   const [result, setResult] = useState<{ agreement: AgreementDetail; outcomes: CreateOutcome[]; createError: string | null } | null>(null);
 
@@ -394,6 +376,47 @@ export default function NewAgreementModal({
   const allPriced = prices.every((p) => p !== null && p > 0);
   const total = prices.reduce<number>((s, p) => s + (p ?? 0), 0);
   const totalNights = included.reduce((n, r) => n + r.nights, 0);
+  /** Average over the PRICED included stays — an unpriced row must not drag the average down. */
+  const pricedNights = included.reduce((n, r, i) => n + (prices[i] !== null ? r.nights : 0), 0);
+  const avgNight = pricedNights > 0 ? total / pricedNights : null;
+  /** Included stays the agreed types cannot host — the operator's to-do list. */
+  const blockedRows = rows.filter((r) => r.include && r.availability.kind === 'blocked');
+
+  function offerPayload(): OfferPayload {
+    return {
+      companyName: form.companyName,
+      companyAddress: form.companyAddress.trim() || null,
+      ico: form.ico.trim() || null,
+      vatNumber: form.vatNumber.trim() || null,
+      contactName: form.repName.trim() || null,
+      contactPhone: form.repPhone.trim() || null,
+      contactEmail: form.repEmail.trim() || form.billingEmail.trim() || null,
+      startDate: form.startDate,
+      endDate: form.endDate,
+      nightWeekdays: form.nightWeekdays,
+      roomIds: form.roomIds,
+      adults: toInt(form.adults, 1),
+      children: toInt(form.children, 0),
+      pricingMode: form.pricingMode,
+      flatNightPriceCzk: flatRate,
+      discountPercent: discount,
+      billingCadence: form.billingCadence,
+      notes: form.notes.trim() || null,
+      stays: included.map((r) => ({ seq: r.seq, arrival: r.arrival, departure: r.departure, nights: r.nights, roomId: r.roomId, priceCzk: toNum(r.price) })),
+    };
+  }
+
+  async function downloadOffer() {
+    setOfferBusy(true);
+    setSaveError(null);
+    try {
+      await downloadOfferPdf(offerPayload());
+    } catch (e) {
+      setSaveError(`Offer PDF failed: ${(e as Error).message}`);
+    } finally {
+      setOfferBusy(false);
+    }
+  }
   const distinct = Array.from(new Set(prices.filter((p): p is number => p !== null)));
   const perStayLabel =
     distinct.length === 0
@@ -796,6 +819,30 @@ export default function NewAgreementModal({
             )}
             {reservationsError && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{reservationsError}</div>}
             {quoteNote && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{quoteNote}</div>}
+            {blockedRows.length > 0 && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                <b>
+                  {blockedRows.length} stay{blockedRows.length === 1 ? ' is' : 's are'} not possible in the agreed types.
+                </b>{' '}
+                Pick another type on the row, or untick it:
+                <ul className="mt-1 space-y-0.5">
+                  {blockedRows.map((r) => {
+                    const alts = r.availability.kind === 'blocked' ? r.availability.alternatives : [];
+                    const free = alts.filter((a) => a.moves === 0);
+                    return (
+                      <li key={r.seq}>
+                        {formatStayRange(r.arrival, r.departure)} —{' '}
+                        {free.length > 0
+                          ? `vacancy in ${describeAlternatives(free)}`
+                          : alts.length > 0
+                            ? `vacancy after a shuffle in ${describeAlternatives(alts)}`
+                            : 'no apartment is free'}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
 
             <div className="overflow-x-auto rounded-lg border border-gray-200">
               <table className="w-full text-sm">
@@ -833,16 +880,11 @@ export default function NewAgreementModal({
                       <td className="px-3 py-2 text-right tabular-nums">{r.nights}</td>
                       <td className="px-3 py-2">
                         <select className={smallInputCls} value={r.roomId} onChange={(e) => setRowRoom(r.seq, Number(e.target.value))} disabled={!r.include}>
-                          {form.roomIds.map((id) => (
-                            <option key={id} value={id}>
-                              {roomShortLabel(id)}
-                            </option>
-                          ))}
+                          <RoomTypeOptions agreed={form.roomIds} />
                         </select>
                       </td>
                       <td className="px-3 py-2">
                         <AvailabilityChip a={r.availability} />
-                        {r.availability.kind === 'blocked' && <div className="text-[10px] text-gray-400 max-w-[220px] whitespace-normal">{r.availability.note}</div>}
                       </td>
                       <td className="px-3 py-2">
                         <input
@@ -881,11 +923,12 @@ export default function NewAgreementModal({
             </div>
 
             {/* Totals */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               {[
                 { label: 'Reservations', value: `${included.length}${included.length !== rows.length ? ` of ${rows.length}` : ''}` },
                 { label: 'Nights total', value: String(totalNights) },
                 { label: 'Price per reservation', value: perStayLabel },
+                { label: 'Average rate / night', value: avgNight === null ? '—' : formatCzk(avgNight) },
                 { label: 'Price total', value: allPriced || total > 0 ? formatCzk(total) : '—' },
               ].map((t) => (
                 <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
@@ -906,7 +949,15 @@ export default function NewAgreementModal({
               <button onClick={() => setStep('form')} disabled={!!saving} className="px-4 py-2 rounded-md text-sm text-gray-600 hover:bg-gray-100">
                 ← Back
               </button>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void downloadOffer()}
+                  disabled={!!saving || offerBusy || included.length === 0}
+                  title="PDF offer for the company: dates, apartment types, nights, rate per night, total"
+                  className="px-4 py-2 rounded-md bg-white border border-emerald-200 text-emerald-700 text-sm font-medium hover:bg-emerald-50 disabled:opacity-50"
+                >
+                  {offerBusy ? 'Preparing PDF…' : 'Download offer PDF'}
+                </button>
                 <button
                   onClick={() => void save(false)}
                   disabled={!!saving}

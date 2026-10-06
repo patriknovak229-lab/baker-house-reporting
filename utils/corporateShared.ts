@@ -259,3 +259,19 @@ export function formatStayDate(ymd: string): string {
 export function formatStayRange(arrival: string, departure: string): string {
   return `${formatStayDate(arrival)} → ${formatStayDate(departure)}`;
 }
+
+/** Short room-type label for tight table cells: "Urban 1KK", "Deluxe 1KK", "K.201 2KK", "O.308 2BR". */
+export function roomShortLabel(roomId: number): string {
+  switch (roomId) {
+    case 679714:
+      return 'Urban 1KK';
+    case 648816:
+      return 'Deluxe 1KK';
+    case 656437:
+      return 'K.201 2KK';
+    case 674672:
+      return 'O.308 2BR';
+    default:
+      return `room ${roomId}`;
+  }
+}

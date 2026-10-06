@@ -27,6 +27,7 @@ import {
   CopyText,
   Field,
   PRICE_SOURCE_LABEL,
+  RoomTypeOptions,
   StayStatusBadge,
   inputCls,
   joinGuestName,
@@ -35,6 +36,7 @@ import {
   smallInputCls,
   splitGuestName,
 } from './ui';
+import { downloadOfferPdf, offerFromAgreement } from './offer';
 
 interface Props {
   agreement: AgreementDetailDto;
@@ -63,6 +65,15 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
   const s = agreement.summary;
   const toCreate = agreement.stays.filter((st) => st.status === 'planned' || st.status === 'failed');
   const unpriced = toCreate.filter((st) => st.priceCzk === null || st.priceCzk <= 0);
+  /** Average over priced, counting stays — matches the preview's figure. */
+  const pricedNights = agreement.stays
+    .filter((st) => (st.status === 'planned' || st.status === 'created' || st.status === 'failed') && st.priceCzk !== null)
+    .reduce((n, st) => n + st.nights, 0);
+  const avgNight = pricedNights > 0 ? s.priceCzk / pricedNights : null;
+
+  async function downloadOffer() {
+    await run('offer', () => downloadOfferPdf(offerFromAgreement(agreement), agreement.id));
+  }
 
   async function refresh() {
     const json = await api<{ agreement: AgreementDetailDto }>(`/api/corporate/agreements/${encodeURIComponent(agreement.id)}`);
@@ -152,6 +163,14 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
               {busy === 'create' ? 'Creating…' : `Create ${toCreate.length} booking${toCreate.length === 1 ? '' : 's'} in Beds24`}
             </button>
           )}
+          <button
+            onClick={() => void downloadOffer()}
+            disabled={busy !== null || s.stays - s.skipped - s.cancelled === 0}
+            title="PDF offer for the company: dates, apartment types, nights, rate per night, total"
+            className="px-3 py-2 rounded-md bg-white border border-emerald-200 text-emerald-700 text-sm font-medium hover:bg-emerald-50 disabled:opacity-50 shadow-sm"
+          >
+            {busy === 'offer' ? 'Preparing PDF…' : 'Offer PDF'}
+          </button>
           {canEdit && (
             <button
               onClick={() => setEditing((v) => !v)}
@@ -212,6 +231,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
           {s.firstArrival && s.lastDeparture && (
             <>
               {' '}· stays {formatStayDate(s.firstArrival)} → {formatStayDate(s.lastDeparture)} · {s.nights} nights · {formatCzk(s.priceCzk)}
+              {avgNight !== null && ` · avg ${formatCzk(avgNight)}/night`}
               {s.unpriced > 0 && ` (${s.unpriced} unpriced)`}
             </>
           )}
@@ -511,11 +531,7 @@ function StayRow({
             onChange={(e) => void patch({ roomId: Number(e.target.value) })}
             title="Room type for this stay"
           >
-            {agreement.roomIds.map((id) => (
-              <option key={id} value={id}>
-                {roomShortLabel(id)}
-              </option>
-            ))}
+            <RoomTypeOptions agreed={agreement.roomIds} />
           </select>
         ) : (
           <span title={roomLabelFor(stay.roomId)}>{roomShortLabel(stay.roomId)}</span>

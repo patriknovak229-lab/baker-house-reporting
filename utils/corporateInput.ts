@@ -235,7 +235,7 @@ export interface StayInput {
   include: boolean;
 }
 
-export function parseStayInputs(raw: unknown, agreement: AgreementInput): ParseResult<StayInput[]> {
+export function parseStayInputs(raw: unknown): ParseResult<StayInput[]> {
   if (raw === undefined || raw === null) return { ok: true, value: [] };
   if (!Array.isArray(raw)) return fail('stays must be an array');
   const out: StayInput[] = [];
@@ -248,9 +248,11 @@ export function parseStayInputs(raw: unknown, agreement: AgreementInput): ParseR
     if (seen.has(seq)) return fail(`Stay ${seq} is listed twice`);
     seen.add(seq);
 
+    // Any sellable type, not only the agreed ones: the preview offers the
+    // operator whatever has vacancy when the agreed types are full for a week.
     const roomId = optNum(s.roomId);
-    if (roomId !== null && !agreement.roomIds.includes(roomId)) {
-      return fail(`Stay ${seq}: room ${roomId} is not one of the agreement's room types`);
+    if (roomId !== null && !SELLABLE_ROOM_IDS.has(roomId)) {
+      return fail(`Stay ${seq}: room ${roomId} is not a sellable room type`);
     }
     const priceCzk = optNum(s.priceCzk);
     if (priceCzk !== null && priceCzk < 0) return fail(`Stay ${seq}: price cannot be negative`);
