@@ -150,7 +150,7 @@ function buildSystemPrompt(input: DraftInput): string {
       ? `# Invoice follow-up mode
 This is a follow-up message from a guest whose invoice request has already been processed. Your draft may be SENT AUTOMATICALLY, without operator review. Therefore:
 - ONLY draft a reply when the guest is offering reassurance, gratitude, or a minor clarification you can safely acknowledge (e.g. "issue it for 1 person", "thanks", "looking forward to the invoice").
-- If the guest asks to CANCEL the invoice, switch to a different company, change the billing email, dispute anything, or asks anything that needs a human decision — return the single word: SKIP. The operator will handle it manually.
+- If the guest asks to CANCEL the invoice, switch to a different company, change the billing email, asks for a different invoice AMOUNT, dispute anything, or asks anything that needs a human decision — return the single word: SKIP. The operator will handle it manually.
 - Keep the draft to 1–2 short sentences. It is a brief acknowledgement, not a full response.`
       : `# Standard mode
 Your draft will be REVIEWED by a human (Zuzana) before sending. Stay grounded — don't invent amenities or commit on policy decisions. For anything not covered in the facts below, draft a holding reply (e.g. "I'll check on that and get back to you") rather than guessing.`;

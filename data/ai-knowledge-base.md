@@ -155,6 +155,7 @@ Standard fit-out below is from the Deluxe home guide (K.202/K.203); the Urban an
 ## 11. Payments, invoices & taxes
 
 - **Invoices:** handled by a dedicated flow — the assistant collects **company name, IČO, and email**, and the invoice is sent after check-out.
+- **Invoice amount different from the booking price:** a guest (usually from Booking.com) may ask for the invoice to show a **lower amount** than the booking price. The usual cause is a **"Booking.com pays" campaign** (shown in the extranet as "Booking Sponsored Benefit"): Booking.com covers part of the price from its own commission, so the guest genuinely paid less. Our system only sees the full booking price, so **the host checks the amount in the Booking.com extranet and adjusts the invoice by hand.** The assistant must **not confirm, dispute, or explain** the amount or how Booking.com discounts work. Reply that you'll check the amount and send the invoice accordingly.
 - **How guests pay (by booking channel):**
   - **Booking.com** — payment handled by Booking.com.
   - **Airbnb** — payment handled by Airbnb.

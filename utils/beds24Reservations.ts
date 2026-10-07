@@ -848,6 +848,28 @@ export async function fetchAllBookings(
 // rate-map publish, inventory-override blackouts) - none of which affect a
 // booking's room, dates or status, so occupancy is identical either way.
 // Mid-stay room segments DO affect rooms, so they are attached here too.
+/**
+ * One reservation as the dashboard and the invoice cron see it, computed from
+ * raw cached Beds24 bookings with the SAME group merge (multi-unit Booking.com
+ * prices summed, sub-bookings folded into their master). Used where only the
+ * Redis cache is at hand, e.g. the message webhook comparing a guest's stated
+ * invoice amount with the price the invoice will print.
+ *
+ * Null when that number isn't a live merged reservation (cancelled, or a
+ * sub-booking whose master carries the reservation). Pure: no I/O.
+ */
+export function reservationFromCachedBookings(
+  raw: Beds24Booking[],
+  reservationNumber: string,
+): Reservation | null {
+  const isCancelledStatus = (b: Beds24Booking) =>
+    b.status === "cancelled" || b.status === "canceled";
+  // mergeGroupedBookings sums prices onto the master in place → work on copies.
+  const live = raw.filter((b) => !isCancelledStatus(b)).map((b) => ({ ...b }));
+  const hit = mergeGroupedBookings(live).find((b) => `BH-${b.id}` === reservationNumber);
+  return hit ? mapToReservation(hit) : null;
+}
+
 export async function buildReservationSet(
   options: { fullSync?: boolean } = {},
 ): Promise<Reservation[]> {

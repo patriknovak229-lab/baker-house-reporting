@@ -37,7 +37,7 @@ import { Redis } from '@upstash/redis';
 import { readAllAutoReplyLog, writeAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
-import type { Reservation, Issue, Room, InvoiceData } from '@/types/reservation';
+import type { Reservation, Issue, Room, InvoiceData, InvoiceModification } from '@/types/reservation';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { sendBeds24Message } from '@/utils/beds24Messages';
@@ -77,12 +77,25 @@ import {
 import { computeParking } from '@/utils/parkingUtils';
 import { composeAiReply } from '@/utils/aiReplyComposer';
 import { fetchRecentConversation } from '@/utils/beds24Conversation';
-import { mapToReservation, type Beds24Booking } from '@/utils/beds24Reservations';
+import {
+  mapToReservation,
+  reservationFromCachedBookings,
+  type Beds24Booking,
+} from '@/utils/beds24Reservations';
 import { autoRatePerks, effectiveRatePerks, type PerkOverrides } from '@/utils/ratePerks';
 import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
 import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
 import { escapeHtml } from '@/utils/telegram';
+import {
+  amountHoldReason,
+  amountTaskNote,
+  isBeyondAutoSendWindow,
+  manualInvoiceAlert,
+  mismatchedAmounts,
+  parseStatedAmounts,
+  withAmountNote,
+} from '@/utils/invoiceAutoSendRules';
 import type { RateType } from '@/types/reservation';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
@@ -121,8 +134,10 @@ const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 // then stop — it's the guest's request, not ours.
 const INVOICE_REMINDER_AFTER_MS = 24 * 60 * 60 * 1000;
 const INVOICE_MAX_ASKS = 2; // initial ask + one 24h reminder
-// Past this many days after checkout, the "your invoice is coming" confirmation
-// is no longer worth sending — mirrors CATCHUP_DAYS in the send-due-invoices cron.
+// Past this many days after checkout, the "your invoice will be sent after your
+// checkout on X" confirmation no longer reads true, so it isn't sent. The
+// invoice itself still auto-sends on the next cron run for checkouts up to
+// ~6 months old (INVOICE_AUTO_SEND_MAX_AGE_DAYS in utils/invoiceAutoSendRules).
 const CONFIRMATION_GRACE_DAYS = 3;
 
 export const maxDuration = 60;
@@ -1749,6 +1764,13 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
   }
 
   if (completed) {
+    // Guest came back naming an amount that isn't the booking price (typically
+    // a "Booking.com pays" discount Beds24 never sees) → hold the open invoice
+    // task so the cron can't send the booking price, alert once, and let the
+    // message fall through to the operator's draft queue. No auto-ack.
+    if (await holdInvoiceForStatedAmount({ redis, request: completed, messageText })) {
+      return false;
+    }
     // Invoice already auto-completed (or operator-accepted). If the guest
     // is just reassuring / clarifying ("issue it for 1 person", "thanks,
     // looking forward"), AI-draft a short acknowledgement and AUTO-SEND
@@ -1897,6 +1919,110 @@ async function tryInvoiceFollowUpAutoSend(args: InvoiceFollowUpArgs): Promise<bo
   return true;
 }
 
+/**
+ * Price + channel of a reservation exactly as the invoice will print it.
+ * buildReservationContext can't be used for this: it is a template-only stub
+ * with `price: 0` and `channel: 'Direct'` hard-coded. Price is null when the
+ * reservation can't be resolved, which makes any stated amount count as a
+ * mismatch (hold + alert) rather than letting the cron bill a guess.
+ */
+async function invoiceBookingView(
+  redis: Redis,
+  reservationNumber: string,
+): Promise<{ price: number | null; channel: string | null }> {
+  try {
+    const cached = (await redis.get<Record<string, Beds24Booking>>(BOOKINGS_CACHE_KEY)) ?? {};
+    const r = reservationFromCachedBookings(Object.values(cached), reservationNumber);
+    return { price: r ? r.price : null, channel: r ? r.channel : null };
+  } catch (err) {
+    console.error(`[invoice flow] booking price lookup failed for ${reservationNumber}:`, err);
+    return { price: null, channel: null };
+  }
+}
+
+interface StatedAmountHoldArgs {
+  redis: Redis;
+  request: InvoiceRequest;
+  messageText: string;
+}
+
+/**
+ * A guest whose invoice request is already complete writes back naming an
+ * amount ("please issue it for 3 509,41 Kč"). When that isn't the booking
+ * price, the open "Send invoice" task gets `holdAutoSend` + a note, and the ops
+ * group gets one Telegram. If the invoice already went out, nothing is held but
+ * the Telegram still fires so the operator can re-issue.
+ *
+ * Returns true when it acted (caller then routes the message to the operator
+ * queue instead of auto-acknowledging it). Returns false when the message names
+ * no amount, the amount matches, or the task is already held for this amount.
+ */
+async function holdInvoiceForStatedAmount(args: StatedAmountHoldArgs): Promise<boolean> {
+  const { redis, request, messageText } = args;
+  const stated = parseStatedAmounts([messageText]);
+  if (stated.length === 0) return false;
+
+  const priced = await invoiceBookingView(redis, request.reservationNumber);
+  const bookingPrice = priced.price;
+
+  const overrides = await readAllReservationOverrides<{
+    invoiceData?: InvoiceData;
+    invoiceStatus?: string;
+    issues?: Issue[];
+    invoiceModifications?: InvoiceModification[];
+  }>();
+  const current = overrides[request.reservationNumber] ?? {};
+  const issues: Issue[] = Array.isArray(current.issues) ? current.issues : [];
+  const alreadySent = current.invoiceStatus === 'Sent';
+
+  // Once sent, compare with what was actually invoiced: the operator may have
+  // already sent a corrected (modified-amount) version, and a guest's "thanks,
+  // 3 509,41 Kč received" must not raise a false alarm.
+  const lastSentModAmount = (current.invoiceModifications ?? [])
+    .filter((m) => m.sentAt && m.amount != null)
+    .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))[0]?.amount;
+  const comparedPrice = alreadySent && lastSentModAmount != null ? lastSentModAmount : bookingPrice;
+  const mismatched = mismatchedAmounts(stated, comparedPrice);
+  if (mismatched.length === 0) return false;
+  const reason = amountHoldReason(mismatched, bookingPrice);
+  const note = amountTaskNote(mismatched, bookingPrice, priced.channel);
+
+  let held = false;
+  if (!alreadySent) {
+    const next = issues.map((i) => {
+      if (i.category !== 'invoice' || i.resolved || i.holdAutoSend === reason) return i;
+      held = true;
+      return { ...i, holdAutoSend: reason, text: withAmountNote(i.text, note) };
+    });
+    if (held) {
+      overrides[request.reservationNumber] = { ...current, issues: next };
+      await writeAllReservationOverrides(overrides);
+    }
+  }
+  // Unsent with nothing newly held = no open task, or already held for this
+  // exact amount (a repeat message) → nothing new to tell anyone.
+  if (!alreadySent && !held) return false;
+
+  await sendTelegram(
+    manualInvoiceAlert(
+      {
+        reservationNumber: request.reservationNumber,
+        companyName: current.invoiceData?.companyName ?? request.companyName,
+        channel: priced.channel,
+        bookingPriceCzk: comparedPrice,
+        mismatched,
+        alreadySent,
+      },
+      escapeHtml,
+    ),
+  ).catch((err) => console.error('[invoice flow] amount alert failed:', err));
+  console.log(
+    `[invoice flow] ${request.reservationNumber}: guest named a different amount (${reason})` +
+      (alreadySent ? ' — invoice already sent, alerted' : ' — auto-send held'),
+  );
+  return true;
+}
+
 interface NewRequestArgs {
   redis: Redis;
   bookingId: number;
@@ -2028,6 +2154,7 @@ async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<void> {
       request: { ...updatedRequest, status: 'auto-completed' },
       language: '', // detector will infer for confirmation message
       allRequests,
+      latestMessage: messageText,
     });
     return;
   }
@@ -2057,10 +2184,13 @@ interface AutoCompleteArgs {
   request: InvoiceRequest;
   language: string;
   allRequests: InvoiceRequest[];
+  /** The guest message that completed the request, when it isn't the original
+   *  `request.rawMessage` — scanned together with it for a stated amount. */
+  latestMessage?: string;
 }
 
 async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void> {
-  const { redis, request, language, allRequests } = args;
+  const { redis, request, language, allRequests, latestMessage } = args;
   const bookingId = Number(request.reservationNumber.replace(/^BH-/, ''));
 
   // Look up reservation for checkout date + first name
@@ -2130,6 +2260,24 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     createdAt: new Date().toISOString(),
   };
 
+  // Did the guest name an amount that isn't the booking price? Then the cron
+  // must not auto-send the booking price: hold the task and say why in its
+  // text. Beds24 can't tell us the real figure (a "Booking.com pays" discount
+  // never reaches it), so the operator sets the invoice amount by hand.
+  const stated = parseStatedAmounts([request.rawMessage, latestMessage]);
+  const priced = stated.length > 0 ? await invoiceBookingView(redis, request.reservationNumber) : null;
+  const bookingPrice = priced?.price ?? null;
+  const mismatched = mismatchedAmounts(stated, bookingPrice);
+  if (mismatched.length > 0) {
+    newIssue.text = withAmountNote(
+      newIssue.text,
+      amountTaskNote(mismatched, bookingPrice, priced?.channel),
+    );
+    newIssue.holdAutoSend = amountHoldReason(mismatched, bookingPrice);
+  }
+  // Checkout beyond the ~6-month auto-send window → the cron will skip it.
+  const tooOld = isBeyondAutoSendWindow(checkoutDate, todayUTC());
+
   overrides[request.reservationNumber] = {
     ...current,
     ...additionalEmailPatch,
@@ -2147,6 +2295,24 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   await persistInvoiceRequests(
     replaceOrAppendInvoiceRequest(allRequests, completedRequest),
   );
+
+  // One-off heads-up when this invoice won't go out by itself. Fired here, at
+  // task creation, rather than from the daily cron so it isn't repeated daily.
+  if (mismatched.length > 0 || tooOld) {
+    await sendTelegram(
+      manualInvoiceAlert(
+        {
+          reservationNumber: request.reservationNumber,
+          companyName: newInvoiceData.companyName,
+          channel: priced?.channel,
+          bookingPriceCzk: bookingPrice,
+          mismatched,
+          tooOldCheckout: tooOld ? checkoutDate : null,
+        },
+        escapeHtml,
+      ),
+    ).catch((err) => console.error('[invoice flow] manual-send alert failed:', err));
+  }
 
   // Confirmation reply — "the invoice will be sent after your checkout on X".
   // Only makes sense while that sentence is still true. The self-heal pass can
@@ -2184,9 +2350,12 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     language: lang,
     action: stale ? 'task-only' : 'sent-with-task',
     sentText: replyText,
-    detail: stale
-      ? `auto-completed silently (checkout ${checkoutDate} long past); invoiceData + issue created`
-      : `auto-completed; invoiceData + issue created for checkout ${checkoutDate}`,
+    detail:
+      (stale
+        ? `auto-completed silently (checkout ${checkoutDate} long past); invoiceData + issue created`
+        : `auto-completed; invoiceData + issue created for checkout ${checkoutDate}`) +
+      (newIssue.holdAutoSend ? `; auto-send held: ${newIssue.holdAutoSend}` : '') +
+      (tooOld ? '; checkout beyond 6-month auto-send window' : ''),
     decidedAt: new Date().toISOString(),
   });
   console.log(

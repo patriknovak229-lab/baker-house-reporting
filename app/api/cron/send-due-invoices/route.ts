@@ -11,10 +11,19 @@
  *   - invoiceStatus === "Sent"      → already emailed (manually or a prior run);
  *                                      just resolve the task. NEVER re-send.
  *   - invoiceStatus === "Issued"    → operator is mid-handling it → leave alone.
+ *   - task carries `holdAutoSend`    → leave for the operator. Set by the
+ *     (e.g. guest asked for a           webhook when the guest names an amount
+ *     different amount)                 that isn't the booking price — typically
+ *                                       a "Booking.com pays" discount Beds24
+ *                                       never sees. The operator modifies the
+ *                                       invoice amount and sends it manually.
  *   - details incomplete (no IČO or  → leave the task open for the operator
  *     VAT, or no billing email)         (same as today).
- *   - checkout older than the        → stale backlog → leave for the operator
- *     catch-up window                   (so go-live doesn't blast old invoices).
+ *   - checkout older than ~6 months  → leave for the operator (the webhook
+ *                                       already Telegrammed it once). Anything
+ *                                       younger is sent on the next run, however
+ *                                       late the guest asked: accountants chase
+ *                                       guests weeks after the stay.
  *   - otherwise                      → generate + email via the SAME util the
  *                                      manual send uses, mark invoiceStatus
  *                                      "Sent", and resolve the task.
@@ -41,13 +50,9 @@ import {
   type BookingsMirrorHealth,
 } from '@/utils/bookingsMirrorHealth';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
+import { autoSendWindowStart } from '@/utils/invoiceAutoSendRules';
 
 export const maxDuration = 60;
-
-// Auto-send when checkout is within this many days of today: sends on the
-// checkout date, tolerates a missed cron run, but does NOT reach back and
-// invoice stale backlog (guards the first live run).
-const CATCHUP_DAYS = 3;
 
 interface OverrideEntry {
   invoiceData?: InvoiceData | null;
@@ -58,12 +63,6 @@ interface OverrideEntry {
 
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function ymdDaysAgo(base: string, days: number): string {
-  const d = new Date(`${base}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - days);
-  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -120,7 +119,10 @@ async function run(req: NextRequest) {
 
 async function sendDueInvoices() {
   const today = todayUTC();
-  const earliest = ymdDaysAgo(today, CATCHUP_DAYS);
+  // Auto-send window: checkouts up to ~6 months back (INVOICE_AUTO_SEND_MAX_AGE_DAYS).
+  // Was 3 days, which silently stranded every request a guest made more than
+  // three days after checking out (BH-93787214, 7 Oct 2026).
+  const earliest = autoSendWindowStart(today);
 
   // Fresh bookings (correct amounts/dates) + overrides (invoiceData / status / task).
   let reservations: Reservation[];
@@ -146,6 +148,7 @@ async function sendDueInvoices() {
   let deferred = 0;
   let alreadySent = 0;
   let skippedManual = 0;
+  let skippedHeld = 0;
   let skippedIncomplete = 0;
   let skippedStale = 0;
   let failed = 0;
@@ -178,6 +181,14 @@ async function sendDueInvoices() {
       continue;
     }
 
+    // Held by the webhook (guest named a different amount, e.g. a "Booking.com
+    // pays" discount). Auto-sending would bill the booking price the guest
+    // says is wrong; the operator sets the amount and sends from the drawer.
+    if (issues.some((i) => isOpenInvoiceTask(i) && !!i.holdAutoSend)) {
+      skippedHeld += 1;
+      continue;
+    }
+
     // Split invoices: the booking is billed to several parties, each with its
     // own customer block and share. Auto-sending would email ONE invoice for
     // the whole stay to whoever happens to sit in `invoiceData` — so this is
@@ -187,7 +198,7 @@ async function sendDueInvoices() {
       continue;
     }
 
-    // Stale backlog (every due task older than the catch-up window) → operator.
+    // Older than the ~6-month window (every due task) → operator.
     if (due.every((i) => i.actionableDate < earliest)) {
       skippedStale += 1;
       continue;
@@ -285,6 +296,7 @@ async function sendDueInvoices() {
     deferrals: deferrals.length > 0 ? deferrals : undefined,
     alreadySent,
     skippedManual,
+    skippedHeld,
     skippedIncomplete,
     skippedStale,
     failed,
@@ -304,6 +316,7 @@ async function sendDueInvoices() {
     failed,
     alreadySent,
     skippedManual,
+    skippedHeld,
     skippedStale,
     skippedIncomplete,
   });

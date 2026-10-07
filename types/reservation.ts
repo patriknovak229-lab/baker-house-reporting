@@ -91,6 +91,15 @@ export interface Issue {
    * Placement itself is Phase 2 (the cleaning app doesn't read this yet).
    */
   timing?: "prep" | "after";
+  /**
+   * Invoice tasks only: set when the send-due-invoices cron must leave this
+   * invoice for the operator instead of auto-sending it. The value is the
+   * human-readable reason, e.g. "guest asked for 3 509,41 Kč, booking price
+   * 3 776,64 Kč" (a "Booking.com pays" discount Beds24 never sees). Absent =
+   * auto-send allowed. Survives drawer saves because the UI passes task
+   * objects through untouched.
+   */
+  holdAutoSend?: string;
 }
 
 /**
