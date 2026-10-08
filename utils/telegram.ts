@@ -53,3 +53,14 @@ export function escapeHtml(s: string): string {
 export function pricingChatId(): string | undefined {
   return process.env.TELEGRAM_PRICING_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID;
 }
+
+/**
+ * Destination for invoice "needs a manual send" alerts (guest asked for a
+ * different amount, or the checkout is beyond the auto-send window). The
+ * operator asked (2026-10-08) for these to land where the price-parity results
+ * go, so the shared Baker House Operations group isn't spammed. Deliberately
+ * the SAME chat as pricing: move one, the other follows.
+ */
+export function invoiceAlertChatId(): string | undefined {
+  return pricingChatId();
+}

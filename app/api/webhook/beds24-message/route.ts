@@ -86,10 +86,11 @@ import { autoRatePerks, effectiveRatePerks, type PerkOverrides } from '@/utils/r
 import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
 import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
-import { escapeHtml } from '@/utils/telegram';
+import { escapeHtml, invoiceAlertChatId, sendTelegram as sendTelegramTo } from '@/utils/telegram';
 import {
   amountHoldReason,
   amountTaskNote,
+  invoiceConfirmationKind,
   isBeyondAutoSendWindow,
   manualInvoiceAlert,
   mismatchedAmounts,
@@ -134,11 +135,6 @@ const LAST_POLL_KEY = 'baker:auto-reply:last-poll';
 // then stop — it's the guest's request, not ours.
 const INVOICE_REMINDER_AFTER_MS = 24 * 60 * 60 * 1000;
 const INVOICE_MAX_ASKS = 2; // initial ask + one 24h reminder
-// Past this many days after checkout, the "your invoice will be sent after your
-// checkout on X" confirmation no longer reads true, so it isn't sent. The
-// invoice itself still auto-sends on the next cron run for checkouts up to
-// ~6 months old (INVOICE_AUTO_SEND_MAX_AGE_DAYS in utils/invoiceAutoSendRules).
-const CONFIRMATION_GRACE_DAYS = 3;
 
 export const maxDuration = 60;
 
@@ -1940,6 +1936,17 @@ async function invoiceBookingView(
   }
 }
 
+/**
+ * Invoice "needs a manual send" alerts go to the price-parity chat, NOT the
+ * Baker House Operations group: operator request (2026-10-08) to keep the ops
+ * group quiet. This file's own sendTelegram() always targets the ops group,
+ * hence the shared util with an explicit chat. Never throws.
+ */
+async function sendInvoiceAlert(text: string): Promise<void> {
+  const ok = await sendTelegramTo(text, { chatId: invoiceAlertChatId() });
+  if (!ok) console.error('[invoice flow] manual-send alert could not be delivered');
+}
+
 interface StatedAmountHoldArgs {
   redis: Redis;
   request: InvoiceRequest;
@@ -1949,9 +1956,10 @@ interface StatedAmountHoldArgs {
 /**
  * A guest whose invoice request is already complete writes back naming an
  * amount ("please issue it for 3 509,41 Kč"). When that isn't the booking
- * price, the open "Send invoice" task gets `holdAutoSend` + a note, and the ops
- * group gets one Telegram. If the invoice already went out, nothing is held but
- * the Telegram still fires so the operator can re-issue.
+ * price, the open "Send invoice" task gets `holdAutoSend` + a note, and one
+ * Telegram goes to the price-parity chat (sendInvoiceAlert). If the invoice
+ * already went out, nothing is held but the Telegram still fires so the
+ * operator can re-issue.
  *
  * Returns true when it acted (caller then routes the message to the operator
  * queue instead of auto-acknowledging it). Returns false when the message names
@@ -2003,7 +2011,7 @@ async function holdInvoiceForStatedAmount(args: StatedAmountHoldArgs): Promise<b
   // exact amount (a repeat message) → nothing new to tell anyone.
   if (!alreadySent && !held) return false;
 
-  await sendTelegram(
+  await sendInvoiceAlert(
     manualInvoiceAlert(
       {
         reservationNumber: request.reservationNumber,
@@ -2015,7 +2023,7 @@ async function holdInvoiceForStatedAmount(args: StatedAmountHoldArgs): Promise<b
       },
       escapeHtml,
     ),
-  ).catch((err) => console.error('[invoice flow] amount alert failed:', err));
+  );
   console.log(
     `[invoice flow] ${request.reservationNumber}: guest named a different amount (${reason})` +
       (alreadySent ? ' — invoice already sent, alerted' : ' — auto-send held'),
@@ -2208,7 +2216,12 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   // Persist invoiceData + create the red Send-invoice Issue via local-state.
   // Both end up in the same Redis blob so we do one read-modify-write.
   const overrides =
-    await readAllReservationOverrides<{ invoiceData?: InvoiceData; issues?: Issue[]; additionalEmail?: string }>();
+    await readAllReservationOverrides<{
+      invoiceData?: InvoiceData;
+      invoiceStatus?: string;
+      issues?: Issue[];
+      additionalEmail?: string;
+    }>();
   const current = overrides[request.reservationNumber] ?? {};
 
   // Don't clobber any pre-existing invoiceData the operator may have set
@@ -2299,7 +2312,7 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   // One-off heads-up when this invoice won't go out by itself. Fired here, at
   // task creation, rather than from the daily cron so it isn't repeated daily.
   if (mismatched.length > 0 || tooOld) {
-    await sendTelegram(
+    await sendInvoiceAlert(
       manualInvoiceAlert(
         {
           reservationNumber: request.reservationNumber,
@@ -2311,24 +2324,30 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
         },
         escapeHtml,
       ),
-    ).catch((err) => console.error('[invoice flow] manual-send alert failed:', err));
+    );
   }
 
-  // Confirmation reply — "the invoice will be sent after your checkout on X".
-  // Only makes sense while that sentence is still true. The self-heal pass can
-  // complete a request whose stay ended months ago (it was stranded by an
-  // older, stricter completeness rule); messaging that guest now would be
-  // bewildering, so the record + task are created silently instead.
-  const stale = !!checkoutDate && checkoutDate < ymdDaysAgo(todayUTC(), CONFIRMATION_GRACE_DAYS);
+  // Confirmation reply. Before checkout: "will be sent after your checkout on
+  // X". After checkout (late requests, often weeks later): "we will send it
+  // shortly", since it goes out on the next cron run or from the operator when
+  // held. Nothing when the invoice already went out, or when the checkout is
+  // beyond the 6-month window (the operator decides and replies personally).
+  const alreadySent = current.invoiceStatus === 'Sent';
+  const confirmation = invoiceConfirmationKind({
+    checkoutDate,
+    todayYmd: todayUTC(),
+    invoiceAlreadySent: alreadySent,
+  });
 
   let replyText: string | null = null;
   let sentMessageId: number | null = null;
-  if (!stale) {
+  if (confirmation) {
     replyText = await renderInvoiceConfirmation(
       firstName,
       newInvoiceData.billingEmail,
       checkoutDate,
       lang,
+      confirmation,
     );
     await sleep(10_000);
     try {
@@ -2348,30 +2367,25 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
     category: 'invoice-request',
     confidence: 1,
     language: lang,
-    action: stale ? 'task-only' : 'sent-with-task',
+    action: replyText ? 'sent-with-task' : 'task-only',
     sentText: replyText,
     detail:
-      (stale
-        ? `auto-completed silently (checkout ${checkoutDate} long past); invoiceData + issue created`
-        : `auto-completed; invoiceData + issue created for checkout ${checkoutDate}`) +
+      (replyText
+        ? `auto-completed; invoiceData + issue created for checkout ${checkoutDate}` +
+          (confirmation === 'after-checkout' ? '; late request, post-checkout confirmation' : '')
+        : `auto-completed silently (${alreadySent ? 'invoice already sent' : `checkout ${checkoutDate} beyond auto-send window`}); invoiceData + issue created`) +
       (newIssue.holdAutoSend ? `; auto-send held: ${newIssue.holdAutoSend}` : '') +
       (tooOld ? '; checkout beyond 6-month auto-send window' : ''),
     decidedAt: new Date().toISOString(),
   });
   console.log(
-    `[invoice flow] booking ${bookingId}: auto-completed, invoice task created${stale ? ' (no guest message — stay long over)' : ''}`,
+    `[invoice flow] booking ${bookingId}: auto-completed, invoice task created${replyText ? '' : ' (no guest message)'}`,
   );
 }
 
 /** Today in UTC as YYYY-MM-DD — matches the send cron's date basis. */
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function ymdDaysAgo(base: string, days: number): string {
-  const d = new Date(`${base}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - days);
-  return d.toISOString().slice(0, 10);
 }
 
 /** Current mandatory-field state of a stored request. */

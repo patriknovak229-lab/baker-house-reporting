@@ -39,6 +39,39 @@ export function isBeyondAutoSendWindow(checkoutYmd: string, todayYmd: string): b
   return !!checkoutYmd && checkoutYmd < autoSendWindowStart(todayYmd);
 }
 
+// ─── Guest confirmation ──────────────────────────────────────────────────────
+
+/**
+ * Which "we have everything we need" message the guest gets once their
+ * invoice details are complete (templates in utils/invoiceReplyTemplates):
+ *
+ *   'before-checkout' → "…will be sent to {EMAIL} after your checkout on {DATE}."
+ *   'after-checkout'  → "…we will send the invoice to {EMAIL} shortly." For late
+ *                        requests, which go out on the next cron run (or are sent
+ *                        by the operator when held for a different amount). The
+ *                        old rule sent nothing more than 3 days after checkout,
+ *                        so a guest who replied a week later heard nothing.
+ *   null              → no message: the invoice already went out (the operator
+ *                        sent it by hand), or the checkout is beyond the
+ *                        auto-send window, where the operator decides whether to
+ *                        issue it at all and replies personally.
+ */
+export type InvoiceConfirmationKind = 'before-checkout' | 'after-checkout';
+
+export function invoiceConfirmationKind(input: {
+  checkoutDate: string;
+  todayYmd: string;
+  invoiceAlreadySent: boolean;
+}): InvoiceConfirmationKind | null {
+  if (input.invoiceAlreadySent) return null;
+  if (isBeyondAutoSendWindow(input.checkoutDate, input.todayYmd)) return null;
+  // Unknown checkout reads as "after": the task is then dated today, so the
+  // invoice goes out on the next run, and "after your checkout on ''" would be
+  // nonsense anyway.
+  if (!input.checkoutDate || input.checkoutDate < input.todayYmd) return 'after-checkout';
+  return 'before-checkout';
+}
+
 // ─── Stated amounts ──────────────────────────────────────────────────────────
 
 export interface StatedAmount {

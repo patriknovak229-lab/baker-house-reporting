@@ -4,6 +4,7 @@ import {
   amountTaskNote,
   autoSendWindowStart,
   formatAmount,
+  invoiceConfirmationKind,
   isBeyondAutoSendWindow,
   manualInvoiceAlert,
   mismatchedAmounts,
@@ -155,5 +156,37 @@ describe('wording', () => {
     const old = manualInvoiceAlert({ reservationNumber: 'BH-2', tooOldCheckout: '2025-09-30' }, esc);
     expect(old).toContain('more than 6 months');
     expect(old).not.toContain('Guest asked');
+  });
+});
+
+describe('invoiceConfirmationKind', () => {
+  const today = '2026-10-08';
+  const kind = (checkoutDate: string, invoiceAlreadySent = false) =>
+    invoiceConfirmationKind({ checkoutDate, todayYmd: today, invoiceAlreadySent });
+
+  it('before or on checkout day → "after your checkout on X"', () => {
+    expect(kind('2026-10-12')).toBe('before-checkout');
+    expect(kind('2026-10-08')).toBe('before-checkout');
+  });
+
+  it('late requests get a confirmation too (the old rule was silent after 3 days)', () => {
+    expect(kind('2026-10-07')).toBe('after-checkout');
+    // BH-93787214: checkout 30 Sep, details 7 Oct → used to get nothing.
+    expect(kind('2026-09-30')).toBe('after-checkout');
+    expect(kind('2026-04-08')).toBe('after-checkout');
+  });
+
+  it('unknown checkout → the dateless wording', () => {
+    expect(kind('')).toBe('after-checkout');
+  });
+
+  it('beyond the 6-month window → no message, the operator replies personally', () => {
+    expect(kind('2026-04-07')).toBeNull();
+    expect(kind('2025-10-01')).toBeNull();
+  });
+
+  it('invoice already sent by hand → no "we will send it" message', () => {
+    expect(kind('2026-10-12', true)).toBeNull();
+    expect(kind('2026-09-30', true)).toBeNull();
   });
 });

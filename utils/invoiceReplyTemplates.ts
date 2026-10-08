@@ -14,6 +14,7 @@
 import { translateText } from '@/utils/googleTranslate';
 import { formalGreeting } from '@/utils/greeting';
 import type { InvoiceMandatoryField } from '@/utils/invoiceUtils';
+import type { InvoiceConfirmationKind } from '@/utils/invoiceAutoSendRules';
 
 const SIGN_OFF = '\n\n— Zuzana';
 
@@ -49,8 +50,24 @@ export async function renderMissingFieldsReply(
 }
 
 /**
- * Confirm to the guest that we have what we need and the invoice will go
- * out after their checkout. The email + date are substituted AFTER
+ * English source (pre-translation) of the confirmation. Pure, unit-tested.
+ * 'after-checkout' is for late requests: no date, because the stay is over and
+ * the invoice goes out on the next cron run (or from the operator when held).
+ */
+export function invoiceConfirmationTemplate(
+  firstName: string,
+  kind: InvoiceConfirmationKind,
+): string {
+  const safeName = firstName || 'there';
+  return kind === 'after-checkout'
+    ? `${safeName}! Thank you, we have everything we need. We will send the invoice to {EMAIL} shortly.`
+    : `${safeName}! Thank you, we have everything we need. The invoice will be sent to {EMAIL} after your checkout on {DATE}.`;
+}
+
+/**
+ * Confirm to the guest that we have what we need: before checkout the invoice
+ * "will be sent after your checkout on X", after checkout "shortly" (see
+ * invoiceConfirmationKind). The email + date are substituted AFTER
  * translation so they're never mangled.
  */
 export async function renderInvoiceConfirmation(
@@ -58,12 +75,11 @@ export async function renderInvoiceConfirmation(
   email: string,
   checkoutDate: string,
   language: string,
+  kind: InvoiceConfirmationKind = 'before-checkout',
 ): Promise<string> {
-  const safeName = firstName || 'there';
   // Greeting prepended OUTSIDE translation (see renderMissingFieldsReply
   // for the why). Name stays in the body so vocative inflection works.
-  const template =
-    `${safeName}! Thank you, we have everything we need. The invoice will be sent to {EMAIL} after your checkout on {DATE}.`;
+  const template = invoiceConfirmationTemplate(firstName, kind);
 
   let body = await translateIfNeeded(template, language);
   body = body

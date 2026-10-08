@@ -10,7 +10,8 @@
  *
  * Query params:
  *   category    parking | wifi | minibar | early-checkin | late-checkout |
- *               invoice-confirmation | invoice-missing
+ *               invoice-confirmation | invoice-confirmation-late |
+ *               invoice-missing
  *   name        guest's first name (default "Andrea")
  *   lang        ISO-639-1 code (default "cs")
  *   room        physical room name for wifi (default "K.202")
@@ -39,6 +40,7 @@ const PREVIEW_CATEGORIES = [
   'early-checkin',
   'late-checkout',
   'invoice-confirmation',
+  'invoice-confirmation-late',
   'invoice-missing',
 ] as const;
 type PreviewCategory = (typeof PREVIEW_CATEGORIES)[number];
@@ -64,12 +66,13 @@ export async function GET(req: NextRequest) {
 
   try {
     let rendered = '';
-    if (category === 'invoice-confirmation') {
+    if (category === 'invoice-confirmation' || category === 'invoice-confirmation-late') {
       rendered = await renderInvoiceConfirmation(
         firstName,
         'example@company.cz',
         '2026-06-15',
         language,
+        category === 'invoice-confirmation-late' ? 'after-checkout' : 'before-checkout',
       );
     } else if (category === 'invoice-missing') {
       const missing: InvoiceMandatory[] = ['companyName', 'companyId'];
