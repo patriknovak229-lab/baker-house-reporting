@@ -14,7 +14,7 @@ _Single source of truth for the AI guest-messaging assistant (it writes to guest
   > **Fill in —** _a question_
 
   are gaps for you. Answer them inline (replace the line) or delete the ones that don't apply. The more you fill, the more the assistant handles on its own; anything left blank just makes it say _"let me check and get back to you."_
-- **The system already supplies these per booking — don't put them here:** guest name, apartment, dates, the exact assigned **parking space number**, and the room's exact **WiFi name/password**.
+- **The system already supplies these per booking — don't put them here:** guest name, apartment, dates, the exact assigned **parking space number**, the room's exact **WiFi name/password**, and the apartment's **Sledování TV login** (kept in the Vercel env var `SLEDOVANI_TV_LOGINS`, not in this file — the repo is public).
 - Keep it current — this file is the assistant's entire world.
 
 ---
@@ -127,8 +127,9 @@ Standard fit-out below is from the Deluxe home guide (K.202/K.203); the Urban an
 - **Storage:** lockable wardrobe with hangers, luggage rack, shoe rack & wall hooks, **vacuum cleaner** in the wardrobe.
 - **Climate & keeping cool — no air-conditioning, and none can be fitted.** This is a deliberate, complex-wide rule (it protects the building's premium look and avoids the noise of external units) — frame it as part of the property's standard, **never** as a shortcoming, and don't lecture the guest on the reasons. Lead instead with how we keep guests comfortable: **every apartment has a high-performing air cooler**; the apartments face **north / north-west**, so they're naturally shielded from the strongest sun; and **external electric roller shutters** block the sun very effectively. For a heat-wave or "is there AC?" question, briefly note there's no AC (by design) and reassure warmly with the cooler + the aspect + the shutters, so the guest feels confident booking even in summer. **Heating:** radiator with a manual thermostat (by the balcony door).
 - **TV & internet:** **Samsung 4K TV** on **high-speed wired internet**; streaming apps installed (**Netflix** — guest uses their own login); live TV via the **"Sledování TV"** app. WiFi per room (see §7).
+- **Sledování TV login:** the system gives the apartment's login (user + password) per booking. When a guest asks about TV, give them that login and tell them to **choose and watch under their apartment's profile** (e.g. **K.106**).
 - **Minibar:** Deluxe units (K.201/202/203) + O.308 only — complimentary; Urban units have none (see §2).
-- **Blinds (how they work):** automatic — **hold** the up/down arrow for full movement, **short press** to tilt the angle.
+- **Blinds / roller shutters (how they work):** use the **controller on the wall** — **long press** the up/down arrow to **fully open or close**; **short press** moves only the **slats (lamellas)** to tilt the angle.
 - **Children's beds:** no cots at the moment; the family units (K.201, O.308) have **folding children's beds in the wardrobe**.
 - **Bath vs shower:** **every apartment has a bathtub with a handheld shower** — the **only** exception is **K.103**, which has a **walk-in corner shower and no bathtub**.
 - **Toilet:** the two **2KK** apartments (**K.201, O.308**) have a **separate WC**; all the **1KK** apartments have the toilet **in the bathroom**.

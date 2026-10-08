@@ -7,8 +7,8 @@
  *      source of truth, marked with prompt caching so the static prefix is
  *      cheap to reuse across messages in a conversation.
  *   2. The BOOKING facts — guest name, apartment(s), dates, the assigned
- *      parking space and the room's WiFi credentials (exact values the model
- *      must use verbatim, never guess).
+ *      parking space, the room's WiFi credentials and Sledování TV login
+ *      (exact values the model must use verbatim, never guess).
  *   3. The recent CONVERSATION so the reply understands follow-ups.
  *
  * Output is a ready-to-send reply (greeting + body + "— Zuzana"), or empty
@@ -21,6 +21,7 @@ import type { Reservation } from '@/types/reservation';
 import { getKnowledgeBase } from '@/utils/knowledgeBase';
 import type { ConversationMessage } from '@/utils/beds24Conversation';
 import { czechGreetingLine, repliesInCzech } from '@/utils/czechVocative';
+import { parseTvLogins, tvLoginFor } from '@/utils/sledovaniTv';
 
 const MODEL = 'claude-sonnet-4-6';
 const SIGN_OFF = '\n\n— Zuzana';
@@ -60,7 +61,7 @@ const RULES = `You ARE Zuzana, the host of Baker House Apartments in Brno. You w
 
 How to reply:
 - Use ONLY the facts in the KNOWLEDGE BASE below and the BOOKING facts that follow. If something isn't covered, warmly say you'll check and get back to them — NEVER invent amenities, prices, policies, or details.
-- Use the exact per-booking values you are given (parking space, WiFi name/password) verbatim. Never guess them; if a value isn't provided, say you'll send it.
+- Use the exact per-booking values you are given (parking space, WiFi name/password, Sledování TV login) verbatim. Never guess them; if a value isn't provided, say you'll send it.
 - Write your reply in CZECH. A Czech-speaking host reviews and edits it, and the system translates it into the guest's language before sending — so write naturally in Czech (it is not sent as-is unless the guest also writes Czech).
 - Tone: **polite, professional, kind and caring — but short and efficient.** Answer exactly what was asked in as few words as read naturally. No padding, no over-explaining, no extra offers or pleasantries the guest didn't ask for — usually 1–3 short sentences is plenty.
 - **Formal address, always.** Write in the formal register — in Czech that means **vykání** (Vy / Vám / Váš, "můžete", "dejte vědět"), NEVER tykání (ty / tobě / tvůj, "můžeš", "dej vědět") and never "Ahoj" / "Čau". This holds even if the guest writes informally.
@@ -110,6 +111,17 @@ function buildBookingBlock(input: ComposeInput): string {
       .map((rm) => `${rm} → network "Apartment_${roomCode(rm)}", password "Bakerhouse@${roomCode(rm)}"`)
       .join('  |  ');
     if (wifi) lines.push(`WiFi for this booking: ${wifi}`);
+    // Package bookings carry a combined room ("K.202 + K.203") — one login per unit.
+    const tvLogins = parseTvLogins(process.env.SLEDOVANI_TV_LOGINS);
+    const tv = rooms
+      .flatMap((rm) => rm.split('+').map((u) => u.trim()))
+      .filter(Boolean)
+      .flatMap((u) => {
+        const login = tvLoginFor(u, tvLogins);
+        return login ? [`${u} → user "${login.user}", password "${login.pass}", profile "${u}"`] : [];
+      })
+      .join('  |  ');
+    if (tv) lines.push(`Sledování TV login for this booking: ${tv}`);
   } else {
     lines.push('(Booking details unavailable — keep the reply general and offer to confirm specifics.)');
   }
