@@ -260,7 +260,9 @@ function autoSaveBlockers(extracted: ExtractedInvoiceData, original: SupplierInv
     currency: extracted.invoiceCurrency,
     documentType: extracted.documentType,
     vatBreakdown: extracted.vatBreakdown,
-    hasOriginalInvoice: !!original,
+    // The printed original number is enough: the list groups it under that invoice
+    // even when the credit note is imported before the invoice itself
+    hasOriginalInvoice: !!original || !!extracted.originalInvoiceNumber,
   }).map((i) => i.message);
 }
 

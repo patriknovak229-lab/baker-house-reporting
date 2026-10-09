@@ -81,7 +81,7 @@ interface CheckInput {
   currency?: string | null;
   documentType?: string | null;
   vatBreakdown?: VatRow[] | null;
-  /** Credit notes only: is it linked to (or does it name) the original invoice? */
+  /** Credit notes only: is it linked to, or does it print the number of, the original invoice? */
   hasOriginalInvoice?: boolean;
 }
 
@@ -166,7 +166,7 @@ export function checkInvoice(inv: CheckInput, today: Date = new Date()): Invoice
 
   // ── Credit-note link ──
   if (isCredit && !inv.hasOriginalInvoice) {
-    issues.push({ field: 'link', message: 'Credit note is not linked to its original invoice.' });
+    issues.push({ field: 'link', message: 'Credit note does not say which invoice it corrects — pick or type the original invoice.' });
   }
 
   return issues;

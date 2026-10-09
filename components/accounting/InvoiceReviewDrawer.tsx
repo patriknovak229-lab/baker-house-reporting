@@ -242,9 +242,9 @@ export default function InvoiceReviewDrawer({
       currency: invoiceCurrency,
       documentType,
       vatBreakdown: unchanged ? extracted?.vatBreakdown : null,
-      hasOriginalInvoice: !!relatedInvoiceId,
+      hasOriginalInvoice: !!relatedInvoiceId || !!originalInvoiceNumber.trim(),
     });
-  }, [amountCZK, vatAmountCZK, isCredit, extracted, supplierName, supplierICO, invoiceDate, invoiceCurrency, documentType, relatedInvoiceId]);
+  }, [amountCZK, vatAmountCZK, isCredit, extracted, supplierName, supplierICO, invoiceDate, invoiceCurrency, documentType, relatedInvoiceId, originalInvoiceNumber]);
 
   // Sync default category once categories load
   useEffect(() => {
