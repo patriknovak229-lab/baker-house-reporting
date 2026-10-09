@@ -26,25 +26,33 @@ export function parseDriveFileId(url?: string): string | null {
 }
 
 /** Get or create the shared invoices folder, caching the ID in Redis */
+/** Lowercase + strip diacritics so "Faktury Přijaté" == "Faktury Prijate". */
+function normName(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
 export async function getOrCreateInvoiceFolder(drive: drive_v3.Drive, redis: Redis): Promise<string> {
   const cached = await redis.get<string>(FOLDER_CACHE_KEY);
   if (cached) return cached;
 
-  const escaped = FOLDER_NAME.replace(/'/g, "\\'");
+  // List the parent's subfolders and match the "Přijaté/Prijate" (received = costs)
+  // one diacritic-insensitively — robust to exactly how the folder was named, and
+  // never picks the "Vydané" (issued/revenue) sibling.
   const search = await drive.files.list({
-    q: `name='${escaped}' and mimeType='application/vnd.google-apps.folder' and '${INVOICE_PARENT_ID}' in parents and trashed=false`,
+    q: `'${INVOICE_PARENT_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     fields: 'files(id,name)',
     spaces: 'drive',
+    pageSize: 100,
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
   });
-
-  if (search.data.files && search.data.files.length > 0) {
-    const id = search.data.files[0].id!;
-    await redis.set(FOLDER_CACHE_KEY, id);
-    return id;
+  const match = (search.data.files ?? []).find((f) => normName(f.name ?? '').includes('prijat'));
+  if (match?.id) {
+    await redis.set(FOLDER_CACHE_KEY, match.id);
+    return match.id;
   }
 
+  // Not found — create the canonical folder under the parent
   const folder = await drive.files.create({
     requestBody: { name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [INVOICE_PARENT_ID] },
     fields: 'id',
