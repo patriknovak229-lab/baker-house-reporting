@@ -87,6 +87,9 @@ export interface BankTransaction {
   costNote?: string;
   /** true when the user dismissed the auto-suggested invoice match ("not a match") — hides the list hint */
   suggestionDismissed?: boolean;
+  /** Set when Auto-match (button or CSV import) made the invoice link — the why, e.g.
+   *  "invoice no. on payment · exact amount · +2 d". Cleared by any manual change. */
+  autoMatchReason?: string;
   reconciledAt?: string;  // ISO timestamp
   ignoredAt?: string;     // ISO timestamp
   importedAt: string;     // ISO timestamp

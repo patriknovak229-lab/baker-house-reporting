@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import type { BankTransaction, BankTransactionDirection, BankTransactionState } from '@/types/bankTransaction';
-import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { matchesCostRule } from '@/types/bankCostWhitelist';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { readAllBankCostWhitelist } from '@/utils/bankCostWhitelistStore';
+import { findAutoMatches, learnCounterparties } from '@/utils/bankInvoiceMatch';
 
 /**
  * Collapse duplicate-id rows that predate the switch to the bank's unique
@@ -249,46 +249,6 @@ function parseKbCsv(csvText: string): BankTransaction[] {
   return results;
 }
 
-// ── Auto-reconciliation ──────────────────────────────────────────────────────
-
-function normStr(s: string): string {
-  return s.toLowerCase().trim();
-}
-
-/** Word-overlap name score (0–4): 4=exact, 3=mutual substring, 2=one-directional, 1=word overlap */
-function calcNameScore(txCounterparty: string, invSupplier: string): number {
-  const a = txCounterparty.toLowerCase().trim();
-  const b = invSupplier.toLowerCase().trim();
-  if (!a || !b) return 0;
-  if (a === b) return 4;
-  if (a.includes(b) && b.includes(a)) return 3;
-  if (a.includes(b) || b.includes(a)) return 2;
-  const aw = a.split(/\s+/), bw = b.split(/\s+/);
-  const overlap = aw.filter((w) => bw.some((bwi) => bwi.includes(w) || w.includes(bwi))).length;
-  return overlap > 0 ? 1 : 0;
-}
-
-/**
- * Returns true if the transaction is a confident match for the invoice.
- * Uses scored name matching (word-overlap, same as manual suggestion drawer).
- * Requires: amount within max(2, 1%) AND nameScore >= 2 OR VS match.
- */
-function isConfidentMatch(tx: BankTransaction, inv: SupplierInvoice): boolean {
-  const isForeign = inv.invoiceCurrency && inv.invoiceCurrency !== 'CZK';
-  const compareTo = isForeign ? (tx.originalAmount ?? tx.amount) : tx.amount;
-  const tolerance = Math.max(2, inv.amountCZK * 0.01);
-  if (Math.abs(compareTo - inv.amountCZK) > tolerance) return false;
-
-  const ns = calcNameScore(tx.counterpartyName ?? '', inv.supplierName);
-  const nameMatch = ns >= 2;
-
-  const vsMatch =
-    tx.variableSymbol &&
-    normStr(tx.variableSymbol) === normStr(inv.invoiceNumber);
-
-  return !!(nameMatch || vsMatch);
-}
-
 // ── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
@@ -341,12 +301,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ imported: 0, duplicates, autoReconciled: 0, autoClassified: 0, transactions: existing });
   }
 
-  // Load invoices for auto-reconciliation
   const invoices = await readAllSupplierInvoices();
-  // Only consider pending invoices with no existing bank link
-  const pendingInvoices = invoices.filter(
-    (inv) => inv.status === 'pending' && !inv.bankTransactionId,
-  );
 
   // Recurring-cost whitelist — auto-classify contractual standing orders (rent, parking)
   const costRules = await readAllBankCostWhitelist();
@@ -356,43 +311,40 @@ export async function POST(request: Request) {
   let autoClassified = 0;
   const updatedInvoices = [...invoices];
 
+  // Whitelist wins over invoice matching — these payments never have an invoice.
   for (const tx of newTxs) {
     if (tx.direction !== 'debit') continue;
-
-    // Whitelist wins over invoice matching — these payments never have an invoice.
     const rule = costRules.find((r) => matchesCostRule(tx, r));
     if (rule) {
       tx.state = 'recurring_cost';
       tx.costCategory = rule.costCategory;
       tx.ignoredAt = now;
       autoClassified++;
-      continue;
     }
+  }
 
-    const matches = pendingInvoices.filter((inv) => isConfidentMatch(tx, inv));
-    if (matches.length === 1) {
-      const inv = matches[0];
-      tx.state = 'reconciled';
-      tx.invoiceId = inv.id;
-      tx.invoiceIds = [inv.id];
-      tx.reconciledAt = now;
+  // Invoice matching for the NEW rows only (the Auto-match button covers older
+  // ones). Older unmatched debits still take part as rivals, so a new row can't
+  // grab an invoice that is just as likely an older payment's.
+  const newIds = new Set(newTxs.map((t) => t.id));
+  const matches = findAutoMatches(
+    [...existing, ...newTxs],
+    invoices,
+    learnCounterparties(existing, invoices),
+  ).filter((m) => newIds.has(m.tx.id));
 
-      // Update invoice in the working copy
-      const idx = updatedInvoices.findIndex((i) => i.id === inv.id);
-      if (idx !== -1) {
-        updatedInvoices[idx] = {
-          ...updatedInvoices[idx],
-          status: 'reconciled',
-          bankTransactionId: tx.id,
-          reconciledAt: now,
-        };
-      }
-      // Remove from pendingInvoices so the same invoice can't match twice
-      const piIdx = pendingInvoices.findIndex((i) => i.id === inv.id);
-      if (piIdx !== -1) pendingInvoices.splice(piIdx, 1);
+  for (const { tx, invoice, reason } of matches) {
+    tx.state = 'reconciled';
+    tx.invoiceId = invoice.id;
+    tx.invoiceIds = [invoice.id];
+    tx.reconciledAt = now;
+    tx.autoMatchReason = reason;
 
-      autoReconciled++;
+    const idx = updatedInvoices.findIndex((i) => i.id === invoice.id);
+    if (idx !== -1) {
+      updatedInvoices[idx] = { ...updatedInvoices[idx], status: 'reconciled', bankTransactionId: tx.id, reconciledAt: now };
     }
+    autoReconciled++;
   }
 
   const allTransactions = [...existing, ...newTxs];

@@ -45,6 +45,7 @@ export const bankTransactions = pgTable('bank_transactions', {
   costCategory: text('cost_category').$type<RecurringCostCategoryId>(),
   costNote: text('cost_note'),
   suggestionDismissed: boolean('suggestion_dismissed'),
+  autoMatchReason: text('auto_match_reason'),
   reconciledAt: timestamp('reconciled_at', { withTimezone: true, mode: 'date' }),
   ignoredAt: timestamp('ignored_at', { withTimezone: true, mode: 'date' }),
   importedAt: timestamp('imported_at', { withTimezone: true, mode: 'date' }).notNull(),

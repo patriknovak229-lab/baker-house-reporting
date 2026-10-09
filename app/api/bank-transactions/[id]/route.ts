@@ -55,6 +55,8 @@ export async function PUT(
 
   const tx = { ...transactions[txIdx] };
   const now = new Date().toISOString();
+  // Any manual decision replaces an Auto-match link — drop its "why" tag.
+  if (body.action !== 'note' && body.action !== 'dismiss_suggestion') tx.autoMatchReason = undefined;
 
   if (body.action === 'reconcile') {
     // Accept a single invoiceId (legacy) or an invoiceIds[] (split-delivery: one

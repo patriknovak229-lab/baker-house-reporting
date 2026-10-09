@@ -5,7 +5,7 @@ import { IGNORE_CATEGORIES, RECURRING_COST_CATEGORIES } from '@/types/bankTransa
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatCurrency, formatDate } from '@/utils/formatters';
-import { findSuggestion } from '@/utils/reconcileSuggest';
+import { findSuggestion, learnCounterparties } from '@/utils/bankInvoiceMatch';
 
 type SortCol = 'date' | 'counterparty' | 'amount';
 type SortDir = 'asc' | 'desc';
@@ -58,15 +58,16 @@ export default function BankTransactionList({
 
   // Per-row suggested invoice match (unmatched debits only, unless already dismissed)
   const suggestions = useMemo(() => {
+    const memory = learnCounterparties(allTransactions, invoices);
     const m = new Map<string, SupplierInvoice>();
     for (const tx of transactions) {
       if (tx.direction === 'debit' && tx.state === 'unmatched' && !tx.suggestionDismissed) {
-        const s = findSuggestion(tx, invoices);
+        const s = findSuggestion(tx, invoices, memory);
         if (s) m.set(tx.id, s);
       }
     }
     return m;
-  }, [transactions, invoices]);
+  }, [transactions, allTransactions, invoices]);
 
   function toggleSort(col: SortCol) {
     if (sortCol === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -298,6 +299,10 @@ export default function BankTransactionList({
                   ) : linkedInvoice ? (
                     <span className="text-xs text-gray-700">
                       {linkedInvoice.invoiceNumber} · {linkedInvoice.supplierName}
+                      {tx.state === 'reconciled' && tx.autoMatchReason && (
+                        <span className="ml-1.5 px-1.5 py-px rounded bg-indigo-50 text-indigo-500 text-[10px] font-medium align-middle"
+                          title={`Auto-matched: ${tx.autoMatchReason}`}>auto</span>
+                      )}
                     </span>
                   ) : linkedTx ? (
                     <span className="text-xs text-teal-700">

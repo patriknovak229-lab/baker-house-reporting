@@ -5,6 +5,7 @@ import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
 import { getOrCreateInvoiceFolder } from '@/utils/driveInvoice';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { readDriveScanSkipList } from '@/data-access/driveScanSkip';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
@@ -59,6 +60,8 @@ export async function POST() {
     if (inv.driveFileId) seen.add(inv.driveFileId);
     if (inv.driveSourceFileId) seen.add(inv.driveSourceFileId);
   }
+  // …plus PDFs of invoices deliberately removed from the ledger
+  for (const e of await readDriveScanSkipList()) seen.add(e.fileId);
 
   const rootId = await getOrCreateInvoiceFolder(drive, redis);
 

@@ -5,7 +5,7 @@ import { IGNORE_CATEGORIES, RECURRING_COST_CATEGORIES } from '@/types/bankTransa
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatAmount, formatDate, formatCurrency } from '@/utils/formatters';
-import { findSuggestion } from '@/utils/reconcileSuggest';
+import { findSuggestion, learnCounterparties } from '@/utils/bankInvoiceMatch';
 
 interface Props {
   transaction: BankTransaction;
@@ -16,8 +16,6 @@ interface Props {
   onGroupSave: (group: SettlementGroup | null, isNew: boolean) => void;
   onClose: () => void;
 }
-
-// findSuggestion moved to utils/reconcileSuggest.ts (shared with BankTransactionList)
 
 /** Render a small label+value detail row */
 function Detail({ label, value }: { label: string; value?: string | null }) {
@@ -35,7 +33,10 @@ type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement' | 'set
 
 export default function ReconcileDrawer({ transaction: tx, transactions, invoices, groups, onSave, onGroupSave, onClose }: Props) {
   const isCredit  = tx.direction === 'credit';
-  const suggestion = useMemo(() => (!isCredit ? findSuggestion(tx, invoices) : null), [tx, invoices, isCredit]);
+  const suggestion = useMemo(
+    () => (!isCredit ? findSuggestion(tx, invoices, learnCounterparties(transactions, invoices)) : null),
+    [tx, transactions, invoices, isCredit],
+  );
   // Invoices already linked to this debit (single legacy id or split-delivery array)
   const linkedIds = useMemo(
     () => (tx.invoiceIds?.length ? tx.invoiceIds : (tx.invoiceId ? [tx.invoiceId] : [])),
@@ -325,6 +326,9 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             <Detail label="My note"          value={tx.myDescription} />
             {tx.state === 'reconciled' && tx.reconciledAt && (
               <Detail label="Reconciled at" value={new Date(tx.reconciledAt).toLocaleString('cs-CZ')} />
+            )}
+            {tx.state === 'reconciled' && (
+              <Detail label="Auto-matched" value={tx.autoMatchReason} />
             )}
             {(tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'recurring_cost') && tx.ignoredAt && (
               <Detail label="Tagged at" value={new Date(tx.ignoredAt).toLocaleString('cs-CZ')} />

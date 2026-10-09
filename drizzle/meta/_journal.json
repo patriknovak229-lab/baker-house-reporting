@@ -127,6 +127,13 @@
       "when": 1791559674249,
       "tag": "0017_acoustic_vivisector",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791577686211,
+      "tag": "0018_stormy_korath",
+      "breakpoints": true
     }
   ]
 }

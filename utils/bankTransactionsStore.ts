@@ -8,7 +8,7 @@
  * loads the DB client. Preserves the routes' whole-array read-modify-write.
  *
  * HARD-RULE domain — storage swap only. Reconciliation math (utils/paymentReconcile,
- * bank-transactions reconcile/[id]/import, reconcileSuggest) reads this list
+ * bank-transactions reconcile/[id]/import, bankInvoiceMatch) reads this list
  * through readAll unchanged. Co-located keys stay on their own stores:
  * supplier_invoices, revenue_invoices, settlement_groups, commission_settlements
  * (migrated stores); bank_cost_whitelist (its own store); reservation_overrides
