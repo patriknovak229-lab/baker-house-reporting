@@ -1,36 +1,11 @@
 import { NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import { requireRole } from '@/utils/authGuard';
-import { SUPPLIER_KNOWLEDGE } from '@/utils/supplierKnowledge';
-import type { ExtractedInvoiceData } from '@/types/supplierInvoice';
+import { readAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
+import { extractInvoice, ExtractionError } from '@/utils/invoiceExtraction';
 
-const EXTRACTION_PROMPT = `Extract structured data from this supplier invoice or fee statement (Czech or English).
-Return ONLY valid JSON, no other text:
-{
-  "supplierName": string or null,
-  "supplierICO": string or null,
-  "invoiceNumber": string or null,
-  "invoiceDate": "YYYY-MM-DD" or null,
-  "dueDate": "YYYY-MM-DD" or null,
-  "totalAmount": number or null,
-  "invoiceCurrency": "CZK"|"USD"|"EUR"|"GBP" or null,
-  "vatAmount": number or null,
-  "suggestedCategory": one of "cleaning"|"laundry"|"consumables"|"utilities"|"software"|"maintenance"|"other" or null,
-  "lineItems": [{"description": string, "amount": number}] or null
-}
-totalAmount: the total amount payable including VAT. READ the printed grand total exactly as shown (e.g. "Celková částka", "CELKEM", "K zaplacení celkem", "Total amount") — do NOT recompute it by summing line items or adding base + VAT yourself; the printed total is authoritative and line-item rounding will differ. Exception: multi-row fee statements with no single applicable total (e.g. Airbnb) — sum the rows per the lineItems rule below. Extract the number as shown, regardless of currency.
-vatAmount: the total VAT (DPH) charged on the document. Look for "DPH", "Výše DPH", "částka daně", "DPH celkem", or a "Rekapitulace DPH" / VAT-recap table. If VAT is split across multiple rates (e.g. 12% and 21%), SUM the per-rate VAT into one total. READ the printed figure — do NOT compute it from base × rate. Use null when the document shows no Czech VAT (e.g. a reverse-charge / foreign supplier, or a simplified receipt with no DPH line).
-invoiceCurrency: the currency of the invoice (CZK, USD, EUR, GBP, etc.).
-lineItems: If the document is a fee statement or service summary with a table of multiple reservations or transactions each with an individual fee amount (e.g. an Airbnb monthly service fee statement), extract each row as a lineItem with description (reservation reference or guest name) and amount (the fee for that row). Set totalAmount to the SUM of all row fees — do NOT use any pre-printed grand total which may include VAT or other charges. If there is only one total with no per-row breakdown, set lineItems to null.
-If a field cannot be determined, use null.`;
-
-/** Generic prompt + per-supplier guidance from the knowledge base (utils/supplierKnowledge.ts) */
-const FULL_PROMPT = `${EXTRACTION_PROMPT}
-
-SUPPLIER-SPECIFIC GUIDANCE
-If this invoice is from one of the suppliers below (match by supplier name or IČO), apply its notes in addition to the rules above. If the supplier is not listed, ignore this section.
-${SUPPLIER_KNOWLEDGE}`;
+// Opus extraction takes ~3–8 s per document; headroom for long multi-page PDFs
+export const maxDuration = 60;
 
 const CLAUDE_MAX_BYTES = 4.5 * 1024 * 1024; // 4.5 MB — leave headroom under the 5 MB API limit
 
@@ -100,75 +75,19 @@ export async function POST(request: Request) {
     } catch { /* leave buffer as-is — Claude will reject if truly too large */ }
   }
 
-  const base64 = buffer.toString('base64');
-  const client = new Anthropic({ apiKey });
-  let content: Anthropic.MessageParam['content'];
-
-  if (mediaType === 'application/pdf') {
-    content = [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-      { type: 'text', text: FULL_PROMPT },
-    ];
-  } else if (mediaType.startsWith('image/')) {
-    const SUPPORTED = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    const imgType = SUPPORTED.includes(mediaType)
-      ? (mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp')
-      : 'image/jpeg';
-    content = [
-      { type: 'image', source: { type: 'base64', media_type: imgType, data: base64 } },
-      { type: 'text', text: FULL_PROMPT },
-    ];
-  } else {
+  if (mediaType !== 'application/pdf' && !mediaType.startsWith('image/')) {
     return NextResponse.json({ error: 'Unsupported file type. Upload a PDF or image.' }, { status: 400 });
   }
 
-  const message = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 2048,
-    messages: [{ role: 'user', content }],
-  });
-
-  const rawText = message.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b as { type: 'text'; text: string }).text)
-    .join('');
-
-  let extracted: ExtractedInvoiceData;
   try {
-    const jsonText = rawText.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim();
-    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-    const rawLineItems = Array.isArray(parsed.lineItems) ? parsed.lineItems : null;
-    const lineItems = rawLineItems
-      ? rawLineItems
-          .filter((item): item is { description: string; amount: number } =>
-            item !== null &&
-            typeof item === 'object' &&
-            typeof (item as Record<string, unknown>).description === 'string' &&
-            typeof (item as Record<string, unknown>).amount === 'number',
-          )
-          .map((item) => ({ description: item.description, amount: item.amount }))
-      : null;
-
-    // If lineItems were extracted, use their sum as the canonical amount
-    const lineItemSum = lineItems && lineItems.length > 0
-      ? lineItems.reduce((s, i) => s + i.amount, 0)
-      : null;
-
-    extracted = {
-      supplierName: typeof parsed.supplierName === 'string' ? parsed.supplierName : null,
-      supplierICO: typeof parsed.supplierICO === 'string' ? parsed.supplierICO : null,
-      invoiceNumber: typeof parsed.invoiceNumber === 'string' ? parsed.invoiceNumber : null,
-      invoiceDate: typeof parsed.invoiceDate === 'string' ? parsed.invoiceDate : null,
-      dueDate: typeof parsed.dueDate === 'string' ? parsed.dueDate : null,
-      amountCZK: lineItemSum ?? (typeof parsed.totalAmount === 'number' ? parsed.totalAmount : null),
-      vatAmountCZK: typeof parsed.vatAmount === 'number' ? parsed.vatAmount : null,
-      invoiceCurrency: typeof parsed.invoiceCurrency === 'string' ? parsed.invoiceCurrency : null,
-      suggestedCategory: typeof parsed.suggestedCategory === 'string' ? parsed.suggestedCategory : null,
-      lineItems: lineItems && lineItems.length > 0 ? lineItems : null,
-    };
-  } catch {
-    return NextResponse.json({ error: 'Failed to parse extraction response', raw: rawText }, { status: 502 });
+    const categories = await readAllInvoiceCategories();
+    const extracted = await extractInvoice({ data: buffer, mediaType, fileName: file.name, categories });
+    return NextResponse.json(extracted);
+  } catch (err) {
+    if (err instanceof ExtractionError) {
+      return NextResponse.json({ error: err.message, raw: err.raw }, { status: err.status });
+    }
+    console.error('Invoice extraction failed:', err);
+    return NextResponse.json({ error: 'Invoice extraction failed' }, { status: 502 });
   }
-
-  return NextResponse.json(extracted);
 }

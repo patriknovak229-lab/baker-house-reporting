@@ -4,6 +4,7 @@ import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { normalizeInvoiceAmounts } from '@/utils/invoiceChecks';
 
 export async function PUT(
   request: Request,
@@ -20,7 +21,7 @@ export async function PUT(
   const idx = invoices.findIndex((inv) => inv.id === id);
   if (idx === -1) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  invoices[idx] = { ...invoices[idx], ...updates, id };
+  invoices[idx] = normalizeInvoiceAmounts({ ...invoices[idx], ...updates, id });
   await writeAllSupplierInvoices(invoices);
 
   return NextResponse.json(invoices[idx]);

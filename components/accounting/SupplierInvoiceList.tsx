@@ -4,6 +4,7 @@ import type { SupplierInvoice, SupplierInvoiceStatus } from '@/types/supplierInv
 import { formatCurrency, formatAmount } from '@/utils/formatters';
 import { useCategories } from './useCategories';
 import { textColorFor } from '@/utils/categoryColors';
+import { findOriginalInvoice } from '@/utils/invoiceChecks';
 
 // ── Source icons ──────────────────────────────────────────────────────────────
 function SourceIcon({ source }: { source: SupplierInvoice['sourceType'] }) {
@@ -129,6 +130,27 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
     return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
   });
 
+  // Credit notes (dobropisy) render nested under the invoice they correct — linked
+  // explicitly, or by the original invoice number printed on the credit note.
+  const parentOf = new Map<string, string>();
+  for (const inv of sorted) {
+    if (inv.documentType !== 'credit_note') continue;
+    const parent = (inv.relatedInvoiceId && sorted.find((p) => p.id === inv.relatedInvoiceId)) ||
+      findOriginalInvoice(inv.supplierName, inv.supplierICO, inv.originalInvoiceNumber, sorted);
+    if (parent) parentOf.set(inv.id, parent.id);
+  }
+  const creditNotesOf = new Map<string, SupplierInvoice[]>();
+  for (const [childId, parentId] of parentOf) {
+    const child = sorted.find((i) => i.id === childId)!;
+    creditNotesOf.set(parentId, [...(creditNotesOf.get(parentId) ?? []), child]);
+  }
+  const rows: Array<{ inv: SupplierInvoice; nested: boolean }> = [];
+  for (const inv of sorted) {
+    if (parentOf.has(inv.id)) continue;
+    rows.push({ inv, nested: false });
+    for (const child of creditNotesOf.get(inv.id) ?? []) rows.push({ inv: child, nested: true });
+  }
+
   const SortArrow = ({ col }: { col: SortCol }) => (
     <span className="ml-0.5 text-[10px] opacity-60">
       {sortCol === col ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
@@ -177,13 +199,19 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {sorted.map((inv) => (
+            {rows.map(({ inv, nested }) => {
+              const isCredit = inv.documentType === 'credit_note';
+              const credits = creditNotesOf.get(inv.id) ?? [];
+              const net = inv.amountCZK + credits.reduce((s, c) => s + c.amountCZK, 0);
+              return (
               <tr
                 key={inv.id}
-                className="hover:bg-gray-50 group cursor-pointer"
+                className={`hover:bg-gray-50 group cursor-pointer ${nested ? 'bg-rose-50/40' : ''}`}
                 onClick={() => onEdit(inv)}
               >
-                <td className="py-2.5 px-3 text-gray-700 whitespace-nowrap">{inv.invoiceDate}</td>
+                <td className={`py-2.5 px-3 text-gray-700 whitespace-nowrap ${nested ? 'pl-8' : ''}`}>
+                  {nested && <span className="text-rose-400 mr-1">↳</span>}{inv.invoiceDate}
+                </td>
                 <td className="py-2.5 px-3 text-gray-500 whitespace-nowrap text-xs">
                   {inv.dueDate ?? <span className="text-gray-300">—</span>}
                 </td>
@@ -191,7 +219,14 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
                   <div className="font-medium text-gray-800">{inv.supplierName}</div>
                   {inv.supplierICO && <div className="text-xs text-gray-400">IČO {inv.supplierICO}</div>}
                 </td>
-                <td className="py-2.5 px-3 text-gray-600 font-mono text-xs">{inv.invoiceNumber}</td>
+                <td className="py-2.5 px-3 text-gray-600 font-mono text-xs">
+                  {inv.invoiceNumber}
+                  {isCredit && (
+                    <div className="font-sans text-[11px] text-rose-600 font-medium">
+                      Credit note{inv.originalInvoiceNumber && !nested ? ` for #${inv.originalInvoiceNumber}` : ''}
+                    </div>
+                  )}
+                </td>
                 <td className="py-2.5 px-3">
                   {(() => {
                     const cat = categories.find((c) => c.id === inv.category);
@@ -206,8 +241,13 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
                     );
                   })()}
                 </td>
-                <td className="py-2.5 px-3 text-right font-medium text-gray-800 whitespace-nowrap">
+                <td className={`py-2.5 px-3 text-right font-medium whitespace-nowrap ${isCredit ? 'text-rose-600' : 'text-gray-800'}`}>
                   {formatAmount(inv.amountCZK, inv.invoiceCurrency)}
+                  {credits.length > 0 && (
+                    <div className="text-[11px] font-normal text-gray-500">
+                      net {formatAmount(net, inv.invoiceCurrency)} after {credits.length} return{credits.length !== 1 ? 's' : ''}
+                    </div>
+                  )}
                 </td>
                 <td className="py-2.5 px-3 text-center">
                   <StatusBadge status={inv.status} settlementGroupId={inv.settlementGroupId} />
@@ -248,7 +288,8 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
           <tfoot>
             <tr className="border-t border-gray-200 bg-gray-50">

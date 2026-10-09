@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { findDuplicateInvoice, normalizeInvoiceAmounts } from '@/utils/invoiceChecks';
 
 export async function GET() {
   const guard = await requireRole(['admin', 'accountant']);
@@ -26,26 +27,18 @@ export async function POST(request: Request) {
 
   const invoices = await readAllSupplierInvoices();
 
-  // Duplicate check (skipped when force === true or when updating an existing invoice by same id)
+  // Duplicate check (skipped when force === true or when updating an existing invoice by same id).
+  // Same supplier (name or IČO) AND same number — or same date + amount, which catches a receipt
+  // re-imported under a different / placeholder number.
   if (!body.force) {
-    const norm = (s?: string) => (s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
-    const normIco = (s?: string) => (s ?? '').toLowerCase().replace(/\s+/g, '');
-    const invNo = norm(body.invoiceNumber);
-    const bodyIco = normIco(body.supplierICO);
-    // Same invoice number AND same supplier (by name OR IČO — robust against OCR
-    // variance in the name when the same receipt is re-photographed/re-imported).
-    const dup = invoices.find(
-      (i) => i.id !== body.id &&
-             norm(i.invoiceNumber) === invNo &&
-             (norm(i.supplierName) === norm(body.supplierName) ||
-              (!!bodyIco && normIco(i.supplierICO) === bodyIco)),
-    );
+    const dup = findDuplicateInvoice(body, invoices);
     if (dup) return NextResponse.json({ code: 'duplicate', existing: dup }, { status: 409 });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { force: _force, ...invoiceBody } = body;
-  invoices.push(invoiceBody as SupplierInvoice);
+  const { force: _force, ...rest } = body;
+  const invoiceBody = normalizeInvoiceAmounts(rest as SupplierInvoice);
+  invoices.push(invoiceBody);
   await writeAllSupplierInvoices(invoices);
 
   return NextResponse.json(invoiceBody, { status: 201 });

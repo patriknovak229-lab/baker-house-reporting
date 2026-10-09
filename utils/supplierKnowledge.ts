@@ -17,10 +17,14 @@
  *     - category: <one of: cleaning | laundry | consumables | utilities | software | maintenance | other>
  *
  *   Keep it tight: only note the quirks that the generic prompt gets wrong.
+ *
+ *   Supplier identity + category for the main recurring suppliers is ALSO
+ *   enforced in code (utils/supplierRegistry.ts) — that wins over the category
+ *   lines here.
  */
 export const SUPPLIER_KNOWLEDGE = `
 ## Airbnb   (Airbnb Ireland UC)
-- Monthly service-fee statement, not a single-item invoice.
+- Monthly service-fee statement, not a single-item invoice: documentType "fee_statement".
 - Extract each reservation row as a lineItem {description, amount}; set totalAmount to the SUM of the row fees. Do NOT use any pre-printed grand total (it may include VAT or unrelated charges).
 - category: other
 
@@ -37,6 +41,7 @@ export const SUPPLIER_KNOWLEDGE = `
 ## Alza.cz a.s.   (IČO 27082440)
 - totalAmount: the final amount payable including VAT ("Celkem k úhradě" / "Celkem s DPH").
 - invoiceNumber: the document number ("Faktura č." / "Daňový doklad č.").
+- RETURNS: Alza issues a separate credit note ("Dobropis" / "Opravný daňový doklad") for each returned item. documentType: "credit_note"; totalAmount and vatAmount = the credited amounts as positive numbers; invoiceNumber = the credit note's own number; originalInvoiceNumber = the number of the original Alza invoice it corrects.
 - category: consumables
 
 ## Temu   (online marketplace; no supplier IČO on the document)
@@ -51,8 +56,11 @@ export const SUPPLIER_KNOWLEDGE = `
 - category: consumables
 
 ## Action Retail Czech s.r.o.   (IČO 03439747, verified in ARES)
-- Household / consumables discount store; receipts/branding may show just "Action". Total and VAT extract correctly.
+- Household / consumables discount store; receipts/branding may show just "Action". supplierName: "Action Retail Czech s.r.o.". documentType: "receipt".
 - supplierICO: ALWAYS 03439747 (digits only, no spaces). Purchases up to 10 000 CZK are issued as a simplified tax document (zjednodušený daňový doklad) that legally need not print the IČO — set 03439747 even when it is not shown on the receipt.
+- Digital e-receipt (PDF from the Action app): store address, then a date WITHOUT a year, e.g. "Středa 19. srpna v 12:12" → invoiceDateHasYear false, invoiceWeekday "Wednesday", invoiceDate with your best-guess year (code fixes the year from the weekday).
+- invoiceNumber: the "Číslo transakce" value (e.g. B08010210241953). It is ALWAYS present on the e-receipt — never return null. Do NOT use the long return barcode number under "Čárový kód pro výměnu nebo vrácení" (e.g. B08010226231121132999932). On older paper receipts use the printed receipt / doklad number.
+- totalAmount: "Celkem" (e.g. 2 916,20). vatAmount: the "Celkem" row of "Přehled DPH" (e.g. 495,52). vatBreakdown: the 12 % and 21 % rows of "Přehled DPH" (columns DPH, Bez = base, Včetně = gross).
 - category: consumables
 
 ## MAKRO Cash & Carry CR s.r.o.   (IČ 26450691, DIČ CZ26450691)
@@ -83,7 +91,7 @@ export const SUPPLIER_KNOWLEDGE = `
 - invoiceNumber: "Číslo faktury" (e.g. CZINV26000001062081) — NOT "Číslo objednávky" (order number).
 - invoiceDate: "Datum vystavení". vatAmount: "DPH" (21%).
 - supplierICO: the Dodavatel (Seller) IČ 27081052 — NOT the Odběratel (Buyer) IČ 19876106 (that is us).
-- category: other
+- category: equipment
 
 ## RYWA s.r.o.   (IČ 07092644, DIČ CZ07092644)
 - Monthly internet + TV invoice ("FAKTURA - daňový doklad", Money S4 system). Recurring, same shape every month.

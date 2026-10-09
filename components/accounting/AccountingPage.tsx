@@ -17,6 +17,8 @@ import { useCategories } from './useCategories';
 import { formatCurrency } from '@/utils/formatters';
 import { prepareImageFile } from '@/utils/imageCompressor';
 import { textColorFor } from '@/utils/categoryColors';
+import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
+import { checkInvoice, findDuplicateInvoice, findOriginalInvoice } from '@/utils/invoiceChecks';
 import BankPage from './BankPage';
 import RevenuePage from './RevenuePage';
 import StatementsPage from './StatementsPage';
@@ -183,49 +185,70 @@ function enrichFromHistory(
   };
 }
 
-/** Match extracted supplier name against whitelist (case-insensitive, trimmed) */
+/**
+ * Match an extracted supplier against the whitelist — by name, by IČO, or by
+ * being the same known supplier (utils/supplierRegistry) — so "ACTION",
+ * "Action Retail Czech s.r.o." and IČO 03439747 all hit the same entry.
+ */
 function matchWhitelist(
   supplierName: string | null,
   supplierICO: string | null | undefined,
   whitelist: WhitelistedSupplier[],
 ): WhitelistedSupplier | null {
   const name = supplierName?.trim().toLowerCase();
-  const ico = (supplierICO ?? '').toLowerCase().replace(/\s+/g, '');
-  // Match by name OR IČO — IČO is stable across a supplier's invoices, so it
-  // catches them even when the extracted name varies ("ACTION" vs "Action Retail Czech s.r.o.").
+  const ico = normalizeIco(supplierICO);
+  const known = findKnownSupplier(supplierName, supplierICO);
   return whitelist.find((w) =>
     (!!name && w.supplierName.trim().toLowerCase() === name) ||
-    (!!ico && !!w.supplierICO && w.supplierICO.toLowerCase().replace(/\s+/g, '') === ico),
+    (!!ico && !!w.supplierICO && normalizeIco(w.supplierICO) === ico) ||
+    (!!known && findKnownSupplier(w.supplierName, w.supplierICO)?.id === known.id),
   ) ?? null;
 }
 
 /**
- * Find an already-saved invoice matching the extracted one — same invoice number
- * AND same supplier (by name OR IČO). Used to auto-skip re-uploads of invoices
+ * Find an already-saved invoice matching the extracted one (same supplier and
+ * same number, or same date + amount). Used to auto-skip re-uploads of invoices
  * already in the system (e.g. re-scanning a folder that still holds old receipts).
  */
 function findDuplicate(extracted: ExtractedInvoiceData, invoices: SupplierInvoice[]): SupplierInvoice | null {
-  if (!extracted.invoiceNumber || !extracted.supplierName) return null;
-  const norm = (s: string | null | undefined) => (s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
-  const normIco = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/\s+/g, '');
-  const invNo = norm(extracted.invoiceNumber);
-  const name = norm(extracted.supplierName);
-  const ico = normIco(extracted.supplierICO);
-  return invoices.find((i) =>
-    norm(i.invoiceNumber) === invNo &&
-    (norm(i.supplierName) === name || (!!ico && normIco(i.supplierICO) === ico)),
-  ) ?? null;
+  if (!extracted.supplierName || extracted.amountCZK == null) return null;
+  return findDuplicateInvoice({
+    id: '',
+    supplierName: extracted.supplierName,
+    supplierICO: extracted.supplierICO,
+    invoiceNumber: extracted.invoiceNumber ?? '',
+    invoiceDate: extracted.invoiceDate ?? '',
+    amountCZK: extracted.amountCZK,
+    documentType: extracted.documentType,
+  }, invoices);
 }
 
-/** Check all required fields are present for auto-save */
-function canAutoSave(extracted: ExtractedInvoiceData): boolean {
-  return !!(
-    extracted.supplierName &&
-    extracted.invoiceNumber &&
-    extracted.invoiceDate &&
-    extracted.amountCZK != null &&
-    extracted.amountCZK > 0
-  );
+/** The original invoice an extracted credit note refers to, if it is already saved */
+function originalFor(extracted: ExtractedInvoiceData, invoices: SupplierInvoice[]): SupplierInvoice | null {
+  if (extracted.documentType !== 'credit_note') return null;
+  return findOriginalInvoice(extracted.supplierName, extracted.supplierICO, extracted.originalInvoiceNumber, invoices);
+}
+
+/**
+ * Whitelisted invoices are saved without review only when every required field
+ * is present AND all sanity checks pass (VAT 12/21 %, plausible date, not our
+ * own IČO, credit note linked …). Anything else opens the review drawer.
+ */
+function canAutoSave(extracted: ExtractedInvoiceData, original: SupplierInvoice | null): boolean {
+  if (!extracted.supplierName || !extracted.invoiceNumber || !extracted.invoiceDate || extracted.amountCZK == null) {
+    return false;
+  }
+  return checkInvoice({
+    supplierName: extracted.supplierName,
+    supplierICO: extracted.supplierICO,
+    invoiceDate: extracted.invoiceDate,
+    amount: extracted.amountCZK,
+    vat: extracted.vatAmountCZK,
+    currency: extracted.invoiceCurrency,
+    documentType: extracted.documentType,
+    vatBreakdown: extracted.vatBreakdown,
+    hasOriginalInvoice: !!original,
+  }).length === 0;
 }
 
 export default function AccountingPage() {
@@ -376,7 +399,12 @@ export default function AccountingPage() {
       amountCZK: extracted.amountCZK!,
       vatAmountCZK: extracted.vatAmountCZK ?? undefined,
       invoiceCurrency: extracted.invoiceCurrency && extracted.invoiceCurrency !== 'CZK' ? extracted.invoiceCurrency : undefined,
-      category: matched.category,
+      duzpDate: extracted.duzpDate ?? undefined,
+      documentType: extracted.documentType === 'credit_note' ? 'credit_note' : undefined,
+      originalInvoiceNumber: extracted.originalInvoiceNumber ?? undefined,
+      relatedInvoiceId: originalFor(extracted, invoicesRef.current)?.id,
+      // Known suppliers (utils/supplierRegistry) carry a fixed category that wins over the whitelist entry
+      category: extracted.knownSupplierId && extracted.suggestedCategory ? extracted.suggestedCategory : matched.category,
       status: 'pending',
       sourceType: invoiceSourceType,
       gmailMessageId,
@@ -405,6 +433,7 @@ export default function AccountingPage() {
         sourceType: invoiceSourceType,
         gmailMessageId,
         icloudFileName,
+        driveSourceFileId,
         duplicateOf: data.existing,
       });
       return;
@@ -458,7 +487,7 @@ export default function AccountingPage() {
         }
         // Check whitelist
         const matched = matchWhitelist(extracted.supplierName, extracted.supplierICO, whitelistRef.current);
-        if (matched && canAutoSave(extracted)) {
+        if (matched && canAutoSave(extracted, originalFor(extracted, invoicesRef.current))) {
           setExtracting(false);
           await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId, next.sourceType ?? 'email', next.icloudFileName, next.driveSourceFileId);
           // Continue with next item
@@ -1015,6 +1044,7 @@ export default function AccountingPage() {
           driveSourceFileId={drawerState.driveSourceFileId}
           extractionFailed={drawerState.extractionFailed}
           duplicateOf={drawerState.duplicateOf}
+          invoices={invoices}
           onSave={handleSave}
           onSaveAndWhitelist={drawerState.existing ? undefined : handleSaveAndWhitelist}
           onClose={handleDrawerClose}

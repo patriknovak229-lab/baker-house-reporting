@@ -1,12 +1,15 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import type {
   SupplierInvoice,
   SupplierInvoiceSource,
+  SupplierDocumentType,
   ExtractedInvoiceData,
   ExtractedLineItem,
 } from '@/types/supplierInvoice';
 import { useCategories } from './useCategories';
+import { checkInvoice, findOriginalInvoice, round2 } from '@/utils/invoiceChecks';
+import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
 
 const ALL_ROOMS = ['K.201', 'K.202', 'K.203', 'O.308'];
 
@@ -20,6 +23,8 @@ interface Props {
   driveSourceFileId?: string;
   extractionFailed?: boolean;
   duplicateOf?: SupplierInvoice | null;   // set when server returned 409
+  /** All saved invoices — to pick the original invoice of a credit note */
+  invoices?: SupplierInvoice[];
   onSave: (inv: SupplierInvoice, force?: boolean) => void;
   onSaveAndWhitelist?: (inv: SupplierInvoice) => void;
   onClose: () => void;
@@ -107,6 +112,7 @@ export default function InvoiceReviewDrawer({
   driveSourceFileId,
   extractionFailed = false,
   duplicateOf = null,
+  invoices = [],
   onSave,
   onSaveAndWhitelist,
   onClose,
@@ -119,6 +125,10 @@ export default function InvoiceReviewDrawer({
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [duzpDate, setDuzpDate] = useState('');
+  const [documentType, setDocumentType] = useState<SupplierDocumentType>('invoice');
+  const [originalInvoiceNumber, setOriginalInvoiceNumber] = useState('');
+  const [relatedInvoiceId, setRelatedInvoiceId] = useState('');
   const [amountCZK, setAmountCZK] = useState('');
   const [vatAmountCZK, setVatAmountCZK] = useState('');
   const [invoiceCurrency, setInvoiceCurrency] = useState('CZK');
@@ -144,8 +154,13 @@ export default function InvoiceReviewDrawer({
       setInvoiceNumber(existing.invoiceNumber);
       setInvoiceDate(existing.invoiceDate);
       setDueDate(existing.dueDate ?? '');
-      setAmountCZK(String(existing.amountCZK));
-      setVatAmountCZK(existing.vatAmountCZK != null ? String(existing.vatAmountCZK) : '');
+      setDuzpDate(existing.duzpDate ?? '');
+      setDocumentType(existing.documentType ?? 'invoice');
+      setOriginalInvoiceNumber(existing.originalInvoiceNumber ?? '');
+      setRelatedInvoiceId(existing.relatedInvoiceId ?? '');
+      // Credit notes are stored negative; the form edits the magnitude
+      setAmountCZK(String(Math.abs(existing.amountCZK)));
+      setVatAmountCZK(existing.vatAmountCZK != null ? String(Math.abs(existing.vatAmountCZK)) : '');
       setInvoiceCurrency(existing.invoiceCurrency ?? 'CZK');
       setCategory(existing.category);
       setRooms(existing.rooms ?? []);
@@ -155,8 +170,15 @@ export default function InvoiceReviewDrawer({
       if (extracted.supplierICO) setSupplierICO(extracted.supplierICO);
       if (extracted.invoiceDate) setInvoiceDate(extracted.invoiceDate);
       if (extracted.dueDate) setDueDate(extracted.dueDate);
-      if (extracted.amountCZK != null) setAmountCZK(String(extracted.amountCZK));
-      if (extracted.vatAmountCZK != null) setVatAmountCZK(String(extracted.vatAmountCZK));
+      if (extracted.duzpDate) setDuzpDate(extracted.duzpDate);
+      if (extracted.amountCZK != null) setAmountCZK(String(Math.abs(extracted.amountCZK)));
+      if (extracted.vatAmountCZK != null) setVatAmountCZK(String(Math.abs(extracted.vatAmountCZK)));
+      if (extracted.documentType === 'credit_note') {
+        setDocumentType('credit_note');
+        if (extracted.originalInvoiceNumber) setOriginalInvoiceNumber(extracted.originalInvoiceNumber);
+        const original = findOriginalInvoice(extracted.supplierName, extracted.supplierICO, extracted.originalInvoiceNumber, invoices);
+        if (original) setRelatedInvoiceId(original.id);
+      }
       if (extracted.invoiceCurrency) setInvoiceCurrency(extracted.invoiceCurrency);
       if (extracted.suggestedCategory) setCategory(extracted.suggestedCategory);
       if (extracted.lineItems && extracted.lineItems.length > 0) {
@@ -178,7 +200,48 @@ export default function InvoiceReviewDrawer({
         setInvoiceNumber(`INV-${safeName}-${dd}${mm}`);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- invoices only seeds the credit-note link once
   }, [extracted, existing]);
+
+  const isCredit = documentType === 'credit_note';
+
+  // Same-supplier invoices a credit note can be linked to (newest first)
+  const linkCandidates = useMemo(() => {
+    if (!isCredit) return [];
+    const name = supplierName.trim().toLowerCase();
+    const ico = normalizeIco(supplierICO);
+    const known = findKnownSupplier(supplierName, supplierICO);
+    return invoices
+      .filter((i) => i.documentType !== 'credit_note' && i.id !== existing?.id)
+      .filter((i) =>
+        (!!name && i.supplierName.trim().toLowerCase() === name) ||
+        (!!ico && normalizeIco(i.supplierICO) === ico) ||
+        (!!known && findKnownSupplier(i.supplierName, i.supplierICO)?.id === known.id))
+      .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
+  }, [isCredit, invoices, supplierName, supplierICO, existing?.id]);
+
+  // Live sanity checks on the current form values. The extracted VAT table is only
+  // used while total + VAT still equal what was extracted (after a manual correction
+  // it would describe the wrong numbers).
+  const issues = useMemo(() => {
+    const amount = parseFloat(amountCZK);
+    const vat = vatAmountCZK ? parseFloat(vatAmountCZK) : null;
+    const sign = (n: number) => (isCredit ? -Math.abs(n) : n);
+    const unchanged = !!extracted && extracted.amountCZK != null &&
+      Math.abs(Math.abs(extracted.amountCZK) - amount) < 0.01 &&
+      Math.abs(Math.abs(extracted.vatAmountCZK ?? 0) - (vat ?? 0)) < 0.01;
+    return checkInvoice({
+      supplierName,
+      supplierICO,
+      invoiceDate,
+      amount: Number.isFinite(amount) ? sign(amount) : null,
+      vat: vat != null && Number.isFinite(vat) ? sign(vat) : null,
+      currency: invoiceCurrency,
+      documentType,
+      vatBreakdown: unchanged ? extracted?.vatBreakdown : null,
+      hasOriginalInvoice: !!relatedInvoiceId,
+    });
+  }, [amountCZK, vatAmountCZK, isCredit, extracted, supplierName, supplierICO, invoiceDate, invoiceCurrency, documentType, relatedInvoiceId]);
 
   // Sync default category once categories load
   useEffect(() => {
@@ -204,11 +267,17 @@ export default function InvoiceReviewDrawer({
     if (!invoiceDate) { setError('Invoice date is required.'); return false; }
     const amount = parseFloat(amountCZK);
     if (isNaN(amount) || amount <= 0) { setError('Amount must be a positive number.'); return false; }
+    if (isCredit && !relatedInvoiceId && !originalInvoiceNumber.trim()) {
+      setError('Pick the original invoice this credit note belongs to (or type its number).');
+      return false;
+    }
     return true;
   }
 
   async function buildInvoice(): Promise<SupplierInvoice> {
-    const amount = parseFloat(amountCZK);
+    // Credit notes are stored negative so they net off the original invoice
+    const sign = (n: number) => round2(isCredit ? -Math.abs(n) : n);
+    const amount = sign(parseFloat(amountCZK));
 
     let driveFileId: string | undefined;
     let driveFileName: string | undefined;
@@ -242,8 +311,12 @@ export default function InvoiceReviewDrawer({
       invoiceNumber: invoiceNumber.trim(),
       invoiceDate,
       dueDate: dueDate || undefined,
+      duzpDate: duzpDate || undefined,
       amountCZK: amount,
-      vatAmountCZK: vatAmountCZK ? parseFloat(vatAmountCZK) : undefined,
+      vatAmountCZK: vatAmountCZK ? sign(parseFloat(vatAmountCZK)) : undefined,
+      documentType: isCredit ? 'credit_note' : undefined,
+      originalInvoiceNumber: isCredit ? (originalInvoiceNumber.trim() || undefined) : undefined,
+      relatedInvoiceId: isCredit ? (relatedInvoiceId || undefined) : undefined,
       invoiceCurrency: invoiceCurrency !== 'CZK' ? invoiceCurrency : undefined,
       category,
       rooms: rooms.length > 0 ? rooms : undefined,
@@ -328,6 +401,23 @@ export default function InvoiceReviewDrawer({
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-700">{error}</div>
           )}
+          {issues.length > 0 && (extracted || existing || amountCZK) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800">
+              <p className="font-semibold mb-1">Check before saving</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {issues.map((i, n) => <li key={n}>{i.message}</li>)}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex rounded-lg border border-gray-200 p-0.5 text-xs font-medium w-fit">
+            {(['invoice', 'credit_note'] as const).map((t) => (
+              <button key={t} type="button" onClick={() => setDocumentType(t)}
+                className={`px-3 py-1 rounded-md transition-colors ${documentType === t ? (t === 'credit_note' ? 'bg-rose-600 text-white' : 'bg-indigo-600 text-white') : 'text-gray-500 hover:text-gray-800'}`}>
+                {t === 'invoice' ? 'Invoice / receipt' : 'Credit note (dobropis)'}
+              </button>
+            ))}
+          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
@@ -347,7 +437,35 @@ export default function InvoiceReviewDrawer({
             <Field label="Due Date">
               <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </Field>
-            <Field label={`Total Amount (${invoiceCurrency}) *`}>
+            <Field label="DUZP" hint="Taxable-supply date, if different">
+              <Input type="date" value={duzpDate} onChange={(e) => setDuzpDate(e.target.value)} />
+            </Field>
+            <div />
+            {isCredit && (
+              <div className="col-span-2 grid grid-cols-2 gap-4 bg-rose-50 border border-rose-100 rounded-lg p-3">
+                <div className="col-span-2">
+                  <Field label="Credit note for invoice *" hint="Several credit notes can point at the same invoice (e.g. one per returned item).">
+                    <Select value={relatedInvoiceId} onChange={(e) => {
+                      setRelatedInvoiceId(e.target.value);
+                      const inv = linkCandidates.find((c) => c.id === e.target.value);
+                      if (inv) setOriginalInvoiceNumber(inv.invoiceNumber);
+                    }}>
+                      <option value="">— not linked —</option>
+                      {linkCandidates.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.invoiceDate} · #{c.invoiceNumber} · {c.amountCZK.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} {c.invoiceCurrency ?? 'CZK'}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+                <Field label="Original invoice # (as printed)">
+                  <Input value={originalInvoiceNumber} onChange={(e) => setOriginalInvoiceNumber(e.target.value)} placeholder="e.g. 4024458200" />
+                </Field>
+                <p className="text-xs text-rose-700 self-end pb-1">Amounts below are entered positive and saved as negative (they reduce the cost).</p>
+              </div>
+            )}
+            <Field label={`${isCredit ? 'Credited' : 'Total'} Amount (${invoiceCurrency}) *`}>
               <Input type="number" min="0" step="0.01" value={amountCZK} onChange={(e) => setAmountCZK(e.target.value)} placeholder="1500" />
             </Field>
             <Field label={`VAT Amount (${invoiceCurrency})`}>
