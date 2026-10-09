@@ -41,7 +41,8 @@ export const SUPPLIER_KNOWLEDGE = `
 ## Alza.cz a.s.   (IČO 27082440)
 - totalAmount: the final amount payable including VAT ("Celkem k úhradě" / "Celkem s DPH").
 - invoiceNumber: the document number ("Faktura č." / "Daňový doklad č.").
-- RETURNS: Alza issues a separate credit note ("Dobropis" / "Opravný daňový doklad") for each returned item. documentType: "credit_note"; totalAmount and vatAmount = the credited amounts as positive numbers; invoiceNumber = the credit note's own number; originalInvoiceNumber = the number of the original Alza invoice it corrects.
+- Header dates (the PDF text layer lists them out of order, so match each label to its own value): "Datum vystavení" = invoiceDate, "Datum uskut. zdaň. plnění" = duzpDate, "Datum splatnosti" = dueDate. Issue date and DUZP are normally the same day; the due date is the same day or later (e.g. vystavení 10.07.2026, DUZP 10.07.2026, splatnost 24.07.2026).
+- RETURNS: Alza issues a separate credit note ("Opravný doklad", numbers start with 3 — invoices start with 4) for each returned item. documentType: "credit_note"; totalAmount and vatAmount = the credited amounts as positive numbers; invoiceNumber = the credit note's own number; originalInvoiceNumber = the number of the original Alza invoice it corrects.
 - category: consumables
 
 ## Temu   (online marketplace; no supplier IČO on the document)
@@ -59,9 +60,14 @@ export const SUPPLIER_KNOWLEDGE = `
 - Household / consumables discount store; receipts/branding may show just "Action". supplierName: "Action Retail Czech s.r.o.". documentType: "receipt".
 - supplierICO: ALWAYS 03439747 (digits only, no spaces). Purchases up to 10 000 CZK are issued as a simplified tax document (zjednodušený daňový doklad) that legally need not print the IČO — set 03439747 even when it is not shown on the receipt.
 - Digital e-receipt (PDF from the Action app): store address, then a date WITHOUT a year, e.g. "Středa 19. srpna v 12:12" → invoiceDateHasYear false, invoiceWeekday "Wednesday", invoiceDate with your best-guess year (code fixes the year from the weekday).
-- invoiceNumber: the "Číslo transakce" value (e.g. B08010210241953). It is ALWAYS present on the e-receipt — never return null. Do NOT use the long return barcode number under "Čárový kód pro výměnu nebo vrácení" (e.g. B08010226231121132999932). On older paper receipts use the printed receipt / doklad number.
+- invoiceNumber: the "Číslo transakce" value (e.g. B08010210241953). It is ALWAYS present on the e-receipt — never return null. Do NOT use the long return barcode number under "Čárový kód pro výměnu nebo vrácení" (e.g. B08010226231121132999932).
+- Paper till receipt (photo): it prints TWO numbers near the top — use the 15-character one on its own line directly under the date/time (e.g. B08010170793255, same format as "Číslo transakce"), NOT the dashed one at the top right (e.g. B080101-10793256). Never use the long barcode number above "Děkujeme".
 - totalAmount: "Celkem" (e.g. 2 916,20). vatAmount: the "Celkem" row of "Přehled DPH" (e.g. 495,52). vatBreakdown: the 12 % and 21 % rows of "Přehled DPH" (columns DPH, Bez = base, Včetně = gross).
 - category: consumables
+
+## PEPCO Czech Republic s.r.o.   (IČO 24294420, DIČ CZ24294420)
+- Till receipt; date printed with a 2-digit year ("Datum: 20.4.26" = 2026-04-20). invoiceNumber: "Ticket" (e.g. 156434).
+- VAT table: the "Zdanitelná částka" column is the GROSS amount INCLUDING VAT (e.g. 765,00 with "částka daně" 132,77). In vatBreakdown put base = Zdanitelná částka − částka daně (e.g. 632,23), vat = částka daně.
 
 ## MAKRO Cash & Carry CR s.r.o.   (IČ 26450691, DIČ CZ26450691)
 - Multi-page wholesale invoice ("FAKTURA - DAŇOVÝ DOKLAD"). Always use the FINAL grand total, never a per-page or pre-VAT subtotal.

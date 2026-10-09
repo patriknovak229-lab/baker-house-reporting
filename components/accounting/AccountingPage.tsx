@@ -165,23 +165,30 @@ function DriveFailureBanner({ count, onDismiss }: { count: number; onDismiss: ()
 }
 
 /**
- * Enrich extracted data with ICO / category pulled from the most recent
- * invoice for the same supplier (case-insensitive name match).
- * Only fills fields that extraction left as null.
+ * Enrich extracted data from what we already know about this supplier.
+ * IČO: only filled when extraction left it empty. Category, for repeat
+ * suppliers: the fixed registry category (set by the extract route) > the
+ * whitelist entry > the category last used for this supplier > the model's guess.
  */
 function enrichFromHistory(
   extracted: ExtractedInvoiceData,
   invoices: SupplierInvoice[],
+  whitelist: WhitelistedSupplier[],
 ): ExtractedInvoiceData {
   if (!extracted.supplierName) return extracted;
-  const norm = extracted.supplierName.trim().toLowerCase();
+  const name = extracted.supplierName.trim().toLowerCase();
+  const ico = normalizeIco(extracted.supplierICO);
   // Most-recent first (invoices are prepended on save)
-  const match = invoices.find((inv) => inv.supplierName.trim().toLowerCase() === norm);
-  if (!match) return extracted;
+  const match = invoices.find((inv) =>
+    inv.supplierName.trim().toLowerCase() === name || (!!ico && normalizeIco(inv.supplierICO) === ico));
+  const listed = matchWhitelist(extracted.supplierName, extracted.supplierICO, whitelist);
+  const category = extracted.knownSupplierId
+    ? extracted.suggestedCategory
+    : listed?.category ?? match?.category ?? extracted.suggestedCategory;
   return {
     ...extracted,
-    supplierICO: extracted.supplierICO ?? match.supplierICO ?? null,
-    suggestedCategory: extracted.suggestedCategory ?? match.category ?? null,
+    supplierICO: extracted.supplierICO ?? match?.supplierICO ?? null,
+    suggestedCategory: category ?? null,
   };
 }
 
@@ -473,7 +480,7 @@ export default function AccountingPage() {
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
-        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoicesRef.current);
+        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoicesRef.current, whitelistRef.current);
         // Skip invoices already in the system (e.g. re-scanning a folder of old, reconciled receipts)
         const dup = findDuplicate(extracted, invoicesRef.current);
         if (dup) {
@@ -525,7 +532,7 @@ export default function AccountingPage() {
       fd.append('file', compressed);
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
-        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices);
+        const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices, whitelist);
         setDrawerState({ extracted, file: compressed, existing: null, sourceType });
       } else {
         setDrawerState({ extracted: null, file: compressed, existing: null, sourceType, extractionFailed: true });

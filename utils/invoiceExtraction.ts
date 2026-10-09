@@ -18,7 +18,7 @@ import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
 import { resolveMissingYear, round2, round2OrNull, OUR_ICO } from '@/utils/invoiceChecks';
 import type { ExtractedInvoiceData, ExtractedVatRow, InvoiceCategory } from '@/types/supplierInvoice';
 
-const MODEL = 'claude-opus-5-5';
+const MODEL = 'claude-sonnet-5-5';
 
 const DOCUMENT_TYPES = ['invoice', 'credit_note', 'receipt', 'fee_statement', 'order_summary', 'other'] as const;
 const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -173,7 +173,7 @@ export async function extractInvoice(input: ExtractInput, client = new Anthropic
     model: MODEL,
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: outputSchema(categoryIds) } },
+    output_config: { effort: 'high', format: { type: 'json_schema', schema: outputSchema(categoryIds) } },
     messages: [{
       role: 'user',
       content: [docBlock, { type: 'text', text: buildPrompt(input.categories, input.fileName, todayIso) }],
