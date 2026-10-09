@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import type { WhitelistedSupplier } from '@/types/supplierInvoice';
 import { readAllSupplierWhitelist, writeAllSupplierWhitelist } from '@/utils/supplierWhitelistStore';
+import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
 
 // GET — list all whitelisted suppliers (admin + accountant)
 export async function GET() {
@@ -27,20 +28,29 @@ export async function POST(request: Request) {
 
   const whitelist = await readAllSupplierWhitelist();
   const nameNorm = supplierName.trim().toLowerCase();
-  const icoNorm = (supplierICO ?? '').toLowerCase().replace(/\s+/g, '');
+  const icoNorm = normalizeIco(supplierICO);
+  const known = findKnownSupplier(supplierName, supplierICO);
 
-  // Already whitelisted if the name OR the IČO already matches an entry
-  if (whitelist.some((s) =>
+  // Already whitelisted if the name, the IČO, or the known-supplier identity matches an entry
+  const existing = whitelist.find((s) =>
     s.supplierName.trim().toLowerCase() === nameNorm ||
-    (!!icoNorm && (s.supplierICO ?? '').toLowerCase().replace(/\s+/g, '') === icoNorm)
-  )) {
-    return NextResponse.json({ error: 'Supplier already whitelisted' }, { status: 409 });
+    (!!icoNorm && normalizeIco(s.supplierICO) === icoNorm) ||
+    (!!known && findKnownSupplier(s.supplierName, s.supplierICO)?.id === known.id),
+  );
+  if (existing) {
+    // Fill in a missing IČO so future invoices match even when the name is read differently
+    if (!existing.supplierICO && icoNorm) {
+      const updated = { ...existing, supplierICO: icoNorm };
+      await writeAllSupplierWhitelist(whitelist.map((s) => (s.id === existing.id ? updated : s)));
+      return NextResponse.json({ ...updated, alreadyListed: true });
+    }
+    return NextResponse.json({ ...existing, alreadyListed: true });
   }
 
   const entry: WhitelistedSupplier = {
     id: crypto.randomUUID(),
     supplierName: supplierName.trim(),
-    supplierICO: supplierICO?.trim() || undefined,
+    supplierICO: icoNorm || undefined,
     category: category ?? 'other',
     addedAt: new Date().toISOString(),
   };

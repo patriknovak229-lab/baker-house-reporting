@@ -45,6 +45,8 @@ interface DrawerState {
   driveSourceFileId?: string;
   extractionFailed?: boolean;
   duplicateOf?: SupplierInvoice;   // set when API returned 409 Conflict
+  /** Whitelisted supplier that was NOT auto-saved — why (shown in the drawer) */
+  autoSaveBlockers?: string[];
 }
 
 interface GmailStatus {
@@ -239,12 +241,16 @@ function originalFor(extracted: ExtractedInvoiceData, invoices: SupplierInvoice[
 /**
  * Whitelisted invoices are saved without review only when every required field
  * is present AND all sanity checks pass (VAT 12/21 %, plausible date, not our
- * own IČO, credit note linked …). Anything else opens the review drawer.
+ * own IČO, credit note linked …). Returns the reasons it can't be — empty = auto-save.
  */
-function canAutoSave(extracted: ExtractedInvoiceData, original: SupplierInvoice | null): boolean {
-  if (!extracted.supplierName || !extracted.invoiceNumber || !extracted.invoiceDate || extracted.amountCZK == null) {
-    return false;
-  }
+function autoSaveBlockers(extracted: ExtractedInvoiceData, original: SupplierInvoice | null): string[] {
+  const missing = [
+    !extracted.supplierName && 'supplier name',
+    !extracted.invoiceNumber && 'invoice number',
+    !extracted.invoiceDate && 'invoice date',
+    extracted.amountCZK == null && 'total amount',
+  ].filter(Boolean);
+  if (missing.length > 0) return [`No ${missing.join(', ')} found on the document.`];
   return checkInvoice({
     supplierName: extracted.supplierName,
     supplierICO: extracted.supplierICO,
@@ -255,7 +261,7 @@ function canAutoSave(extracted: ExtractedInvoiceData, original: SupplierInvoice 
     documentType: extracted.documentType,
     vatBreakdown: extracted.vatBreakdown,
     hasOriginalInvoice: !!original,
-  }).length === 0;
+  }).map((i) => i.message);
 }
 
 export default function AccountingPage() {
@@ -277,6 +283,7 @@ export default function AccountingPage() {
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const [queueRunning, setQueueRunning] = useState(false);
   const [skippedDupes, setSkippedDupes] = useState<Array<{ supplierName: string; invoiceNumber: string }>>([]);
+  const [whitelistNotice, setWhitelistNotice] = useState<string | null>(null);
   const abortQueueRef = useRef(false);
   const { categories } = useCategories();
   const [filters, setFilters] = useState({
@@ -494,14 +501,15 @@ export default function AccountingPage() {
         }
         // Check whitelist
         const matched = matchWhitelist(extracted.supplierName, extracted.supplierICO, whitelistRef.current);
-        if (matched && canAutoSave(extracted, originalFor(extracted, invoicesRef.current))) {
+        const blockers = matched ? autoSaveBlockers(extracted, originalFor(extracted, invoicesRef.current)) : [];
+        if (matched && blockers.length === 0) {
           setExtracting(false);
           await autoSaveInvoice(extracted, matched, compressed, next.gmailMessageId, next.sourceType ?? 'email', next.icloudFileName, next.driveSourceFileId);
           // Continue with next item
           processNextInQueue(rest);
           return;
         }
-        setDrawerState({ extracted, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, driveSourceFileId: next.driveSourceFileId });
+        setDrawerState({ extracted, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, driveSourceFileId: next.driveSourceFileId, autoSaveBlockers: matched ? blockers : undefined });
       } else {
         setDrawerState({ extracted: null, file: compressed, existing: null, sourceType: next.sourceType ?? 'email', gmailMessageId: next.gmailMessageId, icloudFileName: next.icloudFileName, driveSourceFileId: next.driveSourceFileId, extractionFailed: true });
       }
@@ -592,8 +600,14 @@ export default function AccountingPage() {
         body: JSON.stringify({ supplierName: inv.supplierName, supplierICO: inv.supplierICO, category: inv.category }),
       });
       if (res.ok) {
-        const entry = await res.json() as WhitelistedSupplier;
-        setWhitelist((prev) => [...prev, entry]);
+        const entry = await res.json() as WhitelistedSupplier & { alreadyListed?: boolean };
+        if (entry.alreadyListed) {
+          setWhitelist((prev) => prev.map((w) => (w.id === entry.id ? entry : w)));
+          setWhitelistNotice(`${inv.supplierName} is already whitelisted (as "${entry.supplierName}"${entry.supplierICO ? `, IČO ${entry.supplierICO}` : ''}) — invoice saved.`);
+        } else {
+          setWhitelist((prev) => [...prev, entry]);
+          setWhitelistNotice(`${entry.supplierName} added to the whitelist${entry.supplierICO ? ` (IČO ${entry.supplierICO})` : ''} — its future invoices will be auto-saved.`);
+        }
       }
     } catch { /* non-fatal */ }
     setDrawerState(null);
@@ -831,6 +845,14 @@ export default function AccountingPage() {
       {/* Already-imported invoices auto-skipped during a batch */}
       <SkippedDuplicatesBanner entries={skippedDupes} onDismiss={() => setSkippedDupes([])} />
 
+      {/* Save & Whitelist result */}
+      {whitelistNotice && (
+        <div className="flex items-start justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 gap-3">
+          <p className="text-sm text-indigo-800">{whitelistNotice}</p>
+          <button onClick={() => setWhitelistNotice(null)} className="text-indigo-400 hover:text-indigo-600 flex-shrink-0">×</button>
+        </div>
+      )}
+
       {/* Bulk Drive back-fill result */}
       {backfillMsg && (
         <div className="flex items-start justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 gap-3">
@@ -1051,6 +1073,7 @@ export default function AccountingPage() {
           driveSourceFileId={drawerState.driveSourceFileId}
           extractionFailed={drawerState.extractionFailed}
           duplicateOf={drawerState.duplicateOf}
+          autoSaveBlockers={drawerState.autoSaveBlockers}
           invoices={invoices}
           onSave={handleSave}
           onSaveAndWhitelist={drawerState.existing ? undefined : handleSaveAndWhitelist}

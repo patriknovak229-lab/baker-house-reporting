@@ -25,6 +25,8 @@ interface Props {
   duplicateOf?: SupplierInvoice | null;   // set when server returned 409
   /** All saved invoices — to pick the original invoice of a credit note */
   invoices?: SupplierInvoice[];
+  /** Set when the supplier is whitelisted but the invoice was not auto-saved — the reasons */
+  autoSaveBlockers?: string[];
   onSave: (inv: SupplierInvoice, force?: boolean) => void;
   onSaveAndWhitelist?: (inv: SupplierInvoice) => void;
   onClose: () => void;
@@ -113,6 +115,7 @@ export default function InvoiceReviewDrawer({
   extractionFailed = false,
   duplicateOf = null,
   invoices = [],
+  autoSaveBlockers,
   onSave,
   onSaveAndWhitelist,
   onClose,
@@ -391,6 +394,14 @@ export default function InvoiceReviewDrawer({
           {!isEdit && extractionFailed && (
             <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-700">
               Claude couldn&apos;t read this document — please fill in the fields manually.
+            </div>
+          )}
+          {autoSaveBlockers && autoSaveBlockers.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800">
+              <p className="font-semibold mb-1">Whitelisted supplier — not auto-saved because:</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {autoSaveBlockers.map((b, n) => <li key={n}>{b}</li>)}
+              </ul>
             </div>
           )}
           {!isEdit && !extractionFailed && extracted && (

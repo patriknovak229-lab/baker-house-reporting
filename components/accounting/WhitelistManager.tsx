@@ -41,7 +41,11 @@ export default function WhitelistManager({ onClose }: { onClose: () => void }) {
         body: JSON.stringify({ supplierName: supplierName.trim(), category }),
       });
       if (res.ok) {
-        const entry = await res.json() as WhitelistedSupplier;
+        const entry = await res.json() as WhitelistedSupplier & { alreadyListed?: boolean };
+        if (entry.alreadyListed) {
+          setError(`Already on the whitelist as "${entry.supplierName}".`);
+          return;
+        }
         setWhitelist((prev) => [...prev, entry]);
         setSupplierName('');
       } else {
@@ -115,7 +119,7 @@ export default function WhitelistManager({ onClose }: { onClose: () => void }) {
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}
           <p className="text-xs text-gray-400">
-            The name is matched case-insensitively against the supplier name extracted by Claude.
+            Matched by IČO, or case-insensitively by the supplier name extracted by Claude. Use Save &amp; Whitelist on an invoice to store the IČO too.
           </p>
         </div>
 
@@ -134,7 +138,9 @@ export default function WhitelistManager({ onClose }: { onClose: () => void }) {
               <div key={s.id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg">
                 <div>
                   <p className="text-sm font-medium text-gray-800">{s.supplierName}</p>
-                  <p className="text-xs text-gray-400">{categoryLabel(s.category)}</p>
+                  <p className="text-xs text-gray-400">
+                    {categoryLabel(s.category)}{s.supplierICO ? ` · IČO ${s.supplierICO}` : ' · no IČO — matched by name only'}
+                  </p>
                 </div>
                 <button
                   onClick={() => handleRemove(s.id)}
