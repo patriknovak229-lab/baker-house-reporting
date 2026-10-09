@@ -13,6 +13,25 @@ interface GmailAttachment {
   sourceType: 'email' | 'portal';
 }
 
+type GmailSkipReason = 'no_pdf' | 'login' | 'expired' | 'unreachable' | 'not_pdf';
+
+/** An email in the label that yielded no invoice PDF */
+interface GmailSkipped {
+  messageId: string;
+  subject: string;
+  from: string;
+  date: string;
+  reason: GmailSkipReason;
+}
+
+const SKIP_REASON_LABEL: Record<GmailSkipReason, string> = {
+  login: 'Download link needs a login (e.g. your Alza account)',
+  expired: 'Download link has expired',
+  unreachable: 'Download link did not respond',
+  not_pdf: 'Download link did not return a PDF',
+  no_pdf: 'No PDF attached and no download link',
+};
+
 interface DriveFile {
   fileName: string;
   fileSize: number;
@@ -62,6 +81,9 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gmailAttachments, setGmailAttachments] = useState<GmailAttachment[]>([]);
+  const [gmailSkipped, setGmailSkipped] = useState<GmailSkipped[]>([]);
+  const [gmailNotScanned, setGmailNotScanned] = useState(0);
+  const [gmailAccount, setGmailAccount] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadSourceType, setUploadSourceType] = useState<'upload' | 'portal'>('upload');
@@ -106,6 +128,8 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
     setScanning(true);
     setError(null);
     setGmailAttachments([]);
+    setGmailSkipped([]);
+    setGmailNotScanned(0);
     setSelected(new Set());
     try {
       const res = await fetch('/api/supplier-invoices/gmail-scan', { method: 'POST' });
@@ -113,11 +137,19 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
         const err = await res.json() as { error?: string };
         throw new Error(err.error ?? 'Gmail scan failed');
       }
-      const data = await res.json() as { attachments: GmailAttachment[] };
+      const data = await res.json() as {
+        attachments: GmailAttachment[];
+        skipped?: GmailSkipped[];
+        notScanned?: number;
+        account?: string;
+      };
       setGmailAttachments(data.attachments);
+      setGmailSkipped(data.skipped ?? []);
+      setGmailNotScanned(data.notScanned ?? 0);
+      setGmailAccount(data.account ?? null);
       // Auto-select all by default
       setSelected(new Set(data.attachments.map((a) => a.messageId + a.attachmentName)));
-      if (data.attachments.length === 0) {
+      if (data.attachments.length === 0 && (data.skipped ?? []).length === 0) {
         setError('No new invoices found in your Gmail label.');
       }
     } catch (e) {
@@ -437,6 +469,39 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
                         </label>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {gmailNotScanned > 0 && (
+                <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+                  {gmailNotScanned} more email{gmailNotScanned !== 1 ? 's' : ''} waiting — process these, then sync again.
+                </p>
+              )}
+
+              {gmailSkipped.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs text-amber-900 space-y-2">
+                  <p className="font-semibold">
+                    {gmailSkipped.length} email{gmailSkipped.length !== 1 ? 's' : ''} had no readable invoice — not imported
+                  </p>
+                  <p className="text-amber-800">
+                    Download each invoice from the supplier (Alza: Moje Alza → Objednávky) and upload it, then remove
+                    the Gmail label from the email so it stops showing up here.
+                  </p>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {gmailSkipped.map((m) => (
+                      <a
+                        key={m.messageId}
+                        href={`https://mail.google.com/mail/${gmailAccount ? `?authuser=${encodeURIComponent(gmailAccount)}` : ''}#all/${m.messageId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block bg-white border border-amber-100 rounded-md px-2.5 py-1.5 hover:border-amber-300"
+                      >
+                        <span className="font-medium text-gray-800 block truncate">{m.subject}</span>
+                        <span className="text-gray-500 block truncate">{m.from} · {m.date}</span>
+                        <span className="text-amber-700">{SKIP_REASON_LABEL[m.reason]} · open in Gmail ↗</span>
+                      </a>
+                    ))}
                   </div>
                 </div>
               )}

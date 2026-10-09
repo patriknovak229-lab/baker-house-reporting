@@ -56,11 +56,21 @@ function extractPdfUrls(body: string): string[] {
   return [...new Set(body.match(PATTERN) ?? [])];
 }
 
+/** Why an email produced no invoice PDF — shown to the user after the scan */
+type SkipReason = 'no_pdf' | 'login' | 'expired' | 'unreachable' | 'not_pdf';
+
+/** Most informative first, when an email's links fail for different reasons */
+const REASON_PRIORITY: SkipReason[] = ['login', 'expired', 'unreachable', 'not_pdf', 'no_pdf'];
+
+/** Emails processed per scan (each costs Gmail API calls + link fetches); the rest wait for the next scan */
+const MAX_NEW_MESSAGES = 150;
+
 /**
- * Attempt to HTTP-GET a URL and return its bytes if the response is a valid PDF.
- * Returns null for auth-gated pages, non-PDF responses, or network errors.
+ * HTTP-GET a URL and return its bytes if the response is a valid PDF, otherwise
+ * why not: a login page (auth-gated portal such as the Alza account), an expired
+ * link (404/410), an unreachable host / timeout, or some other non-PDF response.
  */
-async function tryFetchPdf(url: string): Promise<Buffer | null> {
+async function tryFetchPdf(url: string): Promise<{ pdf: Buffer } | { reason: SkipReason }> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
@@ -70,13 +80,17 @@ async function tryFetchPdf(url: string): Promise<Buffer | null> {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; InvoiceBot/1.0)' },
     });
     clearTimeout(timer);
-    if (!res.ok) return null;
+    if (res.status === 401 || res.status === 403) return { reason: 'login' };
+    if (res.status === 404 || res.status === 410) return { reason: 'expired' };
+    if (!res.ok) return { reason: 'unreachable' };
     const buf = Buffer.from(await res.arrayBuffer());
     // Verify PDF magic bytes — rejects HTML login pages that return 200
-    if (buf.slice(0, 4).toString('ascii') !== '%PDF') return null;
-    return buf;
+    if (buf.slice(0, 4).toString('ascii') !== '%PDF') {
+      return { reason: (res.headers.get('content-type') ?? '').includes('text/html') ? 'login' : 'not_pdf' };
+    }
+    return { pdf: buf };
   } catch {
-    return null;
+    return { reason: 'unreachable' };
   }
 }
 
@@ -120,22 +134,32 @@ export async function POST() {
   const existing = await readAllSupplierInvoices();
   const importedIds = new Set(existing.map((inv) => inv.gmailMessageId).filter(Boolean));
 
-  // Fetch all emails in the configured label (not just those with PDF attachments —
-  // portal-notification emails have no attachment but contain a download link in the body)
-  const listRes = await gmail.users.messages.list({
-    userId: 'me',
-    q: `label:${label}`,
-    maxResults: 50,
-  });
+  // Fetch ALL emails in the configured label (not just the newest page, and not just
+  // those with PDF attachments — portal-notification emails have no attachment but
+  // contain a download link in the body). Only ids are listed here; cheap.
+  const messages: { id?: string | null }[] = [];
+  let pageToken: string | undefined;
+  do {
+    const listRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: `label:${label}`,
+      maxResults: 500,
+      pageToken,
+    });
+    messages.push(...(listRes.data.messages ?? []));
+    pageToken = listRes.data.nextPageToken ?? undefined;
+  } while (pageToken);
 
-  const messages = listRes.data.messages ?? [];
-  const newMessages = messages.filter((m) => m.id && !importedIds.has(m.id));
+  const unimported = messages.filter((m) => m.id && !importedIds.has(m.id));
+  const newMessages = unimported.slice(0, MAX_NEW_MESSAGES);
+  const notScanned = unimported.length - newMessages.length;
 
   if (newMessages.length === 0) {
-    return NextResponse.json({ attachments: [] });
+    return NextResponse.json({ attachments: [], skipped: [], notScanned: 0, account: stored.email });
   }
 
   const attachments: GmailAttachment[] = [];
+  const skipped: Array<{ messageId: string; subject: string; from: string; date: string; reason: SkipReason }> = [];
 
   for (const msg of newMessages) {
     if (!msg.id) continue;
@@ -188,9 +212,13 @@ export async function POST() {
     const bodyText = extractBodyText((msgRes.data.payload ?? {}) as MessagePart);
     const urls = extractPdfUrls(bodyText);
 
+    const reasons: SkipReason[] = [];
+    let gotPdf = false;
     for (const url of urls.slice(0, 5)) {
-      const pdfBuf = await tryFetchPdf(url);
-      if (!pdfBuf) continue;
+      const result = await tryFetchPdf(url);
+      if ('reason' in result) { reasons.push(result.reason); continue; }
+      const pdfBuf = result.pdf;
+      gotPdf = true;
 
       // Derive a filename from the URL path component
       const rawName = url.split('/').pop()?.split('?')[0]?.split('#')[0] ?? '';
@@ -216,8 +244,12 @@ export async function POST() {
       });
       break; // one PDF per email
     }
-    // If no URL yielded a valid PDF: email is silently skipped
+    // No attachment and no link yielded a PDF — report it instead of dropping it silently
+    if (!gotPdf) {
+      const reason = REASON_PRIORITY.find((r) => reasons.includes(r)) ?? 'no_pdf';
+      skipped.push({ messageId: msg.id, subject, from, date: dateHeader, reason });
+    }
   }
 
-  return NextResponse.json({ attachments });
+  return NextResponse.json({ attachments, skipped, notScanned, account: stored.email });
 }
