@@ -250,7 +250,8 @@ export function findAutoMatches(
   invoices: SupplierInvoice[],
   memory: CounterpartyMemory,
 ): AutoMatch[] {
-  const debits = transactions.filter((t) => t.direction === 'debit' && t.state === 'unmatched');
+  // Only unmatched debits; one where the user dismissed a suggestion ("not a match") is left to them.
+  const debits = transactions.filter((t) => t.direction === 'debit' && t.state === 'unmatched' && !t.suggestionDismissed);
   const pool = invoices.filter(isMatchableInvoice);
 
   const pairs: Array<{ tx: BankTransaction; c: MatchCandidate }> = [];

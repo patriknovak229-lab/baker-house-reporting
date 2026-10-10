@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
-import type { BankTransaction, BankTransactionDirection, BankTransactionState } from '@/types/bankTransaction';
+import type { BankTransaction, BankTransactionState } from '@/types/bankTransaction';
 import { matchesCostRule } from '@/types/bankCostWhitelist';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { readAllBankCostWhitelist } from '@/utils/bankCostWhitelistStore';
 import { findAutoMatches, learnCounterparties } from '@/utils/bankInvoiceMatch';
+import { decodeCsvBytes, parseKbCsv, selectNewRows } from '@/utils/kbCsv';
 
 /**
  * Collapse duplicate-id rows that predate the switch to the bank's unique
@@ -24,231 +25,6 @@ function dedupeById(txs: BankTransaction[]): { deduped: BankTransaction[]; remov
   return { deduped, removed: txs.length - deduped.length };
 }
 
-// ── CSV parsing ──────────────────────────────────────────────────────────────
-
-/** Strip Czech diacritics and lowercase for fuzzy column matching */
-function norm(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
-}
-
-/** Parse a KB-format number: "1 500,00" or "-1500,00" → float */
-function parseCzechNumber(s: string): number {
-  return parseFloat(s.replace(/\s/g, '').replace(',', '.')) || 0;
-}
-
-/** Parse DD.MM.YYYY → YYYY-MM-DD */
-function parseDate(s: string): string {
-  const parts = s.trim().split('.');
-  if (parts.length === 3) {
-    const [d, m, y] = parts;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-  // fallback: assume already YYYY-MM-DD
-  return s.trim();
-}
-
-/** Split a CSV line respecting quoted fields */
-function splitCsvLine(line: string, sep = ';'): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      inQuote = !inQuote;
-    } else if (ch === sep && !inQuote) {
-      result.push(current.trim().replace(/^"|"$/g, ''));
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current.trim().replace(/^"|"$/g, ''));
-  return result;
-}
-
-interface ColMap {
-  date?: number;
-  valueDate?: number;
-  amount?: number;
-  currency?: number;
-  counterpartyAccount?: number;
-  counterpartyName?: number;
-  vs?: number;
-  ks?: number;
-  ss?: number;
-  bankId?: number;
-  description?: number;
-  myDescription?: number;
-  type?: number;
-  originalAmount?: number;
-  originalCurrency?: number;
-}
-
-function buildColMap(headers: string[]): ColMap {
-  const map: ColMap = {};
-  headers.forEach((h, i) => {
-    const n = norm(h);
-    // Date columns — first 'datum' → accounting date, second → value/execution date
-    if (n.includes('datum')) {
-      if (map.date === undefined) map.date = i;
-      else if (map.valueDate === undefined) map.valueDate = i;
-      return;
-    }
-    // Amount — castka (KB+), objem (older KB). Must be exact or start with the word to avoid
-    // matching 'Originalni castka' before the primary amount column is set.
-    if (map.amount === undefined && (n === 'castka' || n === 'objem')) { map.amount = i; return; }
-    // Currency — exact 'mena' only; 'Originalni mena' handled separately below
-    if (map.currency === undefined && n === 'mena') { map.currency = i; return; }
-    // Original (foreign currency) amount and currency
-    if (map.originalAmount === undefined && n.includes('originalni') && n.includes('castka')) { map.originalAmount = i; return; }
-    if (map.originalCurrency === undefined && n.includes('originalni') && n.includes('mena')) { map.originalCurrency = i; return; }
-    // Counterparty account — "Protistrana", "Protiucet", "Protiúčet"
-    if (map.counterpartyAccount === undefined && (n.includes('protistrana') || n.includes('protiucet') || n.includes('ucet protistrany'))) { map.counterpartyAccount = i; return; }
-    // Counterparty name — "Nazev protiustrany", "Nazev protistrany", "Nazev protiuctu"
-    if (map.counterpartyName === undefined && (n.includes('nazev') || n.includes('protistrany') || n.includes('protiustrany'))) { map.counterpartyName = i; return; }
-    // Variable / constant / specific symbol
-    if (map.vs === undefined && (n.includes('variabilni') || n.includes('variable') || n === 'vs')) { map.vs = i; return; }
-    if (map.ks === undefined && (n.includes('konstantni') || n.includes('constant') || n === 'ks')) { map.ks = i; return; }
-    if (map.ss === undefined && (n.includes('specificky') || n.includes('specific') || n === 'ss')) { map.ss = i; return; }
-    // Bank's own globally-unique transaction identifier — "Identifikace transakce"
-    if (map.bankId === undefined && n.includes('identifikace')) { map.bankId = i; return; }
-    // Description
-    if (map.description === undefined && (n.includes('zprava') || n.includes('message') || n.includes('remittance') || n.includes('poznamka'))) { map.description = i; return; }
-    if (map.myDescription === undefined && (n.includes('popis pro me') || n.includes('popis pro') || n.includes('my description'))) { map.myDescription = i; return; }
-    if (map.description === undefined && n.includes('popis')) { map.description = i; return; }
-    // Transaction type / direction
-    if (map.type === undefined && (n.includes('typ') || n.includes('smer') || n.includes('transaction type'))) { map.type = i; return; }
-  });
-  return map;
-}
-
-function cell(cols: string[], idx: number | undefined): string {
-  if (idx === undefined || idx >= cols.length) return '';
-  return cols[idx] ?? '';
-}
-
-/** Deterministic transaction ID */
-function makeTxId(
-  date: string,
-  amount: number,
-  direction: BankTransactionDirection,
-  counterpartyAccount: string,
-  vs: string,
-): string {
-  const raw = `${date}|${amount}|${direction}|${counterpartyAccount}|${vs}`;
-  return Buffer.from(raw).toString('base64url').slice(0, 24);
-}
-
-function parseKbCsv(csvText: string): BankTransaction[] {
-  // Strip UTF-8 BOM if present
-  const text = csvText.charCodeAt(0) === 0xfeff ? csvText.slice(1) : csvText;
-
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  if (lines.length < 2) return [];
-
-  // Auto-detect separator: count ; vs , vs \t in first few lines
-  const sample = lines.slice(0, Math.min(5, lines.length)).join('\n');
-  const countSemi  = sample.split(';').length - 1;
-  const countComma = sample.split(',').length - 1;
-  const countTab   = sample.split('\t').length - 1;
-  const sep = countTab >= countSemi && countTab >= countComma ? '\t'
-            : countSemi >= countComma ? ';' : ',';
-
-  // Find header line — look up to 20 lines deep (KB+ has 16 metadata rows at top)
-  let headerIdx = -1;
-  for (let i = 0; i < Math.min(20, lines.length); i++) {
-    const n = norm(lines[i]);
-    // Must contain a date-like column AND at least one amount/counterparty column
-    const hasDate = n.includes('datum');
-    const hasAmount = n.includes('castka') || n.includes('objem');
-    const hasCounterparty = n.includes('protistrana') || n.includes('protiucet') || n.includes('protistrany');
-    if (hasDate && (hasAmount || hasCounterparty)) {
-      headerIdx = i;
-      break;
-    }
-  }
-  // Fallback: pick the line with the most separator-delimited columns
-  if (headerIdx === -1) {
-    let maxCols = 0;
-    for (let i = 0; i < Math.min(20, lines.length); i++) {
-      const cols = splitCsvLine(lines[i], sep).length;
-      if (cols > maxCols) { maxCols = cols; headerIdx = i; }
-    }
-  }
-  if (headerIdx === -1) return [];
-
-  const headers = splitCsvLine(lines[headerIdx], sep);
-  const colMap = buildColMap(headers);
-  const now = new Date().toISOString();
-  const results: BankTransaction[] = [];
-
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const cols = splitCsvLine(lines[i], sep);
-    if (cols.length < 2) continue;
-
-    const dateStr = cell(cols, colMap.date);
-    if (!dateStr) continue;
-
-    const rawAmount = parseCzechNumber(cell(cols, colMap.amount));
-    if (rawAmount === 0 && cell(cols, colMap.amount) === '') continue;
-
-    const direction: BankTransactionDirection = rawAmount < 0 ? 'debit' : 'credit';
-    const amount = Math.abs(rawAmount);
-    const date = parseDate(dateStr);
-    const valueDateRaw = cell(cols, colMap.valueDate);
-    const counterpartyAccount = cell(cols, colMap.counterpartyAccount);
-    const counterpartyName = cell(cols, colMap.counterpartyName);
-    const vs = cell(cols, colMap.vs);
-    const ks = cell(cols, colMap.ks);
-    const ss = cell(cols, colMap.ss);
-    const description = cell(cols, colMap.description);
-    const myDescription = cell(cols, colMap.myDescription);
-    const currency = cell(cols, colMap.currency) || 'CZK';
-    const transactionType = cell(cols, colMap.type);
-    const rawOriginalAmount = cell(cols, colMap.originalAmount);
-    const originalAmountRaw = rawOriginalAmount ? parseCzechNumber(rawOriginalAmount) : 0;
-    const originalCurrencyRaw = cell(cols, colMap.originalCurrency);
-
-    // Prefer the bank's own unique transaction ID ("Identifikace transakce");
-    // fall back to the deterministic hash only if the column is absent.
-    const bankId = cell(cols, colMap.bankId).trim();
-    const id = bankId || makeTxId(date, amount, direction, counterpartyAccount, vs);
-    const state: BankTransactionState = direction === 'credit' ? 'revenue' : 'unmatched';
-
-    results.push({
-      id,
-      date,
-      valueDate: valueDateRaw ? parseDate(valueDateRaw) : undefined,
-      amount,
-      direction,
-      currency,
-      counterpartyAccount: counterpartyAccount || undefined,
-      counterpartyName: counterpartyName || undefined,
-      variableSymbol: vs || undefined,
-      constantSymbol: ks || undefined,
-      specificSymbol: ss || undefined,
-      description: description || undefined,
-      myDescription: myDescription || undefined,
-      transactionType: transactionType || undefined,
-      originalAmount: originalAmountRaw !== 0 ? Math.abs(originalAmountRaw) : undefined,
-      originalCurrency: (originalCurrencyRaw && originalCurrencyRaw !== currency) ? originalCurrencyRaw : undefined,
-      state,
-      importedAt: now,
-    });
-  }
-
-  return results;
-}
-
 // ── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
@@ -260,7 +36,8 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-    csvText = await file.text();
+    // KB exports Windows-1250 — file.text() would force UTF-8 and mangle Czech letters
+    csvText = decodeCsvBytes(await file.arrayBuffer());
   } catch {
     return NextResponse.json({ error: 'Failed to read uploaded file' }, { status: 400 });
   }
@@ -279,20 +56,10 @@ export async function POST(request: Request) {
   // rows (see dedupeById) so re-keyed pairs collapse automatically on import.
   const rawExisting = await readAllBankTransactions();
   const { deduped: existing, removed: selfHealed } = dedupeById(rawExisting);
-  const existingIds = new Set(existing.map((t) => t.id));
 
-  // A parsed row is already stored if it matches an existing row by the bank ID
-  // (t.id) OR by the legacy hash (date|amount|dir|account|vs). The legacy check
-  // covers rows imported before we switched to the bank's Identifikace transakce,
-  // so re-importing an old statement during the transition won't create duplicates.
-  // Also dedup within the batch itself (a CSV that lists the same row twice).
-  const seenInBatch = new Set<string>();
-  const newTxs = parsed.filter((t) => {
-    if (seenInBatch.has(t.id)) return false;
-    seenInBatch.add(t.id);
-    const legacyId = makeTxId(t.date, t.amount, t.direction, t.counterpartyAccount ?? '', t.variableSymbol ?? '');
-    return !existingIds.has(t.id) && !existingIds.has(legacyId);
-  });
+  // Skip rows already stored (by bank id, or by the legacy hash for rows imported
+  // before the bank id was used) and rows the CSV lists twice — see selectNewRows.
+  const newTxs = selectNewRows(parsed, existing);
   const duplicates = parsed.length - newTxs.length;
 
   if (newTxs.length === 0) {

@@ -138,6 +138,12 @@ describe('findAutoMatches', () => {
     expect(run([tx], [inv])).toEqual([]);
   });
 
+  it('leaves a payment alone once the user dismissed its suggestion', () => {
+    const tx = debit({ date: '2026-08-10', amount: 949, counterpartyName: 'Alza.cz', counterpartyAccount: CARD, suggestionDismissed: true });
+    const inv = invoice({ ...ALZA, invoiceDate: '2026-08-07', amountCZK: 949 });
+    expect(run([tx], [inv])).toEqual([]);
+  });
+
   it('records why it matched', () => {
     const tx = debit({ date: '2026-08-10', amount: 949, counterpartyName: 'Alza.cz', counterpartyAccount: CARD });
     const inv = invoice({ ...ALZA, invoiceDate: '2026-08-07', amountCZK: 949 });
