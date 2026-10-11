@@ -41,6 +41,15 @@ function getRevenueBadgeInfo(tx: { state: string; revenueInvoiceId?: string }): 
   return { label: 'Revenue (linked)', className: 'bg-indigo-200 text-indigo-700' };
 }
 
+/** Small "auto" chip on links made by the Auto-match button; the tooltip says why */
+function AutoTag({ reason }: { reason?: string }) {
+  if (!reason) return null;
+  return (
+    <span className="ml-1.5 px-1.5 py-px rounded bg-indigo-50 text-indigo-500 text-[10px] font-medium align-middle"
+      title={`Auto-matched: ${reason}`}>auto</span>
+  );
+}
+
 function SortIcon({ col, active, dir }: { col: SortCol; active: SortCol; dir: SortDir }) {
   if (col !== active) return <span className="ml-1 text-gray-300">↕</span>;
   return <span className="ml-1 text-indigo-500">{dir === 'asc' ? '↑' : '↓'}</span>;
@@ -286,10 +295,12 @@ export default function BankTransactionList({
                   ) : tx.state === 'grouped' && tx.settlementGroupId ? (
                     <span className="text-xs text-violet-600 font-medium">
                       {groups.find((g) => g.id === tx.settlementGroupId)?.name ?? 'Settlement group'}
+                      <AutoTag reason={tx.autoMatchReason} />
                     </span>
                   ) : tx.revenueInvoiceId ? (
                     <span className="text-xs text-indigo-600 font-medium">
                       Revenue invoice linked
+                      <AutoTag reason={tx.autoMatchReason} />
                     </span>
                   ) : linkedInvoices.length > 1 ? (
                     <span className="text-xs text-gray-700"
@@ -299,10 +310,7 @@ export default function BankTransactionList({
                   ) : linkedInvoice ? (
                     <span className="text-xs text-gray-700">
                       {linkedInvoice.invoiceNumber} · {linkedInvoice.supplierName}
-                      {tx.state === 'reconciled' && tx.autoMatchReason && (
-                        <span className="ml-1.5 px-1.5 py-px rounded bg-indigo-50 text-indigo-500 text-[10px] font-medium align-middle"
-                          title={`Auto-matched: ${tx.autoMatchReason}`}>auto</span>
-                      )}
+                      {tx.state === 'reconciled' && <AutoTag reason={tx.autoMatchReason} />}
                     </span>
                   ) : linkedTx ? (
                     <span className="text-xs text-teal-700">

@@ -41,7 +41,7 @@ export async function PUT(
     if (inv.bankTransactionId && inv.bankTransactionId !== body.bankTransactionId) {
       const oldTxIdx = transactions.findIndex((t) => t.id === inv.bankTransactionId);
       if (oldTxIdx !== -1) {
-        transactions[oldTxIdx] = { ...transactions[oldTxIdx], revenueInvoiceId: undefined, state: 'revenue', reconciledAt: undefined };
+        transactions[oldTxIdx] = { ...transactions[oldTxIdx], revenueInvoiceId: undefined, state: 'revenue', reconciledAt: undefined, autoMatchReason: undefined };
       }
     }
 
@@ -57,6 +57,7 @@ export async function PUT(
       revenueInvoiceId: id,
       state: 'reconciled',
       reconciledAt: now,
+      autoMatchReason: undefined, // linked by hand
     };
 
     await Promise.all([writeAllRevenueInvoices(invoices), writeAllBankTransactions(transactions)]);
@@ -68,7 +69,7 @@ export async function PUT(
     if (inv.bankTransactionId) {
       const txIdx = transactions.findIndex((t) => t.id === inv.bankTransactionId);
       if (txIdx !== -1) {
-        transactions[txIdx] = { ...transactions[txIdx], revenueInvoiceId: undefined, state: 'revenue', reconciledAt: undefined };
+        transactions[txIdx] = { ...transactions[txIdx], revenueInvoiceId: undefined, state: 'revenue', reconciledAt: undefined, autoMatchReason: undefined };
       }
     }
 

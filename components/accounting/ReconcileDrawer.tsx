@@ -327,7 +327,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             {tx.state === 'reconciled' && tx.reconciledAt && (
               <Detail label="Reconciled at" value={new Date(tx.reconciledAt).toLocaleString('cs-CZ')} />
             )}
-            {tx.state === 'reconciled' && (
+            {(tx.state === 'reconciled' || tx.state === 'grouped') && (
               <Detail label="Auto-matched" value={tx.autoMatchReason} />
             )}
             {(tx.state === 'ignored' || tx.state === 'non_deductible' || tx.state === 'recurring_cost') && tx.ignoredAt && (

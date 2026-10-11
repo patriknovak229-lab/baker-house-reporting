@@ -92,7 +92,7 @@ export async function PUT(request: Request, { params }: Params) {
       group.transactionIds = [...group.transactionIds, txId];
     }
     updatedTxs = txs.map((t) =>
-      t.id === txId ? { ...t, state: 'grouped' as const, settlementGroupId: id } : t,
+      t.id === txId ? { ...t, state: 'grouped' as const, settlementGroupId: id, autoMatchReason: undefined } : t,
     );
   }
 
@@ -101,7 +101,7 @@ export async function PUT(request: Request, { params }: Params) {
     group.transactionIds = group.transactionIds.filter((tid) => tid !== txId);
     updatedTxs = txs.map((t) =>
       t.id === txId
-        ? { ...t, state: 'revenue' as const, settlementGroupId: undefined }
+        ? { ...t, state: 'revenue' as const, settlementGroupId: undefined, autoMatchReason: undefined }
         : t,
     );
     // Auto-delete group if last transaction removed — but ONLY for tx-first groups.
@@ -180,7 +180,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   // Reset all grouped transactions back to plain revenue credits
   const updatedTxs = txs.map((t) =>
     group.transactionIds.includes(t.id)
-      ? { ...t, state: 'revenue' as const, settlementGroupId: undefined }
+      ? { ...t, state: 'revenue' as const, settlementGroupId: undefined, autoMatchReason: undefined }
       : t,
   );
 

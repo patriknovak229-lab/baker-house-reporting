@@ -109,7 +109,7 @@ function isMatchableInvoice(inv: SupplierInvoice): boolean {
     && (inv.documentType ?? 'invoice') === 'invoice' && inv.amountCZK > 0;
 }
 
-function daysBetween(fromIso: string, toIso: string): number {
+export function daysBetween(fromIso: string, toIso: string): number {
   return Math.round((Date.parse(toIso.slice(0, 10)) - Date.parse(fromIso.slice(0, 10))) / 86_400_000);
 }
 
@@ -159,21 +159,22 @@ function amountFit(tx: BankTransaction, inv: SupplierInvoice): 'exact' | 'near' 
 }
 
 /** The invoice number appears as the variable symbol or in the payment message ("FV2612173 RYWA S.R.O."). */
-function invoiceNumberOnPayment(tx: BankTransaction, inv: SupplierInvoice): boolean {
-  const numDigits = digitsOf(inv.invoiceNumber);
+export function invoiceNumberOnPayment(tx: BankTransaction, invoiceNumber: string): boolean {
+  const numDigits = digitsOf(invoiceNumber);
   const vs = digitsOf(tx.variableSymbol);
   if (vs.length >= 4 && vs === numDigits) return true;
 
   const words = normText(`${tx.description ?? ''} ${tx.myDescription ?? ''}`).split(/[^a-z0-9]+/).filter(Boolean);
-  const num = normText(inv.invoiceNumber).replace(/[^a-z0-9]/g, '');
+  const num = normText(invoiceNumber).replace(/[^a-z0-9]/g, '');
   if (num.length >= 5 && words.includes(num)) return true;
   if (numDigits.length >= 6 && words.some((w) => /^\d+$/.test(w) && w.replace(/^0+/, '') === numDigits)) return true;
   return false;
 }
 
-function nameOverlap(tx: BankTransaction, inv: SupplierInvoice): boolean {
+/** The bank's counterparty name and `name` share a meaningful word. */
+export function nameOverlap(tx: BankTransaction, name: string | undefined | null): boolean {
   const a = nameTokens(tx.counterpartyName);
-  const b = nameTokens(inv.supplierName);
+  const b = nameTokens(name);
   return a.some((x) => b.some((y) => x === y || (x.length >= 4 && y.length >= 4 && (x.includes(y) || y.includes(x)))));
 }
 
@@ -207,9 +208,9 @@ export function scoreCandidate(
   }
 
   const evidence: MatchEvidence[] = [];
-  if (invoiceNumberOnPayment(tx, inv)) evidence.push('invoice_number');
+  if (invoiceNumberOnPayment(tx, inv.invoiceNumber)) evidence.push('invoice_number');
   if (learnedMatch(tx, inv, memory)) evidence.push('learned');
-  if (nameOverlap(tx, inv)) evidence.push('name');
+  if (nameOverlap(tx, inv.supplierName)) evidence.push('name');
 
   const exactAmount = fit === 'exact';
   const hasNumber = evidence.includes('invoice_number');
@@ -254,34 +255,50 @@ export function findAutoMatches(
   const debits = transactions.filter((t) => t.direction === 'debit' && t.state === 'unmatched' && !t.suggestionDismissed);
   const pool = invoices.filter(isMatchableInvoice);
 
-  const pairs: Array<{ tx: BankTransaction; c: MatchCandidate }> = [];
+  const pairs: Array<CandidatePair<MatchCandidate>> = [];
   for (const tx of debits) {
     for (const inv of pool) {
       const c = scoreCandidate(tx, inv, memory, 'auto');
-      if (c?.autoEligible) pairs.push({ tx, c });
+      if (c?.autoEligible) pairs.push({ tx, targetId: inv.id, score: c.score, data: c });
     }
   }
-  pairs.sort((a, b) => b.c.score - a.c.score);
+  return assignClearBest(pairs).map((p) => ({ tx: p.tx, invoice: p.data.invoice, reason: describeMatch(p.data) }));
+}
 
+/** One scored (payment, document) pairing considered by assignClearBest */
+export interface CandidatePair<T> {
+  tx: BankTransaction;
+  targetId: string;
+  score: number;
+  data: T;
+}
+
+/**
+ * Accept a pair only when it beats every remaining rival of BOTH the payment and
+ * the document by AUTO_MARGIN; repeat until nothing more resolves. Considers all
+ * pairs at once, so the order of the input never matters.
+ */
+export function assignClearBest<T>(pairs: Array<CandidatePair<T>>): Array<CandidatePair<T>> {
+  const sorted = [...pairs].sort((a, b) => b.score - a.score);
   const usedTx = new Set<string>();
-  const usedInv = new Set<string>();
-  const out: AutoMatch[] = [];
+  const usedTarget = new Set<string>();
+  const out: Array<CandidatePair<T>> = [];
 
   for (let progress = true; progress; ) {
     progress = false;
-    const live = pairs.filter((p) => !usedTx.has(p.tx.id) && !usedInv.has(p.c.invoice.id));
+    const live = sorted.filter((p) => !usedTx.has(p.tx.id) && !usedTarget.has(p.targetId));
     for (const p of live) {
-      if (usedTx.has(p.tx.id) || usedInv.has(p.c.invoice.id)) continue;
+      if (usedTx.has(p.tx.id) || usedTarget.has(p.targetId)) continue;
       const clearlyBest = live.every((q) =>
         q === p
-        || usedTx.has(q.tx.id) || usedInv.has(q.c.invoice.id)
-        || (q.tx.id !== p.tx.id && q.c.invoice.id !== p.c.invoice.id)
-        || p.c.score - q.c.score >= AUTO_MARGIN,
+        || usedTx.has(q.tx.id) || usedTarget.has(q.targetId)
+        || (q.tx.id !== p.tx.id && q.targetId !== p.targetId)
+        || p.score - q.score >= AUTO_MARGIN,
       );
       if (!clearlyBest) continue;
-      out.push({ tx: p.tx, invoice: p.c.invoice, reason: describeMatch(p.c) });
+      out.push(p);
       usedTx.add(p.tx.id);
-      usedInv.add(p.c.invoice.id);
+      usedTarget.add(p.targetId);
       progress = true;
     }
   }

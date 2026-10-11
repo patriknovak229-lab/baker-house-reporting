@@ -96,7 +96,7 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
   const [showImport, setShowImport]       = useState(false);
   const [importBanner, setImportBanner]   = useState<ImportResult | null>(null);
   const [matching, setMatching]           = useState(false);
-  const [matchBanner, setMatchBanner]     = useState<number | null>(null);
+  const [matchBanner, setMatchBanner]     = useState<{ invoices: number; payouts: number; settlements: number; issued: number } | null>(null);
   const [cursorYear, setCursorYear]       = useState(() => new Date().getFullYear());
   const [cursorMonth, setCursorMonth]     = useState(() => new Date().getMonth()); // 0-indexed
 
@@ -134,9 +134,10 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
     try {
       const res = await fetch('/api/bank-transactions/reconcile', { method: 'POST' });
       if (res.ok) {
-        const data = await res.json() as { matched: number; transactions: BankTransaction[] };
+        const data = await res.json() as { matched: number; payouts: number; settlements: number; issued: number; transactions: BankTransaction[] };
         setTransactions(data.transactions);
-        setMatchBanner(data.matched);
+        setMatchBanner({ invoices: data.matched, payouts: data.payouts, settlements: data.settlements, issued: data.issued });
+        if (data.payouts > 0) void loadData(); // settlement groups gained payouts
         for (const tx of data.transactions) {
           if (tx.state !== 'reconciled') continue;
           for (const invId of linkedInvoiceIds(tx)) {
@@ -412,7 +413,13 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
             <div>
               <p className="text-sm font-medium text-indigo-800">Auto-match complete</p>
               <p className="text-xs text-indigo-600 mt-0.5">
-                {matchBanner > 0 ? `${matchBanner} transaction${matchBanner !== 1 ? 's' : ''} matched` : 'No confident matches found'}
+                {matchBanner.invoices + matchBanner.payouts + matchBanner.issued === 0
+                  ? 'No confident matches found'
+                  : [
+                      matchBanner.invoices > 0 && `${matchBanner.invoices} payment${matchBanner.invoices !== 1 ? 's' : ''} → supplier invoices`,
+                      matchBanner.payouts > 0 && `${matchBanner.payouts} OTA payout${matchBanner.payouts !== 1 ? 's' : ''} → ${matchBanner.settlements} settlement${matchBanner.settlements !== 1 ? 's' : ''}`,
+                      matchBanner.issued > 0 && `${matchBanner.issued} incoming payment${matchBanner.issued !== 1 ? 's' : ''} → issued invoices`,
+                    ].filter(Boolean).join(' · ')}
               </p>
             </div>
           </div>
