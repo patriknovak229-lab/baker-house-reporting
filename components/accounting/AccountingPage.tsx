@@ -25,6 +25,7 @@ import StatementsPage from './StatementsPage';
 import VouchersPage from './VouchersPage';
 import CommissionPage from './CommissionPage';
 import type { BankTransaction } from '@/types/bankTransaction';
+import { isOtaSupplier } from '@/utils/otaSupplier';
 
 const PHASES = [
   { id: 1, label: 'Costs', description: 'Supplier invoices' },
@@ -123,7 +124,11 @@ function AutoSavedBanner({ entries, onDismiss }: { entries: AutoSavedEntry[]; on
   );
 }
 
-function SkippedDuplicatesBanner({ entries, onDismiss }: { entries: Array<{ supplierName: string; invoiceNumber: string }>; onDismiss: () => void }) {
+function SkippedDuplicatesBanner({ entries, onDismiss, title }: {
+  entries: Array<{ supplierName: string; invoiceNumber: string }>;
+  onDismiss: () => void;
+  title?: string;
+}) {
   if (entries.length === 0) return null;
   return (
     <div className="flex items-start justify-between bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 gap-3">
@@ -131,7 +136,7 @@ function SkippedDuplicatesBanner({ entries, onDismiss }: { entries: Array<{ supp
         <span className="w-2 h-2 rounded-full bg-gray-400 flex-shrink-0 mt-1.5" />
         <div>
           <p className="text-sm font-medium text-gray-700">
-            {entries.length} already-imported invoice{entries.length !== 1 ? 's' : ''} skipped
+            {title ?? `${entries.length} already-imported invoice${entries.length !== 1 ? 's' : ''} skipped`}
           </p>
           <div className="text-xs text-gray-500 mt-0.5 space-y-0.5 max-h-32 overflow-y-auto">
             {entries.map((e, i) => (
@@ -285,6 +290,8 @@ export default function AccountingPage() {
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const [queueRunning, setQueueRunning] = useState(false);
   const [skippedDupes, setSkippedDupes] = useState<Array<{ supplierName: string; invoiceNumber: string }>>([]);
+  /** Booking.com / Airbnb documents dropped during import — their commission comes from the settlement report */
+  const [skippedOta, setSkippedOta] = useState<Array<{ supplierName: string; invoiceNumber: string }>>([]);
   const [whitelistNotice, setWhitelistNotice] = useState<string | null>(null);
   const abortQueueRef = useRef(false);
   const { categories } = useCategories();
@@ -490,6 +497,13 @@ export default function AccountingPage() {
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
         const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoicesRef.current, whitelistRef.current);
+        // Booking.com / Airbnb commission is booked from the settlement report — never import their invoices
+        if (isOtaSupplier(extracted.supplierName, extracted.supplierICO)) {
+          skipOtaDocument(extracted, next.driveSourceFileId);
+          setExtracting(false);
+          processNextInQueue(rest);
+          return;
+        }
         // Skip invoices already in the system (e.g. re-scanning a folder of old, reconciled receipts)
         const dup = findDuplicate(extracted, invoicesRef.current);
         if (dup) {
@@ -522,11 +536,27 @@ export default function AccountingPage() {
     }
   }
 
+  /** Drop an OTA commission invoice (see utils/otaSupplier); a Drive original is never offered again. */
+  function skipOtaDocument(extracted: ExtractedInvoiceData, driveSourceFileId?: string) {
+    setSkippedOta((prev) => [...prev, {
+      supplierName: extracted.supplierName ?? 'Booking.com / Airbnb',
+      invoiceNumber: extracted.invoiceNumber ?? '—',
+    }]);
+    if (driveSourceFileId) {
+      fetch('/api/supplier-invoices/drive-skip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileId: driveSourceFileId, note: `${extracted.supplierName ?? 'OTA'} ${extracted.invoiceNumber ?? ''} — booked from settlement report` }),
+      }).catch(() => { /* non-fatal: it would just be offered (and skipped) again */ });
+    }
+  }
+
   function handleProcessBatch(items: QueueItem[]) {
     setShowImportModal(false);
     setAutoSavedEntries([]);
     setDriveFailures(0);
     setSkippedDupes([]);
+    setSkippedOta([]);
     abortQueueRef.current = false;
     setQueueRunning(true);
     processNextInQueue(items);
@@ -543,6 +573,11 @@ export default function AccountingPage() {
       const res = await fetch('/api/supplier-invoices/extract', { method: 'POST', body: fd });
       if (res.ok) {
         const extracted = enrichFromHistory(await res.json() as ExtractedInvoiceData, invoices, whitelist);
+        if (isOtaSupplier(extracted.supplierName, extracted.supplierICO)) {
+          setSkippedOta([]);
+          skipOtaDocument(extracted);
+          return;
+        }
         setDrawerState({ extracted, file: compressed, existing: null, sourceType });
       } else {
         setDrawerState({ extracted: null, file: compressed, existing: null, sourceType, extractionFailed: true });
@@ -554,7 +589,7 @@ export default function AccountingPage() {
     }
   }
 
-  async function persistInvoice(inv: SupplierInvoice, force = false): Promise<{ ok: boolean; dupOf?: SupplierInvoice }> {
+  async function persistInvoice(inv: SupplierInvoice, force = false): Promise<{ ok: boolean; dupOf?: SupplierInvoice; error?: string }> {
     const isNew = !invoices.some((e) => e.id === inv.id);
     const method = isNew ? 'POST' : 'PUT';
     const url = isNew ? '/api/supplier-invoices' : `/api/supplier-invoices/${inv.id}`;
@@ -567,6 +602,10 @@ export default function AccountingPage() {
     if (res.status === 409) {
       const data = await res.json() as { code: string; existing: SupplierInvoice };
       return { ok: false, dupOf: data.existing };
+    }
+    if (res.status === 422) {
+      const data = await res.json() as { error?: string };
+      return { ok: false, error: data.error ?? 'This invoice cannot be saved.' };
     }
     if (res.ok) {
       const saved = await res.json() as SupplierInvoice;
@@ -583,6 +622,10 @@ export default function AccountingPage() {
       setDrawerState((prev) => prev ? { ...prev, duplicateOf: result.dupOf } : prev);
       return;
     }
+    if (result.error) {
+      alert(result.error);
+      return;
+    }
     // The drawer uploads the file to Drive before saving; a file present but no
     // driveUrl means that upload failed (silently) — surface it via the banner.
     if (result.ok && hadFile && !inv.driveUrl) setDriveFailures((n) => n + 1);
@@ -593,7 +636,11 @@ export default function AccountingPage() {
   }
 
   async function handleSaveAndWhitelist(inv: SupplierInvoice) {
-    await persistInvoice(inv);
+    const saved = await persistInvoice(inv);
+    if (saved.error) {
+      alert(saved.error);
+      return;
+    }
     // Add supplier to whitelist
     try {
       const res = await fetch('/api/supplier-invoices/whitelist', {
@@ -846,6 +893,11 @@ export default function AccountingPage() {
 
       {/* Already-imported invoices auto-skipped during a batch */}
       <SkippedDuplicatesBanner entries={skippedDupes} onDismiss={() => setSkippedDupes([])} />
+      <SkippedDuplicatesBanner
+        entries={skippedOta}
+        onDismiss={() => setSkippedOta([])}
+        title={`${skippedOta.length} Booking.com / Airbnb invoice${skippedOta.length !== 1 ? 's' : ''} not imported — commission is booked from the settlement report (Revenue → OTA settlements)`}
+      />
 
       {/* Save & Whitelist result */}
       {whitelistNotice && (

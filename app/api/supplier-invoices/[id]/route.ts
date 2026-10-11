@@ -5,6 +5,7 @@ import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { normalizeInvoiceAmounts } from '@/utils/invoiceChecks';
+import { isOtaSupplier, OTA_INVOICE_SKIP_MESSAGE } from '@/utils/otaSupplier';
 
 export async function PUT(
   request: Request,
@@ -21,7 +22,14 @@ export async function PUT(
   const idx = invoices.findIndex((inv) => inv.id === id);
   if (idx === -1) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  invoices[idx] = normalizeInvoiceAmounts({ ...invoices[idx], ...updates, id });
+  const merged = { ...invoices[idx], ...updates, id };
+  // Turning an invoice into an OTA one outside a settlement would double-count the commission
+  if (isOtaSupplier(merged.supplierName, merged.supplierICO) && !merged.settlementGroupId
+      && !isOtaSupplier(invoices[idx].supplierName, invoices[idx].supplierICO)) {
+    return NextResponse.json({ code: 'ota_settlement', error: OTA_INVOICE_SKIP_MESSAGE }, { status: 422 });
+  }
+
+  invoices[idx] = normalizeInvoiceAmounts(merged);
   await writeAllSupplierInvoices(invoices);
 
   return NextResponse.json(invoices[idx]);

@@ -3,6 +3,7 @@ import { requireRole } from '@/utils/authGuard';
 import type { WhitelistedSupplier } from '@/types/supplierInvoice';
 import { readAllSupplierWhitelist, writeAllSupplierWhitelist } from '@/utils/supplierWhitelistStore';
 import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
+import { isOtaSupplier, OTA_INVOICE_SKIP_MESSAGE } from '@/utils/otaSupplier';
 
 // GET — list all whitelisted suppliers (admin + accountant)
 export async function GET() {
@@ -24,6 +25,10 @@ export async function POST(request: Request) {
 
   if (!supplierName?.trim()) {
     return NextResponse.json({ error: 'supplierName is required' }, { status: 400 });
+  }
+  // OTA commission is booked from settlement reports — never auto-save their invoices
+  if (isOtaSupplier(supplierName, supplierICO)) {
+    return NextResponse.json({ code: 'ota_settlement', error: OTA_INVOICE_SKIP_MESSAGE }, { status: 422 });
   }
 
   const whitelist = await readAllSupplierWhitelist();

@@ -83,6 +83,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
   const [gmailAttachments, setGmailAttachments] = useState<GmailAttachment[]>([]);
   const [gmailSkipped, setGmailSkipped] = useState<GmailSkipped[]>([]);
   const [gmailNotScanned, setGmailNotScanned] = useState(0);
+  const [gmailOtaSkipped, setGmailOtaSkipped] = useState(0);
   const [gmailAccount, setGmailAccount] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -130,6 +131,7 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
     setGmailAttachments([]);
     setGmailSkipped([]);
     setGmailNotScanned(0);
+    setGmailOtaSkipped(0);
     setSelected(new Set());
     try {
       const res = await fetch('/api/supplier-invoices/gmail-scan', { method: 'POST' });
@@ -141,11 +143,13 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
         attachments: GmailAttachment[];
         skipped?: GmailSkipped[];
         notScanned?: number;
+        otaSkipped?: number;
         account?: string;
       };
       setGmailAttachments(data.attachments);
       setGmailSkipped(data.skipped ?? []);
       setGmailNotScanned(data.notScanned ?? 0);
+      setGmailOtaSkipped(data.otaSkipped ?? 0);
       setGmailAccount(data.account ?? null);
       // Auto-select all by default
       setSelected(new Set(data.attachments.map((a) => a.messageId + a.attachmentName)));
@@ -476,6 +480,13 @@ export default function InvoiceImportModal({ onProcessBatch, onFileSelected, onM
               {gmailNotScanned > 0 && (
                 <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
                   {gmailNotScanned} more email{gmailNotScanned !== 1 ? 's' : ''} waiting — process these, then sync again.
+                </p>
+              )}
+
+              {gmailOtaSkipped > 0 && (
+                <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                  {gmailOtaSkipped} Booking.com / Airbnb email{gmailOtaSkipped !== 1 ? 's' : ''} skipped — their commission is
+                  booked from the settlement report (Revenue → OTA settlements).
                 </p>
               )}
 

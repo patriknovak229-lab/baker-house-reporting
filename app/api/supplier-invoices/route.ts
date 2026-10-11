@@ -3,6 +3,7 @@ import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { findDuplicateInvoice, normalizeInvoiceAmounts } from '@/utils/invoiceChecks';
+import { isOtaSupplier, OTA_INVOICE_SKIP_MESSAGE } from '@/utils/otaSupplier';
 
 export async function GET() {
   const guard = await requireRole(['admin', 'accountant']);
@@ -23,6 +24,11 @@ export async function POST(request: Request) {
   const body = await request.json() as SupplierInvoice & { force?: boolean };
   if (!body.id || !body.supplierName || !body.invoiceNumber) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+  }
+
+  // OTA commission comes from the settlement report — a standalone invoice would double-count it
+  if (isOtaSupplier(body.supplierName, body.supplierICO) && !body.settlementGroupId) {
+    return NextResponse.json({ code: 'ota_settlement', error: OTA_INVOICE_SKIP_MESSAGE }, { status: 422 });
   }
 
   const invoices = await readAllSupplierInvoices();

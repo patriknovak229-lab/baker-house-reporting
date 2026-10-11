@@ -9,9 +9,8 @@ import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { classifyCost, RECURRING_ENTRY, type StatutoryLine } from '@/utils/costBridge';
+import { isOtaSupplier } from '@/utils/otaSupplier';
 
-/** OTA-named suppliers — used to flag legacy commission invoices not backed by a settlement */
-const OTA_SUPPLIER_RE = /booking\.?com|airbnb/i;
 
 /** Plausible invoice-date window; anything outside is flagged (not silently bucketed) */
 const MIN_DATE = '2023-01-01';
@@ -149,7 +148,7 @@ export async function GET(req: NextRequest) {
     if (date < from || date > to) continue;
 
     // Legacy OTA commission (not backed by a settlement) — counted, but flagged for cleanup
-    if (OTA_SUPPLIER_RE.test(inv.supplierName) && !settlementOwnedCostIds.has(inv.id)) {
+    if (isOtaSupplier(inv.supplierName, inv.supplierICO) && !settlementOwnedCostIds.has(inv.id)) {
       flaggedLegacyOta.push(row);
     }
     if (cls.unknownCategory) flaggedUnknownCategory.push(row);

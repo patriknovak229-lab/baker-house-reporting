@@ -3,6 +3,7 @@ import { google } from 'googleapis';
 import { requireRole } from '@/utils/authGuard';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readGmailInvoiceToken } from '@/utils/gmailInvoiceTokenStore';
+import { NOT_OTA_SENDERS_QUERY, OTA_SENDERS_QUERY } from '@/utils/otaSupplier';
 
 interface GmailAttachment {
   messageId: string;
@@ -137,25 +138,30 @@ export async function POST() {
   // Fetch ALL emails in the configured label (not just the newest page, and not just
   // those with PDF attachments — portal-notification emails have no attachment but
   // contain a download link in the body). Only ids are listed here; cheap.
-  const messages: { id?: string | null }[] = [];
-  let pageToken: string | undefined;
-  do {
-    const listRes = await gmail.users.messages.list({
-      userId: 'me',
-      q: `label:${label}`,
-      maxResults: 500,
-      pageToken,
-    });
-    messages.push(...(listRes.data.messages ?? []));
-    pageToken = listRes.data.nextPageToken ?? undefined;
-  } while (pageToken);
+  // Booking.com / Airbnb senders are excluded: their commission is booked from the
+  // settlement report, so importing their invoices would count it twice.
+  const listIds = async (q: string) => {
+    const ids: { id?: string | null }[] = [];
+    let pageToken: string | undefined;
+    do {
+      const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults: 500, pageToken });
+      ids.push(...(listRes.data.messages ?? []));
+      pageToken = listRes.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return ids;
+  };
+  const [messages, otaMessages] = await Promise.all([
+    listIds(`label:${label} ${NOT_OTA_SENDERS_QUERY}`),
+    listIds(`label:${label} ${OTA_SENDERS_QUERY}`),
+  ]);
+  const otaSkipped = otaMessages.filter((m) => m.id && !importedIds.has(m.id)).length;
 
   const unimported = messages.filter((m) => m.id && !importedIds.has(m.id));
   const newMessages = unimported.slice(0, MAX_NEW_MESSAGES);
   const notScanned = unimported.length - newMessages.length;
 
   if (newMessages.length === 0) {
-    return NextResponse.json({ attachments: [], skipped: [], notScanned: 0, account: stored.email });
+    return NextResponse.json({ attachments: [], skipped: [], notScanned: 0, otaSkipped, account: stored.email });
   }
 
   const attachments: GmailAttachment[] = [];
@@ -251,5 +257,5 @@ export async function POST() {
     }
   }
 
-  return NextResponse.json({ attachments, skipped, notScanned, account: stored.email });
+  return NextResponse.json({ attachments, skipped, notScanned, otaSkipped, account: stored.email });
 }
