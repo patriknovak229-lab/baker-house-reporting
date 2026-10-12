@@ -67,3 +67,17 @@ export async function appendSupplierInvoices(items: SupplierInvoice[]): Promise<
     await (await pg()).appendSupplierInvoicesPg(items);
   }
 }
+
+/** Set one invoice's per-rate VAT split. On Postgres a single-row UPDATE (safe
+ *  against concurrent whole-array writes); on Redis the usual read-modify-write. */
+export async function setSupplierInvoiceVatBreakdown(id: string, rows: SupplierInvoice['vatBreakdown']): Promise<void> {
+  if (writesToRedis(DOMAIN)) {
+    const redis = getRedis();
+    if (!redis) throw new Error('Redis not configured');
+    const items = (await redis.get<SupplierInvoice[]>(KEY)) ?? [];
+    await redis.set(KEY, items.map((i) => (i.id === id ? { ...i, vatBreakdown: rows } : i)));
+  }
+  if (writesToPostgres(DOMAIN)) {
+    await (await pg()).setSupplierInvoiceVatBreakdownPg(id, rows);
+  }
+}

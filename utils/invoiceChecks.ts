@@ -221,7 +221,7 @@ export function normalizeInvoiceAmounts<T extends {
   vatAmountCZK?: number;
   documentType?: string;
   vatBreakdown?: VatRow[];
-}>(inv: T): T {
+}>(inv: T): T & { vatBreakdown?: VatRow[] } {
   const isCredit = inv.documentType === 'credit_note';
   const sign = (n: number) => (isCredit ? -Math.abs(n) : n);
   const amountCZK = round2(sign(inv.amountCZK));

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { auth } from '@/auth';
 import { requireRole } from '@/utils/authGuard';
-import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
+import { readAllSupplierInvoices, setSupplierInvoiceVatBreakdown } from '@/utils/supplierInvoicesStore';
 import { readAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
 import { deriveVatBreakdown, meaningfulVatRows, round2 } from '@/utils/invoiceChecks';
 import { extractInvoice } from '@/utils/invoiceExtraction';
@@ -36,9 +36,9 @@ export async function POST(
   const inv = invoices.find((i) => i.id === id);
   if (!inv) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
+  // Targeted single-invoice update — a whole-list rewrite here raced with other saves
   const save = async (rows: ExtractedVatRow[], status: 'derived' | 'reread'): Promise<Outcome> => {
-    const fresh = await readAllSupplierInvoices();
-    await writeAllSupplierInvoices(fresh.map((i) => (i.id === id ? { ...i, vatBreakdown: rows } : i)));
+    await setSupplierInvoiceVatBreakdown(id, rows);
     return { status, vatBreakdown: rows };
   };
 

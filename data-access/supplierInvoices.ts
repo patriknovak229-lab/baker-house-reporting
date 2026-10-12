@@ -19,7 +19,7 @@
  * can never fail the batch insert. Dedup unique constraints (gmail_message_id,
  * icloud_file_name, invoice_number+ico) remain deferred — see schema note.
  */
-import { asc, desc } from 'drizzle-orm';
+import { asc, desc, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { supplierInvoices } from '@/lib/db/schema';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
@@ -129,4 +129,15 @@ export async function appendSupplierInvoicesPg(items: SupplierInvoice[]): Promis
   if (items.length === 0) return;
   const rows = items.map(toRow);
   await db.insert(supplierInvoices).values(rows).onConflictDoNothing({ target: supplierInvoices.id });
+}
+
+/** Set ONE invoice's per-rate VAT split — a targeted row update, so it can't be
+ *  lost to (or clobber) a concurrent whole-table replaceAll. */
+export async function setSupplierInvoiceVatBreakdownPg(id: string, rows: SupplierInvoice['vatBreakdown']): Promise<boolean> {
+  const res = await db
+    .update(supplierInvoices)
+    .set({ vatBreakdown: rows && rows.length > 0 ? rows : null })
+    .where(eq(supplierInvoices.id, id))
+    .returning({ id: supplierInvoices.id });
+  return res.length > 0;
 }
