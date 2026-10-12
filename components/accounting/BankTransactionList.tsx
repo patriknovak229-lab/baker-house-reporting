@@ -228,7 +228,10 @@ export default function BankTransactionList({
               ? RECURRING_COST_CATEGORIES.find((c) => c.id === tx.costCategory)?.label
               : undefined;
 
-            const revenueBadgeOverride = getRevenueBadgeInfo(tx);
+            // An incoming refund settling supplier credit note(s) — shown as a refund, not revenue
+            const isCreditNoteRefund = tx.direction === 'credit' && linkedInvoices.length > 0
+              && linkedInvoices.every((inv) => inv.documentType === 'credit_note');
+            const revenueBadgeOverride = isCreditNoteRefund ? STATE_BADGE.refund : getRevenueBadgeInfo(tx);
 
             return (
               <tr
@@ -300,6 +303,12 @@ export default function BankTransactionList({
                   ) : tx.revenueInvoiceId ? (
                     <span className="text-xs text-indigo-600 font-medium">
                       Revenue invoice linked
+                      <AutoTag reason={tx.autoMatchReason} />
+                    </span>
+                  ) : isCreditNoteRefund ? (
+                    <span className="text-xs text-teal-700"
+                      title={linkedInvoices.map((inv) => `${inv.invoiceNumber}${inv.originalInvoiceNumber ? ` (for #${inv.originalInvoiceNumber})` : ''}`).join('\n')}>
+                      Refund · credit note {linkedInvoices.map((inv) => inv.invoiceNumber).join(', ')} · {linkedInvoices[0].supplierName}
                       <AutoTag reason={tx.autoMatchReason} />
                     </span>
                   ) : linkedInvoices.length > 1 ? (

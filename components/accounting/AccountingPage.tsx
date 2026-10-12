@@ -298,23 +298,28 @@ export default function AccountingPage() {
   const [filters, setFilters] = useState({
     status: 'all' as 'all' | SupplierInvoiceStatus,
     category: 'all' as string,
+    /** 'credit_notes' = show only dobropisy (they normally sit nested under their invoice) */
+    docType: 'all' as 'all' | 'credit_notes',
     search: '',
     dateFrom: '',
     dateTo: '',
   });
 
-  const isFiltered = filters.status !== 'all' || filters.category !== 'all' ||
+  const isFiltered = filters.status !== 'all' || filters.category !== 'all' || filters.docType !== 'all' ||
     !!filters.search || !!filters.dateFrom || !!filters.dateTo;
 
   const filteredInvoices = useMemo(() => invoices.filter((inv) => {
     if (filters.status !== 'all' && inv.status !== filters.status) return false;
     if (filters.category !== 'all' && inv.category !== filters.category) return false;
+    if (filters.docType === 'credit_notes' && inv.documentType !== 'credit_note') return false;
     if (filters.dateFrom && inv.invoiceDate < filters.dateFrom) return false;
     if (filters.dateTo && inv.invoiceDate > filters.dateTo) return false;
     if (filters.search) {
       const q = filters.search.toLowerCase();
       if (!inv.supplierName.toLowerCase().includes(q) &&
           !inv.invoiceNumber.toLowerCase().includes(q) &&
+          // a credit note also matches the invoice number it corrects, so it shows under that invoice
+          !(inv.originalInvoiceNumber ?? '').toLowerCase().includes(q) &&
           !(inv.description ?? '').toLowerCase().includes(q)) return false;
     }
     return true;
@@ -1044,6 +1049,12 @@ export default function AccountingPage() {
             <option value="pending">Pending</option>
             <option value="reconciled">Reconciled</option>
           </select>
+          <select value={filters.docType} onChange={(e) => setFilters((f) => ({ ...f, docType: e.target.value as typeof filters.docType }))}
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          >
+            <option value="all">All documents</option>
+            <option value="credit_notes">Credit notes only</option>
+          </select>
           <select value={filters.category} onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))}
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
           >
@@ -1059,8 +1070,8 @@ export default function AccountingPage() {
             <input type="date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
               className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400" />
           </div>
-          {(filters.status !== 'all' || filters.category !== 'all' || filters.search || filters.dateFrom || filters.dateTo) && (
-            <button onClick={() => setFilters({ status: 'all', category: 'all', search: '', dateFrom: '', dateTo: '' })}
+          {(filters.status !== 'all' || filters.category !== 'all' || filters.docType !== 'all' || filters.search || filters.dateFrom || filters.dateTo) && (
+            <button onClick={() => setFilters({ status: 'all', category: 'all', docType: 'all', search: '', dateFrom: '', dateTo: '' })}
               className="text-xs text-gray-400 hover:text-gray-600 px-2">
               Clear filters
             </button>

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { BankTransaction } from '@/types/bankTransaction';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
-import { findIssuedInvoiceMatches, findSettlementPayouts } from './bankCreditMatch';
+import type { SupplierInvoice } from '@/types/supplierInvoice';
+import { findCreditNoteRefunds, findIssuedInvoiceMatches, findSettlementPayouts } from './bankCreditMatch';
 
 let seq = 0;
 function credit(p: Partial<BankTransaction> & { date: string; amount: number }): BankTransaction {
@@ -99,5 +100,63 @@ describe('findIssuedInvoiceMatches', () => {
     const done = issued({ invoiceNumber: 'INV-2', invoiceDate: '2026-07-01', amountCZK: 5000, status: 'reconciled' });
     const tx = credit({ date: '2026-07-05', amount: 5000, variableSymbol: '2' });
     expect(findIssuedInvoiceMatches([tx], [ota, done])).toEqual([]);
+  });
+});
+
+describe('findCreditNoteRefunds', () => {
+  const ALZA = { supplierName: 'Alza.cz a.s.', supplierICO: '27082440' };
+  const CARD = '412501******5296';
+  function note(p: Partial<SupplierInvoice> & { invoiceNumber: string; amountCZK: number }): SupplierInvoice {
+    return {
+      id: `n${++seq}`, ...ALZA, invoiceDate: '2026-07-10', duzpDate: '2026-07-10', category: 'consumables', status: 'pending',
+      sourceType: 'drive', createdAt: '', documentType: 'credit_note', originalInvoiceNumber: '4024458200', ...p,
+    };
+  }
+  const refund = (amount: number, p: Partial<BankTransaction> = {}) =>
+    credit({ date: '2026-07-13', amount, counterpartyName: 'Alza.cz', counterpartyAccount: CARD, ...p });
+
+  it('pairs the six Alza goodwills one refund each (3 × 1 499, 3 × 729)', () => {
+    const notes = [
+      note({ invoiceNumber: '3261600886', amountCZK: -1499 }), note({ invoiceNumber: '3261600905', amountCZK: -729 }),
+      note({ invoiceNumber: '3261600931', amountCZK: -1499 }), note({ invoiceNumber: '3261601069', amountCZK: -729 }),
+      note({ invoiceNumber: '3261601088', amountCZK: -729 }), note({ invoiceNumber: '3261601112', amountCZK: -1499 }),
+    ];
+    const refunds = [refund(1499), refund(729), refund(1499), refund(729), refund(729), refund(1499)];
+    const m = findCreditNoteRefunds(refunds, notes, new Map());
+    expect(m).toHaveLength(6);
+    expect(new Set(m.map((x) => x.tx.id)).size).toBe(6);
+    for (const x of m) expect(x.tx.amount).toBe(-x.creditNote.amountCZK);
+    expect(m[0].reason).toBe('refund of credit note · name match · exact amount · +3 d');
+  });
+
+  it('uses the payer of the original purchase when the bank shows no usable name', () => {
+    const original: SupplierInvoice = { id: 'orig', ...ALZA, invoiceNumber: '4024458200', invoiceDate: '2026-07-04', amountCZK: 8912,
+      category: 'consumables', status: 'reconciled', sourceType: 'drive', createdAt: '', bankTransactionId: 'buy' };
+    const buy: BankTransaction = { id: 'buy', direction: 'debit', currency: 'CZK', state: 'reconciled', importedAt: '',
+      date: '2026-07-06', amount: 8912, counterpartyAccount: '35-3355550267/0100' };
+    const n = note({ invoiceNumber: '3261600886', amountCZK: -1499, relatedInvoiceId: 'orig' });
+    const back = credit({ date: '2026-07-13', amount: 1499, counterpartyAccount: '35-3355550267/0100' });
+    const [m] = findCreditNoteRefunds([buy, back], [original, n], new Map());
+    expect(m.reason).toContain('same payer as the original purchase');
+  });
+
+  it('needs an exact amount, a supplier signal and a plausible date', () => {
+    const n = note({ invoiceNumber: '1', amountCZK: -1499 });
+    expect(findCreditNoteRefunds([refund(1490)], [n], new Map())).toEqual([]);                       // not exact (±1 Kč rounding only)
+    expect(findCreditNoteRefunds([refund(1499, { counterpartyName: 'Someone' })], [n], new Map())).toEqual([]); // no signal
+    expect(findCreditNoteRefunds([refund(1499, { date: '2026-09-30' })], [n], new Map())).toEqual([]);  // 82 d later
+  });
+
+  it('ignores reconciled credit notes and credits already claimed', () => {
+    const done = note({ invoiceNumber: '1', amountCZK: -1499, status: 'reconciled', bankTransactionId: 'x' });
+    const open = note({ invoiceNumber: '2', amountCZK: -729 });
+    expect(findCreditNoteRefunds([refund(1499)], [done], new Map())).toEqual([]);
+    expect(findCreditNoteRefunds([refund(729, { state: 'refund' })], [open], new Map())).toEqual([]);
+  });
+
+  it('leaves a refund alone when credit notes of two suppliers could explain it', () => {
+    const a = note({ invoiceNumber: '1', amountCZK: -500 });
+    const b = note({ invoiceNumber: '2', amountCZK: -500, supplierName: 'Alza Plus s.r.o.', supplierICO: '99999999' });
+    expect(findCreditNoteRefunds([refund(500)], [a, b], new Map())).toEqual([]);
   });
 });

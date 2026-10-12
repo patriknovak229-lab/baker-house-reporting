@@ -137,7 +137,7 @@ export function learnCounterparties(transactions: BankTransaction[], invoices: S
 }
 
 /** 'exact' (to the crown / cent), 'near' (≤ 1 %), or null. Foreign invoices compare the original-currency amount. */
-function amountFit(tx: BankTransaction, inv: SupplierInvoice): 'exact' | 'near' | null {
+export function amountFit(tx: BankTransaction, inv: SupplierInvoice): 'exact' | 'near' | null {
   const currency = (inv.invoiceCurrency || 'CZK').toUpperCase();
   let diff: number;
   let exactTol: number;

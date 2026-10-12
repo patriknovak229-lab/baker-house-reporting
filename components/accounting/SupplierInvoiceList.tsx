@@ -246,6 +246,10 @@ export default function SupplierInvoiceList({ invoices, onEdit, onDelete, onReup
                   {credits.length > 0 && (
                     <div className="text-[11px] font-normal text-gray-500">
                       net {formatAmount(net, inv.invoiceCurrency)} after {credits.length} return{credits.length !== 1 ? 's' : ''}
+                      {' · '}
+                      <span className={credits.every((c) => c.bankTransactionId) ? 'text-teal-600' : 'text-amber-600'}>
+                        {credits.filter((c) => c.bankTransactionId).length}/{credits.length} refunded
+                      </span>
                     </div>
                   )}
                 </td>

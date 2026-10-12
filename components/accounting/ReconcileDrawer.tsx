@@ -5,7 +5,7 @@ import { IGNORE_CATEGORIES, RECURRING_COST_CATEGORIES } from '@/types/bankTransa
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatAmount, formatDate, formatCurrency } from '@/utils/formatters';
-import { findSuggestion, learnCounterparties } from '@/utils/bankInvoiceMatch';
+import { findSuggestion, learnCounterparties, nameOverlap } from '@/utils/bankInvoiceMatch';
 
 interface Props {
   transaction: BankTransaction;
@@ -29,7 +29,7 @@ function Detail({ label, value }: { label: string; value?: string | null }) {
 }
 
 type DebitMode  = 'match' | 'recurring_cost' | 'ignore' | 'non_deductible';
-type CreditMode = 'note' | 'refund' | 'partial_refund' | 'net_settlement' | 'settlement_group';
+type CreditMode = 'note' | 'credit_note' | 'refund' | 'partial_refund' | 'net_settlement' | 'settlement_group';
 
 export default function ReconcileDrawer({ transaction: tx, transactions, invoices, groups, onSave, onGroupSave, onClose }: Props) {
   const isCredit  = tx.direction === 'credit';
@@ -66,7 +66,26 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   const [whitelistFixed, setWhitelistFixed]    = useState(true);
 
   // ── Credit state ──────────────────────────────────────────────────────────
+  /** Credit notes this refund is (or could be) settling — open ones plus the one already linked */
+  const creditNoteCandidates = useMemo(() => {
+    if (!isCredit) return [];
+    const linked = new Set(linkedIds);
+    return invoices
+      .filter((i) => i.documentType === 'credit_note' && (linked.has(i.id) || (i.status !== 'reconciled' && !i.bankTransactionId)))
+      .map((i) => {
+        const exact = Math.abs(Math.abs(i.amountCZK) - tx.amount) <= 1;
+        const named = nameOverlap(tx, i.supplierName);
+        const days = Math.abs((Date.parse(tx.date) - Date.parse(i.duzpDate ?? i.invoiceDate)) / 86_400_000);
+        return { inv: i, exact, named, score: (linked.has(i.id) ? 1000 : 0) + (exact ? 100 : 0) + (named ? 20 : 0) - Math.min(days, 90) * 0.1 };
+      })
+      .sort((a, b) => b.score - a.score);
+  }, [isCredit, invoices, linkedIds, tx]);
+  const linkedCreditNoteId = creditNoteCandidates.find((c) => linkedIds.includes(c.inv.id))?.inv.id;
+  const suggestedCreditNoteId = linkedCreditNoteId
+    ?? (creditNoteCandidates[0]?.exact && creditNoteCandidates[0]?.named ? creditNoteCandidates[0].inv.id : undefined);
+
   const initialCreditMode: CreditMode =
+    linkedCreditNoteId              ? 'credit_note' :
     tx.state === 'refund'          ? 'refund' :
     tx.state === 'partial_refund'  ? 'partial_refund' :
     tx.state === 'net_settlement'  ? 'net_settlement' :
@@ -74,6 +93,8 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
 
   const [creditMode, setCreditMode]            = useState<CreditMode>(initialCreditMode);
   const [revenueNote, setRevenueNote]          = useState(tx.ignoreNote ?? '');
+  const [selectedCreditNoteId, setSelectedCreditNoteId] = useState(suggestedCreditNoteId ?? '');
+  const [creditNoteSearch, setCreditNoteSearch] = useState('');
   const [selectedDebitId, setSelectedDebitId]  = useState(tx.linkedTransactionId ?? '');
   const [debitSearch, setDebitSearch]          = useState('');
   const [settlementInvoiceIds, setSettlementInvoiceIds] = useState<Set<string>>(
@@ -205,6 +226,9 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
       if (isCredit) {
         if (creditMode === 'note') {
           body = { action: 'note', note: revenueNote };
+        } else if (creditMode === 'credit_note') {
+          if (!selectedCreditNoteId) return;
+          body = { action: 'credit_note', invoiceId: selectedCreditNoteId };
         } else if (creditMode === 'net_settlement') {
           body = {
             action: 'net_settlement',
@@ -268,6 +292,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   const canSave = isCredit
     ? creditMode === 'settlement_group'
       ? groupMode === 'new' ? !!newGroupName.trim() : !!selectedGroupId
+      : creditMode === 'credit_note' ? !!selectedCreditNoteId
       : true
     : debitMode === 'match' ? selectedInvoiceIds.size > 0
     : debitMode === 'recurring_cost' ? !!costCategory
@@ -347,6 +372,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             <>
               <div className="flex border-b border-gray-100 flex-shrink-0">
                 <button onClick={() => setCreditMode('note')}              className={tabClass(creditMode === 'note')}>Note</button>
+                <button onClick={() => setCreditMode('credit_note')}       className={tabClass(creditMode === 'credit_note')}>Credit note</button>
                 <button onClick={() => setCreditMode('settlement_group')}  className={tabClass(creditMode === 'settlement_group')}>Group</button>
                 <button onClick={() => setCreditMode('net_settlement')}    className={tabClass(creditMode === 'net_settlement')}>Net settlement</button>
                 <button onClick={() => setCreditMode('refund')}            className={tabClass(creditMode === 'refund')}>Refund</button>
@@ -506,6 +532,49 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                         {settlementInvoiceIds.size} invoice{settlementInvoiceIds.size !== 1 ? 's' : ''} selected
                       </p>
                     )}
+                  </>
+                )}
+
+                {creditMode === 'credit_note' && (
+                  <>
+                    <p className="text-xs text-gray-500">
+                      A supplier refund settles one credit note (dobropis). Pick the credit note this money comes back for.
+                    </p>
+                    <input
+                      type="text"
+                      placeholder="Search supplier or credit note #…"
+                      value={creditNoteSearch}
+                      onChange={(e) => setCreditNoteSearch(e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                    <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                      {(() => {
+                        const q = creditNoteSearch.trim().toLowerCase();
+                        const shown = creditNoteCandidates.filter(({ inv }) => !q ||
+                          inv.supplierName.toLowerCase().includes(q) || inv.invoiceNumber.toLowerCase().includes(q) ||
+                          (inv.originalInvoiceNumber ?? '').toLowerCase().includes(q));
+                        if (shown.length === 0) return <p className="text-xs text-gray-400 text-center py-4">No open credit notes.</p>;
+                        return shown.map(({ inv, exact }) => (
+                          <label key={inv.id}
+                            className={`flex items-start gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition-colors ${selectedCreditNoteId === inv.id ? 'border-teal-300 bg-teal-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                            <input type="radio" name="credit-note" value={inv.id}
+                              checked={selectedCreditNoteId === inv.id}
+                              onChange={() => setSelectedCreditNoteId(inv.id)}
+                              className="mt-0.5 text-teal-600 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-gray-800 truncate">{inv.supplierName}</p>
+                              <p className="text-xs text-gray-500">
+                                {inv.invoiceNumber} · {formatDate(inv.duzpDate ?? inv.invoiceDate)}
+                                {inv.originalInvoiceNumber ? ` · for #${inv.originalInvoiceNumber}` : ''}
+                              </p>
+                            </div>
+                            <p className={`text-sm font-medium whitespace-nowrap flex-shrink-0 ${exact ? 'text-teal-700' : 'text-gray-800'}`}>
+                              {formatAmount(inv.amountCZK, inv.invoiceCurrency)}
+                            </p>
+                          </label>
+                        ));
+                      })()}
+                    </div>
                   </>
                 )}
 

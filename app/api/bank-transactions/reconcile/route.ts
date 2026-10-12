@@ -5,14 +5,15 @@ import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankT
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 import { readAllSettlementGroups, writeAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { findAutoMatches, learnCounterparties } from '@/utils/bankInvoiceMatch';
-import { findIssuedInvoiceMatches, findSettlementPayouts } from '@/utils/bankCreditMatch';
+import { findCreditNoteRefunds, findIssuedInvoiceMatches, findSettlementPayouts } from '@/utils/bankCreditMatch';
 
 /**
- * "Auto-match" button — three lanes, each only where the match is unambiguous
+ * "Auto-match" button — four lanes, each only where the match is unambiguous
  * (rules in utils/bankInvoiceMatch + utils/bankCreditMatch):
  *   1. outgoing payments → supplier invoices
  *   2. OTA payouts → settlement reports (exact net)
  *   3. incoming payments → issued invoices (invoice no. on the payment)
+ *   4. refunds → supplier credit notes (one refund per credit note)
  * Every link records autoMatchReason so it can be reviewed / undone.
  */
 export async function POST() {
@@ -31,7 +32,8 @@ export async function POST() {
   };
 
   // 1. Supplier invoices
-  const invoiceMatches = findAutoMatches(transactions, invoices, learnCounterparties(transactions, invoices));
+  const memory = learnCounterparties(transactions, invoices);
+  const invoiceMatches = findAutoMatches(transactions, invoices, memory);
   const invIdx = new Map(invoices.map((inv, i) => [inv.id, i]));
   for (const { tx, invoice, reason } of invoiceMatches) {
     patchTx(tx.id, { state: 'reconciled', invoiceId: invoice.id, invoiceIds: [invoice.id], reconciledAt: now, autoMatchReason: reason });
@@ -57,11 +59,19 @@ export async function POST() {
     revenueInvoices[ri] = { ...revenueInvoices[ri], status: 'reconciled', bankTransactionId: tx.id, reconciledAt: now };
   }
 
+  // 4. Refunds → credit notes (same effect as the drawer's "Credit note" tab)
+  const refundMatches = findCreditNoteRefunds(transactions, invoices, memory);
+  for (const { tx, creditNote, reason } of refundMatches) {
+    patchTx(tx.id, { state: 'reconciled', invoiceId: creditNote.id, invoiceIds: [creditNote.id], reconciledAt: now, autoMatchReason: reason });
+    const ii = invIdx.get(creditNote.id)!;
+    invoices[ii] = { ...invoices[ii], status: 'reconciled', bankTransactionId: tx.id, reconciledAt: now };
+  }
+
   const payoutsLinked = payoutMatches.reduce((s, m) => s + m.payouts.length, 0);
-  if (invoiceMatches.length + payoutsLinked + issuedMatches.length > 0) {
+  if (invoiceMatches.length + payoutsLinked + issuedMatches.length + refundMatches.length > 0) {
     await Promise.all([
       writeAllBankTransactions(transactions),
-      invoiceMatches.length > 0 ? writeAllSupplierInvoices(invoices) : null,
+      invoiceMatches.length + refundMatches.length > 0 ? writeAllSupplierInvoices(invoices) : null,
       payoutMatches.length > 0 ? writeAllSettlementGroups(groups) : null,
       issuedMatches.length > 0 ? writeAllRevenueInvoices(revenueInvoices) : null,
     ]);
@@ -72,6 +82,7 @@ export async function POST() {
     payouts: payoutsLinked,
     settlements: payoutMatches.length,
     issued: issuedMatches.length,
+    refunds: refundMatches.length,
     transactions,
   });
 }

@@ -206,7 +206,9 @@ export async function POST(req: NextRequest) {
     let category = '';
     let ledgerAccount = '';
     if (tx.state === 'reconciled' && linkedSup.length > 0) {
-      category = linkedSup.length === 1 ? linkedSup[0].category : 'mixed';
+      // An incoming refund settling credit note(s) reverses that cost — label it a refund, keep the cost account
+      const creditNoteRefund = tx.direction === 'credit' && linkedSup.every((i) => i.documentType === 'credit_note');
+      category = creditNoteRefund ? 'refund' : linkedSup.length === 1 ? linkedSup[0].category : 'mixed';
       ledgerAccount = linkedSup.length === 1 ? classifyCost(linkedSup[0].category, linkedSup[0].amountCZK).account : '';
     } else if (tx.state === 'recurring_cost') {
       category = tx.costCategory ?? 'recurring';

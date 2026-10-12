@@ -16,7 +16,8 @@ type RefundBody         = { action: 'refund'; linkedTransactionId?: string; part
 type NonDeductibleBody  = { action: 'non_deductible'; ignoreNote?: string };
 type NetSettlementBody  = { action: 'net_settlement'; deductedInvoiceIds: string[]; grossAmount?: number };
 type DismissSuggestBody = { action: 'dismiss_suggestion' };
-type PutBody = ReconcileBody | IgnoreBody | RecurringCostBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody | DismissSuggestBody;
+type CreditNoteBody     = { action: 'credit_note'; invoiceId: string };
+type PutBody = ReconcileBody | IgnoreBody | RecurringCostBody | UnmatchBody | NoteBody | RefundBody | NonDeductibleBody | NetSettlementBody | DismissSuggestBody | CreditNoteBody;
 
 /** All supplier invoices linked to a debit — supports the legacy single `invoiceId`
  *  and the multi-invoice `invoiceIds` (split-delivery) shapes. */
@@ -206,7 +207,45 @@ export async function PUT(
       }
     }
 
+  } else if (body.action === 'credit_note') {
+    // An incoming refund settles ONE supplier credit note (dobropis) — one bank line per document
+    const noteIdx = invoices.findIndex((i) => i.id === body.invoiceId);
+    const note = noteIdx === -1 ? undefined : invoices[noteIdx];
+    if (!note || note.documentType !== 'credit_note') {
+      return NextResponse.json({ error: 'Credit note not found' }, { status: 404 });
+    }
+    if (tx.direction !== 'credit') {
+      return NextResponse.json({ error: 'Only an incoming payment can settle a credit note' }, { status: 400 });
+    }
+    if (tx.revenueInvoiceId || tx.settlementGroupId) {
+      return NextResponse.json({ error: 'Unlink this payment from its revenue invoice / settlement first' }, { status: 409 });
+    }
+    if (note.bankTransactionId && note.bankTransactionId !== id) {
+      return NextResponse.json({ error: 'That credit note is already matched to another refund' }, { status: 409 });
+    }
+
+    // Release whatever this credit was linked to before
+    resetInvoicesToPending(linkedInvoiceIds(tx).filter((invId) => invId !== note.id), invoices);
+    if (tx.linkedTransactionId) {
+      const debitIdx = transactions.findIndex((t) => t.id === tx.linkedTransactionId);
+      if (debitIdx !== -1 && transactions[debitIdx].linkedTransactionId === id) {
+        transactions[debitIdx] = { ...transactions[debitIdx], linkedTransactionId: undefined, state: 'unmatched', reconciledAt: undefined };
+      }
+    }
+
+    tx.state = 'reconciled';
+    tx.invoiceId = note.id;
+    tx.invoiceIds = [note.id];
+    tx.linkedTransactionId = undefined;
+    tx.grossAmount = undefined;
+    tx.deductedInvoiceIds = undefined;
+    tx.ignoredAt = undefined;
+    tx.reconciledAt = now;
+    invoices[noteIdx] = { ...note, status: 'reconciled', bankTransactionId: id, reconciledAt: now };
+
   } else if (body.action === 'refund') {
+    // A credit-note link (or any document link) is replaced — release those documents
+    resetInvoicesToPending(linkedInvoiceIds(tx), invoices);
     // If previously linked to a different debit, reset that debit first
     if (tx.linkedTransactionId && tx.linkedTransactionId !== body.linkedTransactionId) {
       const prevDebitIdx = transactions.findIndex((t) => t.id === tx.linkedTransactionId);
