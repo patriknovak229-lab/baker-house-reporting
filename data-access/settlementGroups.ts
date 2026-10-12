@@ -45,6 +45,7 @@ function toRow(g: SettlementGroup): SettlementGroupInsert {
     reportFileName: g.reportFileName ?? null,
     reportUrl: g.reportUrl ?? null,
     revenueInvoiceId: g.revenueInvoiceId ?? null,
+    stripePayoutId: g.stripePayoutId ?? null,
   };
 }
 
@@ -67,6 +68,7 @@ function fromRow(r: SettlementGroupRow): SettlementGroup {
     reportFileName: u(r.reportFileName),
     reportUrl: u(r.reportUrl),
     revenueInvoiceId: u(r.revenueInvoiceId),
+    stripePayoutId: u(r.stripePayoutId),
   };
 }
 

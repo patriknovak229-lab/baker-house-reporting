@@ -51,6 +51,7 @@ export const DISTRIBUTION_FEES_CATEGORY = 'distribution-fees';
 export function sourceLabel(source?: string): string {
   if (source === 'airbnb')  return 'Airbnb';
   if (source === 'booking') return 'Booking.com B.V.';
+  if (source === 'stripe')  return 'Stripe Technology Europe Ltd';
   return 'OTA channel';
 }
 
@@ -58,6 +59,7 @@ export function sourceLabel(source?: string): string {
 export function channelLabel(source?: string): string {
   if (source === 'airbnb')  return 'Airbnb';
   if (source === 'booking') return 'Booking.com';
+  if (source === 'stripe')  return 'Stripe';
   return 'OTA';
 }
 

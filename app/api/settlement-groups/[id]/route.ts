@@ -57,6 +57,14 @@ export async function PUT(request: Request, { params }: Params) {
     group.name = body.name.trim();
   }
 
+  if (body.action === 'update_report' && group.source === 'stripe') {
+    // Built from Stripe's own payout data — editing figures here would desync the records
+    return NextResponse.json(
+      { error: 'Stripe settlements come straight from Stripe — delete it and run Auto-match again instead of editing.' },
+      { status: 400 },
+    );
+  }
+
   if (body.action === 'update_report') {
     // Patch only the earnings-report fields that were provided (undefined = leave unchanged)
     const patch: (keyof SettlementGroup)[] = [
@@ -196,11 +204,17 @@ export async function DELETE(_request: Request, { params }: Params) {
           : inv,
       );
 
-  // Report settlements also own the gross revenue record → delete it
+  // Report settlements also own the gross revenue record → delete it. Records the
+  // settlement only LINKED (a Stripe payout's payment-link / requested-invoice
+  // records) go back to pending instead.
   let updatedRevenue: RevenueInvoice[] | null = null;
-  if (isReport && group.revenueInvoiceId) {
+  if (isReport) {
     const rev = await readAllRevenueInvoices();
-    updatedRevenue = rev.filter((r) => r.id !== group.revenueInvoiceId);
+    updatedRevenue = rev
+      .filter((r) => r.id !== group.revenueInvoiceId)
+      .map((r) => (r.settlementGroupId === id
+        ? { ...r, status: 'pending' as const, settlementGroupId: undefined, reconciledAt: undefined }
+        : r));
   }
 
   const updatedGroups = groups.filter((g) => g.id !== id);

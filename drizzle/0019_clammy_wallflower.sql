@@ -1,0 +1,1 @@
+ALTER TABLE "settlement_groups" ADD COLUMN "stripe_payout_id" text;

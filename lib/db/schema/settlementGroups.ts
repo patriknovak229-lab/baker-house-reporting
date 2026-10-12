@@ -24,6 +24,7 @@ export const settlementGroups = pgTable('settlement_groups', {
   reportFileName: text('report_file_name'),
   reportUrl: text('report_url'),
   revenueInvoiceId: text('revenue_invoice_id'),
+  stripePayoutId: text('stripe_payout_id'),
 });
 
 export type SettlementGroupRow = typeof settlementGroups.$inferSelect;

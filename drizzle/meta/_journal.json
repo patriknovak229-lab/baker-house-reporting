@@ -134,6 +134,13 @@
       "when": 1791577686211,
       "tag": "0018_stormy_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791793889088,
+      "tag": "0019_clammy_wallflower",
+      "breakpoints": true
     }
   ]
 }

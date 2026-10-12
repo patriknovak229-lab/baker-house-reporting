@@ -6,6 +6,10 @@ import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenue
 import { readAllSettlementGroups, writeAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { findAutoMatches, learnCounterparties } from '@/utils/bankInvoiceMatch';
 import { findCreditNoteRefunds, findIssuedInvoiceMatches, findSettlementPayouts } from '@/utils/bankCreditMatch';
+import { applyStripeSettlement, isOpenStripeCredit } from '@/utils/stripeSettlement';
+import { loadWebBookings, planStripeCredit, stripeClient } from '@/utils/stripePayouts';
+
+export const maxDuration = 60;
 
 /**
  * "Auto-match" button — four lanes, each only where the match is unambiguous
@@ -14,6 +18,9 @@ import { findCreditNoteRefunds, findIssuedInvoiceMatches, findSettlementPayouts 
  *   2. OTA payouts → settlement reports (exact net)
  *   3. incoming payments → issued invoices (invoice no. on the payment)
  *   4. refunds → supplier credit notes (one refund per credit note)
+ *   5. Stripe payouts → Stripe settlements, built from the Stripe API — only when
+ *      the payout's contents tie to the bank exactly and nothing needs review;
+ *      otherwise left for the drawer's "Stripe payout" preview
  * Every link records autoMatchReason so it can be reviewed / undone.
  */
 export async function POST() {
@@ -40,6 +47,27 @@ export async function POST() {
     const ii = invIdx.get(invoice.id)!;
     invoices[ii] = { ...invoices[ii], status: 'reconciled', bankTransactionId: tx.id, reconciledAt: now };
   }
+
+  // 5. Stripe payouts → Stripe settlements (before the other credit lanes claim anything)
+  let stripeBooked = 0;
+  let stripeToReview = 0;
+  const openStripe = transactions.filter(isOpenStripeCredit);
+  const stripe = openStripe.length > 0 ? stripeClient() : null;
+  if (stripe) {
+    const bookings = await loadWebBookings();
+    for (const tx of openStripe) {
+      try {
+        const plan = await planStripeCredit(stripe, tx, revenueInvoices, bookings);
+        if (!plan.ties || plan.issues.length > 0) { stripeToReview++; continue; }
+        applyStripeSettlement(plan, { transactions, revenueInvoices, supplierInvoices: invoices, groups }, crypto.randomUUID(), now);
+        stripeBooked++;
+      } catch {
+        stripeToReview++;
+      }
+    }
+  }
+  txIdx.clear();
+  transactions.forEach((t, i) => txIdx.set(t.id, i));
 
   // 2. OTA payouts → settlements (same effect as the drawer's "add payout")
   const payoutMatches = findSettlementPayouts(transactions, groups);
@@ -68,12 +96,12 @@ export async function POST() {
   }
 
   const payoutsLinked = payoutMatches.reduce((s, m) => s + m.payouts.length, 0);
-  if (invoiceMatches.length + payoutsLinked + issuedMatches.length + refundMatches.length > 0) {
+  if (invoiceMatches.length + payoutsLinked + issuedMatches.length + refundMatches.length + stripeBooked > 0) {
     await Promise.all([
       writeAllBankTransactions(transactions),
-      invoiceMatches.length + refundMatches.length > 0 ? writeAllSupplierInvoices(invoices) : null,
-      payoutMatches.length > 0 ? writeAllSettlementGroups(groups) : null,
-      issuedMatches.length > 0 ? writeAllRevenueInvoices(revenueInvoices) : null,
+      invoiceMatches.length + refundMatches.length + stripeBooked > 0 ? writeAllSupplierInvoices(invoices) : null,
+      payoutMatches.length + stripeBooked > 0 ? writeAllSettlementGroups(groups) : null,
+      issuedMatches.length + stripeBooked > 0 ? writeAllRevenueInvoices(revenueInvoices) : null,
     ]);
   }
 
@@ -83,9 +111,11 @@ export async function POST() {
     settlements: payoutMatches.length,
     issued: issuedMatches.length,
     refunds: refundMatches.length,
+    stripe: stripeBooked,
+    stripeToReview,
     /** Every link made, across all lanes — the banner trusts this, so a page loaded
      *  before a new lane shipped never reports "no matches" when there were some */
-    total: invoiceMatches.length + payoutsLinked + issuedMatches.length + refundMatches.length,
+    total: invoiceMatches.length + payoutsLinked + issuedMatches.length + refundMatches.length + stripeBooked,
     transactions,
   });
 }

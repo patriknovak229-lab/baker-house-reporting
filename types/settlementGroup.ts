@@ -1,5 +1,5 @@
-/** Which OTA / channel an earnings-report settlement is from */
-export type SettlementSource = 'airbnb' | 'booking' | 'other';
+/** Which channel a settlement is from. 'stripe' = a Stripe payout of web bookings, built from the Stripe API (no report upload) */
+export type SettlementSource = 'airbnb' | 'booking' | 'stripe' | 'other';
 
 export interface SettlementGroup {
   id: string;               // uuid
@@ -33,6 +33,8 @@ export interface SettlementGroup {
   reportUrl?: string;
   /** RevenueInvoice.id auto-created for the gross booking volume (the cost record is in invoiceIds) */
   revenueInvoiceId?: string;
+  /** Stripe settlements: the Stripe payout (po_…) this group was built from */
+  stripePayoutId?: string;
 }
 
 /** A group that carries OTA earnings-report data (created from an uploaded report) */

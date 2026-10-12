@@ -96,7 +96,7 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
   const [showImport, setShowImport]       = useState(false);
   const [importBanner, setImportBanner]   = useState<ImportResult | null>(null);
   const [matching, setMatching]           = useState(false);
-  const [matchBanner, setMatchBanner]     = useState<{ invoices: number; payouts: number; settlements: number; issued: number; refunds: number; total: number } | null>(null);
+  const [matchBanner, setMatchBanner]     = useState<{ invoices: number; payouts: number; settlements: number; issued: number; refunds: number; stripe: number; stripeToReview: number; total: number } | null>(null);
   const [cursorYear, setCursorYear]       = useState(() => new Date().getFullYear());
   const [cursorMonth, setCursorMonth]     = useState(() => new Date().getMonth()); // 0-indexed
 
@@ -134,13 +134,14 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
     try {
       const res = await fetch('/api/bank-transactions/reconcile', { method: 'POST' });
       if (res.ok) {
-        const data = await res.json() as { matched: number; payouts: number; settlements: number; issued: number; refunds: number; total?: number; transactions: BankTransaction[] };
+        const data = await res.json() as { matched: number; payouts: number; settlements: number; issued: number; refunds: number; stripe?: number; stripeToReview?: number; total?: number; transactions: BankTransaction[] };
         setTransactions(data.transactions);
         setMatchBanner({
           invoices: data.matched, payouts: data.payouts, settlements: data.settlements, issued: data.issued, refunds: data.refunds,
+          stripe: data.stripe ?? 0, stripeToReview: data.stripeToReview ?? 0,
           total: data.total ?? data.matched + data.payouts + data.issued + data.refunds,
         });
-        if (data.payouts > 0) void loadData(); // settlement groups gained payouts
+        if (data.payouts > 0 || (data.stripe ?? 0) > 0) void loadData(); // settlement groups changed
         for (const tx of data.transactions) {
           if (tx.state !== 'reconciled') continue;
           for (const invId of linkedInvoiceIds(tx)) {
@@ -433,8 +434,14 @@ export default function BankPage({ invoices, onInvoiceUpdate, transactions, onTr
                       matchBanner.payouts > 0 && `${matchBanner.payouts} OTA payout${matchBanner.payouts !== 1 ? 's' : ''} → ${matchBanner.settlements} settlement${matchBanner.settlements !== 1 ? 's' : ''}`,
                       matchBanner.issued > 0 && `${matchBanner.issued} incoming payment${matchBanner.issued !== 1 ? 's' : ''} → issued invoices`,
                       matchBanner.refunds > 0 && `${matchBanner.refunds} refund${matchBanner.refunds !== 1 ? 's' : ''} → credit notes`,
+                      matchBanner.stripe > 0 && `${matchBanner.stripe} Stripe payout${matchBanner.stripe !== 1 ? 's' : ''} → settlements`,
                     ].filter(Boolean).join(' · ') || `${matchBanner.total} link${matchBanner.total !== 1 ? 's' : ''} made — reload to see details`}
               </p>
+              {matchBanner.stripeToReview > 0 && (
+                <p className="text-xs text-amber-700 mt-0.5">
+                  {matchBanner.stripeToReview} Stripe payout{matchBanner.stripeToReview !== 1 ? 's need' : ' needs'} a look — open it and use the “Stripe payout” tab
+                </p>
+              )}
             </div>
           </div>
           <button onClick={() => setMatchBanner(null)} className="text-indigo-400 hover:text-indigo-600 flex-shrink-0">×</button>

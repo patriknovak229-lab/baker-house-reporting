@@ -6,6 +6,8 @@ import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import { formatAmount, formatDate, formatCurrency } from '@/utils/formatters';
 import { findSuggestion, learnCounterparties, nameOverlap } from '@/utils/bankInvoiceMatch';
+import { isOpenStripeCredit } from '@/utils/stripeSettlement';
+import StripePayoutPanel from './StripePayoutPanel';
 
 interface Props {
   transaction: BankTransaction;
@@ -29,7 +31,7 @@ function Detail({ label, value }: { label: string; value?: string | null }) {
 }
 
 type DebitMode  = 'match' | 'recurring_cost' | 'ignore' | 'non_deductible';
-type CreditMode = 'note' | 'credit_note' | 'refund' | 'partial_refund' | 'net_settlement' | 'settlement_group';
+type CreditMode = 'note' | 'credit_note' | 'stripe_payout' | 'refund' | 'partial_refund' | 'net_settlement' | 'settlement_group';
 
 export default function ReconcileDrawer({ transaction: tx, transactions, invoices, groups, onSave, onGroupSave, onClose }: Props) {
   const isCredit  = tx.direction === 'credit';
@@ -84,8 +86,12 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   const suggestedCreditNoteId = linkedCreditNoteId
     ?? (creditNoteCandidates[0]?.exact && creditNoteCandidates[0]?.named ? creditNoteCandidates[0].inv.id : undefined);
 
+  /** A Stripe payout not yet booked as a settlement (or only hand-tagged "Net settlement") */
+  const isStripePayout = isOpenStripeCredit(tx);
+
   const initialCreditMode: CreditMode =
     linkedCreditNoteId              ? 'credit_note' :
+    isStripePayout                  ? 'stripe_payout' :
     tx.state === 'refund'          ? 'refund' :
     tx.state === 'partial_refund'  ? 'partial_refund' :
     tx.state === 'net_settlement'  ? 'net_settlement' :
@@ -372,6 +378,9 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
             <>
               <div className="flex border-b border-gray-100 flex-shrink-0">
                 <button onClick={() => setCreditMode('note')}              className={tabClass(creditMode === 'note')}>Note</button>
+                {isStripePayout && (
+                  <button onClick={() => setCreditMode('stripe_payout')}   className={tabClass(creditMode === 'stripe_payout')}>Stripe payout</button>
+                )}
                 <button onClick={() => setCreditMode('credit_note')}       className={tabClass(creditMode === 'credit_note')}>Credit note</button>
                 <button onClick={() => setCreditMode('settlement_group')}  className={tabClass(creditMode === 'settlement_group')}>Group</button>
                 <button onClick={() => setCreditMode('net_settlement')}    className={tabClass(creditMode === 'net_settlement')}>Net settlement</button>
@@ -533,6 +542,13 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
                       </p>
                     )}
                   </>
+                )}
+
+                {creditMode === 'stripe_payout' && (
+                  <StripePayoutPanel
+                    transaction={tx}
+                    onBooked={(updatedTx, group) => { onGroupSave(group, true); onSave(updatedTx); }}
+                  />
                 )}
 
                 {creditMode === 'credit_note' && (
@@ -814,11 +830,13 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
           </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+            {!(isCredit && creditMode === 'stripe_payout') && (
             <button onClick={() => { void handleSave(); }} disabled={!canSave || saving}
               className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
               {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               Save
             </button>
+            )}
           </div>
         </div>
       </div>
