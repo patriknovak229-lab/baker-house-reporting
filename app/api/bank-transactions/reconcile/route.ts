@@ -83,6 +83,9 @@ export async function POST() {
     settlements: payoutMatches.length,
     issued: issuedMatches.length,
     refunds: refundMatches.length,
+    /** Every link made, across all lanes — the banner trusts this, so a page loaded
+     *  before a new lane shipped never reports "no matches" when there were some */
+    total: invoiceMatches.length + payoutsLinked + issuedMatches.length + refundMatches.length,
     transactions,
   });
 }
