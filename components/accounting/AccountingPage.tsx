@@ -24,6 +24,7 @@ import RevenuePage from './RevenuePage';
 import StatementsPage from './StatementsPage';
 import VouchersPage from './VouchersPage';
 import CommissionPage from './CommissionPage';
+import VatPage from './vat/VatPage';
 import type { BankTransaction } from '@/types/bankTransaction';
 import { isOtaSupplier } from '@/utils/otaSupplier';
 
@@ -34,6 +35,7 @@ const PHASES = [
   { id: 4, label: 'Statements', description: 'P&L · Balance Sheet' },
   { id: 5, label: 'Vouchers', description: 'Discount codes' },
   { id: 6, label: 'Commission', description: 'Owner settlements' },
+  { id: 7, label: 'VAT', description: 'DPH return · kontrolní hlášení' },
 ];
 
 interface DrawerState {
@@ -839,7 +841,7 @@ export default function AccountingPage() {
       {/* Phase navigation */}
       <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl w-fit">
         {PHASES.map((phase) => {
-          const enabled = phase.id <= 6;
+          const enabled = phase.id <= 7;
           const active = activePhase === phase.id;
           return (
             <div key={phase.id}
@@ -896,6 +898,11 @@ export default function AccountingPage() {
       {/* Phase 6 — Commission */}
       {activePhase === 6 && (
         <CommissionPage />
+      )}
+
+      {/* Phase 7 — VAT */}
+      {activePhase === 7 && (
+        <VatPage />
       )}
 
       {/* Phase 1 — Costs */}
