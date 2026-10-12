@@ -8,7 +8,7 @@ import type {
   ExtractedLineItem,
 } from '@/types/supplierInvoice';
 import { useCategories } from './useCategories';
-import { checkInvoice, findOriginalInvoice, round2 } from '@/utils/invoiceChecks';
+import { checkInvoice, deriveVatBreakdown, findOriginalInvoice, meaningfulVatRows, round2, type VatRow } from '@/utils/invoiceChecks';
 import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
 
 const ALL_ROOMS = ['K.201', 'K.202', 'K.203', 'O.308'];
@@ -59,6 +59,15 @@ function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
       className={`w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white ${props.className ?? ''}`}
     />
   );
+}
+
+/** Saved / extracted VAT rows → form rows (magnitudes as strings; empty rows dropped) */
+function toFormRows(rows: VatRow[] | null | undefined): Array<{ rate: string; base: string; vat: string }> {
+  return meaningfulVatRows(rows).map((r) => ({
+    rate: String(r.rate),
+    base: r.base == null ? '' : String(Math.abs(r.base)),
+    vat: r.vat == null ? '' : String(Math.abs(r.vat)),
+  }));
 }
 
 function LineItemsBreakdown({
@@ -134,6 +143,8 @@ export default function InvoiceReviewDrawer({
   const [relatedInvoiceId, setRelatedInvoiceId] = useState('');
   const [amountCZK, setAmountCZK] = useState('');
   const [vatAmountCZK, setVatAmountCZK] = useState('');
+  // VAT split per rate — edited as magnitudes (credit notes are signed on save)
+  const [vatRows, setVatRows] = useState<Array<{ rate: string; base: string; vat: string }>>([]);
   const [invoiceCurrency, setInvoiceCurrency] = useState('CZK');
   const [category, setCategory] = useState('other');
   const [rooms, setRooms] = useState<string[]>([]);
@@ -164,6 +175,7 @@ export default function InvoiceReviewDrawer({
       // Credit notes are stored negative; the form edits the magnitude
       setAmountCZK(String(Math.abs(existing.amountCZK)));
       setVatAmountCZK(existing.vatAmountCZK != null ? String(Math.abs(existing.vatAmountCZK)) : '');
+      setVatRows(toFormRows(existing.vatBreakdown));
       setInvoiceCurrency(existing.invoiceCurrency ?? 'CZK');
       setCategory(existing.category);
       setRooms(existing.rooms ?? []);
@@ -176,6 +188,7 @@ export default function InvoiceReviewDrawer({
       if (extracted.duzpDate) setDuzpDate(extracted.duzpDate);
       if (extracted.amountCZK != null) setAmountCZK(String(Math.abs(extracted.amountCZK)));
       if (extracted.vatAmountCZK != null) setVatAmountCZK(String(Math.abs(extracted.vatAmountCZK)));
+      setVatRows(toFormRows(extracted.vatBreakdown));
       if (extracted.documentType === 'credit_note') {
         setDocumentType('credit_note');
         if (extracted.originalInvoiceNumber) setOriginalInvoiceNumber(extracted.originalInvoiceNumber);
@@ -223,16 +236,27 @@ export default function InvoiceReviewDrawer({
       .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
   }, [isCredit, invoices, supplierName, supplierICO, existing?.id]);
 
-  // Live sanity checks on the current form values. The extracted VAT table is only
-  // used while total + VAT still equal what was extracted (after a manual correction
-  // it would describe the wrong numbers).
+  // The VAT rows as saved: numbers, signed like the amount, empty rows dropped
+  const parsedVatRows = useMemo<VatRow[]>(() => {
+    const num = (v: string) => (v.trim() === '' || !Number.isFinite(parseFloat(v)) ? null : parseFloat(v));
+    const sign = (n: number | null) => (n == null ? null : round2(isCredit ? -Math.abs(n) : n));
+    return meaningfulVatRows(vatRows.map((r) => ({ rate: Number(r.rate), base: sign(num(r.base)), vat: sign(num(r.vat)) })));
+  }, [vatRows, isCredit]);
+
+  // With no rows, a single-rate invoice is split automatically on save — preview it
+  const derivedVatRows = useMemo(() => {
+    if (parsedVatRows.length > 0) return null;
+    const amount = parseFloat(amountCZK);
+    const vat = parseFloat(vatAmountCZK);
+    if (!Number.isFinite(amount) || !Number.isFinite(vat)) return null;
+    return deriveVatBreakdown(isCredit ? -Math.abs(amount) : amount, isCredit ? -Math.abs(vat) : vat);
+  }, [parsedVatRows, amountCZK, vatAmountCZK, isCredit]);
+
+  // Live sanity checks on the current form values
   const issues = useMemo(() => {
     const amount = parseFloat(amountCZK);
     const vat = vatAmountCZK ? parseFloat(vatAmountCZK) : null;
     const sign = (n: number) => (isCredit ? -Math.abs(n) : n);
-    const unchanged = !!extracted && extracted.amountCZK != null &&
-      Math.abs(Math.abs(extracted.amountCZK) - amount) < 0.01 &&
-      Math.abs(Math.abs(extracted.vatAmountCZK ?? 0) - (vat ?? 0)) < 0.01;
     return checkInvoice({
       supplierName,
       supplierICO,
@@ -241,10 +265,10 @@ export default function InvoiceReviewDrawer({
       vat: vat != null && Number.isFinite(vat) ? sign(vat) : null,
       currency: invoiceCurrency,
       documentType,
-      vatBreakdown: unchanged ? extracted?.vatBreakdown : null,
+      vatBreakdown: parsedVatRows.length > 0 ? parsedVatRows : null,
       hasOriginalInvoice: !!relatedInvoiceId || !!originalInvoiceNumber.trim(),
     });
-  }, [amountCZK, vatAmountCZK, isCredit, extracted, supplierName, supplierICO, invoiceDate, invoiceCurrency, documentType, relatedInvoiceId, originalInvoiceNumber]);
+  }, [amountCZK, vatAmountCZK, isCredit, parsedVatRows, supplierName, supplierICO, invoiceDate, invoiceCurrency, documentType, relatedInvoiceId, originalInvoiceNumber]);
 
   // Sync default category once categories load
   useEffect(() => {
@@ -317,6 +341,8 @@ export default function InvoiceReviewDrawer({
       duzpDate: duzpDate || undefined,
       amountCZK: amount,
       vatAmountCZK: vatAmountCZK ? sign(parseFloat(vatAmountCZK)) : undefined,
+      // Empty → the save route derives a single-rate split from the totals
+      vatBreakdown: parsedVatRows.length > 0 ? parsedVatRows : undefined,
       documentType: isCredit ? 'credit_note' : undefined,
       originalInvoiceNumber: isCredit ? (originalInvoiceNumber.trim() || undefined) : undefined,
       relatedInvoiceId: isCredit ? (relatedInvoiceId || undefined) : undefined,
@@ -482,6 +508,35 @@ export default function InvoiceReviewDrawer({
             <Field label={`VAT Amount (${invoiceCurrency})`}>
               <Input type="number" min="0" step="0.01" value={vatAmountCZK} onChange={(e) => setVatAmountCZK(e.target.value)} placeholder="0" />
             </Field>
+            <div className="col-span-2 border border-gray-200 rounded-lg px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-medium text-gray-500">VAT by rate</span>
+                <button type="button" onClick={() => setVatRows((rows) => [...rows, { rate: '21', base: '', vat: '' }])}
+                  className="text-xs text-indigo-600 hover:underline">+ Add rate</button>
+              </div>
+              {vatRows.length === 0 && (
+                <p className="text-xs text-gray-400">
+                  {derivedVatRows
+                    ? `Single rate — saved as ${derivedVatRows[0].rate} %: base ${Math.abs(derivedVatRows[0].base ?? 0).toLocaleString('cs-CZ')}, VAT ${Math.abs(derivedVatRows[0].vat ?? 0).toLocaleString('cs-CZ')}.`
+                    : 'No VAT split. Add a row per rate if the document shows VAT at 12 % and 21 %.'}
+                </p>
+              )}
+              {vatRows.map((row, n) => (
+                <div key={n} className="grid grid-cols-[5rem_1fr_1fr_1.25rem] gap-2 items-center mb-1.5">
+                  <Select value={row.rate} onChange={(e) => setVatRows((rows) => rows.map((r, i) => (i === n ? { ...r, rate: e.target.value } : r)))}>
+                    <option value="21">21 %</option>
+                    <option value="12">12 %</option>
+                    <option value="0">0 %</option>
+                  </Select>
+                  <Input type="number" min="0" step="0.01" placeholder="Base (bez DPH)" value={row.base}
+                    onChange={(e) => setVatRows((rows) => rows.map((r, i) => (i === n ? { ...r, base: e.target.value } : r)))} />
+                  <Input type="number" min="0" step="0.01" placeholder="VAT" value={row.vat}
+                    onChange={(e) => setVatRows((rows) => rows.map((r, i) => (i === n ? { ...r, vat: e.target.value } : r)))} />
+                  <button type="button" title="Remove rate" onClick={() => setVatRows((rows) => rows.filter((_, i) => i !== n))}
+                    className="text-gray-300 hover:text-red-500 text-base leading-none">×</button>
+                </div>
+              ))}
+            </div>
             {extracted?.lineItems && extracted.lineItems.length > 0 && (
               <div className="col-span-2">
                 <LineItemsBreakdown

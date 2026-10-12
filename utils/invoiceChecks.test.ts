@@ -71,6 +71,10 @@ describe('checkInvoice', () => {
   it('passes when there is no VAT table but the rate is 21 %', () => {
     expect(checkInvoice({ ...action, vatBreakdown: null, amount: 1210, vat: 210 }, TODAY)).toEqual([]);
   });
+  it('flags a mixed 12 %/21 % invoice that has no per-rate split', () => {
+    const issues = checkInvoice({ ...action, vatBreakdown: null }, TODAY);
+    expect(issues.some((i) => i.message.includes('mixes 12 % and 21 %'))).toBe(true);
+  });
   it('flags VAT that is not 12 % or 21 %', () => {
     const issues = checkInvoice({ ...action, vatBreakdown: null, amount: 1300, vat: 300 }, TODAY);
     expect(issues.map((i) => i.field)).toContain('vat');
@@ -103,8 +107,20 @@ describe('checkInvoice', () => {
 
 describe('normalizeInvoiceAmounts', () => {
   it('rounds and forces credit notes negative', () => {
-    expect(normalizeInvoiceAmounts({ amountCZK: 2815.6000000000004, vatAmountCZK: 488.66 })).toEqual({ amountCZK: 2815.6, vatAmountCZK: 488.66 });
-    expect(normalizeInvoiceAmounts({ amountCZK: 299, vatAmountCZK: 51.89, documentType: 'credit_note' })).toEqual({ amountCZK: -299, vatAmountCZK: -51.89, documentType: 'credit_note' });
+    expect(normalizeInvoiceAmounts({ amountCZK: 2815.6000000000004, vatAmountCZK: 488.66 })).toMatchObject({ amountCZK: 2815.6, vatAmountCZK: 488.66 });
+    expect(normalizeInvoiceAmounts({ amountCZK: 299, vatAmountCZK: 51.89, documentType: 'credit_note' })).toMatchObject({ amountCZK: -299, vatAmountCZK: -51.89, documentType: 'credit_note' });
+  });
+  it('derives a single-rate VAT split, signed like the amount', () => {
+    expect(normalizeInvoiceAmounts({ amountCZK: 9075, vatAmountCZK: 1575 }).vatBreakdown).toEqual([{ rate: 21, base: 7500, vat: 1575 }]);
+    expect(normalizeInvoiceAmounts({ amountCZK: 1499, vatAmountCZK: 260.16, documentType: 'credit_note' }).vatBreakdown).toEqual([{ rate: 21, base: -1238.84, vat: -260.16 }]);
+    expect(normalizeInvoiceAmounts({ amountCZK: 159.6, vatAmountCZK: 17.1 }).vatBreakdown).toEqual([{ rate: 12, base: 142.5, vat: 17.1 }]);
+  });
+  it('keeps given rows (signed, rounded, empty ones dropped) and never guesses a mixed split', () => {
+    const rows = [{ rate: 12, base: 142.5, vat: 17.1 }, { rate: 21, base: 2278.18, vat: 478.42 }, { rate: 0, base: 0, vat: 0 }];
+    expect(normalizeInvoiceAmounts({ amountCZK: 2916.2, vatAmountCZK: 495.52, vatBreakdown: rows }).vatBreakdown).toEqual(rows.slice(0, 2));
+    // Action receipt without its VAT table: mostly 21 % → implied 20.5 %, must NOT become one 21 % row
+    expect(normalizeInvoiceAmounts({ amountCZK: 2916.2, vatAmountCZK: 495.52 }).vatBreakdown).toBeUndefined();
+    expect(normalizeInvoiceAmounts({ amountCZK: 11900, vatAmountCZK: undefined }).vatBreakdown).toBeUndefined();
   });
 });
 

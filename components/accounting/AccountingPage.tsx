@@ -293,6 +293,14 @@ export default function AccountingPage() {
   /** Booking.com / Airbnb documents dropped during import — their commission comes from the settlement report */
   const [skippedOta, setSkippedOta] = useState<Array<{ supplierName: string; invoiceNumber: string }>>([]);
   const [whitelistNotice, setWhitelistNotice] = useState<string | null>(null);
+  const [vatFill, setVatFill] = useState<{
+    running: boolean;
+    done: number;
+    total: number;
+    derived: number;
+    reread: number;
+    manual: Array<{ label: string; reason: string }>;
+  } | null>(null);
   const abortQueueRef = useRef(false);
   const { categories } = useCategories();
   const [filters, setFilters] = useState({
@@ -324,6 +332,12 @@ export default function AccountingPage() {
     }
     return true;
   }), [invoices, filters]);
+
+  // Invoices in the current view with VAT but no per-rate split yet (VAT report back-fill)
+  const missingVatSplit = useMemo(
+    () => filteredInvoices.filter((inv) => !!inv.vatAmountCZK && !(inv.vatBreakdown && inv.vatBreakdown.length > 0)),
+    [filteredInvoices],
+  );
 
   // Invoices that can be recovered to Drive: missing a Drive copy but linked to a Gmail message
   const missingDriveCount = useMemo(
@@ -428,6 +442,8 @@ export default function AccountingPage() {
       vatAmountCZK: extracted.vatAmountCZK ?? undefined,
       invoiceCurrency: extracted.invoiceCurrency && extracted.invoiceCurrency !== 'CZK' ? extracted.invoiceCurrency : undefined,
       duzpDate: extracted.duzpDate ?? undefined,
+      // Signed + rounded (or derived for a single rate) by the save route
+      vatBreakdown: extracted.vatBreakdown ?? undefined,
       documentType: extracted.documentType === 'credit_note' ? 'credit_note' : undefined,
       originalInvoiceNumber: extracted.originalInvoiceNumber ?? undefined,
       relatedInvoiceId: originalFor(extracted, invoicesRef.current)?.id,
@@ -723,6 +739,35 @@ export default function AccountingPage() {
     }).catch(() => { /* non-fatal */ });
   }
 
+  /** Fill the per-rate VAT split for every invoice in the current view that lacks it */
+  async function handleFillVatRates() {
+    const todo = missingVatSplit;
+    const state = { running: true, done: 0, total: todo.length, derived: 0, reread: 0, manual: [] as Array<{ label: string; reason: string }> };
+    setVatFill({ ...state });
+    for (const inv of todo) {
+      const label = `${inv.supplierName} #${inv.invoiceNumber} (${inv.invoiceDate})`;
+      try {
+        const res = await fetch(`/api/supplier-invoices/${inv.id}/vat-breakdown`, { method: 'POST' });
+        const out = await res.json() as {
+          status: string;
+          reason?: string;
+          vatBreakdown?: SupplierInvoice['vatBreakdown'];
+        };
+        if ((out.status === 'derived' || out.status === 'reread') && out.vatBreakdown) {
+          if (out.status === 'derived') state.derived += 1; else state.reread += 1;
+          setInvoices((prev) => prev.map((e) => (e.id === inv.id ? { ...e, vatBreakdown: out.vatBreakdown } : e)));
+        } else if (out.status === 'manual' || !res.ok) {
+          state.manual.push({ label, reason: out.reason ?? 'Failed' });
+        }
+      } catch {
+        state.manual.push({ label, reason: 'Request failed' });
+      }
+      state.done += 1;
+      setVatFill({ ...state, manual: [...state.manual] });
+    }
+    setVatFill({ ...state, running: false, manual: [...state.manual] });
+  }
+
   async function handleBackfillDrive() {
     setBackfilling(true);
     setBackfillMsg(null);
@@ -870,6 +915,13 @@ export default function AccountingPage() {
               {backfilling ? 'Backing up…' : `↑ Back-fill Drive (${missingDriveCount})`}
             </button>
           )}
+          {(missingVatSplit.length > 0 || vatFill?.running) && (
+            <button onClick={handleFillVatRates} disabled={!!vatFill?.running}
+              title="Split VAT per rate (21 % / 12 %) for the invoices in the current view — from the totals, or by re-reading the PDF for mixed receipts"
+              className="px-3 py-2 text-sm font-medium text-indigo-700 border border-indigo-200 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50">
+              {vatFill?.running ? `Filling VAT rates ${vatFill.done}/${vatFill.total}…` : `Fill VAT rates (${missingVatSplit.length})`}
+            </button>
+          )}
           <button onClick={() => setShowWhitelistManager(true)} className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
             Whitelist
           </button>
@@ -903,6 +955,27 @@ export default function AccountingPage() {
         onDismiss={() => setSkippedOta([])}
         title={`${skippedOta.length} Booking.com / Airbnb invoice${skippedOta.length !== 1 ? 's' : ''} not imported — commission is booked from the settlement report (Revenue → OTA settlements)`}
       />
+
+      {/* Fill VAT rates result */}
+      {vatFill && !vatFill.running && (
+        <div className="flex items-start justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 gap-3">
+          <div className="text-sm text-indigo-800">
+            <p>
+              VAT rates filled for {vatFill.derived + vatFill.reread} of {vatFill.total} invoices
+              ({vatFill.derived} from the totals, {vatFill.reread} re-read from the PDF).
+            </p>
+            {vatFill.manual.length > 0 && (
+              <div className="mt-1 text-xs text-amber-800">
+                <p className="font-medium">{vatFill.manual.length} need the split entered by hand — open each and fill &quot;VAT by rate&quot;:</p>
+                <ul className="list-disc pl-4 max-h-32 overflow-y-auto">
+                  {vatFill.manual.map((m, i) => <li key={i}>{m.label} — {m.reason}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+          <button onClick={() => setVatFill(null)} className="text-indigo-400 hover:text-indigo-600 flex-shrink-0">×</button>
+        </div>
+      )}
 
       {/* Save & Whitelist result */}
       {whitelistNotice && (

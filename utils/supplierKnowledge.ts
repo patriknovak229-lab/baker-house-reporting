@@ -119,6 +119,12 @@ export const SUPPLIER_KNOWLEDGE = `
 - vatAmount: "Sales Tax" (usually 0). category: software.
 - description: the "Invoice duration", e.g. 22 Apr 2026 – 21 May 2026.
 
+## DPD Komerce I. s.r.o.   (IČ 19134975, DIČ CZ19134975) — parking rent, invoices sent by Domoplan (dauk.cz)
+- Monthly "FAKTURA - DAŇOVÝ DOKLAD" for parking spaces GS 015, GS 016, GS 017: 3 × 2 500 = 7 500 + 21 % VAT 1 575 = 9 075.
+- invoiceNumber: the "FAKTURA - DAŇOVÝ DOKLAD č." number (e.g. 260100066, same as the variable symbol). invoiceDate: "Datum vystavení"; duzpDate: "Datum uskutečnění plnění" (same day). The "9/2026" on the line is the month the rent COVERS, not the invoice date.
+- vatBreakdown: only the 21 % row of "Rekapitulace DPH" (the 0 % and 12 % rows are 0,00).
+- supplierICO: 19134975 — NOT the Odběratel IČ 19876106 (us). category: services
+
 ## Google Cloud EMEA Limited   (Irish entity, VAT prefixed IE — not a Czech IČO)
 - Cloud SaaS. category: software
 

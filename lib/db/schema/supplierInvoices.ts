@@ -1,5 +1,5 @@
-import { pgTable, text, numeric, date, boolean, timestamp } from 'drizzle-orm/pg-core';
-import type { SupplierInvoiceStatus, SupplierInvoiceSource, SupplierDocumentType } from '../../../types/supplierInvoice';
+import { pgTable, text, numeric, date, boolean, timestamp, jsonb } from 'drizzle-orm/pg-core';
+import type { SupplierInvoiceStatus, SupplierInvoiceSource, SupplierDocumentType, ExtractedVatRow } from '../../../types/supplierInvoice';
 
 /**
  * Supplier invoices — was Redis JSON array `baker:supplier-invoices`.
@@ -35,6 +35,8 @@ export const supplierInvoices = pgTable('supplier_invoices', {
   documentType: text('document_type').$type<SupplierDocumentType>(),
   originalInvoiceNumber: text('original_invoice_number'),
   relatedInvoiceId: text('related_invoice_id'),
+  // VAT split per rate [{rate, base, vat}] — signed like amount_czk
+  vatBreakdown: jsonb('vat_breakdown').$type<ExtractedVatRow[]>(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   // Phase 2 reconciliation refs (point at bank_transactions / settlement_groups) — plain text for now
   bankTransactionId: text('bank_transaction_id'),

@@ -56,6 +56,13 @@ export interface SupplierInvoice {
   originalInvoiceNumber?: string;
   /** Credit notes: id of the original SupplierInvoice (several credit notes may point at one invoice) */
   relatedInvoiceId?: string;
+  /**
+   * VAT split per rate (21 % / 12 % / 0 %), for the VAT report. Rows carry the
+   * sign of amountCZK (negative on credit notes). Filled from the document's VAT
+   * table, or derived on save when the whole VAT is at one rate. Absent = no VAT
+   * on the document (non-payer, reverse charge) or a mixed invoice not yet split.
+   */
+  vatBreakdown?: ExtractedVatRow[];
   // Phase 2 — bank reconciliation (unused in Phase 1)
   bankTransactionId?: string;
   reconciledAt?: string;

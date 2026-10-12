@@ -1,0 +1,1 @@
+ALTER TABLE "supplier_invoices" ADD COLUMN "vat_breakdown" jsonb;

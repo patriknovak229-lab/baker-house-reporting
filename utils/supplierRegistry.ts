@@ -31,6 +31,8 @@ export const KNOWN_SUPPLIERS: KnownSupplier[] = [
   { id: 'google',    name: 'Google Cloud EMEA Limited',                         namePattern: /\bgoogle\b/i,           category: 'software' },
   { id: 'beds24',    name: 'Beds24 GmbH',                   ico: 'DE328454604', namePattern: /\bbeds\s?24\b/i,        category: 'software' },
   { id: 'anthropic', name: 'Anthropic, PBC',                                    namePattern: /\banthropic\b/i,        category: 'software' },
+  // Parking rent (spaces GS 015–017, via Domoplan) — services = account 518, same as the old "rent" bank cost
+  { id: 'dpd-komerce', name: 'DPD Komerce I. s.r.o.',       ico: '19134975',    namePattern: /\bdpd\s+komerce\b/i,   category: 'services' },
 ];
 
 /** Normalise an IČO / VAT id for comparison: drop spaces, uppercase, strip a leading "CZ". */

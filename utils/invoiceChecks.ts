@@ -132,11 +132,14 @@ export function checkInvoice(inv: CheckInput, today: Date = new Date()): Invoice
         }
       }
     } else if (isCzk) {
-      // No VAT table: the implied rate must be 12 %, 21 %, or in between (mixed basket)
+      // No VAT table: the implied rate must be 12 % or 21 %. In between means a
+      // mixed basket — then the per-rate split is required (the VAT report needs it).
       const net = Math.abs(amount) - Math.abs(vat);
       const ratePct = net > 0 ? (Math.abs(vat) / net) * 100 : 0;
       if (ratePct < 11.5 || ratePct > 21.5) {
         issues.push({ field: 'vat', message: `VAT is ${round2(ratePct)} % of the net amount — expected 21 % or 12 %.` });
+      } else if (!singleRateOf(net, Math.abs(vat))) {
+        issues.push({ field: 'vat', message: 'VAT mixes 12 % and 21 % — add the amount for each rate under "VAT by rate".' });
       }
     }
   }
@@ -173,18 +176,60 @@ export function checkInvoice(inv: CheckInput, today: Date = new Date()): Invoice
 }
 
 /**
- * Normalise money before persisting: 2 decimals, and credit notes always
- * negative / invoices always as entered. Applied by the save routes so manual
- * edits and client-side sums can't store float noise.
+ * The one VAT rate that explains the whole VAT on this net amount, or null when
+ * it takes a mix of rates. Strict: the VAT must equal net × rate to within 1 Kč
+ * (0.1 % on large invoices) — a percentage window is too loose, e.g. an Action
+ * receipt mostly at 21 % with a little at 12 % implies 20.5 %.
  */
-export function normalizeInvoiceAmounts<T extends { amountCZK: number; vatAmountCZK?: number; documentType?: string }>(inv: T): T {
+function singleRateOf(net: number, vat: number): 21 | 12 | null {
+  for (const rate of [21, 12] as const) {
+    const expected = (net * rate) / 100;
+    if (Math.abs(vat - expected) <= Math.max(1, expected * 0.001)) return rate;
+  }
+  return null;
+}
+
+/** Drop empty VAT-table rows (e.g. the printed "0 % · 0,00 · 0,00" line); a real 0 % row with a base stays */
+export function meaningfulVatRows(rows: VatRow[] | null | undefined): VatRow[] {
+  return (rows ?? []).filter((r) => Math.abs(r.base ?? 0) >= 0.005 || Math.abs(r.vat ?? 0) >= 0.005);
+}
+
+/**
+ * The per-rate VAT split when it follows from the totals alone: the whole VAT
+ * is at ONE rate (21 % or 12 %). Returns null for no VAT, or for a mixed
+ * 12 %/21 % basket — those need the document's VAT table. Rows carry the sign
+ * of the amount (negative on credit notes).
+ */
+export function deriveVatBreakdown(amount: number, vat: number | null | undefined): VatRow[] | null {
+  if (vat == null || vat === 0 || !Number.isFinite(amount)) return null;
+  const net = Math.abs(amount) - Math.abs(vat);
+  if (net <= 0) return null;
+  const rate = singleRateOf(net, Math.abs(vat));
+  if (!rate) return null;
+  const sign = amount < 0 ? -1 : 1;
+  return [{ rate, base: round2(sign * net), vat: round2(sign * Math.abs(vat)) }];
+}
+
+/**
+ * Normalise money before persisting: 2 decimals, credit notes always negative
+ * (amount, VAT and the per-rate rows), and the per-rate VAT split filled in
+ * when it follows from a single rate. Applied by the save routes so manual
+ * edits and client-side sums can't store float noise or an unsplit invoice.
+ */
+export function normalizeInvoiceAmounts<T extends {
+  amountCZK: number;
+  vatAmountCZK?: number;
+  documentType?: string;
+  vatBreakdown?: VatRow[];
+}>(inv: T): T {
   const isCredit = inv.documentType === 'credit_note';
   const sign = (n: number) => (isCredit ? -Math.abs(n) : n);
-  return {
-    ...inv,
-    amountCZK: round2(sign(inv.amountCZK)),
-    vatAmountCZK: inv.vatAmountCZK == null ? inv.vatAmountCZK : round2(sign(inv.vatAmountCZK)),
-  };
+  const amountCZK = round2(sign(inv.amountCZK));
+  const vatAmountCZK = inv.vatAmountCZK == null ? inv.vatAmountCZK : round2(sign(inv.vatAmountCZK));
+  const rows = meaningfulVatRows(inv.vatBreakdown)
+    .map((r) => ({ rate: r.rate, base: r.base == null ? null : round2(sign(r.base)), vat: r.vat == null ? null : round2(sign(r.vat)) }));
+  const vatBreakdown = rows.length > 0 ? rows : deriveVatBreakdown(amountCZK, vatAmountCZK) ?? undefined;
+  return { ...inv, amountCZK, vatAmountCZK, vatBreakdown };
 }
 
 interface DupCandidate {
