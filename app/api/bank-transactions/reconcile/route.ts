@@ -20,7 +20,8 @@ export const maxDuration = 60;
  *   4. refunds → supplier credit notes (one refund per credit note)
  *   5. Stripe payouts → Stripe settlements, built from the Stripe API — only when
  *      the payout's contents tie to the bank exactly and nothing needs review;
- *      otherwise left for the drawer's "Stripe payout" preview
+ *      otherwise left for the drawer's "Stripe payout" preview. Only unlinked
+ *      Stripe credits — payouts already tagged by hand (closed months) stay as they are
  * Every link records autoMatchReason so it can be reviewed / undone.
  */
 export async function POST() {

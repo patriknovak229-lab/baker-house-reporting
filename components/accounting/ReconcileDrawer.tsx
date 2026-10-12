@@ -86,7 +86,7 @@ export default function ReconcileDrawer({ transaction: tx, transactions, invoice
   const suggestedCreditNoteId = linkedCreditNoteId
     ?? (creditNoteCandidates[0]?.exact && creditNoteCandidates[0]?.named ? creditNoteCandidates[0].inv.id : undefined);
 
-  /** A Stripe payout not yet booked as a settlement (or only hand-tagged "Net settlement") */
+  /** A Stripe payout not yet booked as a settlement */
   const isStripePayout = isOpenStripeCredit(tx);
 
   const initialCreditMode: CreditMode =

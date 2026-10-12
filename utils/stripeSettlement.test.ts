@@ -153,9 +153,9 @@ describe('applyStripeSettlement', () => {
 });
 
 describe('isOpenStripeCredit', () => {
-  it('covers unlinked Stripe credits and the old hand-tagged "Net settlement" ones', () => {
+  it('covers unlinked Stripe credits only — hand-tagged ones (closed months) are left alone', () => {
     expect(isOpenStripeCredit(payoutTx(1))).toBe(true);
-    expect(isOpenStripeCredit(payoutTx(1, { state: 'net_settlement' }))).toBe(true);
+    expect(isOpenStripeCredit(payoutTx(1, { state: 'net_settlement' }))).toBe(false);
     expect(isOpenStripeCredit(payoutTx(1, { state: 'grouped', settlementGroupId: 'g' }))).toBe(false);
     expect(isOpenStripeCredit(payoutTx(1, { counterpartyName: 'BOOKING.COM B.V.' }))).toBe(false);
   });

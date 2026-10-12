@@ -215,12 +215,14 @@ export function planStripeSettlement(input: {
   };
 }
 
-/** A Stripe credit Auto-match / the drawer may (re)build: unlinked, or only tagged "Net settlement" by hand */
+/**
+ * A Stripe credit Auto-match / the drawer may book: still unlinked revenue. Payouts
+ * already tagged by hand (e.g. "Net settlement" for Apr–Jul 2026) belong to closed
+ * months and are left alone — Unmatch one first to rebuild it on purpose.
+ */
 export function isOpenStripeCredit(t: BankTransaction): boolean {
   if (t.direction !== 'credit' || !/stripe/i.test(t.counterpartyName ?? '')) return false;
-  if (t.settlementGroupId || t.revenueInvoiceId) return false;
-  if (t.state === 'revenue') return true;
-  return t.state === 'net_settlement' && !(t.deductedInvoiceIds && t.deductedInvoiceIds.length > 0);
+  return t.state === 'revenue' && !t.settlementGroupId && !t.revenueInvoiceId;
 }
 
 export interface StripeSettlementRecords {
