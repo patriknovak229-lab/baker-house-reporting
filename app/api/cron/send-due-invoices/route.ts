@@ -28,6 +28,13 @@
  *                                      manual send uses, mark invoiceStatus
  *                                      "Sent", and resolve the task.
  *
+ * Payment details: a task scheduled from the New Booking modal may carry
+ * `includeQR` ("Include payment details"). Then the invoice prints the bank
+ * details + payment QR, and once it is sent the issued revenue invoice is
+ * recorded — what the drawer does when it sends with the QR on, so the guest's
+ * bank transfer can be matched. Tasks without the flag (every chat-flow task)
+ * go out exactly as before: no QR, no revenue record.
+ *
  * Failures leave the task unresolved (stays in the operator's pending-tasks
  * banner) and fire a Telegram alert. Idempotency = invoiceStatus + resolved
  * task, so a re-run never double-sends.
@@ -43,7 +50,7 @@ import type { InvoiceData, Issue, InvoiceStatus, InvoiceSplit, Reservation } fro
 import { buildReservationSet } from '@/utils/beds24Reservations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { sendInvoiceEmail } from '@/utils/invoiceSend';
-import { sendTelegram } from '@/utils/telegram';
+import { sendTelegram, escapeHtml } from '@/utils/telegram';
 import {
   checkBookingsMirrorHealth,
   bookingsMirrorAlert,
@@ -51,6 +58,8 @@ import {
 } from '@/utils/bookingsMirrorHealth';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { autoSendWindowStart } from '@/utils/invoiceAutoSendRules';
+import { revenueInvoiceId } from '@/utils/invoiceUtils';
+import { syncIssuedRevenueInvoices } from '@/utils/revenueInvoiceSync';
 
 export const maxDuration = 60;
 
@@ -154,6 +163,8 @@ async function sendDueInvoices() {
   let failed = 0;
   const errors: { reservation: string; reason: string }[] = [];
   const deferrals: { reservation: string; reason: string }[] = [];
+  // Sent WITH payment details → record the issued revenue invoice afterwards.
+  const revenueToRecord: { reservation: Reservation; invoiceNumber: string }[] = [];
   let dirty = false;
 
   const isOpenInvoiceTask = (i: Issue) => i.category === 'invoice' && !i.resolved;
@@ -220,9 +231,12 @@ async function sendDueInvoices() {
       // throwing — the mail server already has the message, so we mark it Sent
       // and resolve the task exactly as for a confirmed send. Re-sending
       // tomorrow is the one thing that could duplicate the invoice.
+      // Bank details + QR only when the operator asked for them on the task
+      // (New Booking modal → "Include payment details"); otherwise plain.
+      const includeQR = due.some((i) => i.includeQR === true);
       const result = await sendInvoiceEmail(
         { ...reservation, invoiceData: ov.invoiceData, invoiceStatus: 'Not Issued' },
-        { includeQR: false },
+        { includeQR },
       );
       if (result.outcome === 'deferred') {
         deferred += 1;
@@ -232,6 +246,7 @@ async function sendDueInvoices() {
       ov.issues = resolveInvoiceTasks(issues);
       dirty = true;
       sent += 1;
+      if (includeQR) revenueToRecord.push({ reservation, invoiceNumber: result.invoiceNumber });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[cron/send-due-invoices] send failed for ${resNum}:`, reason);
@@ -254,6 +269,34 @@ async function sendDueInvoices() {
       ).catch(() => {});
       return NextResponse.json({ error: `Persist failed after sending ${sent}: ${reason}`, sent }, { status: 500 });
     }
+  }
+
+  // Revenue records for invoices sent with payment details. After the status
+  // write on purpose: "Sent" is what prevents a double-send, so it goes first;
+  // a missing revenue record is recoverable by hand (Accounting → Revenue).
+  const revenueFailures: string[] = [];
+  for (const { reservation, invoiceNumber } of revenueToRecord) {
+    try {
+      await syncIssuedRevenueInvoices(reservation.reservationNumber, [
+        {
+          id: revenueInvoiceId(reservation.reservationNumber),
+          invoiceNumber,
+          invoiceDate: today,
+          amountCZK: reservation.price,
+          guestName: `${reservation.firstName} ${reservation.lastName}`.trim(),
+        },
+      ]);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[cron/send-due-invoices] revenue record for ${reservation.reservationNumber} failed:`, reason);
+      revenueFailures.push(`${reservation.reservationNumber}: ${escapeHtml(reason)}`);
+    }
+  }
+  if (revenueFailures.length > 0) {
+    await sendTelegram(
+      `⚠️ Invoice auto-send: sent with payment details, but the revenue record failed (bank matching won't find it):\n` +
+        revenueFailures.map((f) => `• ${f}`).join('\n'),
+    ).catch(() => {});
   }
 
   if (deferred > 0) {

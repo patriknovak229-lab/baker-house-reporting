@@ -60,6 +60,18 @@ describe('mapToReservation', () => {
     const r = mapToReservation(booking({ roomId: 999999 }));
     expect(r.room).toBe('Unknown room 999999');
   });
+
+  it('reads the additional guests the New Booking modal writes into comments', () => {
+    const r = mapToReservation(booking({
+      comments: `${APP_PHONE_MARKER}\n[ADDITIONAL GUESTS: Jana Nováková; Petr Novák]\nLate arrival`,
+    }));
+    expect(r.additionalGuests).toEqual(['Jana Nováková', 'Petr Novák']);
+    expect(r.firstName).not.toContain('Jana');
+  });
+
+  it('leaves additionalGuests off a booking without the marker', () => {
+    expect('additionalGuests' in mapToReservation(booking())).toBe(false);
+  });
 });
 
 describe('mapChannel', () => {

@@ -48,6 +48,7 @@ import {
   deriveIcoFromDic,
   missingInvoiceFields,
   restoredInvoiceRequestStatus,
+  invoiceGuestNames,
   PAYMENT_IBAN,
   PAYMENT_SWIFT,
   PAYMENT_ACCOUNT_DISPLAY,
@@ -2766,7 +2767,7 @@ function SplitInvoiceEditor({
                 value={sp.guestName ?? ""}
                 onChange={(e) => onPatch(sp.id, { guestName: e.target.value })}
                 className={inputCls}
-                placeholder={`${reservation.firstName} ${reservation.lastName}`.trim()}
+                placeholder={invoiceGuestNames(reservation)}
               />
             </div>
           </div>
@@ -4605,6 +4606,16 @@ export default function ReservationDrawer({
             <div className="grid grid-cols-2 gap-3">
               <ReadOnlyField label="First Name" value={reservation.firstName} />
               <ReadOnlyField label="Last Name" value={reservation.lastName} />
+              {/* Everyone else on the booking — from the Beds24 comment line the
+                  New Booking modal writes; also printed on the invoice. */}
+              {(reservation.additionalGuests?.length ?? 0) > 0 && (
+                <div className="col-span-2">
+                  <ReadOnlyField
+                    label="Additional guests"
+                    value={reservation.additionalGuests!.join(", ")}
+                  />
+                </div>
+              )}
               {/* Email — OTA conduit address with truncation + copy + additional email */}
               <div className="col-span-2">
                 <p className="text-[11px] text-gray-400 mb-0.5">Email (channel)</p>
@@ -6282,7 +6293,7 @@ export default function ReservationDrawer({
                           type="text"
                           value={modifyGuestName}
                           onChange={(e) => setModifyGuestName(e.target.value)}
-                          placeholder={`${reservation.firstName} ${reservation.lastName}`.trim()}
+                          placeholder={invoiceGuestNames(reservation)}
                           className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
                         />
                       </div>

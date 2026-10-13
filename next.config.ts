@@ -22,6 +22,7 @@ import type { NextConfig } from "next";
  */
 export const CHROMIUM_ROUTES = [
   "/api/send-invoice",
+  "/api/bookings/initial-invoice",
   "/api/cron/send-due-invoices",
   "/api/transactions/invoice-to-drive",
   "/api/commission/pdf",

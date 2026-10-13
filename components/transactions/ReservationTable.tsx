@@ -267,6 +267,29 @@ function NoteBadge({ text }: { text: string }) {
 }
 
 /**
+ * "+1" after the lead guest's name when the booking records other guests (the
+ * `[ADDITIONAL GUESTS: …]` line the New Booking modal writes into Beds24).
+ * Hover lists them — same tooltip pattern as the note badge.
+ */
+function AdditionalGuestsChip({ names }: { names?: string[] }) {
+  if (!names || names.length === 0) return null;
+  return (
+    <span className="relative group/guests inline-flex ml-1 align-middle">
+      <span className="inline-flex items-center rounded-full bg-gray-100 px-1.5 text-[10px] font-semibold text-gray-600">
+        +{names.length}
+      </span>
+      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/guests:flex flex-col gap-0.5 z-30 min-w-[140px] max-w-[280px]">
+        <span className="bg-gray-900 text-white text-[11px] rounded px-2.5 py-1.5 shadow-lg whitespace-pre-wrap break-words text-left">
+          <span className="block font-semibold">Also on this booking</span>
+          <span className="block text-gray-200 mt-1">{names.join('\n')}</span>
+        </span>
+        <span className="self-center border-4 border-transparent border-t-gray-900 w-0 h-0" />
+      </span>
+    </span>
+  );
+}
+
+/**
  * Copy-to-clipboard affordance for the reservation number, so the operator can
  * lift it straight from the overview instead of opening the drawer. Stops the
  * click bubbling to the row (which would open the drawer) and flips to a tick
@@ -467,6 +490,7 @@ function ReservationCard({
           <span className={`font-semibold truncate ${res.isCancelled ? 'line-through text-gray-400' : 'text-gray-900'}`}>
             {res.firstName} {res.lastName}
           </span>
+          <AdditionalGuestsChip names={res.additionalGuests} />
           {emoji && (
             <span
               className="flex items-center gap-0.5 shrink-0"
@@ -878,6 +902,7 @@ export default function ReservationTable({
                         {flag}
                       </span>
                       <span className={res.isCancelled ? 'line-through text-gray-400' : ''}>{res.firstName} {res.lastName}</span>
+                      <AdditionalGuestsChip names={res.additionalGuests} />
                       {emoji && (
                         <span
                           className="ml-1.5 inline-flex items-center gap-0.5 align-middle"

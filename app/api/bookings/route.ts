@@ -3,6 +3,7 @@ import type { Reservation, RateType, Issue } from "@/types/reservation";
 import { readAllAdditionalPayments } from "@/utils/additionalPaymentsStore";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { countryToLang, isValidCountryCode } from "@/utils/countries";
+import { formatAdditionalGuestsMarker } from "@/utils/additionalGuests";
 import { requireRole } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy, freeCancelDaysLeft } from "@/utils/cancellationPolicy";
@@ -267,6 +268,7 @@ export async function POST(req: NextRequest) {
     roomId, roomQty, price,   // legacy single-row shape (back-compat)
     arrival, departure, numAdult, numChild,
     firstName, lastName, email, phone, nationality, notes,
+    additionalGuests,
   } = body as {
     units?: { roomId: number; roomQty?: number; price?: number }[];
     roomId?: number;
@@ -283,6 +285,8 @@ export async function POST(req: NextRequest) {
     /** ISO 3166-1 alpha-2 country code of the guest. */
     nationality?: string;
     notes?: string;
+    /** Full names of everyone on the booking besides the lead guest. */
+    additionalGuests?: string[];
   };
 
   if (!arrival || !departure || !firstName) {
@@ -323,10 +327,15 @@ export async function POST(req: NextRequest) {
     ? `pkg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     : null;
   const groupMarker = groupId ? `[GROUP:${groupId}]` : '';
+  // The other people on the booking. Beds24's own guest list is not writable
+  // through the v2 API, so they go in as a comment line the dashboard parses
+  // back (utils/additionalGuests.ts) — visible on the Beds24 booking too.
+  const guestsMarker = formatAdditionalGuestsMarker(additionalGuests);
 
   function buildComments(): string {
     const parts = [APP_PHONE_MARKER];
     if (groupMarker) parts.push(groupMarker);
+    if (guestsMarker) parts.push(guestsMarker);
     if (notes && notes.trim()) parts.push(notes.trim());
     return parts.join('\n');
   }

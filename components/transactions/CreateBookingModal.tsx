@@ -1,6 +1,10 @@
 'use client';
 import { useEffect, useState } from "react";
+import type { InvoiceData, Reservation } from "@/types/reservation";
 import { COUNTRY_OPTIONS, languageNameForCountry } from "@/utils/countries";
+import { pragueToday } from "@/utils/periodUtils";
+import { stayAvailability, effectiveFreeUnits, type TypeAvailability, type UnitAvailability } from "@/utils/bookingAvailability";
+import { hasAnyInvoiceData, invoiceDeliveryProblem, type InvoiceDelivery } from "@/utils/newBookingInvoice";
 
 // Operator-facing manual bookings target one of TWO unit kinds:
 //
@@ -56,6 +60,9 @@ const SELLING_UNIT_BY_ROOM_ID: Record<number, SellingUnit> = Object.fromEntries(
   SELLING_UNITS.map((s) => [s.roomId, s]),
 );
 
+/** Sellable roomIds in dropdown order — the availability list follows it. */
+const SELLABLE_ORDER = SELLING_UNITS.filter((s) => s.kind === 'sellable').map((s) => s.roomId);
+
 // Two-level grouping for the dropdown: kind first (sellable vs force-physical),
 // then category (Urban / Deluxe) so operators can find what they need fast.
 const SELLING_UNIT_GROUPS = [
@@ -70,6 +77,8 @@ const SELLING_UNIT_GROUPS = [
 ];
 
 interface Props {
+  /** Reservations on screen — the occupancy behind "Check availability & prices". */
+  reservations: Reservation[];
   onClose: () => void;
   onCreated: () => void;
 }
@@ -85,6 +94,17 @@ interface UnitRow {
   roomQty: number;
   /** Per-row price in CZK (raw input — converted on submit). */
   price: string;
+  /** Beds24 price for ONE unit, when the row was filled from the availability
+   *  list — lets a qty change rescale the price it set. */
+  quotedUnitPrice?: number;
+  /** "arrival|departure" that price was quoted for — warns if the dates move. */
+  quotedFor?: string;
+}
+
+/** Someone on the booking besides the lead guest. */
+interface GuestName {
+  firstName: string;
+  lastName: string;
 }
 
 interface FormState {
@@ -95,6 +115,8 @@ interface FormState {
   numChild: number;
   firstName: string;
   lastName: string;
+  /** Written into the Beds24 booking and printed on the invoice. */
+  additionalGuests: GuestName[];
   email: string;
   phone: string;
   /** ISO 3166-1 alpha-2 (uppercase), mandatory — see the Nationality field. */
@@ -110,10 +132,19 @@ const DEFAULT_FORM: FormState = {
   numChild: 0,
   firstName: "",
   lastName: "",
+  additionalGuests: [],
   email: "",
   phone: "",
   nationality: "",
   notes: "",
+};
+
+const EMPTY_INVOICE: InvoiceData = {
+  companyName: "",
+  companyAddress: "",
+  ico: "",
+  vatNumber: "",
+  billingEmail: "",
 };
 
 function Field({ label, optional, children }: { label: string; optional?: boolean; children: React.ReactNode }) {
@@ -128,9 +159,26 @@ function Field({ label, optional, children }: { label: string; optional?: boolea
   );
 }
 
+/** The on/off switch every toggle in this form uses. */
+function Switch({ on }: { on: boolean }) {
+  return (
+    <span
+      className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${
+        on ? 'bg-indigo-600' : 'bg-gray-200'
+      }`}
+    >
+      <span
+        className={`inline-block h-3 w-3 rounded-full bg-white shadow transform transition-transform ${
+          on ? 'translate-x-3' : 'translate-x-0'
+        }`}
+      />
+    </span>
+  );
+}
+
 const inputCls = "w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300";
 
-type Step = 'form' | 'link';
+type Step = 'form' | 'result';
 type PaymentMode = 'pct' | 'czk';
 
 interface PaymentRow {
@@ -147,8 +195,84 @@ interface ResultPaymentRow {
   url?: string;
 }
 
+/** A sellable type in the availability list, priced. */
+interface QuotedType extends TypeAvailability {
+  /** Beds24 price for ONE unit of this type, for the whole stay. */
+  price: number | null;
+  /** 'offer' = Beds24's own quote; 'estimate' = rebuilt from daily rates
+   *  because Beds24 won't sell this span on the web (min-stay, advance or
+   *  check-in rule) even though a unit is free — which a manual booking may
+   *  still take, since it bypasses those rules. */
+  source: 'offer' | 'estimate' | null;
+}
+
+interface AvailabilityResult {
+  /** arrival|departure|adults|children the list was built for. */
+  key: string;
+  nights: number;
+  party: number;
+  types: QuotedType[];
+  /** Beds24 pricing failed — occupancy is still shown. */
+  pricingError?: string;
+}
+
+type InvoiceTiming = 'now' | 'schedule';
+
+/** What happened to the invoice after the booking was created. */
+type InvoiceOutcome =
+  | { kind: 'saved' }
+  | { kind: 'scheduled'; sendDate: string; to: string; withPaymentDetails: boolean }
+  | {
+      kind: 'sent' | 'deferred';
+      invoiceNumber: string;
+      to: string;
+      withPaymentDetails: boolean;
+      deferral?: string;
+      statusSaved: boolean;
+      revenueRecorded?: boolean;
+    }
+  | { kind: 'error'; message: string; saved: boolean };
+
+/** Everything the result step reports once the booking exists. */
+interface CreatedBooking {
+  reservationNumber?: string;
+  /** null = no payment link was requested. */
+  paymentRows: ResultPaymentRow[] | null;
+  paymentError: string | null;
+  /** null = no invoice step. */
+  invoice: InvoiceOutcome | null;
+}
+
 function todayLocal(): string {
-  return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD in local time
+  return pragueToday();
+}
+
+function addDays(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function nightsBetween(arrival: string, departure: string): number {
+  return Math.round((Date.parse(`${departure}T00:00:00Z`) - Date.parse(`${arrival}T00:00:00Z`)) / 86_400_000);
+}
+
+function formatCZK(n: number): string {
+  return Math.round(n).toLocaleString('cs-CZ') + ' Kč';
+}
+
+function formatDay(iso: string): string {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** "Jan Novák" → "Novák"; several holders → "2 stays"; a blackout → "Blocked". */
+function shortHolder(heldBy: string | null): string {
+  if (!heldBy) return '';
+  if (heldBy.startsWith('Blocked')) return 'Blocked';
+  const holders = heldBy.split(', ');
+  if (holders.length > 1) return `${holders.length} stays`;
+  const parts = heldBy.trim().split(/\s+/);
+  return parts[parts.length - 1];
 }
 
 function defaultPaymentsForCount(count: number): PaymentRow[] {
@@ -165,19 +289,54 @@ function defaultPaymentsForCount(count: number): PaymentRow[] {
   ];
 }
 
-export default function CreateBookingModal({ onClose, onCreated }: Props) {
+/** Beds24 per-unit prices by sellable roomId, via the Price Check endpoint. */
+async function fetchPriceMap(
+  arrival: string,
+  departure: string,
+  adults: number,
+  children: number,
+  ignoreAvailability = false,
+): Promise<Map<number, number>> {
+  const params = new URLSearchParams({
+    arrival,
+    departure,
+    adults: String(adults),
+    children: String(children),
+  });
+  if (ignoreAvailability) params.set('ignoreAvailability', 'true');
+  const res = await fetch(`/api/price-check?${params.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error ?? `Price check failed (HTTP ${res.status})`);
+  const map = new Map<number, number>();
+  for (const o of (data.offers ?? []) as { roomId?: number; price?: number | null }[]) {
+    if (o.roomId && o.price != null && o.price > 0) map.set(o.roomId, o.price);
+  }
+  return map;
+}
+
+export default function CreateBookingModal({ reservations, onClose, onCreated }: Props) {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
+  /** What the submit is doing right now — shown on the button. */
+  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [includePaymentLink, setIncludePaymentLink] = useState(false);
   const [splitPayment, setSplitPayment] = useState(false);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('pct');
   const [payments, setPayments] = useState<PaymentRow[]>(defaultPaymentsForCount(2));
 
-  // Link step state
+  // Invoice — off by default; for bookings the customer pays by invoice.
+  const [invoiceOn, setInvoiceOn] = useState(false);
+  const [invoiceData, setInvoiceData] = useState<InvoiceData>(EMPTY_INVOICE);
+  const [sendInvoice, setSendInvoice] = useState(false);
+  const [invoiceTiming, setInvoiceTiming] = useState<InvoiceTiming>('now');
+  const [invoiceSendDate, setInvoiceSendDate] = useState('');
+  // On by default: an invoice the customer pays needs the account and VS.
+  const [invoicePaymentDetails, setInvoicePaymentDetails] = useState(true);
+
+  // Result step state
   const [step, setStep] = useState<Step>('form');
-  const [paymentUrl, setPaymentUrl] = useState('');
-  const [resultPayments, setResultPayments] = useState<ResultPaymentRow[] | null>(null);
+  const [created, setCreated] = useState<CreatedBooking | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   function set<K extends keyof FormState>(field: K, value: FormState[K]) {
@@ -206,6 +365,24 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     });
   }
 
+  /** Qty change. A price the availability list filled in follows the qty;
+   *  one the operator typed is theirs and stays. */
+  function changeQty(idx: number, qty: number) {
+    setForm((prev) => ({
+      ...prev,
+      units: prev.units.map((u, i) => {
+        if (i !== idx) return u;
+        const listPriced =
+          u.quotedUnitPrice != null && u.price === String(Math.round(u.quotedUnitPrice * u.roomQty));
+        return {
+          ...u,
+          roomQty: qty,
+          ...(listPriced ? { price: String(Math.round(u.quotedUnitPrice! * qty)) } : {}),
+        };
+      }),
+    }));
+  }
+
   // Per-row price as a number (0 when blank/invalid)
   function unitPriceCzk(u: UnitRow): number {
     const n = parseFloat(u.price);
@@ -217,86 +394,183 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     return form.units.reduce((s, u) => s + unitPriceCzk(u), 0);
   }
 
-  // ── Fetch-prices flow ──────────────────────────────────────────────────────
-  // Pulls Beds24's per-unit rate for the selected dates (offers endpoint —
-  // applies the Direct rate-plan multipliers so it matches what the unit
-  // sells for on bakerhouseapartments.cz) and auto-fills each row's price
-  // multiplied by qty. If a unit is fully booked for those dates the offers
-  // endpoint returns null — that row's price is left untouched and the
-  // status note tells the operator which rooms had no rate.
-  const [fetchingPrices, setFetchingPrices] = useState(false);
-  const [priceFetchNote, setPriceFetchNote] = useState<string | null>(null);
+  // ── Additional guests ─────────────────────────────────────────────────────
+  function addGuest() {
+    setForm((prev) => {
+      const additionalGuests = [...prev.additionalGuests, { firstName: "", lastName: "" }];
+      // More names than guests means the headcount is stale — grow it, never shrink.
+      const names = 1 + additionalGuests.length;
+      const numAdult = prev.numAdult + prev.numChild < names ? names - prev.numChild : prev.numAdult;
+      return { ...prev, additionalGuests, numAdult };
+    });
+  }
 
-  async function fetchPricesForAllRows() {
-    if (!form.arrival || !form.departure) return;
-    setFetchingPrices(true);
-    setPriceFetchNote(null);
+  function updateGuest(idx: number, patch: Partial<GuestName>) {
+    setForm((prev) => ({
+      ...prev,
+      additionalGuests: prev.additionalGuests.map((g, i) => (i === idx ? { ...g, ...patch } : g)),
+    }));
+  }
+
+  function removeGuest(idx: number) {
+    setForm((prev) => ({
+      ...prev,
+      additionalGuests: prev.additionalGuests.filter((_, i) => i !== idx),
+    }));
+  }
+
+  const additionalGuestNames = form.additionalGuests
+    .map((g) => `${g.firstName.trim()} ${g.lastName.trim()}`.trim())
+    .filter(Boolean);
+  const leadGuestName = [form.firstName, form.lastName].map((s) => s.trim()).filter(Boolean).join(' ');
+
+  // ── Availability & prices ─────────────────────────────────────────────────
+  // The Price Check list, inside the booking form: every apartment type with
+  // its Beds24 price for these dates and which physical units are free (from
+  // the reservations on screen). "Use" fills the last unit row; a unit chip
+  // forces that specific apartment.
+  const [availability, setAvailability] = useState<AvailabilityResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+
+  const datesValid = !!form.arrival && !!form.departure && form.departure > form.arrival;
+  const listKey = `${form.arrival}|${form.departure}|${form.numAdult}|${form.numChild}`;
+  const quoteDates = `${form.arrival}|${form.departure}`;
+  const listStale = !!availability && availability.key !== listKey;
+
+  async function checkAvailability() {
+    if (!datesValid || checking) return;
+    setChecking(true);
+    setCheckError(null);
     try {
-      // Default mode (no ignoreAvailability) → offers endpoint → rates with
-      // Direct-channel multipliers applied. ignoreAvailability=true returns
-      // raw daily price1 which is the unadjusted base rate, not what guests
-      // would actually pay.
-      const url = `/api/price-check?arrival=${encodeURIComponent(form.arrival)}&departure=${encodeURIComponent(form.departure)}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Price check failed');
+      await buildAvailability();
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : 'Availability check failed');
+    } finally {
+      setChecking(false);
+    }
+  }
 
-      // Build a per-unit price map keyed by selling roomId
-      const perUnitByRoomId = new Map<number, number>();
-      for (const offer of (data.offers ?? []) as { roomId?: number; price?: number | null }[]) {
-        if (offer.roomId && offer.price != null && offer.price > 0) {
-          perUnitByRoomId.set(offer.roomId, offer.price);
+  async function buildAvailability() {
+    const { arrival, departure, numAdult, numChild } = form;
+    const key = `${arrival}|${departure}|${numAdult}|${numChild}`;
+    const partySize = numAdult + numChild;
+    const occupancy = stayAvailability(reservations, arrival, departure);
+
+    const priced = new Map<number, { price: number; source: 'offer' | 'estimate' }>();
+    let pricingError: string | undefined;
+    try {
+      // 1. Beds24's own quote for the whole party — one call prices every type
+      //    that can host it (same call the Price Check pill makes).
+      const offers = await fetchPriceMap(arrival, departure, numAdult, numChild);
+      for (const t of occupancy) {
+        const p = offers.get(t.roomId);
+        if (partySize <= t.sleeps && p != null) priced.set(t.roomId, { price: p, source: 'offer' });
+      }
+
+      // 2. A party bigger than a studio gets no studio offer at all, but may
+      //    still take two studios — so quote the studios for what one sleeps.
+      const tooSmall = occupancy.filter((t) => partySize > t.sleeps);
+      for (const sleeps of [...new Set(tooSmall.map((t) => t.sleeps))]) {
+        const adults = Math.max(1, Math.min(numAdult, sleeps));
+        const children = Math.max(0, Math.min(numChild, sleeps - adults));
+        const perUnit = await fetchPriceMap(arrival, departure, adults, children);
+        for (const t of tooSmall.filter((x) => x.sleeps === sleeps)) {
+          const p = perUnit.get(t.roomId);
+          if (p != null) priced.set(t.roomId, { price: p, source: 'offer' });
         }
       }
 
-      // Fill each row — multiply per-unit price by the row's qty.
-      // Force-physical rows aren't priced by the offers endpoint (which
-      // only quotes sellable IDs) — skip them from both filled & missing
-      // counts so the operator isn't told "unavailable" when they're
-      // simply expected to enter a manual rate.
-      let filled = 0;
-      let missing = 0;
-      let physicalSkipped = 0;
-      setForm((prev) => ({
-        ...prev,
-        units: prev.units.map((u) => {
-          const su = SELLING_UNIT_BY_ROOM_ID[u.roomId];
-          if (su?.kind === 'physical') {
-            physicalSkipped += 1;
-            return u; // operator enters price manually for force-physical rows
-          }
-          const perUnit = perUnitByRoomId.get(u.roomId);
-          if (perUnit == null) {
-            missing += 1;
-            return u; // leave the price as-is for rows where Beds24 has no rate
-          }
-          filled += 1;
-          const total = Math.round(perUnit * u.roomQty);
-          return { ...u, price: String(total) };
-        }),
-      }));
-
-      const physicalNote =
-        physicalSkipped > 0
-          ? ` (${physicalSkipped} force-physical row${physicalSkipped === 1 ? '' : 's'} skipped — enter manually)`
-          : '';
-      if (filled === 0 && missing === 0) {
-        setPriceFetchNote(`Nothing to auto-fill${physicalNote}.`);
-      } else if (filled === 0) {
-        setPriceFetchNote(`None of the selected units are available for these dates — enter prices manually${physicalNote}.`);
-      } else if (missing > 0) {
-        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'}; ${missing} unavailable for these dates — enter those manually${physicalNote}.`);
-      } else {
-        setPriceFetchNote(`Filled ${filled} row${filled === 1 ? '' : 's'} with the rates these units sell at${physicalNote}.`);
+      // 3. A free unit Beds24 won't quote (min-stay, advance or check-in rule)
+      //    is still bookable here — estimate it from the daily rates.
+      const unquoted = occupancy.filter((t) => effectiveFreeUnits(t) > 0 && !priced.has(t.roomId));
+      if (unquoted.length > 0) {
+        const estimates = await fetchPriceMap(arrival, departure, 2, 0, true);
+        for (const t of unquoted) {
+          const p = estimates.get(t.roomId);
+          if (p != null) priced.set(t.roomId, { price: p, source: 'estimate' });
+        }
       }
-      setTimeout(() => setPriceFetchNote(null), 4000);
     } catch (e) {
-      setPriceFetchNote((e as Error).message);
-      setTimeout(() => setPriceFetchNote(null), 4000);
-    } finally {
-      setFetchingPrices(false);
+      pricingError = e instanceof Error ? e.message : 'Price check failed';
+    }
+
+    const types: QuotedType[] = occupancy
+      .map((t) => {
+        const p = priced.get(t.roomId);
+        return { ...t, price: p?.price ?? null, source: p?.source ?? null };
+      })
+      .sort((a, b) => SELLABLE_ORDER.indexOf(a.roomId) - SELLABLE_ORDER.indexOf(b.roomId));
+
+    setAvailability({ key, nights: nightsBetween(arrival, departure), party: partySize, types, pricingError });
+  }
+
+  /** The availability-list price for a dropdown roomId (sellable or forced unit). */
+  function listPriceFor(roomId: number): number | null {
+    if (!availability || listStale) return null;
+    const t = availability.types.find(
+      (x) => x.roomId === roomId || x.units.some((u) => u.roomId === roomId),
+    );
+    return t?.price ?? null;
+  }
+
+  /** "Use" in the list → fill the LAST unit row (the one "Add another unit" just added). */
+  function applyFromList(roomId: number, perUnit: number | null) {
+    const idx = form.units.length - 1;
+    updateUnit(
+      idx,
+      perUnit != null
+        ? { roomId, roomQty: 1, price: String(Math.round(perUnit)), quotedUnitPrice: perUnit, quotedFor: quoteDates }
+        : { roomId, roomQty: 1, price: '', quotedUnitPrice: undefined, quotedFor: undefined },
+    );
+  }
+
+  /** Dropdown change — picks up the list's price for the new unit when there is one. */
+  function changeUnit(idx: number, roomId: number) {
+    const price = listPriceFor(roomId);
+    updateUnit(
+      idx,
+      price != null
+        ? { roomId, roomQty: 1, price: String(Math.round(price)), quotedUnitPrice: price, quotedFor: quoteDates }
+        // Reset qty to 1 when switching unit (qty bounds change)
+        : { roomId, roomQty: 1, quotedUnitPrice: undefined, quotedFor: undefined },
+    );
+  }
+
+  // ── Invoice ───────────────────────────────────────────────────────────────
+  function setInvoiceField<K extends keyof InvoiceData>(field: K, value: InvoiceData[K]) {
+    setInvoiceData((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function toggleInvoice() {
+    const next = !invoiceOn;
+    setInvoiceOn(next);
+    // The guest's own address is the usual billing address — start from it.
+    if (next && !invoiceData.billingEmail.trim() && form.email.trim()) {
+      setInvoiceField('billingEmail', form.email.trim());
     }
   }
+
+  function chooseInvoiceTiming(timing: InvoiceTiming) {
+    setInvoiceTiming(timing);
+    if (timing === 'schedule' && !invoiceSendDate) {
+      // Checkout is when the chat flow's invoices go out too.
+      const tomorrow = addDays(todayLocal(), 1);
+      setInvoiceSendDate(form.departure && form.departure > tomorrow ? form.departure : tomorrow);
+    }
+  }
+
+  /** What the invoice step will do on submit; null = no invoice step. */
+  function invoiceDelivery(): InvoiceDelivery | null {
+    if (!invoiceOn) return null;
+    if (sendInvoice) return invoiceTiming === 'now' ? 'now' : 'schedule';
+    return hasAnyInvoiceData(invoiceData) ? 'save' : null;
+  }
+
+  const delivery = invoiceDelivery();
+  const invoiceProblem = delivery
+    ? invoiceDeliveryProblem(invoiceData, delivery, delivery === 'schedule' ? invoiceSendDate : undefined, todayLocal())
+    : null;
 
   // Initialize default send dates whenever payments are reset or arrival changes.
   // Row 1 = today; row 2 = arrival (check-in); row 3 = no default (user fills).
@@ -396,14 +670,122 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
     ? Math.abs(sumPct - 100) < 0.001
     : sumActual === Math.round(priceNum);
 
+  /** Stripe link(s) for the new booking — the flow this modal always had. */
+  async function createPaymentLinks(reservationNumber: string | undefined): Promise<ResultPaymentRow[]> {
+    const guestName = [form.firstName, form.lastName].filter(Boolean).join(' ');
+
+    // Split payment path
+    if (splitPayment && reservationNumber) {
+      const total = payments.length;
+      const paymentInputs = payments.map((p, i) => ({
+        paymentNumber: i + 1,
+        totalPayments: total,
+        amountCzk: rowAmountCzk(p, priceNum),
+        sendDate: p.sendDate,
+      }));
+
+      const linkRes = await fetch('/api/stripe/split-payments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reservationNumber,
+          guestEmail: form.email || undefined,
+          guestPhone: form.phone || undefined,
+          guestName: guestName || undefined,
+          payments: paymentInputs,
+        }),
+      });
+      const linkData = await linkRes.json();
+      if (!linkRes.ok) throw new Error(linkData.error ?? 'Failed to set up split payments');
+      return linkData.payments ?? [];
+    }
+
+    // Single payment path
+    const description = reservationNumber
+      ? `Baker House — reservation ${reservationNumber}`
+      : `Baker House — ${guestName}`;
+
+    const linkRes = await fetch('/api/stripe/payment-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amountCzk: priceNum,
+        description,
+        guestEmail: form.email || undefined,
+        guestPhone: form.phone || undefined,
+        reservationNumber: reservationNumber,
+      }),
+    });
+    const linkData = await linkRes.json();
+    if (!linkRes.ok) throw new Error(linkData.error ?? 'Failed to generate payment link');
+    return [{
+      paymentNumber: 1,
+      totalPayments: 1,
+      amountCzk: priceNum,
+      sendDate: todayLocal(),
+      status: 'sent',
+      url: linkData.url,
+    }];
+  }
+
+  /** Store the billing details on the new booking and send / schedule the invoice. */
+  async function setUpInvoice(reservationNumbers: string[], how: InvoiceDelivery): Promise<InvoiceOutcome> {
+    const withPaymentDetails = how !== 'save' && invoicePaymentDetails;
+    try {
+      const res = await fetch('/api/bookings/initial-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reservationNumbers,
+          invoiceData,
+          delivery: how,
+          ...(how === 'schedule' ? { sendDate: invoiceSendDate } : {}),
+          includeQR: withPaymentDetails,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { kind: 'error', message: json.error ?? `HTTP ${res.status}`, saved: json.saved === true };
+      }
+      if (json.status === 'saved') return { kind: 'saved' };
+      if (json.status === 'scheduled') {
+        return { kind: 'scheduled', sendDate: json.sendDate ?? invoiceSendDate, to: invoiceData.billingEmail.trim(), withPaymentDetails };
+      }
+      return {
+        kind: json.status === 'deferred' ? 'deferred' : 'sent',
+        invoiceNumber: json.invoiceNumber ?? '',
+        to: json.sentTo ?? invoiceData.billingEmail.trim(),
+        withPaymentDetails,
+        deferral: json.deferral,
+        statusSaved: json.statusSaved !== false,
+        revenueRecorded: json.revenueRecorded,
+      };
+    } catch (err) {
+      return {
+        kind: 'error',
+        message: `${err instanceof Error ? err.message : 'Network error'} — open the reservation to check what was saved before retrying.`,
+        saved: false,
+      };
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitting) return;
     if (form.departure && form.arrival && form.departure <= form.arrival) {
       setError("Check-out must be after check-in");
       return;
     }
     if (!form.nationality) {
       setError("Nationality is required — Beds24 uses it to pick the language of the automated guest messages");
+      return;
+    }
+    if (invoiceProblem) {
+      setError(invoiceProblem);
+      return;
+    }
+    if ((delivery === 'now' || delivery === 'schedule') && priceNum <= 0) {
+      setError("Set the price before sending an invoice — it would bill 0 Kč");
       return;
     }
 
@@ -464,11 +846,15 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
 
     setError(null);
     setSubmitting(true);
+    setProgress('Creating booking…');
+
+    // 1. Create the Beds24 booking(s).
+    // Server-side handles single vs multi-row: when units.length > 1 it
+    // generates a [GROUP:xxx] marker and POSTs an array of bookings to
+    // Beds24 in one call, returning all created IDs.
+    let reservationNumber: string | undefined;
+    let reservationNumbers: string[] = [];
     try {
-      // 1. Create the Beds24 booking(s).
-      // Server-side handles single vs multi-row: when units.length > 1 it
-      // generates a [GROUP:xxx] marker and POSTs an array of bookings to
-      // Beds24 in one call, returning all created IDs.
       const payload = {
         units: form.units.map((u) => ({
           roomId: u.roomId,
@@ -481,6 +867,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
         numChild: form.numChild,
         firstName: form.firstName,
         lastName: form.lastName,
+        additionalGuests: additionalGuestNames,
         email: form.email,
         phone: form.phone,
         nationality: form.nationality,
@@ -497,93 +884,73 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
       // Server returns the canonical reservation number (first booking ID)
       // along with the full list of created IDs. The payment link attaches
       // to the canonical reservation so the merged "package" view shows it.
-      const reservationNumber: string | undefined = json.reservationNumber;
-
-      if (!includePaymentLink || priceNum <= 0) {
-        onCreated();
-        return;
-      }
-
-      const guestName = [form.firstName, form.lastName].filter(Boolean).join(' ');
-
-      // 2a. Split payment path
-      if (splitPayment && reservationNumber) {
-        const total = payments.length;
-        const paymentInputs = payments.map((p, i) => ({
-          paymentNumber: i + 1,
-          totalPayments: total,
-          amountCzk: rowAmountCzk(p, priceNum),
-          sendDate: p.sendDate,
-        }));
-
-        const linkRes = await fetch('/api/stripe/split-payments', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            reservationNumber,
-            guestEmail: form.email || undefined,
-            guestPhone: form.phone || undefined,
-            guestName: guestName || undefined,
-            payments: paymentInputs,
-          }),
-        });
-        const linkData = await linkRes.json();
-        if (!linkRes.ok) throw new Error(linkData.error ?? 'Booking created but failed to set up split payments');
-
-        setResultPayments(linkData.payments ?? []);
-        setStep('link');
-        return;
-      }
-
-      // 2b. Single payment path (existing flow)
-      const description = reservationNumber
-        ? `Baker House — reservation ${reservationNumber}`
-        : `Baker House — ${guestName}`;
-
-      const linkRes = await fetch('/api/stripe/payment-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amountCzk: priceNum,
-          description,
-          guestEmail: form.email || undefined,
-          guestPhone: form.phone || undefined,
-          reservationNumber: reservationNumber,
-        }),
-      });
-      const linkData = await linkRes.json();
-      if (!linkRes.ok) throw new Error(linkData.error ?? 'Booking created but failed to generate payment link');
-
-      setPaymentUrl(linkData.url);
-      setStep('link');
+      reservationNumber = json.reservationNumber;
+      reservationNumbers = Array.isArray(json.reservationNumbers)
+        ? json.reservationNumbers
+        : reservationNumber ? [reservationNumber] : [];
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
       setSubmitting(false);
+      setProgress(null);
+      return;
     }
+
+    // ── The booking exists from here on. ──
+    // Nothing below may drop the operator back on the form: a failed payment
+    // link or invoice is reported in the result step instead, because "Create"
+    // again would create a second booking.
+    const outcome: CreatedBooking = { reservationNumber, paymentRows: null, paymentError: null, invoice: null };
+
+    if (includePaymentLink && priceNum > 0) {
+      setProgress('Creating payment link…');
+      try {
+        outcome.paymentRows = await createPaymentLinks(reservationNumber);
+      } catch (err) {
+        outcome.paymentError = err instanceof Error ? err.message : 'Failed to create the payment link';
+      }
+    }
+
+    if (delivery) {
+      setProgress(delivery === 'now' ? 'Sending invoice…' : 'Saving invoice…');
+      outcome.invoice = reservationNumbers.length > 0
+        ? await setUpInvoice(reservationNumbers, delivery)
+        : {
+            kind: 'error',
+            message: "Beds24 didn't return the new booking number, so the invoice details weren't saved — add them in the reservation drawer.",
+            saved: false,
+          };
+    }
+
+    setSubmitting(false);
+    setProgress(null);
+
+    // Nothing worth a second screen → close as before.
+    const quiet =
+      outcome.paymentRows === null &&
+      outcome.paymentError === null &&
+      (outcome.invoice === null || outcome.invoice.kind === 'saved');
+    if (quiet) {
+      onCreated();
+      return;
+    }
+    setCreated(outcome);
+    setStep('result');
   }
 
-  // ── Link step ──────────────────────────────────────────────────────────────
-  if (step === 'link') {
-    const guestName = [form.firstName, form.lastName].filter(Boolean).join(' ');
+  // ── Result step ────────────────────────────────────────────────────────────
+  if (step === 'result' && created) {
+    const guestLine = [leadGuestName || 'guest', ...additionalGuestNames].join(', ');
     const submittedTotal = totalPrice();
-
-    // Build display rows: split path uses resultPayments; single path synthesizes one row
-    const displayRows: ResultPaymentRow[] = resultPayments ?? [{
-      paymentNumber: 1,
-      totalPayments: 1,
-      amountCzk: submittedTotal,
-      sendDate: todayLocal(),
-      status: 'sent',
-      url: paymentUrl,
-    }];
+    const displayRows = created.paymentRows ?? [];
+    const inv = created.invoice;
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
             <h2 className="text-base font-semibold text-gray-900">
-              Booking Created · {displayRows.length} {displayRows.length === 1 ? 'Payment Link' : 'Payments'}
+              Booking Created
+              {displayRows.length > 0 && ` · ${displayRows.length} ${displayRows.length === 1 ? 'Payment Link' : 'Payments'}`}
             </h2>
             <button onClick={() => { onCreated(); }} className="text-gray-400 hover:text-gray-600 transition-colors">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -598,7 +965,9 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              Booking created for {guestName || 'guest'}
+              <span>
+                Booking {created.reservationNumber ? <strong>{created.reservationNumber}</strong> : null} created for {guestLine}
+              </span>
             </div>
 
             {/* Summary */}
@@ -611,80 +980,92 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
               </p>
             </div>
 
+            {/* Payment link failed — the booking itself is fine */}
+            {created.paymentError && (
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                Payment link not created: {created.paymentError}. Create it from the reservation drawer (Request Payment) — don&apos;t re-create the booking.
+              </p>
+            )}
+
             {/* Payment rows */}
-            <div className="space-y-3">
-              {displayRows.map((row, idx) => (
-                <div
-                  key={idx}
-                  className="border border-gray-200 rounded-lg px-4 py-3 space-y-2"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        {row.totalPayments > 1
-                          ? `Payment ${row.paymentNumber} of ${row.totalPayments}`
-                          : 'Payment'}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {row.amountCzk.toLocaleString('cs-CZ')} Kč
-                      </p>
+            {displayRows.length > 0 && (
+              <div className="space-y-3">
+                {displayRows.map((row, idx) => (
+                  <div
+                    key={idx}
+                    className="border border-gray-200 rounded-lg px-4 py-3 space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {row.totalPayments > 1
+                            ? `Payment ${row.paymentNumber} of ${row.totalPayments}`
+                            : 'Payment'}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {row.amountCzk.toLocaleString('cs-CZ')} Kč
+                        </p>
+                      </div>
+                      {row.status === 'sent' ? (
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                          Link ready
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                          Scheduled
+                        </span>
+                      )}
                     </div>
-                    {row.status === 'sent' ? (
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
-                        Link ready
-                      </span>
+
+                    {row.status === 'sent' && row.url ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <input
+                            readOnly
+                            value={row.url}
+                            className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-[11px] text-gray-500 bg-gray-50 truncate"
+                          />
+                          <button
+                            onClick={() => handleCopy(idx, row.url!)}
+                            className={`px-2.5 py-1.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap ${
+                              copiedIdx === idx ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {copiedIdx === idx ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                        {form.phone && (
+                          <button
+                            onClick={() => {
+                              const text = encodeURIComponent(
+                                `Hi ${leadGuestName || 'there'}, here is your payment link${row.totalPayments > 1 ? ` (Payment ${row.paymentNumber} of ${row.totalPayments})` : ''} for your Baker House stay: ${row.url}`,
+                              );
+                              const num = form.phone.replace(/\D/g, '');
+                              window.open(`https://wa.me/${num}?text=${text}`, '_blank');
+                            }}
+                            className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-green-200 text-green-700 text-[11px] font-medium rounded hover:bg-green-50 transition-colors"
+                          >
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                              <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.527 5.845L0 24l6.333-1.505A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.647-.494-5.17-1.358l-.37-.216-3.758.893.939-3.65-.24-.384A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                            </svg>
+                            Send via WhatsApp
+                          </button>
+                        )}
+                      </>
                     ) : (
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                        Scheduled
-                      </span>
+                      <p className="text-xs text-gray-500">
+                        Will be emailed to the guest automatically on{' '}
+                        <span className="font-medium text-gray-700">{row.sendDate}</span>.
+                      </p>
                     )}
                   </div>
+                ))}
+              </div>
+            )}
 
-                  {row.status === 'sent' && row.url ? (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <input
-                          readOnly
-                          value={row.url}
-                          className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-[11px] text-gray-500 bg-gray-50 truncate"
-                        />
-                        <button
-                          onClick={() => handleCopy(idx, row.url!)}
-                          className={`px-2.5 py-1.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap ${
-                            copiedIdx === idx ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
-                        >
-                          {copiedIdx === idx ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                      {form.phone && (
-                        <button
-                          onClick={() => {
-                            const text = encodeURIComponent(
-                              `Hi ${guestName || 'there'}, here is your payment link${row.totalPayments > 1 ? ` (Payment ${row.paymentNumber} of ${row.totalPayments})` : ''} for your Baker House stay: ${row.url}`,
-                            );
-                            const num = form.phone.replace(/\D/g, '');
-                            window.open(`https://wa.me/${num}?text=${text}`, '_blank');
-                          }}
-                          className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-green-200 text-green-700 text-[11px] font-medium rounded hover:bg-green-50 transition-colors"
-                        >
-                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                            <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.527 5.845L0 24l6.333-1.505A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.647-.494-5.17-1.358l-.37-.216-3.758.893.939-3.65-.24-.384A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-                          </svg>
-                          Send via WhatsApp
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-xs text-gray-500">
-                      Will be emailed to the guest automatically on{' '}
-                      <span className="font-medium text-gray-700">{row.sendDate}</span>.
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
+            {/* Invoice */}
+            {inv && <InvoiceOutcomeCard outcome={inv} />}
 
             <button
               onClick={() => { onCreated(); }}
@@ -699,9 +1080,14 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
   }
 
   // ── Form step ──────────────────────────────────────────────────────────────
+  // Only rows the operator has actually priced — the untouched default row
+  // (Urban, no price) must not read as a choice already made.
+  const usedRoomIds = new Set(form.units.filter((u) => u.price.trim() !== '').map((u) => u.roomId));
+  const lastRowNumber = form.units.length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[95vh] overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden max-h-[95vh] overflow-y-auto">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
@@ -726,7 +1112,15 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 type="date"
                 required
                 value={form.arrival}
-                onChange={(e) => set("arrival", e.target.value)}
+                onChange={(e) => {
+                  const arrival = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    arrival,
+                    // Keep the stay at least one night when check-in moves past check-out.
+                    departure: arrival && prev.departure && prev.departure <= arrival ? addDays(arrival, 1) : prev.departure,
+                  }));
+                }}
                 className={inputCls}
               />
             </Field>
@@ -735,105 +1129,152 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 type="date"
                 required
                 value={form.departure}
-                min={form.arrival || undefined}
+                min={form.arrival ? addDays(form.arrival, 1) : undefined}
                 onChange={(e) => set("departure", e.target.value)}
                 className={inputCls}
               />
             </Field>
           </div>
 
+          {/* Guests — up here because the availability check prices for them */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Adults">
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={form.numAdult}
+                onChange={(e) => set("numAdult", parseInt(e.target.value) || 1)}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Children">
+              <input
+                type="number"
+                min={0}
+                max={10}
+                value={form.numChild}
+                onChange={(e) => set("numChild", parseInt(e.target.value) || 0)}
+                className={inputCls}
+              />
+            </Field>
+          </div>
+
+          {/* Availability & prices — what the Price Check pill shows, usable in place */}
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={checkAvailability}
+              disabled={!datesValid || checking}
+              className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              title={datesValid ? 'List every apartment with its Beds24 price and free units for these dates' : 'Set check-in and check-out first'}
+            >
+              {checking ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                  Checking Beds24…
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  {availability && !listStale ? 'Check again' : 'Check availability & prices'}
+                </>
+              )}
+            </button>
+            {!datesValid && (
+              <p className="text-[11px] text-gray-400 text-center">Pick check-in and check-out to see what&apos;s free and what it costs.</p>
+            )}
+
+            {availability && (
+              <AvailabilityList
+                result={availability}
+                stale={listStale}
+                usedRoomIds={usedRoomIds}
+                targetRow={lastRowNumber}
+                noOccupancyData={reservations.length === 0}
+                onUse={applyFromList}
+              />
+            )}
+            {checkError && (
+              <p className="text-[11px] text-red-600">{checkError}</p>
+            )}
+          </div>
+
           {/* Units — one or more rows. Each row becomes a separate Beds24
               booking; multi-row bookings are linked into a single visual
               reservation via a group marker in comments. */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-gray-600">Units</p>
-              <button
-                type="button"
-                onClick={fetchPricesForAllRows}
-                disabled={!form.arrival || !form.departure || fetchingPrices}
-                className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                title={
-                  !form.arrival || !form.departure
-                    ? 'Set check-in and check-out first'
-                    : 'Pull the rates these units sell at on the website and fill the price fields (qty-multiplied)'
-                }
-              >
-                {fetchingPrices ? (
-                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                  </svg>
-                ) : (
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                )}
-                {fetchingPrices ? 'Fetching…' : 'Fetch prices from Beds24'}
-              </button>
-            </div>
+            <p className="text-xs font-medium text-gray-600">Units</p>
             {form.units.map((unit, idx) => {
               const su = SELLING_UNIT_BY_ROOM_ID[unit.roomId];
               const showQty = su?.maxQty && su.maxQty > 1;
+              const quoteStale = !!unit.quotedFor && unit.quotedFor !== quoteDates;
               return (
-                <div
-                  key={idx}
-                  className={`grid ${showQty ? 'grid-cols-[1fr_70px_120px_28px]' : 'grid-cols-[1fr_120px_28px]'} gap-2 items-end`}
-                >
-                  <Field label={idx === 0 ? "Selling unit" : ""}>
-                    <select
-                      value={unit.roomId}
-                      onChange={(e) => {
-                        const newId = parseInt(e.target.value);
-                        // Reset qty to 1 when switching unit (qty bounds change)
-                        updateUnit(idx, { roomId: newId, roomQty: 1 });
-                      }}
-                      className={inputCls}
-                    >
-                      {SELLING_UNIT_GROUPS.map((group) => (
-                        <optgroup key={group.label} label={group.label}>
-                          {group.options.map((o) => (
-                            <option key={o.roomId} value={o.roomId}>{o.label}</option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </Field>
-                  {showQty && (
-                    <Field label={idx === 0 ? "Qty" : ""}>
+                <div key={idx} className="space-y-1">
+                  <div
+                    className={`grid ${showQty ? 'grid-cols-[1fr_70px_120px_28px]' : 'grid-cols-[1fr_120px_28px]'} gap-2 items-end`}
+                  >
+                    <Field label={idx === 0 ? "Selling unit" : ""}>
                       <select
-                        value={unit.roomQty}
-                        onChange={(e) => updateUnit(idx, { roomQty: parseInt(e.target.value) })}
+                        value={unit.roomId}
+                        onChange={(e) => changeUnit(idx, parseInt(e.target.value))}
                         className={inputCls}
                       >
-                        {Array.from({ length: su!.maxQty }, (_, i) => i + 1).map((n) => (
-                          <option key={n} value={n}>{n}</option>
+                        {SELLING_UNIT_GROUPS.map((group) => (
+                          <optgroup key={group.label} label={group.label}>
+                            {group.options.map((o) => (
+                              <option key={o.roomId} value={o.roomId}>{o.label}</option>
+                            ))}
+                          </optgroup>
                         ))}
                       </select>
                     </Field>
+                    {showQty && (
+                      <Field label={idx === 0 ? "Qty" : ""}>
+                        <select
+                          value={unit.roomQty}
+                          onChange={(e) => changeQty(idx, parseInt(e.target.value))}
+                          className={inputCls}
+                        >
+                          {Array.from({ length: su!.maxQty }, (_, i) => i + 1).map((n) => (
+                            <option key={n} value={n}>{n}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+                    <Field label={idx === 0 ? "Price (Kč)" : ""}>
+                      <input
+                        type="number"
+                        min={0}
+                        value={unit.price}
+                        onChange={(e) => updateUnit(idx, { price: e.target.value, quotedUnitPrice: undefined, quotedFor: undefined })}
+                        placeholder="0"
+                        className={inputCls}
+                      />
+                    </Field>
+                    {form.units.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => removeUnit(idx)}
+                        className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+                        title="Remove this unit"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    ) : <span />}
+                  </div>
+                  {quoteStale && (
+                    <p className="text-[11px] text-amber-700">
+                      This price was fetched for other dates — check availability again or adjust it.
+                    </p>
                   )}
-                  <Field label={idx === 0 ? "Price (Kč)" : ""}>
-                    <input
-                      type="number"
-                      min={0}
-                      value={unit.price}
-                      onChange={(e) => updateUnit(idx, { price: e.target.value })}
-                      placeholder="0"
-                      className={inputCls}
-                    />
-                  </Field>
-                  {form.units.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => removeUnit(idx)}
-                      className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
-                      title="Remove this unit"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  ) : <span />}
                 </div>
               );
             })}
@@ -855,10 +1296,6 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 </div>
               )}
             </div>
-
-            {priceFetchNote && (
-              <p className="text-[11px] text-gray-500 italic">{priceFetchNote}</p>
-            )}
           </div>
 
           {/* Guest name */}
@@ -880,6 +1317,60 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 className={inputCls}
               />
             </Field>
+          </div>
+
+          {/* Additional guests — written into the Beds24 booking and printed
+              on the invoice next to the lead guest. */}
+          {form.additionalGuests.length > 0 && (
+            <div className="space-y-2">
+              {form.additionalGuests.map((g, idx) => (
+                <div key={idx} className="grid grid-cols-[1fr_1fr_28px] gap-3 items-end">
+                  <Field label={`Guest ${idx + 2} — first name`}>
+                    <input
+                      type="text"
+                      value={g.firstName}
+                      onChange={(e) => updateGuest(idx, { firstName: e.target.value })}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <Field label="Last name" optional>
+                    <input
+                      type="text"
+                      value={g.lastName}
+                      onChange={(e) => updateGuest(idx, { lastName: e.target.value })}
+                      className={inputCls}
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    onClick={() => removeGuest(idx)}
+                    className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+                    title="Remove this guest"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="-mt-1 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={addGuest}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Add guest
+            </button>
+            {form.additionalGuests.length > 0 && (
+              <p className="text-[11px] text-gray-400 text-right">
+                Saved on the Beds24 booking and printed on the invoice.
+              </p>
+            )}
           </div>
 
           {/* Contact */}
@@ -930,30 +1421,6 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
             </div>
           </div>
 
-          {/* Guests + Price */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Adults">
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={form.numAdult}
-                onChange={(e) => set("numAdult", parseInt(e.target.value) || 1)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Children">
-              <input
-                type="number"
-                min={0}
-                max={10}
-                value={form.numChild}
-                onChange={(e) => set("numChild", parseInt(e.target.value) || 0)}
-                className={inputCls}
-              />
-            </Field>
-          </div>
-
           {/* Notes */}
           <Field label="Notes" optional>
             <textarea
@@ -963,6 +1430,73 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
               className={`${inputCls} resize-none`}
             />
           </Field>
+
+          {/* Invoice info — for bookings the customer pays by invoice */}
+          <button
+            type="button"
+            onClick={toggleInvoice}
+            className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+          >
+            <Switch on={invoiceOn} />
+            Add invoice info
+          </button>
+
+          {invoiceOn && (
+            <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
+              <Field label="Company name">
+                <input
+                  type="text"
+                  value={invoiceData.companyName}
+                  onChange={(e) => setInvoiceField('companyName', e.target.value)}
+                  placeholder="Acme s.r.o."
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Company address" optional>
+                <input
+                  type="text"
+                  value={invoiceData.companyAddress}
+                  onChange={(e) => setInvoiceField('companyAddress', e.target.value)}
+                  placeholder="Šumavská 10, 602 00 Brno"
+                  className={inputCls}
+                />
+              </Field>
+              <div className="grid grid-cols-3 gap-3">
+                <Field label="IČO">
+                  <input
+                    type="text"
+                    value={invoiceData.ico}
+                    onChange={(e) => setInvoiceField('ico', e.target.value)}
+                    placeholder="19876107"
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="DIČ / VAT">
+                  <input
+                    type="text"
+                    value={invoiceData.vatNumber}
+                    onChange={(e) => setInvoiceField('vatNumber', e.target.value)}
+                    placeholder="CZ19876107"
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="Billing email">
+                  <input
+                    type="email"
+                    value={invoiceData.billingEmail}
+                    onChange={(e) => setInvoiceField('billingEmail', e.target.value)}
+                    placeholder="accounting@acme.cz"
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+              {!sendInvoice && (
+                <p className="text-[11px] text-gray-400">
+                  Saved on the reservation — the invoice is ready to issue from the drawer. To send it from here, turn on Send invoice below.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Payment link toggle */}
           <button
@@ -974,17 +1508,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
             }}
             className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
           >
-            <span
-              className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${
-                includePaymentLink ? 'bg-indigo-600' : 'bg-gray-200'
-              }`}
-            >
-              <span
-                className={`inline-block h-3 w-3 rounded-full bg-white shadow transform transition-transform ${
-                  includePaymentLink ? 'translate-x-3' : 'translate-x-0'
-                }`}
-              />
-            </span>
+            <Switch on={includePaymentLink} />
             Send payment link after booking
           </button>
 
@@ -996,17 +1520,7 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
                 onClick={() => toggleSplit(!splitPayment)}
                 className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
               >
-                <span
-                  className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${
-                    splitPayment ? 'bg-indigo-600' : 'bg-gray-200'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-3 w-3 rounded-full bg-white shadow transform transition-transform ${
-                      splitPayment ? 'translate-x-3' : 'translate-x-0'
-                    }`}
-                  />
-                </span>
+                <Switch on={splitPayment} />
                 Split payment
               </button>
 
@@ -1132,6 +1646,81 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
             </div>
           )}
 
+          {/* Send invoice — needs the invoice info above */}
+          {invoiceOn && (
+            <>
+              <button
+                type="button"
+                onClick={() => setSendInvoice((v) => !v)}
+                className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+              >
+                <Switch on={sendInvoice} />
+                Send invoice
+              </button>
+
+              {sendInvoice && (
+                <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="invoice-timing"
+                        checked={invoiceTiming === 'now'}
+                        onChange={() => chooseInvoiceTiming('now')}
+                        className="accent-indigo-600"
+                      />
+                      Issue &amp; send now
+                      <span className="text-gray-400">— emailed right after the booking is created</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="invoice-timing"
+                        checked={invoiceTiming === 'schedule'}
+                        onChange={() => chooseInvoiceTiming('schedule')}
+                        className="accent-indigo-600"
+                      />
+                      Schedule for
+                      <input
+                        type="date"
+                        value={invoiceSendDate}
+                        min={addDays(todayLocal(), 1)}
+                        onChange={(e) => { setInvoiceSendDate(e.target.value); setInvoiceTiming('schedule'); }}
+                        className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      />
+                    </label>
+                    {invoiceTiming === 'schedule' && (
+                      <p className="text-[11px] text-gray-400 pl-5">
+                        Goes out with the morning invoice run (≈ 10–11:00) on that day. Until then it shows as a Send-invoice task on the reservation.
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setInvoicePaymentDetails((v) => !v)}
+                    className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+                  >
+                    <Switch on={invoicePaymentDetails} />
+                    Include payment details
+                    <span className="font-normal text-gray-400">— bank account, VS and QR code</span>
+                  </button>
+                  {includePaymentLink && invoicePaymentDetails && (
+                    <p className="text-[11px] text-amber-700">
+                      The guest also gets a Stripe payment link — with bank details on the invoice they could pay twice.
+                    </p>
+                  )}
+
+                  {invoiceProblem && (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                      {invoiceProblem}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
           {/* Error */}
           {error && (
             <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
@@ -1142,7 +1731,8 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+              disabled={submitting}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
@@ -1151,11 +1741,294 @@ export default function CreateBookingModal({ onClose, onCreated }: Props) {
               disabled={submitting}
               className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {submitting ? "Creating…" : (includePaymentLink ? "Create & Get Link" : "Create Booking")}
+              {submitting
+                ? (progress ?? "Creating…")
+                : includePaymentLink
+                  ? "Create & Get Link"
+                  : delivery === 'now'
+                    ? "Create & Send Invoice"
+                    : "Create Booking"}
             </button>
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+// ── Availability list ────────────────────────────────────────────────────────
+
+function AvailabilityList({
+  result,
+  stale,
+  usedRoomIds,
+  targetRow,
+  noOccupancyData,
+  onUse,
+}: {
+  result: AvailabilityResult;
+  /** Dates or guests changed since the list was built. */
+  stale: boolean;
+  /** roomIds the unit rows currently book — highlighted. */
+  usedRoomIds: Set<number>;
+  /** 1-based row "Use" fills (the last one). */
+  targetRow: number;
+  noOccupancyData: boolean;
+  onUse: (roomId: number, perUnitPrice: number | null) => void;
+}) {
+  const { nights, party, types } = result;
+  return (
+    <div className={`rounded-xl border border-gray-200 p-2.5 space-y-2 ${stale ? 'opacity-60' : ''}`}>
+      <div className="flex items-center justify-between gap-2 px-1">
+        <p className="text-[11px] text-gray-500">
+          {nights} night{nights === 1 ? '' : 's'} · {party} guest{party === 1 ? '' : 's'} · Beds24 web rate per apartment
+        </p>
+        {targetRow > 1 && !stale && (
+          <p className="text-[11px] text-indigo-600 shrink-0">Use fills unit row {targetRow}</p>
+        )}
+      </div>
+
+      {stale && (
+        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          Dates or guests changed since this list was made — check again.
+        </p>
+      )}
+      {result.pricingError && (
+        <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+          Beds24 prices didn&apos;t fully load ({result.pricingError}) — type in any price that&apos;s missing. Free units come from the reservations on screen.
+        </p>
+      )}
+      {noOccupancyData && (
+        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          No reservations loaded, so every unit reads as free — rely on the Beds24 prices only.
+        </p>
+      )}
+
+      {types.map((t) => (
+        <TypeCard
+          key={t.roomId}
+          t={t}
+          nights={nights}
+          party={party}
+          stale={stale}
+          usedRoomIds={usedRoomIds}
+          onUse={onUse}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TypeCard({
+  t,
+  nights,
+  party,
+  stale,
+  usedRoomIds,
+  onUse,
+}: {
+  t: QuotedType;
+  nights: number;
+  party: number;
+  stale: boolean;
+  usedRoomIds: Set<number>;
+  onUse: (roomId: number, perUnitPrice: number | null) => void;
+}) {
+  const label = SELLING_UNIT_BY_ROOM_ID[t.roomId]?.label ?? t.label;
+  const multiUnit = t.units.length > 1;
+  const free = effectiveFreeUnits(t);
+  // Beds24 quoting it is proof it can sell it, even when the list on screen
+  // is a sync behind and still shows the unit taken.
+  const bookable = free > 0 || t.source === 'offer';
+  const inUse = usedRoomIds.has(t.roomId) || t.units.some((u) => usedRoomIds.has(u.roomId));
+  const singleUnit = t.units[0];
+
+  let status: string;
+  if (multiUnit) {
+    status = `${t.freeUnits} of ${t.units.length} free`;
+    if (t.unallocated > 0) {
+      status += ` · ${t.unallocated} unassigned booking${t.unallocated === 1 ? '' : 's'} will take ${t.unallocated === 1 ? 'one' : 'some'}`;
+    }
+  } else {
+    status = singleUnit.free ? 'Free' : `Booked — ${singleUnit.heldBy ?? 'unknown'}`;
+  }
+  if (free === 0 && t.source === 'offer') status += ' · Beds24 still sells it — refresh Transactions';
+
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2.5 ${
+        inUse
+          ? 'border-indigo-300 bg-indigo-50/70'
+          : bookable
+            ? 'border-emerald-200 bg-emerald-50/50'
+            : 'border-gray-200 bg-gray-50'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className={`text-sm font-medium ${bookable ? 'text-gray-900' : 'text-gray-500'}`}>
+            {label}
+            <span className="ml-1.5 text-[11px] font-normal text-gray-400">sleeps {t.sleeps}</span>
+          </p>
+          <p className={`text-[11px] ${bookable ? 'text-gray-500' : 'text-gray-400'}`}>{status}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="text-right">
+            {t.price != null && bookable ? (
+              <>
+                <p
+                  className={`text-sm font-semibold ${t.source === 'estimate' ? 'text-amber-700' : 'text-emerald-700'}`}
+                  title={t.source === 'estimate'
+                    ? "Beds24 won't sell this stay on the web (min-stay, advance or check-in rule), so this is rebuilt from the daily rates. A manual booking can still take it."
+                    : 'Beds24 web rate for one apartment, whole stay'}
+                >
+                  {t.source === 'estimate' ? '≈ ' : ''}{formatCZK(t.price)}
+                </p>
+                {nights > 0 && (
+                  <p className="text-[10px] text-gray-400">
+                    {formatCZK(t.price / nights)} / night{t.source === 'estimate' ? ' · est.' : ''}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-gray-400">{bookable ? 'No web rate' : 'Booked'}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={!bookable || stale}
+            onClick={() => onUse(t.roomId, t.price)}
+            title={bookable ? `Book ${label}${t.price != null ? ` at ${formatCZK(t.price)}` : ''}` : 'No free unit for these dates'}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              usedRoomIds.has(t.roomId)
+                ? 'bg-indigo-600 text-white'
+                : 'bg-white border border-indigo-300 text-indigo-700 hover:bg-indigo-50'
+            }`}
+          >
+            {usedRoomIds.has(t.roomId) ? '✓ Used' : 'Use'}
+          </button>
+        </div>
+      </div>
+
+      {/* Physical units — a free one can be forced for this booking */}
+      {multiUnit && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-0.5">Force</span>
+          {t.units.map((u) => (
+            <UnitChip
+              key={u.room}
+              u={u}
+              stale={stale}
+              inUse={usedRoomIds.has(u.roomId)}
+              onPick={() => onUse(u.roomId, t.price)}
+            />
+          ))}
+        </div>
+      )}
+
+      {party > t.sleeps && bookable && (
+        <p className="mt-1.5 text-[11px] text-amber-700">
+          Sleeps {t.sleeps} — {party} guests need {Math.ceil(party / t.sleeps)} of these (add another unit). Price is per apartment.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function UnitChip({
+  u,
+  stale,
+  inUse,
+  onPick,
+}: {
+  u: UnitAvailability;
+  stale: boolean;
+  inUse: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={!u.free || stale}
+      onClick={onPick}
+      title={
+        u.free
+          ? `Book ${u.room} specifically (force physical room)`
+          : u.heldBy?.startsWith('Blocked')
+            ? `${u.heldBy} on these dates`
+            : `Held by ${u.heldBy ?? 'another booking'} on these dates`
+      }
+      className={`px-2 py-0.5 rounded-md border text-[11px] font-medium transition-colors ${
+        inUse
+          ? 'border-indigo-400 bg-indigo-100 text-indigo-800'
+          : u.free
+            ? 'border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-50'
+            : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+      }`}
+    >
+      {u.room}
+      {!u.free && <span className="font-normal"> · {shortHolder(u.heldBy)}</span>}
+    </button>
+  );
+}
+
+// ── Invoice outcome (result step) ────────────────────────────────────────────
+
+function InvoiceOutcomeCard({ outcome }: { outcome: InvoiceOutcome }) {
+  if (outcome.kind === 'error') {
+    return (
+      <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 space-y-1">
+        <p className="font-medium">Invoice not sent</p>
+        <p className="text-xs">{outcome.message}</p>
+        {!outcome.saved && (
+          <p className="text-xs">The booking itself is fine — add the invoice in the reservation drawer. Don&apos;t re-create the booking.</p>
+        )}
+      </div>
+    );
+  }
+  if (outcome.kind === 'saved') {
+    return (
+      <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+        Invoice details saved — issue the invoice from the reservation drawer when you&apos;re ready.
+      </p>
+    );
+  }
+  if (outcome.kind === 'scheduled') {
+    return (
+      <div className="text-sm text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 space-y-0.5">
+        <p className="font-medium">Invoice scheduled for {formatDay(outcome.sendDate)}</p>
+        <p className="text-xs">
+          Emailed to {outcome.to} by the morning invoice run{outcome.withPaymentDetails ? ', with payment details' : ''}.
+          It shows as a Send-invoice task on the reservation until then.
+        </p>
+      </div>
+    );
+  }
+  const deferred = outcome.kind === 'deferred';
+  return (
+    <div
+      className={`text-sm rounded-lg px-3 py-2 space-y-1 border ${
+        deferred ? 'text-amber-800 bg-amber-50 border-amber-200' : 'text-green-800 bg-green-50 border-green-200'
+      }`}
+    >
+      <p className="font-medium">
+        {deferred ? 'Invoice handed to the mail server' : 'Invoice sent'}
+        {outcome.invoiceNumber ? ` — ${outcome.invoiceNumber}` : ''}
+      </p>
+      <p className="text-xs">
+        To {outcome.to}{outcome.withPaymentDetails ? ', with payment details' : ''}.
+        {deferred && ' Gmail deferred the acknowledgement, so delivery is unconfirmed — check the Sent folder before re-sending.'}
+      </p>
+      {!outcome.statusSaved && (
+        <p className="text-xs text-amber-800">
+          It went out, but its &quot;Sent&quot; status couldn&apos;t be saved, so the drawer may still show it as not issued — don&apos;t send it again.
+        </p>
+      )}
+      {outcome.revenueRecorded === false && (
+        <p className="text-xs text-amber-800">
+          The revenue record for accounting wasn&apos;t created — add it in Accounting → Revenue so the bank payment can be matched.
+        </p>
+      )}
     </div>
   );
 }

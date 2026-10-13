@@ -1042,7 +1042,11 @@ export default function TransactionsPage() {
       // without its country code — e.g. "1577…" for "+49 1577 …" — still hits)
       if (search.trim()) {
         const q = normalizeForSearch(search);
-        const fullName = normalizeForSearch(`${res.firstName} ${res.lastName}`);
+        // Everyone on the booking — a guest added as an additional name is
+        // findable too, not only the lead guest Beds24 files it under.
+        const fullName = normalizeForSearch(
+          [`${res.firstName} ${res.lastName}`, ...(res.additionalGuests ?? [])].join(' '),
+        );
         const qDigits = phoneDigits(search);
         const resPhoneDigits = phoneDigits(res.phone);
         if (
@@ -2809,6 +2813,7 @@ export default function TransactionsPage() {
       {/* Create booking modal */}
       {showCreateModal && (
         <CreateBookingModal
+          reservations={reservations}
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);

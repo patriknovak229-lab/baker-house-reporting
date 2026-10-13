@@ -24,16 +24,7 @@
 
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
-import type { RevenueInvoice } from '@/types/revenueInvoice';
-import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
-
-interface DesiredInvoice {
-  id: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  amountCZK: number;
-  guestName?: string;
-}
+import { syncIssuedRevenueInvoices, type DesiredRevenueInvoice } from '@/utils/revenueInvoiceSync';
 
 export async function POST(request: Request) {
   const guard = await requireRole(['admin', 'accountant']);
@@ -41,7 +32,7 @@ export async function POST(request: Request) {
 
   const { reservationNumber, invoices: desired } = (await request.json()) as {
     reservationNumber?: string;
-    invoices?: DesiredInvoice[];
+    invoices?: DesiredRevenueInvoice[];
   };
 
   if (!reservationNumber || !Array.isArray(desired)) {
@@ -59,58 +50,8 @@ export async function POST(request: Request) {
     }
   }
 
-  const all = await readAllRevenueInvoices();
-  const now = new Date().toISOString();
-  const wanted = new Set(desired.map((d) => d.id));
-
-  const isIssuedForThisBooking = (i: RevenueInvoice) =>
-    i.sourceType === 'issued' && i.reservationNumber === reservationNumber;
-
-  // Drop the issued records this reservation no longer wants — except any that
-  // a bank transaction already points at.
-  const keptReconciled: string[] = [];
-  const removed: string[] = [];
-  const next = all.filter((i) => {
-    if (!isIssuedForThisBooking(i) || wanted.has(i.id)) return true;
-    if (i.status === 'reconciled' || i.bankTransactionId) {
-      keptReconciled.push(i.invoiceNumber);
-      return true;
-    }
-    removed.push(i.invoiceNumber);
-    return false;
-  });
-
-  // Upsert the desired set, carrying over everything the accountant owns
-  // (status, bank link, Drive file) from any record already at that id.
-  for (const d of desired) {
-    const idx = next.findIndex((i) => i.id === d.id);
-    const prev = idx >= 0 ? next[idx] : undefined;
-    const record: RevenueInvoice = {
-      id: d.id,
-      sourceType: 'issued',
-      category: prev?.category ?? 'accommodation_direct',
-      status: prev?.status ?? 'pending',
-      invoiceNumber: d.invoiceNumber,
-      invoiceDate: d.invoiceDate,
-      amountCZK: d.amountCZK,
-      reservationNumber,
-      guestName: d.guestName,
-      bankTransactionId: prev?.bankTransactionId,
-      reconciledAt: prev?.reconciledAt,
-      driveFileId: prev?.driveFileId,
-      driveFileName: prev?.driveFileName,
-      driveUrl: prev?.driveUrl,
-      createdAt: prev?.createdAt ?? now,
-    };
-    if (idx >= 0) next[idx] = record;
-    else next.push(record);
-  }
-
-  await writeAllRevenueInvoices(next);
-
-  return NextResponse.json({
-    written: desired.length,
-    removed,
-    keptReconciled,
-  });
+  // The replace itself (drop what's no longer issued, keep reconciled records,
+  // upsert the rest) lives in utils/revenueInvoiceSync so the server-side
+  // senders record revenue through the same code.
+  return NextResponse.json(await syncIssuedRevenueInvoices(reservationNumber, desired));
 }

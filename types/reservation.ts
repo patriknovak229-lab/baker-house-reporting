@@ -100,6 +100,13 @@ export interface Issue {
    * objects through untouched.
    */
   holdAutoSend?: string;
+  /**
+   * Invoice tasks only: print the bank details + payment QR when the cron sends
+   * it (and record the issued revenue invoice, as the drawer does when it sends
+   * with the QR on). Set when the New Booking modal schedules an invoice with
+   * "Include payment details". Absent = plain invoice, the cron's default.
+   */
+  includeQR?: boolean;
 }
 
 /**
@@ -382,6 +389,14 @@ export interface Reservation {
    * sync, never stored in the overrides map. See utils/corporateShared.ts.
    */
   corporateAgreementId?: string;
+  /**
+   * Everyone on the booking besides the lead guest (firstName/lastName), as
+   * full names. Parsed from the `[ADDITIONAL GUESTS: …]` comment line the New
+   * Booking modal writes into Beds24 — server-derived on each sync, never stored
+   * in the overrides map. Printed on the invoice after the lead guest. See
+   * utils/additionalGuests.ts.
+   */
+  additionalGuests?: string[];
 
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)

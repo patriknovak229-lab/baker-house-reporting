@@ -196,6 +196,19 @@ export function revenueInvoiceId(reservationNumber: string, seq?: number): strin
 }
 
 /**
+ * Who the stay was for, as the invoice line item names them: the lead guest,
+ * then everyone recorded on the booking with them (`additionalGuests`, from the
+ * Beds24 comment line the New Booking modal writes). A company paying for two
+ * colleagues wants both names on the document it books as an expense.
+ */
+export function invoiceGuestNames(
+  res: Pick<Reservation, "firstName" | "lastName" | "additionalGuests">,
+): string {
+  const lead = `${res.firstName ?? ""} ${res.lastName ?? ""}`.trim();
+  return [lead, ...(res.additionalGuests ?? [])].filter(Boolean).join(", ");
+}
+
+/**
  * Payment status as the drawer shows it: a manual override always wins over the
  * Beds24/Stripe-derived value. Read-only — this never changes payment state.
  */
@@ -330,7 +343,7 @@ export function buildInvoiceHTML(
   // Resolve overridable line-item bits (defaults to Beds24-derived values).
   const guestNameLine = modification?.guestName?.trim()
     || opts?.guestName?.trim()
-    || `${res.firstName} ${res.lastName}`.trim();
+    || invoiceGuestNames(res);
   const lineDescription = modification?.lineDescription?.trim()
     || "Ubytování / Accommodation";
 
