@@ -451,3 +451,41 @@ export function planForUnallocated(
     },
   };
 }
+
+// ─── Execute-time validation ───────────────────────────────────────────────────
+
+/** Minimal booking shape for the post-move double-book check. */
+export interface MoveBooking {
+  id: number;
+  arrival: string; // YYYY-MM-DD
+  departure: string; // YYYY-MM-DD (exclusive)
+}
+
+/**
+ * Given the post-move allocation (unit → the bookings that would sit in it) and
+ * the ids of the bookings actually being moved, return the first double-book the
+ * move would CREATE — or null if there is none.
+ *
+ * A conflict between two bookings that are BOTH staying put is pre-existing: their
+ * roomId didn't change, so they overlapped before this move too. Blocking on it
+ * would let a stale/past overbooking elsewhere in the unit veto an unrelated
+ * reshuffle (the 60-day validation fetch can drag such rows in). So we only flag
+ * a pair when at least one side is being moved.
+ */
+export function findMoveCreatedConflict(
+  perUnit: Record<string, MoveBooking[]>,
+  movedIds: Set<number>,
+): { unit: string; a: number; b: number } | null {
+  for (const [unit, list] of Object.entries(perUnit)) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        if (!movedIds.has(list[i].id) && !movedIds.has(list[j].id)) continue;
+        // Half-open overlap: each starts before the other ends.
+        if (list[i].arrival < list[j].departure && list[j].arrival < list[i].departure) {
+          return { unit, a: list[i].id, b: list[j].id };
+        }
+      }
+    }
+  }
+  return null;
+}

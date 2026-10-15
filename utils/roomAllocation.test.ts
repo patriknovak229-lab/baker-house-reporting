@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   planReallocation,
   planForUnallocated,
+  findMoveCreatedConflict,
   ALLOCATION_GROUPS,
   type ReallocInput,
   type ResRef,
+  type MoveBooking,
 } from "./roomAllocation";
 
 const URBAN = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Urban Studios")!; // K.102/K.103/K.106
@@ -261,5 +263,63 @@ describe("multi-apartment reservations (one guest, several units)", () => {
     const res = planForUnallocated(all, "ARRIVING", "2026-09-19");
     if ("error" in res) throw new Error(res.error);
     expect(res.plan.feasible).toBe(false);
+  });
+});
+
+describe("findMoveCreatedConflict (execute-time double-book check)", () => {
+  // The real BH-94705092 (Zoltan) case: post-move K.103 carries a pre-existing,
+  // already-departed overbooking (Abhi #92586229 vs Justin #93371888, overlap
+  // Sep 28–Oct 3) that neither leg of the shuffle touches. It must NOT veto it.
+  const WITH_GHOST: Record<string, MoveBooking[]> = {
+    "K.103": [
+      { id: 92586229, arrival: "2026-09-27", departure: "2026-10-03" }, // Abhi — staying (departed)
+      { id: 93371888, arrival: "2026-09-28", departure: "2026-10-18" }, // Justin — staying
+      { id: 94705092, arrival: "2026-10-18", departure: "2026-10-21" }, // Zoltan — moved in
+      { id: 93322418, arrival: "2026-10-22", departure: "2026-10-24" }, // Jana — moved in
+      { id: 92991204, arrival: "2026-10-24", departure: "2026-10-28" }, // Jens — moved in
+    ],
+    "K.102": [
+      { id: 94035909, arrival: "2026-10-13", departure: "2026-10-19" }, // Vasyl — staying
+      { id: 94258097, arrival: "2026-10-19", departure: "2026-10-27" }, // Edoardo — moved in
+    ],
+  };
+  const MOVED = new Set([94705092, 93322418, 92991204, 94258097]);
+
+  it("ignores a pre-existing overbooking neither leg touches (regression)", () => {
+    expect(findMoveCreatedConflict(WITH_GHOST, MOVED)).toBeNull();
+  });
+
+  it("flags a conflict a moved booking creates against a staying guest", () => {
+    // Zoltan arrives a day early → overlaps Justin (who checks out Oct 18).
+    const bad: Record<string, MoveBooking[]> = {
+      "K.103": [
+        { id: 93371888, arrival: "2026-09-28", departure: "2026-10-18" }, // staying
+        { id: 94705092, arrival: "2026-10-17", departure: "2026-10-21" }, // moved in → clashes
+      ],
+    };
+    const c = findMoveCreatedConflict(bad, new Set([94705092]));
+    expect(c).not.toBeNull();
+    expect(c!.unit).toBe("K.103");
+    expect([c!.a, c!.b].sort((x, y) => x - y)).toEqual([93371888, 94705092]);
+  });
+
+  it("flags two moved bookings sent to the same unit overlapping", () => {
+    const bad: Record<string, MoveBooking[]> = {
+      "K.103": [
+        { id: 111, arrival: "2026-10-20", departure: "2026-10-24" },
+        { id: 222, arrival: "2026-10-22", departure: "2026-10-26" },
+      ],
+    };
+    expect(findMoveCreatedConflict(bad, new Set([111, 222]))).not.toBeNull();
+  });
+
+  it("treats a same-day turnover (moved in as another checks out) as clean", () => {
+    const ok: Record<string, MoveBooking[]> = {
+      "K.103": [
+        { id: 93371888, arrival: "2026-09-28", departure: "2026-10-18" }, // staying, out Oct 18
+        { id: 94705092, arrival: "2026-10-18", departure: "2026-10-21" }, // moved in, in Oct 18
+      ],
+    };
+    expect(findMoveCreatedConflict(ok, new Set([94705092]))).toBeNull();
   });
 });

@@ -28,6 +28,7 @@ import { requireRole } from "@/utils/authGuard";
 import {
   roomIdForName,
   groupForRoom,
+  findMoveCreatedConflict,
   type AllocationGroup,
 } from "@/utils/roomAllocation";
 import { pragueToday } from "@/utils/periodUtils";
@@ -61,10 +62,6 @@ interface ParsedMove {
 interface MoveInput {
   reservationNumber: string;
   toRoom: string;
-}
-
-function overlaps(a: { arrival: string; departure: string }, b: { arrival: string; departure: string }): boolean {
-  return a.arrival < b.departure && b.arrival < a.departure;
 }
 
 async function sendTelegram(message: string): Promise<void> {
@@ -271,17 +268,15 @@ export async function POST(req: NextRequest) {
     perUnit[p.toRoom].push({ ...b, roomId: p.toRoomId });
   }
 
-  for (const [unit, list] of Object.entries(perUnit)) {
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        if (overlaps(list[i], list[j])) {
-          return NextResponse.json(
-            { error: `Move rejected — it would double-book ${unit} (bookings ${list[i].id} & ${list[j].id})` },
-            { status: 409 },
-          );
-        }
-      }
-    }
+  // Reject only a double-book THIS move creates — a conflict between two
+  // bookings that both stay put pre-existed (their roomId is unchanged) and must
+  // not veto an unrelated reshuffle. See findMoveCreatedConflict.
+  const conflict = findMoveCreatedConflict(perUnit, new Set(parsed.map((p) => p.bookingId)));
+  if (conflict) {
+    return NextResponse.json(
+      { error: `Move rejected — it would double-book ${conflict.unit} (bookings ${conflict.a} & ${conflict.b})` },
+      { status: 409 },
+    );
   }
 
   // ── Execute: batch roomId reassign ──
