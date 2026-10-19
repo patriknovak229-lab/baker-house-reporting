@@ -101,6 +101,7 @@ _Single source of truth for the AI guest-messaging assistant (it writes to guest
 ## 6. Parking
 
 - Underground garage at **Bratislavská 82**; spaces are on the lower sub-level, close to the elevators up to the apartments.
+- **Step-free / barrier-free access:** a **lift in the garage goes straight up to the guest's apartment floor**, and **every parking space is within ~15 m of the lift with no stairs** — so getting from the car to the apartment is fully step-free. Reassure guests who ask about accessibility / limited mobility / heavy luggage / a pushchair with this.
 - **Each apartment has exactly ONE assigned space, and guests should use THAT designated spot.** A second/extra space isn't possible — politely decline a second car. **If the assigned space is occupied** (or there's another parking problem): ask the guest to park at the **closest available spot as a temporary measure** and **contact the host straight away** (WhatsApp) or **speak to reception**, so we can resolve it. A different spot is only a short-term stopgap, not a permanent switch.
 - **Collect keys from reception first**, before entering the garage — the keys include the chip/fob that opens the garage door (1–2 min; you can stop briefly in front of reception while collecting them).
 - **Finding the garage gate:** the gate right next to the main entrance is only a **service/emergency door — NOT the garage**. The real garage gate is on the **same side, ~20 m further down the street**. There's currently **construction next to the main entrance**, so the garage gate may **not be visible from the entrance** — tell guests to continue ~20 m along the same side.
@@ -134,7 +135,7 @@ Standard fit-out below is from the Deluxe home guide (K.202/K.203); the Urban an
 - **Bath vs shower:** **every apartment has a bathtub with a handheld shower** — the **only** exception is **K.103**, which has a **walk-in corner shower and no bathtub**.
 - **Toilet:** the two **2KK** apartments (**K.201, O.308**) have a **separate WC**; all the **1KK** apartments have the toilet **in the bathroom**.
 - **Bathroom questions:** when a guest asks about the bath vs shower or the toilet, reassure them briefly and politely.
-- **Elevator & access:** a lift runs from the **garage** (a few metres from the parking spots, behind a clearly-labelled door) up to the apartments; building entrances are clearly signed and intuitive to find.
+- **Elevator & access:** a lift runs from the **garage** (every parking space is within ~15 m, no stairs — step-free) **straight up to the apartment floor**; building entrances are clearly signed and intuitive to find. (See §6 for the barrier-free reassurance.)
 - **Safe:** no in-room safe.
 
 ## 9. Services during the stay

@@ -1749,14 +1749,14 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
 
   // Follow-up path — already in awaiting-info
   if (awaiting) {
-    await handleInvoiceFollowUp({
+    const surface = await handleInvoiceFollowUp({
       redis,
       messageId,
       messageText,
       request: awaiting,
       allRequests: all,
     });
-    return true;
+    return !surface; // surface → let the regular pipeline queue it for the operator
   }
 
   if (completed) {
@@ -1797,7 +1797,7 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
   }
   if (!detected) return false;
 
-  await handleNewInvoiceRequest({
+  const surface = await handleNewInvoiceRequest({
     redis,
     bookingId,
     messageId,
@@ -1805,7 +1805,7 @@ async function tryInvoiceFlow(args: InvoiceFlowArgs): Promise<boolean> {
     language,
     allRequests: all,
   });
-  return true;
+  return !surface; // surface → let the regular pipeline queue it for the operator
 }
 
 interface InvoiceFollowUpArgs {
@@ -2040,12 +2040,21 @@ interface NewRequestArgs {
   allRequests: InvoiceRequest[];
 }
 
-async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<void> {
+/**
+ * Returns `true` when the message should be SURFACED to the operator (it asked
+ * other things besides the invoice, so we saved the billing data quietly and
+ * sent nothing) — the caller then lets the regular pipeline draft/queue it.
+ * Returns `false` when fully handled by the invoice flow.
+ */
+async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<boolean> {
   const { redis, bookingId, messageId, messageText, language, allRequests } = args;
   const reservationNumber = `BH-${bookingId}`;
 
   // Extract whatever the guest provided in the initial message.
   const extracted = await extractInvoiceFields(messageText);
+  // Same message also asks about non-billing things → no canned reply; the
+  // operator answers, and we surface the whole message to them.
+  const hasOther = extracted.hasOtherRequests;
   // Detect language if extractor didn't surface one — small extra Haiku
   // call kept consistent with the regular pipeline's behaviour. Only
   // run when keyword path detected (language not yet known).
@@ -2073,18 +2082,43 @@ async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<void> {
 
   const missing = missingMandatoryFields(extracted);
   if (missing.length === 0) {
-    // Lucky path — initial message had everything we need. Skip ask, go
-    // straight to auto-complete.
+    // Had everything. Save invoiceData + create the task. Confirm to the guest
+    // ONLY when the message was invoice-only; when it also asked other things,
+    // stay silent (`silent: hasOther`) and surface it to the operator.
     await autoCompleteInvoiceRequest({
       redis,
       request: { ...request, status: 'auto-completed' },
       language: lang,
       allRequests,
+      silent: hasOther,
     });
-    return;
+    return hasOther;
   }
 
-  // Missing mandatory fields — send the ask, persist as awaiting-info.
+  if (hasOther) {
+    // Details incomplete AND the message asks other things → don't send the
+    // fields-ask. Save the partial request so a later reply is recognised, and
+    // surface the whole message to the operator to handle.
+    await persistInvoiceRequests([...allRequests, request]);
+    await appendLog(redis, {
+      id: makeLogId(),
+      beds24MessageId: messageId,
+      beds24SentMessageId: null,
+      bookingId,
+      reservationNumber,
+      category: 'invoice-request',
+      confidence: 1,
+      language: lang,
+      action: 'task-only',
+      sentText: null,
+      detail: `invoice + other questions — saved partial details, no ask sent, surfaced to operator (still missing: ${missing.join(', ')})`,
+      decidedAt: new Date().toISOString(),
+    });
+    console.log(`[invoice flow] booking ${bookingId}: invoice+other → surfaced to operator`);
+    return true;
+  }
+
+  // Missing mandatory fields, invoice-only — send the ask, persist as awaiting-info.
   const reservation = await buildReservationContext(redis, bookingId);
   const firstName = reservation?.firstName ?? '';
   const replyText = await renderMissingFieldsReply(firstName, missing, lang);
@@ -2119,6 +2153,7 @@ async function handleNewInvoiceRequest(args: NewRequestArgs): Promise<void> {
     decidedAt: new Date().toISOString(),
   });
   console.log(`[invoice flow] booking ${bookingId}: asked for ${missing.join(', ')}`);
+  return false;
 }
 
 interface FollowUpArgs {
@@ -2129,18 +2164,22 @@ interface FollowUpArgs {
   allRequests: InvoiceRequest[];
 }
 
-async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<void> {
+/** Returns `true` to SURFACE the message to the operator (it asked other things
+ *  too), `false` when fully handled by the invoice flow. */
+async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<boolean> {
   const { redis, messageId, messageText, request, allRequests } = args;
   const bookingId = Number(request.reservationNumber.replace(/^BH-/, ''));
 
   // Re-extract from this new message
   const extracted = await extractInvoiceFields(messageText);
+  const hasOther = extracted.hasOtherRequests;
   const prior: ExtractedInvoiceFields = {
     companyName: request.companyName,
     companyAddress: request.companyAddress ?? null,
     ico: request.ico,
     dic: request.dic,
     email: request.email,
+    hasOtherRequests: false,
   };
   const merged = mergeInvoiceFields(prior, extracted);
   const missing = missingMandatoryFields(merged);
@@ -2156,20 +2195,23 @@ async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<void> {
   };
 
   if (missing.length === 0) {
-    // We have everything — auto-complete.
+    // We have everything — auto-complete. Stay silent + surface when the same
+    // message also asked other things.
     await autoCompleteInvoiceRequest({
       redis,
       request: { ...updatedRequest, status: 'auto-completed' },
       language: '', // detector will infer for confirmation message
       allRequests,
       latestMessage: messageText,
+      silent: hasOther,
     });
-    return;
+    return hasOther;
   }
 
   // Still missing — DO NOT send another ask here (the 24h reminder pass
   // handles the single follow-up). Just persist the merged fields and
-  // log so we have a paper trail.
+  // log so we have a paper trail. Surface to the operator when the message
+  // also raised other questions.
   await persistInvoiceRequests(replaceInvoiceRequest(allRequests, updatedRequest));
   await appendLog(redis, {
     id: makeLogId(),
@@ -2182,9 +2224,10 @@ async function handleInvoiceFollowUp(args: FollowUpArgs): Promise<void> {
     language: '',
     action: 'skipped-rate-limit', // closest existing action label
     sentText: null,
-    detail: `partial info received, still missing: ${missing.join(', ')}`,
+    detail: `partial info received, still missing: ${missing.join(', ')}${hasOther ? ' — surfaced to operator (also asked other questions)' : ''}`,
     decidedAt: new Date().toISOString(),
   });
+  return hasOther;
 }
 
 interface AutoCompleteArgs {
@@ -2195,10 +2238,14 @@ interface AutoCompleteArgs {
   /** The guest message that completed the request, when it isn't the original
    *  `request.rawMessage` — scanned together with it for a stated amount. */
   latestMessage?: string;
+  /** Save invoiceData + create the task but send NO confirmation to the guest.
+   *  Used when the same message also asks other questions — the operator answers
+   *  (and the message is surfaced to them) rather than a canned invoice reply. */
+  silent?: boolean;
 }
 
 async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void> {
-  const { redis, request, language, allRequests, latestMessage } = args;
+  const { redis, request, language, allRequests, latestMessage, silent } = args;
   const bookingId = Number(request.reservationNumber.replace(/^BH-/, ''));
 
   // Look up reservation for checkout date + first name
@@ -2333,11 +2380,15 @@ async function autoCompleteInvoiceRequest(args: AutoCompleteArgs): Promise<void>
   // held. Nothing when the invoice already went out, or when the checkout is
   // beyond the 6-month window (the operator decides and replies personally).
   const alreadySent = current.invoiceStatus === 'Sent';
-  const confirmation = invoiceConfirmationKind({
-    checkoutDate,
-    todayYmd: todayUTC(),
-    invoiceAlreadySent: alreadySent,
-  });
+  // `silent` = the same guest message also asked other things, so the operator
+  // handles the reply; we still saved the data + created the task above.
+  const confirmation = silent
+    ? null
+    : invoiceConfirmationKind({
+        checkoutDate,
+        todayYmd: todayUTC(),
+        invoiceAlreadySent: alreadySent,
+      });
 
   let replyText: string | null = null;
   let sentMessageId: number | null = null;
@@ -2396,6 +2447,7 @@ function requestFields(r: InvoiceRequest): ExtractedInvoiceFields {
     ico: r.ico,
     dic: r.dic,
     email: r.email,
+    hasOtherRequests: false, // stored request — not a fresh message
   };
 }
 

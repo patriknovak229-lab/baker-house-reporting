@@ -26,6 +26,10 @@ export interface ExtractedInvoiceFields {
   /** Tax / VAT ID of any country, e.g. "CZ12345678", "PL5251985295", "DE366335248". */
   dic: string | null;
   email: string | null;
+  /** true when the SAME message also asks about / requests something beyond the
+   *  invoice (parking, check-in, access, amenities, a complaint, …). Signals the
+   *  caller to NOT auto-reply and surface the message to the operator instead. */
+  hasOtherRequests: boolean;
 }
 
 const EMPTY: ExtractedInvoiceFields = {
@@ -34,6 +38,7 @@ const EMPTY: ExtractedInvoiceFields = {
   ico: null,
   dic: null,
   email: null,
+  hasOtherRequests: false,
 };
 
 const SYSTEM_PROMPT = `You extract invoice-related billing details from a guest message at a hotel in Brno, Czech Republic.
@@ -44,9 +49,10 @@ Identify ONLY these fields if present:
 - ico               — Czech/Slovak company ID, ALWAYS exactly 8 digits. Strip any prefix/suffix. Foreign companies do NOT have one — leave null rather than putting a VAT number here.
 - dic               — Tax/VAT ID of ANY country, not just Czech. Czech "CZ…", Slovak "SK…", but equally "PL5251985295", "DE366335248", "ATU12345678", "GB123456789". Keep the country prefix and drop the spaces.
 - email             — a real email address ending in @domain.tld. Ignore @stayforlong.com, @guest.booking.com, @guest.airbnb.com (those are channel-conduit aliases, not real).
+- hasOtherRequests  — a BOOLEAN. true when, BEYOND the invoice/billing details, the SAME message also asks a question or makes a request about anything else (parking, check-in / check-out, directions, access / accessibility, the apartment, amenities, a complaint, an extra service, …). false when the message is ONLY about the invoice/billing (company details, "please send me an invoice", or a thank-you/acknowledgement for the invoice). When in doubt and the message clearly contains an unrelated question → true.
 
 Output ONLY a single JSON object on one line, no preamble:
-{"companyName": "...", "companyAddress": "...", "ico": "...", "dic": "...", "email": "..."}
+{"companyName": "...", "companyAddress": "...", "ico": "...", "dic": "...", "email": "...", "hasOtherRequests": false}
 
 Use null (not empty string) for any field not clearly present in the message. Never guess — if uncertain, return null. Don't infer a company name from a personal name.`;
 
@@ -104,6 +110,8 @@ export function mergeInvoiceFields(
     ico: prior.ico ?? next.ico,
     dic: prior.dic ?? next.dic,
     email: prior.email ?? next.email,
+    // Per-message property (not a stored field): keep the current message's.
+    hasOtherRequests: next.hasOtherRequests,
   };
 }
 
@@ -139,6 +147,7 @@ function parseJson(raw: string): ExtractedInvoiceFields {
     ico: cleanIco(obj.ico),
     dic: cleanVat(obj.dic),
     email: cleanEmail(obj.email),
+    hasOtherRequests: obj.hasOtherRequests === true,
   };
 }
 
