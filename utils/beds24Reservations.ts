@@ -11,7 +11,7 @@
 // publish the Postgres bookings archive, or it silently falls behind - see
 // archiveReservationSet at the bottom of this file.
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, StayShortening } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, StayShortening, StayLink } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
@@ -45,6 +45,8 @@ export function getRedis(): Redis | null {
  *   - platform refund (amount the operator handed back off-channel)
  *   - stay shortening (keeps the money on the original nightly schedule —
  *     without it a shortened stay's full price lands on its remaining nights)
+ * Plus the stay links (utils/stayChains) — not money, but the room resolver
+ * and stay quotes read them wherever reservations are built.
  * A booking carrying none is returned untouched.
  */
 export async function attachNonArrivalOverlay(reservations: Reservation[]): Promise<Reservation[]> {
@@ -53,11 +55,13 @@ export async function attachNonArrivalOverlay(reservations: Reservation[]): Prom
     nonArrivalNetPriceCzk?: number | null;
     platformRefund?: PlatformRefund | null;
     stayShortened?: StayShortening | null;
+    stayLink?: StayLink | null;
+    stayLinkRejected?: string[];
   }>();
   if (Object.keys(overrides).length === 0) return reservations;
   return reservations.map((r) => {
     const ov = overrides[r.reservationNumber];
-    if (!ov?.nonArrival && !ov?.platformRefund && !ov?.stayShortened) return r;
+    if (!ov?.nonArrival && !ov?.platformRefund && !ov?.stayShortened && !ov?.stayLink && !ov?.stayLinkRejected?.length) return r;
     const merged = { ...r };
     if (ov.nonArrival) {
       merged.nonArrival = ov.nonArrival;
@@ -65,6 +69,8 @@ export async function attachNonArrivalOverlay(reservations: Reservation[]): Prom
     }
     if (ov.platformRefund) merged.platformRefund = ov.platformRefund;
     if (ov.stayShortened) merged.stayShortened = ov.stayShortened;
+    if (ov.stayLink) merged.stayLink = ov.stayLink;
+    if (ov.stayLinkRejected?.length) merged.stayLinkRejected = ov.stayLinkRejected;
     return merged;
   });
 }

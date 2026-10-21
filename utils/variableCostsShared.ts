@@ -95,6 +95,7 @@ export interface VariableCostsResponse {
    *  special cleanings that don't change linen → no laundry event). */
   noLaundryKeys: string[];
   /** "date|roomId" of cleanings the operator removed (e.g. stay prolonged) —
-   *  the reservation still counts but no cleaning happened. */
+   *  the reservation still counts but no cleaning happened. Includes the
+   *  turnovers a confirmed stay link removed (utils/stayLinkCleanings). */
   dismissedCleaningKeys: string[];
 }

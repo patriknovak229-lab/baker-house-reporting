@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import type { Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
+import type { StayLink, Reservation, PaymentStatus, RatingStatus, InvoiceStatus, InvoiceData, CustomerFlag, Issue, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
@@ -31,7 +31,10 @@ import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { computeTurnoverClashes } from "@/utils/turnoverClash";
 import { planForUnallocated } from "@/utils/roomAllocation";
+import { confirmedLinks, staySuggestions } from "@/utils/stayChains";
+import { signalsText, type StayLinkAction } from "./StayLinks";
 import { pragueToday } from "@/utils/periodUtils";
+import { formatDate } from "@/utils/formatters";
 import { ratingClass } from "@/utils/rating";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
@@ -63,6 +66,8 @@ type LocalFields = {
   nonArrivalNetPriceCzk?: number | null;
   platformRefund?: import('@/types/reservation').PlatformRefund | null;
   stayShortened?: import('@/types/reservation').StayShortening | null;
+  stayLink?: import('@/types/reservation').StayLink | null;
+  stayLinkRejected?: string[];
 };
 
 function extractLocalFields(r: Reservation): LocalFields {
@@ -88,6 +93,8 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.nonArrivalNetPriceCzk != null) local.nonArrivalNetPriceCzk = r.nonArrivalNetPriceCzk;
   if (r.platformRefund) local.platformRefund = r.platformRefund;
   if (r.stayShortened) local.stayShortened = r.stayShortened;
+  if (r.stayLink) local.stayLink = r.stayLink;
+  if (r.stayLinkRejected && r.stayLinkRejected.length > 0) local.stayLinkRejected = r.stayLinkRejected;
   return local;
 }
 
@@ -246,6 +253,8 @@ export default function TransactionsPage() {
   // visible to every operator until one of them dismisses.
   const [roomMoves, setRoomMoves] = useState<RoomMoveNotice[]>([]);
   const [roomMovesPanelOpen, setRoomMovesPanelOpen] = useState(false);
+  const [staySuggestionsPanelOpen, setStaySuggestionsPanelOpen] = useState(false);
+  const [staySuggestionBusy, setStaySuggestionBusy] = useState<string | null>(null);
   const [dismissingMoves, setDismissingMoves] = useState<Set<string>>(new Set());
   // Pending operator-approval drafts (Section A in the panel) and queued
   // `other`-category messages (Section B). Both arrive from the same
@@ -742,7 +751,25 @@ export default function TransactionsPage() {
   // Late-checkout ↔ early-check-in turnover clashes (same room, same day) —
   // rate-perk-derived, so two back-to-back Flexi stays surface here for the
   // operator to manage with cleaners. Carries a move suggestion when possible.
-  const turnoverClashes = useMemo(() => computeTurnoverClashes(reservations), [reservations]);
+  // A linked prolongation is one guest staying on, not a turnover.
+  const turnoverClashes = useMemo(() => {
+    const prevOf = confirmedLinks(reservations);
+    return computeTurnoverClashes(reservations).filter(
+      (c) => prevOf.get(c.incoming.reservationNumber) !== c.outgoing.reservationNumber,
+    );
+  }, [reservations]);
+
+  /**
+   * Back-to-back bookings that look like one guest's stay (same name, real
+   * email or phone) but aren't linked yet — typically a prolongation sold as
+   * a separate direct booking. Upcoming handovers only; linking hides the
+   * turnover cleaning in the cleaning app, so the operator confirms each one.
+   * See utils/stayChains.ts.
+   */
+  const pendingStaySuggestions = useMemo(
+    () => staySuggestions(reservations, pragueToday()),
+    [reservations],
+  );
 
   /**
    * Reservations sitting on a virtual room with no physical allocation —
@@ -1113,6 +1140,63 @@ export default function TransactionsPage() {
     });
   }, [reservations, search, filters, activeCutoff]);
 
+  /**
+   * Link two back-to-back bookings as one stay, unlink them, or mark them
+   * "not the same guest". Always written on the LATER booking's overrides
+   * (StayLink lives there), whichever booking the operator is looking at.
+   */
+  async function handleStayLink(earlier: Reservation, later: Reservation, action: StayLinkAction, source: StayLink["source"] = "manual") {
+    const current = reservations.find((r) => r.reservationNumber === later.reservationNumber) ?? later;
+    const rejected = new Set(current.stayLinkRejected ?? []);
+    let updated: Reservation;
+    if (action === "link") {
+      rejected.delete(earlier.reservationNumber);
+      updated = {
+        ...current,
+        stayLink: {
+          prev: earlier.reservationNumber,
+          source,
+          linkedAt: new Date().toISOString(),
+          linkedBy: (session?.user as { email?: string } | undefined)?.email ?? "",
+        },
+        stayLinkRejected: [...rejected],
+      };
+    } else if (action === "unlink") {
+      updated = { ...current, stayLink: null };
+    } else if (action === "reject") {
+      rejected.add(earlier.reservationNumber);
+      updated = {
+        ...current,
+        stayLink: current.stayLink?.prev === earlier.reservationNumber ? null : current.stayLink,
+        stayLinkRejected: [...rejected],
+      };
+    } else {
+      rejected.delete(earlier.reservationNumber);
+      updated = { ...current, stayLinkRejected: [...rejected] };
+    }
+    setReservations((prev) => prev.map((r) => (r.reservationNumber === updated.reservationNumber ? updated : r)));
+    setSelectedReservation((prev) => (prev && prev.reservationNumber === updated.reservationNumber ? updated : prev));
+    try {
+      await persistOverride(updated.reservationNumber, extractLocalFields(updated));
+    } catch (err) {
+      setReservations((prev) => prev.map((r) => (r.reservationNumber === current.reservationNumber ? current : r)));
+      setSelectedReservation((prev) => (prev && prev.reservationNumber === current.reservationNumber ? current : prev));
+      throw err;
+    }
+  }
+
+  async function handleStaySuggestion(earlier: Reservation, later: Reservation, action: "link" | "reject") {
+    const key = `${earlier.reservationNumber}>${later.reservationNumber}`;
+    setStaySuggestionBusy(key);
+    try {
+      await handleStayLink(earlier, later, action, "suggestion");
+    } catch (err) {
+      alert(`Couldn't save: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStaySuggestionBusy(null);
+    }
+  }
+
   async function handleUpdate(updated: Reservation) {
     // Did anything the CLEANING app reads move? Its maps are otherwise only
     // rewritten by GET /api/bookings, so without this an operational task or an
@@ -1463,6 +1547,7 @@ export default function TransactionsPage() {
         || activeBlackouts.length > 0
         || activeRestrictions.length > 0
         || roomMoves.length > 0
+        || pendingStaySuggestions.length > 0
         || unsentInvoiceRows.length > 0
         || postStayChanges.length > 0) && (
         <div className="mb-3 space-y-2">
@@ -1575,6 +1660,22 @@ export default function TransactionsPage() {
                 </button>
               );
             })()}
+            {pendingStaySuggestions.length > 0 && (
+              <button
+                onClick={() => setStaySuggestionsPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-50 border border-teal-200 text-teal-800 text-sm font-medium hover:bg-teal-100 transition-colors"
+              >
+                <span className="shrink-0">🔗</span>
+                {pendingStaySuggestions.length} possible {pendingStaySuggestions.length === 1 ? "extension" : "extensions"}
+                <span className="text-teal-600 font-normal">· link or dismiss</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${staySuggestionsPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
             {postStayChanges.length > 0 && (
               <button
                 onClick={() => setPostStayPanelOpen((o) => !o)}
@@ -2094,6 +2195,76 @@ export default function TransactionsPage() {
               can't carry out (door code, cleaner's sheet, and for a forced move
               the rest of the reshuffle), and the notice is the reminder that
               they're outstanding. Dismissing is the operator saying "handled". */}
+          {pendingStaySuggestions.length > 0 && staySuggestionsPanelOpen && (
+            <div className="rounded-lg border border-teal-200 bg-teal-50 overflow-hidden">
+              <div className="px-4 py-2 bg-teal-100/60 border-b border-teal-200 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-teal-900">
+                  Possible extensions
+                </span>
+                <span className="text-[11px] text-teal-700">
+                  Back-to-back bookings that look like one guest · linking removes the turnover cleaning between them (same apartment)
+                </span>
+              </div>
+              <div className="divide-y divide-teal-200">
+                {pendingStaySuggestions.map(({ earlier, later, signals }) => {
+                  const key = `${earlier.reservationNumber}>${later.reservationNumber}`;
+                  const busy = staySuggestionBusy === key;
+                  const canDo = Boolean(role && canMutate(role, "transactions"));
+                  const moves = earlier.room !== later.room;
+                  return (
+                    <div key={key} className="px-4 py-3 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-teal-900">
+                          {earlier.firstName} {earlier.lastName}
+                          {(later.firstName !== earlier.firstName || later.lastName !== earlier.lastName) && (
+                            <span className="font-normal text-teal-700"> / {later.firstName} {later.lastName}</span>
+                          )}
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[10px] font-semibold uppercase tracking-wide">
+                            same {signalsText(signals)}
+                          </span>
+                          {moves && (
+                            <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold uppercase tracking-wide">
+                              changes apartment
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-teal-700 mt-0.5">
+                          <button onClick={() => { setSelectedReservation(earlier); setStaySuggestionsPanelOpen(false); }} className="font-mono underline hover:text-teal-900">
+                            {earlier.reservationNumber}
+                          </button>{" "}
+                          {earlier.channel} · {earlier.room} · {formatDate(earlier.checkInDate)} → {formatDate(earlier.checkOutDate)}
+                          <span className="mx-1.5">→</span>
+                          <button onClick={() => { setSelectedReservation(later); setStaySuggestionsPanelOpen(false); }} className="font-mono underline hover:text-teal-900">
+                            {later.reservationNumber}
+                          </button>{" "}
+                          {later.channel} · {later.room} · {formatDate(later.checkInDate)} → {formatDate(later.checkOutDate)}
+                        </p>
+                      </div>
+                      {canDo && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleStaySuggestion(earlier, later, "reject")}
+                            disabled={staySuggestionBusy !== null}
+                            className="text-[11px] text-gray-500 hover:text-gray-700 underline disabled:opacity-50"
+                          >
+                            Not same guest
+                          </button>
+                          <button
+                            onClick={() => handleStaySuggestion(earlier, later, "link")}
+                            disabled={staySuggestionBusy !== null}
+                            className="text-xs px-2.5 py-1 rounded border border-teal-300 bg-white text-teal-800 font-medium hover:bg-teal-100 disabled:opacity-50"
+                          >
+                            {busy ? "Linking…" : "Link as one stay"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {roomMoves.length > 0 && roomMovesPanelOpen && (
             <div className="rounded-lg border border-sky-300 bg-sky-50 overflow-hidden">
               <div className="px-4 py-2 bg-sky-100/60 border-b border-sky-300 flex items-center gap-2">
@@ -2826,6 +2997,8 @@ export default function TransactionsPage() {
         // in the alert bar without waiting for the poll.
         onPaymentCreated={() => { fetchReservations(); fetchRoomMoves(); }}
         saveStatus={saveStatus}
+        onStayLink={(earlier, later, action) => handleStayLink(earlier, later, action)}
+        onOpenReservation={setSelectedReservation}
       />
 
       {/* Create booking modal */}

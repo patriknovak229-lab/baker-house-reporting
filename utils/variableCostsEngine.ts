@@ -24,6 +24,8 @@ import {
   readLaundryAssignmentsPg,
   readConsumableEntriesPg,
 } from '@/utils/cleaningDataPg';
+import { readAllReservationOverrides } from '@/utils/reservationOverridesStore';
+import { stayContinuedCleaningKeys, type ScheduleTaskRef, type StayLinkOverrideRef } from '@/utils/stayLinkCleanings';
 import {
   type SubscriptionItem,
   type VariableCostEntry,
@@ -240,6 +242,7 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
     noLaundryRaw,
     dismissedRaw,
     cleaningAdjustmentsRaw,
+    overridesRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
     fromPg ? readCleaningAssignmentsPg() : redis.get(KEY_CLEANING_ASSIGNMENTS),
@@ -255,6 +258,9 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
     redis.get('baker:no-laundry-cleanings'),
     redis.get('baker:dismissed-cleanings'),
     redis.get('baker:cleaning-adjustments'),
+    // Stay links (utils/stayLinkCleanings) — a failed read means "no links",
+    // which only ever counts a cleaning, never hides one.
+    readAllReservationOverrides<StayLinkOverrideRef>().catch(() => ({} as Record<string, StayLinkOverrideRef>)),
   ]);
 
   // Checkout tasks from the current Beds24 schedule snapshot — the source of
@@ -263,11 +269,13 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
   // to reject orphaned cleaning/laundry assignments left behind by cancelled
   // or moved bookings.
   const checkoutTaskKeys = new Set<string>();
+  let snapshotTasks: ScheduleTaskRef[] = [];
   try {
     const snapRaw = (await redis.get('baker:beds24-schedule-snapshot')) as {
-      schedule?: { tasks?: Array<{ date: string; roomId: string }> };
+      schedule?: { tasks?: ScheduleTaskRef[] };
     } | null;
-    for (const t of snapRaw?.schedule?.tasks ?? []) {
+    snapshotTasks = snapRaw?.schedule?.tasks ?? [];
+    for (const t of snapshotTasks) {
       checkoutTaskKeys.add(`${t.date}|${t.roomId}`);
     }
   } catch {
@@ -284,6 +292,11 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
       .map((d: { date?: string; roomId?: string }) => (d?.date && d?.roomId ? `${d.date}|${d.roomId}` : ''))
       .filter(Boolean),
   );
+  // Turnovers a confirmed stay link removed (the guest stays on — same rule
+  // the cleaning app applies to hide them). Treated exactly like a cleaning
+  // the operator removed by hand: not billed, not expected.
+  const stayContinuedKeys = stayContinuedCleaningKeys(snapshotTasks, overridesRaw);
+  for (const k of stayContinuedKeys) dismissedKeySet.add(k);
 
   // Manual (off-checkout) cleanings — real cleanings even without a Beds24
   // checkout task on that date.
@@ -296,7 +309,7 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
   // Set of valid (date, roomId) LAUNDRY cells — Beds24 tasks + manual laundry
   // events + manual cleanings. Used to reject orphan laundry assignments whose
   // underlying event has been removed.
-  const validLaundryKeys = new Set<string>(checkoutTaskKeys);
+  const validLaundryKeys = new Set<string>([...checkoutTaskKeys].filter((k) => !stayContinuedKeys.has(k)));
   const manualLaundryEvents = (Array.isArray(manualLaundryRaw) ? manualLaundryRaw : []) as Array<{
     date: string;
     roomId: string;
@@ -490,9 +503,8 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
 
   const manualCleaningKeys = manualCleaningEvents.map((e) => `${e.date}|${e.roomId}`);
   const noLaundryKeys = (Array.isArray(noLaundryRaw) ? noLaundryRaw : []) as string[];
-  const dismissedCleaningKeys = (Array.isArray(dismissedRaw) ? dismissedRaw : [])
-    .map((d: { date?: string; roomId?: string }) => (d?.date && d?.roomId ? `${d.date}|${d.roomId}` : ''))
-    .filter(Boolean);
+  // Hand-removed cleanings + stay-link continuations (both "stay prolonged").
+  const dismissedCleaningKeys = [...dismissedKeySet];
 
   const body: VariableCostsResponse = {
     byDateRoom: lookup,

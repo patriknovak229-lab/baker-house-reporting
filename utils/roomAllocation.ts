@@ -19,8 +19,9 @@
  * `UNIT_MAP` / `VR_ROOM_LABELS` in `app/api/bookings/route.ts`.
  */
 
-import type { RoomSegment } from "@/types/reservation";
+import type { RoomSegment, StayLink } from "@/types/reservation";
 import { occupancySpans } from "@/utils/roomSegments";
+import { guestKeyOf, sameStayKeys } from "@/utils/stayChains";
 
 export interface AllocationUnit {
   room: string; // physical room name, e.g. "K.102"
@@ -137,8 +138,11 @@ export interface ReallocInput {
    */
   members?: ReallocMember[];
   /**
-   * Normalised guest identity (`guestKeyOf`). Links an unplaced booking to the
-   * same guest's adjoining stay, so the solver keeps them in one unit.
+   * "Same stay" identity (`sameStayKeys` in utils/stayChains): shared by the
+   * back-to-back bookings of one stay — operator-linked, or the same guest
+   * name unless marked "not the same guest". Links an unplaced booking to the
+   * stay it continues, so the solver keeps them in one unit. Absent = the
+   * booking continues nobody.
    */
   guestKey?: string;
   /**
@@ -441,6 +445,10 @@ export interface ResRef {
   roomSegments?: RoomSegment[];
   firstName?: string;
   lastName?: string;
+  /** Operator-confirmed continuation of another booking (utils/stayChains). */
+  stayLink?: StayLink | null;
+  /** Bookings the operator marked "not the same guest". */
+  stayLinkRejected?: string[];
 }
 
 function nameOf(r: ResRef): string {
@@ -460,23 +468,10 @@ function daysBetween(from: string, to: string): number {
 }
 
 /**
- * Normalised guest identity — the full name, case-, diacritics-, punctuation-
- * and word-order-insensitive ("Piotr Marczewski" = "MARCZEWSKI piotr"). Used
- * to recognise one guest's back-to-back bookings as a single stay. Over-
- * matching is the safe direction: two different guests mistaken for one stay
- * only get moved together, never double-booked.
+ * Normalised guest identity — lives in utils/stayChains (the resolver's
+ * "same stay" key is built from it there); re-exported for existing callers.
  */
-export function guestKeyOf(r: Pick<ResRef, "firstName" | "lastName">): string | undefined {
-  const tokens = `${r.firstName ?? ""} ${r.lastName ?? ""}`
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .split(" ")
-    .filter(Boolean)
-    .sort();
-  return tokens.length > 0 ? tokens.join(" ") : undefined;
-}
+export { guestKeyOf };
 
 /**
  * Turn a reservation list into solver rows for one allocation group. Shared by
@@ -492,11 +487,14 @@ export function guestKeyOf(r: Pick<ResRef, "firstName" | "lastName">): string | 
  *     as a separate reservation — become ONE row that moves whole or not at
  *     all. Without this, the solver happily moved just the extension night,
  *     which would make the guest change rooms mid-stay (BH-93987993, the
- *     one-night extension of BH-93901799, Oct 2026).
+ *     one-night extension of BH-93901799, Oct 2026). "One guest" =
+ *     `sameStayKeys`: an operator stay link wins over names both ways (a
+ *     link joins different names, "not the same guest" splits equal ones).
  * Unplaced bookings of the group's type become seeds (currentRoom = null).
  */
 export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: string): ReallocInput[] {
   const tomorrow = addDaysISO(today, 1);
+  const stayKeys = sameStayKeys(all);
   const unitNames = new Set(group.units.map((u) => u.room));
 
   interface Row {
@@ -528,7 +526,7 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
           currentRoom: null,
           movable: true,
           label: nameOf(r),
-          guestKey: guestKeyOf(r),
+          guestKey: stayKeys.get(r.reservationNumber),
         });
       }
       continue;
@@ -561,7 +559,7 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
         from: s.from > today ? s.from : today,
         to: s.to,
         movable: !inHouse && !r.isBlackout && !inconsistent,
-        guestKey: r.isBlackout ? undefined : guestKeyOf(r),
+        guestKey: stayKeys.get(r.reservationNumber),
         label: nameOf(r),
       });
     }
@@ -647,6 +645,7 @@ export function solveTwoTier(group: AllocationGroup, inputs: ReallocInput[]): Re
  */
 export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocPlan, today: string): string | null {
   const units = new Set(group.units.map((u) => u.room));
+  const stayKeys = sameStayKeys(all);
   const destination = new Map<string, string>();
   for (const m of plan.moves) destination.set(m.reservationNumber, m.to);
   for (const p of plan.placements) destination.set(p.reservationNumber, p.room);
@@ -671,7 +670,7 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
         occ.push({
           id: r.reservationNumber, name: nameOf(r), unit, origUnit: null, arrival: r.checkInDate,
           start: r.checkInDate, from: r.checkInDate > today ? r.checkInDate : today, to: r.checkOutDate,
-          key: guestKeyOf(r),
+          key: stayKeys.get(r.reservationNumber),
         });
       }
       continue;
@@ -685,7 +684,7 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
       occ.push({
         id, name: nameOf(r), unit, origUnit: s.room, arrival: r.checkInDate,
         start: s.from, from: s.from > today ? s.from : today, to: s.to,
-        key: r.isBlackout ? undefined : guestKeyOf(r),
+        key: stayKeys.get(r.reservationNumber),
       });
     }
   }

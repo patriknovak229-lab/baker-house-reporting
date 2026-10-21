@@ -284,6 +284,26 @@ export interface StayShortening {
   reason?: string;
 }
 
+/**
+ * "This booking continues the stay of `prev`" — a prolongation (or early
+ * arrival) booked as its own reservation, typically a direct booking that
+ * extends an OTA one. Stored on the LATER booking by dates, so a chain of
+ * several bookings is followed through `prev`. Operator-confirmed only:
+ * consumers that act on it (the cleaning app skips the turnover between the
+ * two) never guess. See utils/stayChains.ts.
+ * Persisted in `baker:reservation-overrides`.
+ */
+export interface StayLink {
+  /** Reservation number of the booking this one continues, e.g. "BH-93901799". */
+  prev: string;
+  /** How it was confirmed: by hand, from a suggestion, or by an extend flow. */
+  source: "manual" | "suggestion" | "extend-flow";
+  /** ISO timestamp the link was made. */
+  linkedAt: string;
+  /** Operator email that made it. */
+  linkedBy: string;
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -462,6 +482,18 @@ export interface Reservation {
    * Persisted in `baker:reservation-overrides`.
    */
   stayShortened?: StayShortening | null;
+  /**
+   * Set when this booking continues another booking's stay (see StayLink).
+   * Only valid while the two still meet: `prev` checks out the day this one
+   * arrives and neither is cancelled — `utils/stayChains.ts` ignores it otherwise.
+   */
+  stayLink?: StayLink | null;
+  /**
+   * Reservation numbers the operator marked "not the same guest" — a
+   * back-to-back booking under the same name that is NOT a continuation. Stops
+   * the suggestion and stops the room resolver chaining the two by name.
+   */
+  stayLinkRejected?: string[];
   /**
    * Set only on the per-apartment pieces `expandLinkedReservations` makes of a
    * SHORTENED reservation: how the piece's money is spread over nights, as

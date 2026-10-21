@@ -8,6 +8,8 @@ import { getEffectiveFlags } from "@/utils/flagUtils";
 import { computeStayStatus } from "@/utils/stayStatus";
 import { countryCodeToFlag } from "@/utils/nationalityUtils";
 import { roomChipClasses } from "@/utils/roomVisuals";
+import { stayChainIndex, type StayChain } from "@/utils/stayChains";
+import { StayLinkBadge } from "./StayLinks";
 import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
 import {
   freeCancelDaysLeft,
@@ -425,11 +427,13 @@ function ReservationCard({
   allReservations,
   unreadBookingIds,
   onClick,
+  stayChain,
 }: {
   res: Reservation;
   allReservations: Reservation[];
   unreadBookingIds: Set<number>;
   onClick: () => void;
+  stayChain?: StayChain<Reservation>;
 }) {
   // Blackouts use a stripped-down card — no guest, no payment, no flags
   if (res.isBlackout) {
@@ -562,6 +566,7 @@ function ReservationCard({
             <Badge variant="indigo" size="xs">🏢 Corporate</Badge>
           </span>
         )}
+        <StayLinkBadge chain={stayChain} />
         <span className="ml-auto flex items-center gap-0.5">
           <span className={`font-mono text-[11px] text-gray-400 ${res.isCancelled ? 'line-through' : ''}`}>{res.reservationNumber}</span>
           <CopyResNumber value={res.reservationNumber} />
@@ -666,6 +671,8 @@ export default function ReservationTable({
   onRowClick,
 }: ReservationTableProps) {
   const [sortField, setSortField] = useState<SortField>("reservationDate");
+  // Linked stays (utils/stayChains) need every booking, not just this page's.
+  const stayIndex = useMemo(() => stayChainIndex(allReservations), [allReservations]);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
 
@@ -759,6 +766,7 @@ export default function ReservationTable({
                 allReservations={allReservations}
                 unreadBookingIds={unreadBookingIds}
                 onClick={() => onRowClick(res)}
+                stayChain={stayIndex.get(res.reservationNumber)}
               />
             ))}
           </div>
@@ -873,6 +881,7 @@ export default function ReservationTable({
                       <div className="flex items-center gap-1.5">
                         <span className={`text-gray-500 ${res.isCancelled ? 'line-through text-gray-400' : ''}`}>{res.reservationNumber}</span>
                         <CopyResNumber value={res.reservationNumber} />
+                        <StayLinkBadge chain={stayIndex.get(res.reservationNumber)} />
                         {res.bookingTimestamp &&
                           Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000 && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500 text-white animate-pulse">

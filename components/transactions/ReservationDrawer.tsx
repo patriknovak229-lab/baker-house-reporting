@@ -12,6 +12,7 @@ import MessageThread from "./MessageThread";
 import CreateVoucherModal from "./CreateVoucherModal";
 import EmailGuestModal from "./EmailGuestModal";
 import Badge from "@/components/shared/Badge";
+import { StayLinkSection, type StayLinkAction } from "@/components/transactions/StayLinks";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
 import { platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
@@ -891,6 +892,10 @@ interface ReservationDrawerProps {
    *  top of the drawer so any onUpdate write surfaces save feedback without
    *  having to instrument every individual button. */
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  /** Link / unlink / "not the same guest" for back-to-back bookings (StayLinks.tsx). */
+  onStayLink?: (earlier: Reservation, later: Reservation, action: StayLinkAction) => Promise<void>;
+  /** Switch the drawer to another reservation (e.g. the other half of a linked stay). */
+  onOpenReservation?: (r: Reservation) => void;
 }
 
 function SourceLabel({ source, color }: { source: string; color?: string }) {
@@ -3001,6 +3006,8 @@ export default function ReservationDrawer({
   onUpdate,
   onPaymentCreated,
   saveStatus = 'idle',
+  onStayLink,
+  onOpenReservation,
 }: ReservationDrawerProps) {
   const { data: naSession } = useSession();
   const naUserEmail = (naSession?.user as { email?: string } | undefined)?.email ?? "";
@@ -4581,6 +4588,16 @@ export default function ReservationDrawer({
               <ReadOnlyField label="Nights" value={String(reservation.numberOfNights)} />
               <ReadOnlyField label="Reservation Date" value={formatDate(reservation.reservationDate)} />
             </div>
+
+            {onStayLink && (
+              <StayLinkSection
+                reservation={reservation}
+                allReservations={allReservations}
+                canEdit={canEditNonArrival}
+                onAction={onStayLink}
+                onOpen={onOpenReservation}
+              />
+            )}
 
             {/* Manual room move — maintenance / ad-hoc. Hidden for multi-room
                 packages (those must be handled in Beds24). */}

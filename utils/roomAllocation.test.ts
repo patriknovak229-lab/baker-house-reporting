@@ -508,3 +508,58 @@ describe("verifyPlan — independent safety net", () => {
     expect(verifyPlan(all, DELUXE_G, bad, "2026-10-21")).toMatch(/already staying/);
   });
 });
+
+describe("operator stay links override names (utils/stayChains)", () => {
+  const DELUXE_G = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Deluxe Studios")!;
+  const LINK = { source: "manual" as const, linkedAt: "2026-10-21T10:00:00Z", linkedBy: "op@example.com" };
+  // K.202: the company pays for the extension, so it's under another name.
+  // K.203 is blacked out from Oct 14; S needs Oct 12→16 and only fits K.202.
+  const COMPANY: ResRef[] = [
+    { reservationNumber: "S", room: "1KK Deluxe Studios", checkInDate: "2026-10-12", checkOutDate: "2026-10-16", isUnallocatedVR: true, firstName: "New", lastName: "Guest" },
+    { reservationNumber: "X1", room: "K.202", checkInDate: "2026-10-05", checkOutDate: "2026-10-09", firstName: "Xavier", lastName: "Long" },
+    { reservationNumber: "X2", room: "K.202", checkInDate: "2026-10-09", checkOutDate: "2026-10-14", firstName: "Acme", lastName: "s.r.o.", stayLink: { prev: "X1", ...LINK } },
+    { reservationNumber: "OV", room: "K.203", checkInDate: "2026-10-14", checkOutDate: "2026-10-20", isBlackout: true },
+  ];
+
+  it("a linked extension under another name moves together with the main stay", () => {
+    const out = planForUnallocated(COMPANY, "S", "2026-10-01");
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.moves.map((m) => [m.reservationNumber, m.to])).toEqual([["X1", "K.203"], ["X2", "K.203"]]);
+    expect(verifyPlan(COMPANY, DELUXE_G, out.plan, "2026-10-01")).toBeNull();
+  });
+
+  it("verifyPlan refuses to split a linked stay even when the names differ", () => {
+    const split: ReallocPlan = {
+      feasible: true,
+      placements: [{ reservationNumber: "S", room: "K.202" }],
+      moves: [{ reservationNumber: "X2", from: "K.202", to: "K.203" }],
+      assignment: {},
+    };
+    expect(verifyPlan(COMPANY, DELUXE_G, split, "2026-10-01")).toMatch(/splits Acme s\.r\.o\.'s stay/);
+  });
+
+  it("'not the same guest' lets the resolver treat two same-name bookings apart", () => {
+    // Two different people called Jan Novák, back-to-back in K.202; the first
+    // is staying. S (Oct 9→12) fits only K.202 (K.203 is blacked out on the
+    // 11th), so the second Jan must make way to K.203. Chained by name, the
+    // pair would be pinned whole and S couldn't be placed.
+    const base: ResRef[] = [
+      { reservationNumber: "S", room: "1KK Deluxe Studios", checkInDate: "2026-10-09", checkOutDate: "2026-10-12", isUnallocatedVR: true, firstName: "New", lastName: "Guest" },
+      { reservationNumber: "J1", room: "K.202", checkInDate: "2026-10-05", checkOutDate: "2026-10-09", firstName: "Jan", lastName: "Novák" },
+      { reservationNumber: "J2", room: "K.202", checkInDate: "2026-10-09", checkOutDate: "2026-10-11", firstName: "Jan", lastName: "Novák" },
+      { reservationNumber: "B", room: "K.203", checkInDate: "2026-10-11", checkOutDate: "2026-10-12", isBlackout: true },
+    ];
+    const chained = planForUnallocated(base, "S", "2026-10-06");
+    if ("error" in chained) throw new Error(chained.error);
+    expect(chained.plan.feasible).toBe(false);
+
+    const apart = base.map((r) => (r.reservationNumber === "J2" ? { ...r, stayLinkRejected: ["J1"] } : r));
+    expect(buildGroupInputs(apart, DELUXE_G, "2026-10-06").find((i) => i.reservationNumber === "J2")?.members).toBeUndefined();
+    const out = planForUnallocated(apart, "S", "2026-10-06");
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.feasible).toBe(true);
+    expect(out.plan.moves.map((m) => [m.reservationNumber, m.to])).toEqual([["J2", "K.203"]]);
+    expect(out.plan.placements[0].room).toBe("K.202");
+    expect(verifyPlan(apart, DELUXE_G, out.plan, "2026-10-06")).toBeNull();
+  });
+});
