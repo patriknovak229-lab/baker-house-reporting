@@ -12,7 +12,8 @@ import type {
   SubscriptionItem,
 } from '@/utils/variableCostsShared';
 import type { DateRange } from '@/utils/periodUtils';
-import { isReservationInPeriod, getNightsInPeriod } from '@/utils/periodUtils';
+import { getNightsInPeriod } from '@/utils/periodUtils';
+import { hasRevenueInPeriod } from '@/utils/reservationRevenue';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import { computeGrossProfit } from '@/utils/grossProfit';
 import {
@@ -139,7 +140,7 @@ export function computeSettlement(
   // keep in-period, scope to the pool/room. computeGrossProfit sums net sales
   // over exactly the reservations it receives, so the pre-filter is essential.
   const scoped = expandLinkedReservations(reservations).filter(
-    (r) => !r.isBlackout && isReservationInPeriod(r, range) && rooms.includes(r.room),
+    (r) => !r.isBlackout && hasRevenueInPeriod(r, range) && rooms.includes(r.room),
   );
 
   const t = computeGrossProfit(
@@ -157,8 +158,8 @@ export function computeSettlement(
   /**
    * Guests whose last night was in the previous month check out on the 1st.
    * Costs are on a checkout-date basis, so their cleaning is billed to THIS
-   * month — but the stay has zero nights here, so `isReservationInPeriod`
-   * (which is `nights > 0`) drops them in the pre-filter above, before the
+   * month — but the stay has zero nights here, so `hasRevenueInPeriod`
+   * (`nights > 0`, bar a shortened stay's unused nights) drops them in the pre-filter above, before the
    * shared engine's own carry-in branch can ever see them. Counted here off the
    * unfiltered list instead, or every 1st-of-month checkout reads as an
    * unexplained extra cleaning.

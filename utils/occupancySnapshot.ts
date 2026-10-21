@@ -16,8 +16,8 @@
 
 import type { Reservation } from '@/types/reservation';
 import type { DateRange } from '@/utils/periodUtils';
-import { daysBetween, getNightsInPeriod, isReservationInPeriod } from '@/utils/periodUtils';
-import { reservationRevenue } from '@/utils/reservationRevenue';
+import { daysBetween, getNightsInPeriod } from '@/utils/periodUtils';
+import { hasRevenueInPeriod, reservationRevenue, revenueShareInPeriod } from '@/utils/reservationRevenue';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import type { SnapshotData } from '@/types/occupancySnapshot';
 import { isRepeatSegmentPiece } from "@/utils/roomSegments";
@@ -72,7 +72,7 @@ export function computeSnapshotData(
     (r) =>
       !r.isBlackout &&
       !(r.isCancelled && !r.nonArrival) &&
-      isReservationInPeriod(r, range) &&
+      hasRevenueInPeriod(r, range) &&
       roomSet.has(r.room),
   );
   // Occupancy counts physical stays only — non-arrivals freed their room.
@@ -87,9 +87,7 @@ export function computeSnapshotData(
     ? Math.round(
         inScope.reduce((sum, r) => {
           if (r.paymentStatus === 'Refunded') return sum;
-          const nights = getNightsInPeriod(r, range);
-          const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
-          return sum + reservationRevenue(r).gbv * fraction;
+          return sum + reservationRevenue(r).gbv * revenueShareInPeriod(r, range);
         }, 0),
       )
     : undefined;
@@ -129,8 +127,11 @@ export function computeSnapshotData(
       occupancyPct: pct(soldTotal, availableTotal),
       soldNights: soldTotal,
       availableNights: availableTotal,
-      // A mid-stay move's two apartment pieces are one booking.
-      reservationsCount: inScope.filter((r) => !isRepeatSegmentPiece(r, countedPieces)).length,
+      // A mid-stay move's two apartment pieces are one booking; a shortened
+      // stay's revenue-only tail (no nights here) is not a booking at all.
+      reservationsCount: inScope.filter(
+        (r) => getNightsInPeriod(r, range) > 0 && !isRepeatSegmentPiece(r, countedPieces),
+      ).length,
       ...(grossSalesCzk !== undefined ? { grossSalesCzk } : {}),
     },
     perRoom,

@@ -11,7 +11,7 @@
 // publish the Postgres bookings archive, or it silently falls behind - see
 // archiveReservationSet at the bottom of this file.
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, StayShortening } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
@@ -40,27 +40,31 @@ export function getRedis(): Redis | null {
  * override set on top (identical values), keeping optimistic UI updates
  * instant.
  *
- * Two overlays, both inputs to `reservationRevenue`:
+ * Three overlays, all inputs to the revenue engine (utils/reservationRevenue):
  *   - non-arrival (flag + editable net retained)
  *   - platform refund (amount the operator handed back off-channel)
- * A booking carrying neither is returned untouched.
+ *   - stay shortening (keeps the money on the original nightly schedule —
+ *     without it a shortened stay's full price lands on its remaining nights)
+ * A booking carrying none is returned untouched.
  */
 export async function attachNonArrivalOverlay(reservations: Reservation[]): Promise<Reservation[]> {
   const overrides = await readAllReservationOverrides<{
     nonArrival?: NonArrival | null;
     nonArrivalNetPriceCzk?: number | null;
     platformRefund?: PlatformRefund | null;
+    stayShortened?: StayShortening | null;
   }>();
   if (Object.keys(overrides).length === 0) return reservations;
   return reservations.map((r) => {
     const ov = overrides[r.reservationNumber];
-    if (!ov?.nonArrival && !ov?.platformRefund) return r;
+    if (!ov?.nonArrival && !ov?.platformRefund && !ov?.stayShortened) return r;
     const merged = { ...r };
     if (ov.nonArrival) {
       merged.nonArrival = ov.nonArrival;
       merged.nonArrivalNetPriceCzk = ov.nonArrivalNetPriceCzk ?? ov.nonArrival.originalPriceCzk;
     }
     if (ov.platformRefund) merged.platformRefund = ov.platformRefund;
+    if (ov.stayShortened) merged.stayShortened = ov.stayShortened;
     return merged;
   });
 }

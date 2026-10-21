@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import type { Reservation } from "@/types/reservation";
 import { getNightsInPeriod } from "@/utils/periodUtils";
-import { reservationRevenue } from "@/utils/reservationRevenue";
+import { reservationRevenue, revenueShareInPeriod } from "@/utils/reservationRevenue";
 import type { DateRange } from "@/utils/periodUtils";
 import { CHANNEL_COLORS, CHANNEL_COLOR_FALLBACK as FALLBACK_COLOR } from "@/utils/channelColors";
 import { isRepeatSegmentPiece } from "@/utils/roomSegments";
@@ -41,9 +41,11 @@ function buildStats(reservations: Reservation[], dateRange: DateRange): ChannelS
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
     const nights = getNightsInPeriod(r, dateRange);
-    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
+    const fraction = revenueShareInPeriod(r, dateRange);
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0, gbv: 0 };
-    if (!isRepeatSegmentPiece(r, counted)) map[r.channel].reservations += 1;
+    // A shortened stay can bring revenue into a month it has no nights in —
+    // that's money, not a stay, so it doesn't count as a reservation here.
+    if (nights > 0 && !isRepeatSegmentPiece(r, counted)) map[r.channel].reservations += 1;
     map[r.channel].nights += nights;
     map[r.channel].gbv += reservationRevenue(r).gbv * fraction;
   }

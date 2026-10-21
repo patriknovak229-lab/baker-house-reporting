@@ -1,7 +1,8 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { ALL_ROOMS } from "@/data/performanceMockData";
-import { getPeriodDateRange, isReservationInPeriod, PERIOD_OPTIONS } from "@/utils/periodUtils";
+import { getPeriodDateRange, PERIOD_OPTIONS } from "@/utils/periodUtils";
+import { hasRevenueInPeriod } from "@/utils/reservationRevenue";
 import type { PeriodKey, DateRange } from "@/utils/periodUtils";
 import { formatDate } from "@/utils/formatters";
 import type { Reservation, Room } from "@/types/reservation";
@@ -112,7 +113,8 @@ export default function PerformancePage() {
           // Plain cancellations contribute nothing — no revenue, no occupancy. Non-arrivals
           // stay (net-retained revenue); OccupancyView drops them from sold-nights.
           !(r.isCancelled && !r.nonArrival) &&
-          isReservationInPeriod(r, dateRange) &&
+          // Nights in the period, or a shortened stay's unused nights that do.
+          hasRevenueInPeriod(r, dateRange) &&
           selectedRooms.includes(r.room),
       ),
     [reservations, dateRange, selectedRooms]

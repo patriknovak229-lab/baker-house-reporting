@@ -8,10 +8,13 @@
  *   1. the booking's dates move in Beds24,
  *   2. the trimmed nights become vacant and sellable again (automatic — Beds24
  *      frees availability the moment the dates shrink),
- *   3. the price is adjusted by hand in Beds24 by the operator, because the
- *      refund is what was agreed with the guest, not what a rate says. Beds24
- *      deliberately does NOT recalculate the price on a date change, so nothing
- *      here touches `price`, invoice items or payments.
+ *   3. the guest's refund is recorded in the app as a partial refund once it is
+ *      agreed (often weeks later, after we know which freed nights resold).
+ *      Beds24 does NOT recalculate the price on a date change and nothing here
+ *      touches `price`, invoice items or payments: the price stays what the
+ *      guest paid, and the revenue engine keeps the stayed nights at the
+ *      original rate with the rest on the unused nights' original dates
+ *      (utils/reservationRevenue `shortenedRevenueSpans`).
  *
  * This is NOT a non-arrival (`/api/bookings/non-arrival`), which cancels the
  * whole booking while still charging for it, and NOT a partial platform refund
@@ -296,7 +299,7 @@ export async function POST(req: NextRequest) {
       `${plan.fromArrival} → ${plan.fromDeparture}  ⇒  ${plan.toArrival} → ${plan.toDeparture}`,
       describeShortening(plan),
       lockChannel ? `🔒 Channel updates blocked on this booking.` : `Channel updates left open.`,
-      `💰 Price unchanged in Beds24 — adjust it there and refund the guest.`,
+      `💰 Beds24 price left as paid — once the refund is agreed, record it in the app (↩︎ Mark partially refunded).`,
       reason ? `📝 ${reason}` : "",
       `👤 by ${guard.email}`,
     ]

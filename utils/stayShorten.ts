@@ -4,10 +4,12 @@
  * all, booking dies, we keep charging) and from a partial platform refund
  * (money back, dates untouched).
  *
- * The operator moves the dates here, the freed nights go back on sale, and the
- * price is adjusted by hand in Beds24 afterwards — Beds24 never recalculates a
- * booking's price when its dates change, which is exactly what we want: the
- * refund is negotiated with the guest, not derived from a rate.
+ * The operator moves the dates here and the freed nights go back on sale. The
+ * price stays what the guest paid — Beds24 never recalculates it on a date
+ * change, which is exactly what we want: the refund is negotiated with the
+ * guest (often only once we know which freed nights resold) and recorded in
+ * the app as a partial refund. Until then the unused nights keep their money
+ * on their original dates — see `shortenedRevenueSpans` in reservationRevenue.
  *
  * This module is the pure rule set, shared by the drawer (live preview) and
  * `POST /api/bookings/shorten` (which re-validates against LIVE Beds24 dates,

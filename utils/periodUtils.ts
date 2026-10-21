@@ -132,7 +132,7 @@ export function daysBetween(start: string, end: string): number {
 // checkInDate is the first night; checkOutDate is the day of departure (exclusive).
 // Example: check-in Mar 30, check-out Apr 3 → 2 nights in March, 2 nights in April.
 export function getNightsInPeriod(
-  reservation: Reservation,
+  reservation: Pick<Reservation, "checkInDate" | "checkOutDate">,
   range: DateRange
 ): number {
   const checkIn     = new Date(reservation.checkInDate).getTime();

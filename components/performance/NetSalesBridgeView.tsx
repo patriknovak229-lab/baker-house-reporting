@@ -9,8 +9,7 @@ import {
   Cell,
 } from "recharts";
 import type { Reservation } from "@/types/reservation";
-import { getNightsInPeriod } from "@/utils/periodUtils";
-import { reservationRevenue } from "@/utils/reservationRevenue";
+import { reservationRevenue, revenueShareInPeriod } from "@/utils/reservationRevenue";
 import type { DateRange } from "@/utils/periodUtils";
 import { CHANNEL_COLORS, CHANNEL_COLOR_FALLBACK as FALLBACK_COLOR } from "@/utils/channelColors";
 
@@ -68,8 +67,7 @@ function computeBreakdown(reservations: Reservation[], dateRange: DateRange): {
 
   for (const r of reservations) {
     if (r.paymentStatus === "Refunded") continue;
-    const nights = getNightsInPeriod(r, dateRange);
-    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
+    const fraction = revenueShareInPeriod(r, dateRange);
     if (!map[r.channel]) map[r.channel] = { gbv: 0, commission: 0, paymentFee: 0 };
     const rev = reservationRevenue(r);
     map[r.channel].gbv += rev.gbv * fraction;

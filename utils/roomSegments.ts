@@ -23,7 +23,8 @@
  *
  * The reservation's `room` stays the Beds24 room = the LAST segment's room.
  */
-import type { Reservation, RoomSegment } from "@/types/reservation";
+import type { Reservation, RevenueSpan, RoomSegment } from "@/types/reservation";
+import { revenueSpansOf } from "@/utils/reservationRevenue";
 
 /** The subset of a `room_moves` row this module needs. */
 export interface RoomMoveRecord {
@@ -177,6 +178,7 @@ export function splitBySegments<T extends Reservation>(r: T): T[] {
     (typeof PRORATED_FIELDS)[number],
     number[]
   >;
+  const spans = revenueSpansOf(r);
   return segs.map((s, i) => ({
     ...r,
     room: s.room as T["room"],
@@ -190,7 +192,40 @@ export function splitBySegments<T extends Reservation>(r: T): T[] {
     amountPaid: parts.amountPaid[i],
     roomSegments: undefined, // prevent double-expansion
     segmentPiece: { index: i, of: segs.length },
+    revenueSpans: spans
+      ? pieceRevenueSpans(spans, segs, i, r.price > 0 ? parts.price[i] / r.price : shares[i])
+      : undefined,
   }));
+}
+
+/**
+ * A shortened stay's revenue spans, re-cut for one mid-stay piece. The piece
+ * owns the stayed nights inside its own dates, plus any trimmed nights before
+ * the first segment (piece 0) or after the last one (the final piece) — the
+ * unused nights belong to the apartment the guest was booked into at that end
+ * of the stay. Shares are rescaled from the whole booking's money to the
+ * piece's (`weight` = the piece's cut of the price), so a piece's shares can
+ * add up to more or less than 1 while all pieces together still book exactly
+ * the booking's money.
+ */
+function pieceRevenueSpans(
+  spans: RevenueSpan[],
+  segs: RoomSegment[],
+  index: number,
+  weight: number,
+): RevenueSpan[] {
+  const lo = index === 0 ? "0000-01-01" : segs[index].from;
+  const hi = index === segs.length - 1 ? "9999-12-31" : segs[index].to;
+  const out: RevenueSpan[] = [];
+  for (const span of spans) {
+    const from = span.from > lo ? span.from : lo;
+    const to = span.to < hi ? span.to : hi;
+    const owned = nightsBetween(from, to);
+    const total = nightsBetween(span.from, span.to);
+    if (owned <= 0 || total <= 0 || !(weight > 0)) continue;
+    out.push({ from, to, share: (span.share * owned) / total / weight });
+  }
+  return out;
 }
 
 /**

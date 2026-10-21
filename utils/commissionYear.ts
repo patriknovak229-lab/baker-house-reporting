@@ -44,7 +44,7 @@ import type { SettlementMode } from '@/utils/commissionConfig';
 import { ANNUAL_UNITS, unitCommissionRate, type CommissionUnit } from '@/utils/commissionConfig';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import { computeGrossProfit } from '@/utils/grossProfit';
-import { isReservationInPeriod } from '@/utils/periodUtils';
+import { hasRevenueInPeriod } from '@/utils/reservationRevenue';
 import { computeSettlement, monthRange, type VariableCostBundle } from '@/utils/commissionCalc';
 
 /** Row key for the catch-all row; not a real unit. */
@@ -515,7 +515,7 @@ function buildUnallocatedRow(
   const cells = months.map((month): AnnualCell | null => {
     if (!covered(month)) return null;
     const range = monthRange(month);
-    const scoped = orphans.filter((r) => isReservationInPeriod(r, range));
+    const scoped = orphans.filter((r) => hasRevenueInPeriod(r, range));
     const t = computeGrossProfit(scoped, range, {}, {}, [], [], [], []);
     return {
       ...emptyFigures(),

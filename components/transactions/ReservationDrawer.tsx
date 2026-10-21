@@ -14,7 +14,7 @@ import EmailGuestModal from "./EmailGuestModal";
 import Badge from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
-import { platformRefundShare } from "@/utils/reservationRevenue";
+import { platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
 import { planShortening, describeShortening, nightsLabel } from "@/utils/stayShorten";
 import {
   freeCancelDaysLeft,
@@ -2870,6 +2870,49 @@ function BreakdownRow({
 // Channels where zero fees is expected and should NOT trigger a warning
 const NO_FEE_CHANNELS: Reservation["channel"][] = ["Direct-Phone"];
 
+/**
+ * How a shortened stay's money is booked: stayed nights at the original nightly
+ * rate, the rest left on the unused nights' original dates until a refund is
+ * recorded. Mirrors `shortenedRevenueSpans`, which every revenue view uses.
+ */
+function ShortenedRevenueNote({ reservation }: { reservation: Reservation }) {
+  const shortening = reservation.stayShortened;
+  if (!shortening) return null;
+  const split = shortenedRevenueSplit(reservation);
+  if (!split) {
+    return (
+      <p className="text-[11px] text-amber-700 mt-1">
+        ⚠ The dates have changed since this record ({reservation.checkInDate} → {reservation.checkOutDate}),
+        so revenue is spread evenly over the current stay.
+      </p>
+    );
+  }
+  const refunded = platformRefundShare(reservation);
+  const priceLowered = Math.round(reservation.price) < Math.round(shortening.originalPriceCzk);
+  return (
+    <div className="text-[11px] mt-1 space-y-0.5">
+      <p className="text-sky-800">
+        Revenue: {formatCurrency(split.stayedCzk)} on the {nightsLabel(split.stayedNights)} stayed (
+        {formatCurrency(split.nightlyRateCzk)}/night, the original rate) · {formatCurrency(split.unusedCzk)} on
+        the {nightsLabel(split.unusedNights)} not used, on {split.unusedNights === 1 ? "its original date" : "their original dates"}.
+      </p>
+      {refunded > 0 ? (
+        <p className="text-sky-700">↩︎ Refund of {formatCurrency(refunded)} recorded — taken off the unused nights.</p>
+      ) : priceLowered ? (
+        <p className="text-sky-700">
+          Price lowered in Beds24: {formatCurrency(shortening.originalPriceCzk)} →{" "}
+          {formatCurrency(reservation.price)} — the difference comes off the unused nights.
+        </p>
+      ) : (
+        <p className="text-amber-700">
+          ⏳ No refund recorded yet. Once it&apos;s agreed, record it with “↩︎ Mark partially refunded” —
+          leave the Beds24 price as it is.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
   const [open, setOpen] = useState(false);
   const { price, commissionAmount, paymentChargeAmount, channel } = reservation;
@@ -3094,7 +3137,7 @@ export default function ReservationDrawer({
     if (
       !window.confirm(
         `Shorten this stay?\n\n${r.checkInDate} → ${r.checkOutDate} becomes ${plan.toArrival} → ${plan.toDeparture} (${describeShortening(plan)}).\n\n` +
-          `${nightsLabel(plan.nightsRemoved)} go back on sale immediately. The price stays at ${formatCurrency(r.price)} — adjust it in Beds24 and refund the guest yourself.` +
+          `${nightsLabel(plan.nightsRemoved)} go back on sale immediately. The price stays at ${formatCurrency(r.price)} — leave it as it is in Beds24, and once the guest's refund is agreed, record it here with “↩︎ Mark partially refunded”.` +
           (shortenLock ? `\n\n${r.channel} will be blocked from changing this booking, so it can't restore the original dates.` : ""),
       )
     )
@@ -3139,7 +3182,7 @@ export default function ReservationDrawer({
             {
               id: taskId,
               category: "problem" as const,
-              text: `Stay shortened by ${nightsLabel(record.nightsRemoved)} — adjust the price in Beds24 and refund the guest`,
+              text: `Stay shortened by ${nightsLabel(record.nightsRemoved)} — once the guest's refund is agreed, record it with “↩︎ Mark partially refunded” (leave the Beds24 price as it is)`,
               actionableDate: pragueToday(),
               resolved: false,
               createdAt: new Date().toISOString(),
@@ -5025,6 +5068,8 @@ export default function ReservationDrawer({
                     <p className="text-[11px] text-amber-600 mt-0.5">
                       Comes off gross revenue. {reservation.channel} keeps its fee on the full{" "}
                       {formatCurrency(reservation.platformRefund.originalPriceCzk)} it billed.
+                      {reservation.stayShortened &&
+                        " The stay was shortened, so it comes off the unused nights first — the nights the guest stayed keep their original rate."}
                     </p>
                     <div className="mt-2 flex items-end gap-3 flex-wrap">
                       <label className="text-[11px] text-amber-700">
@@ -5382,12 +5427,13 @@ export default function ReservationDrawer({
               ) : null}
             </div>
 
-            {/* Shorten stay — the guest still comes but drops a night and wants
-                that night's money back. Moves the dates in Beds24 (freeing the
-                trimmed nights for resale straight away) and leaves the price
-                alone: the refund is whatever was agreed, entered by hand in
-                Beds24 afterwards. Not offered on non-arrivals or cancellations
-                — those nights are already free. */}
+            {/* Shorten stay — the guest still comes but drops nights (or leaves
+                early). Moves the dates in Beds24, freeing the trimmed nights for
+                resale straight away, and leaves the price alone. Revenue keeps
+                the original nightly rate: the unused nights' money stays on
+                their original dates until the refund is recorded as a partial
+                refund (see shortenedRevenueSpans). Not offered on non-arrivals
+                or cancellations — those nights are already free. */}
             {!reservation.nonArrival && !reservation.isCancelled && !reservation.isBlackout && (
               <div className="mt-2">
                 {reservation.stayShortened && (
@@ -5417,19 +5463,7 @@ export default function ReservationDrawer({
                         {reservation.stayShortened.reason}
                       </p>
                     )}
-                    <p className="text-[11px] mt-1">
-                      {Math.round(reservation.price) === Math.round(reservation.stayShortened.originalPriceCzk) ? (
-                        <span className="text-amber-700">
-                          ⏳ Price still {formatCurrency(reservation.stayShortened.originalPriceCzk)} — adjust it in
-                          Beds24 and refund the guest.
-                        </span>
-                      ) : (
-                        <span className="text-sky-700">
-                          Price adjusted: {formatCurrency(reservation.stayShortened.originalPriceCzk)} →{" "}
-                          {formatCurrency(reservation.price)}
-                        </span>
-                      )}
-                    </p>
+                    <ShortenedRevenueNote reservation={reservation} />
                   </div>
                 )}
 
@@ -5438,8 +5472,9 @@ export default function ReservationDrawer({
                     <div className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2.5">
                       <div className="text-sm font-medium text-sky-800">✂️ Shorten stay</div>
                       <p className="text-[11px] text-sky-600 mt-0.5">
-                        Moves the dates in Beds24 and puts the trimmed nights back on sale. The price is
-                        left untouched — adjust it in Beds24 and refund the guest yourself.
+                        Moves the dates in Beds24 and puts the trimmed nights back on sale. Leave the Beds24
+                        price as it is: the unused nights stay as revenue on their original dates until you
+                        record the guest&apos;s refund with “↩︎ Mark partially refunded”.
                       </p>
                       <div className="mt-2 flex items-end gap-3 flex-wrap">
                         <label className="text-[11px] text-sky-700">

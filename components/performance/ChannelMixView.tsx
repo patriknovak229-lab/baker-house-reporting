@@ -23,8 +23,10 @@ function buildStats(reservations: Reservation[], dateRange: DateRange): ChannelS
   const counted = new Set<string>();
   for (const r of reservations) {
     if (!map[r.channel]) map[r.channel] = { reservations: 0, nights: 0 };
-    if (!isRepeatSegmentPiece(r, counted)) map[r.channel].reservations += 1;
-    map[r.channel].nights += getNightsInPeriod(r, dateRange);
+    const nights = getNightsInPeriod(r, dateRange);
+    // Rows with no nights here are a shortened stay's revenue-only tail.
+    if (nights > 0 && !isRepeatSegmentPiece(r, counted)) map[r.channel].reservations += 1;
+    map[r.channel].nights += nights;
   }
   return Object.entries(map).map(([channel, data]) => ({
     channel,

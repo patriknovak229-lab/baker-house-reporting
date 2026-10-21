@@ -250,15 +250,20 @@ export interface PlatformRefund {
 }
 
 /**
- * Audit record of a stay the operator trimmed at the guest's request — see
- * `POST /api/bookings/shorten`. The dates themselves live in Beds24 (this is a
- * real modification, not an overlay), so this only remembers what the booking
- * looked like before and who changed it. Persisted in `baker:reservation-overrides`.
+ * Record of a stay the operator trimmed at the guest's request — see
+ * `POST /api/bookings/shorten`. The dates themselves live in Beds24 (a real
+ * modification, so the freed nights go back on sale), but the PRICE does not
+ * move: the guest paid for the original stay and any refund is agreed later,
+ * often only once we know which of the freed nights were resold.
  *
- * It carries no money: the refund is agreed with the guest and entered by hand
- * as the new Beds24 price, which flows through revenue on its own. Keeping the
- * pre-change price here is what lets the drawer show whether that adjustment
- * has actually been made yet.
+ * So this record is also a revenue input. A shortened stay is treated as a
+ * partial non-arrival: the nights the guest slept keep the original nightly
+ * rate, and whatever the guest has paid beyond that stays as revenue on the
+ * trimmed nights' ORIGINAL dates — not piled onto the shorter stay, which
+ * would inflate the stayed month. A refund, recorded as a `platformRefund`
+ * ("Mark partially refunded"), comes off the trimmed nights first. See
+ * `shortenedRevenueSpans` in utils/stayShorten.ts.
+ * Persisted in `baker:reservation-overrides`.
  */
 export interface StayShortening {
   /** ISO timestamp the stay was shortened. */
@@ -452,11 +457,19 @@ export interface Reservation {
   platformRefund?: PlatformRefund | null;
   /**
    * Set when the operator trimmed nights off this stay at the guest's request.
-   * Purely a record of the change — the shortened dates are the ones Beds24
-   * reports, and the refund shows up as the operator's manual price reduction.
+   * The shortened dates are the ones Beds24 reports (occupancy follows them);
+   * revenue stays on the original nightly schedule — see StayShortening.
    * Persisted in `baker:reservation-overrides`.
    */
   stayShortened?: StayShortening | null;
+  /**
+   * Set only on the per-apartment pieces `expandLinkedReservations` makes of a
+   * SHORTENED reservation: how the piece's money is spread over nights, as
+   * shares of the piece's own amounts. Computed from the whole booking before
+   * it is split, because the shares depend on the booking's total price. Read
+   * through `revenueShareInPeriod`, never directly.
+   */
+  revenueSpans?: RevenueSpan[];
   invoiceData: InvoiceData | null;
   invoiceStatus: InvoiceStatus;
   includeQR?: boolean;   // true = QR payment code was included; Revenue section will track this
@@ -501,6 +514,17 @@ export interface Reservation {
 }
 
 /** One stretch of a mid-stay-moved reservation spent in one physical unit. */
+/**
+ * A run of nights carrying a fixed share of a reservation's money, spread
+ * evenly over those nights. Shares across a reservation's spans add up to 1
+ * (on a split piece they can exceed it — see `Reservation.revenueSpans`).
+ */
+export interface RevenueSpan {
+  from: string;  // YYYY-MM-DD, first night
+  to: string;    // YYYY-MM-DD, exclusive
+  share: number;
+}
+
 export interface RoomSegment {
   room: string;
   /** First night (YYYY-MM-DD). */

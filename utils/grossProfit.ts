@@ -7,7 +7,9 @@
  * never drift from what the Performance dashboard shows for the same rooms and
  * period.
  *
- * Net Sales   = Σ (price − OTA commission − payment fees) × fraction-of-stay-in-period
+ * Net Sales   = Σ (price − OTA commission − payment fees) × share-in-period
+ *               (nights in period ÷ nights, except a shortened stay — see
+ *               `revenueShareInPeriod`)
  * Gross Profit = Net Sales − (cleaning + laundry + consumables + subscriptions
  *                             + wear&tear + misc)
  *
@@ -16,7 +18,7 @@
  */
 import type { Reservation, Room } from '@/types/reservation';
 import { getNightsInPeriod } from '@/utils/periodUtils';
-import { reservationRevenue } from '@/utils/reservationRevenue';
+import { reservationRevenue, revenueShareInPeriod } from '@/utils/reservationRevenue';
 import type { DateRange } from '@/utils/periodUtils';
 import type {
   VariableCostEntry,
@@ -152,7 +154,7 @@ export function computeGrossProfit(
     // net amount they actually keep.
     if (r.isCancelled && !r.nonArrival) continue;
     const nights = getNightsInPeriod(r, dateRange);
-    const fraction = r.numberOfNights > 0 ? nights / r.numberOfNights : 0;
+    const fraction = revenueShareInPeriod(r, dateRange);
     const { gbv: price, commission, fee: fees } = reservationRevenue(r);
     gbv += price * fraction;
     otaCommission += commission * fraction;
