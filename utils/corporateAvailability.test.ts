@@ -57,8 +57,10 @@ describe('evaluateAvailability', () => {
   });
 
   it('a week that only works with a shuffle says so and lists types free without moves', () => {
-    // Urban is hopeless; Deluxe works only if the K.202 guest (11→13) is
-    // moved into K.203, which is free until the 13th.
+    // Urban is hopeless; Deluxe works with ONE move either way — the K.202
+    // guest (11→13) into K.203, or the K.203 guest (13→14) into K.202. The
+    // resolver moves the guest who arrives LATER (13th: more lead time, less
+    // likely to have their room details yet), so the stay lands in K.203.
     const res = [
       booking('K.102', '2026-10-10', '2026-10-15'),
       booking('K.103', '2026-10-12', '2026-10-14'),
@@ -70,7 +72,7 @@ describe('evaluateAvailability', () => {
     expect(r.roomId).toBe(DELUXE);
     expect(r.availability.kind).toBe('shuffle');
     if (r.availability.kind !== 'shuffle') return;
-    expect(r.availability.unit).toBe('K.202'); // the K.202 guest is moved into K.203
+    expect(r.availability.unit).toBe('K.203'); // the later-arriving K.203 guest makes way
     expect(r.availability.moves).toBe(1);
     expect(r.availability.alternatives.map((a) => a.roomId).sort()).toEqual([K201, O308].sort());
   });

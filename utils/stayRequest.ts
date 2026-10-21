@@ -29,7 +29,8 @@
 import {
   ALLOCATION_GROUPS,
   PHYSICAL_ROOMS,
-  planReallocation,
+  buildGroupInputs,
+  solveTwoTier,
   type AllocationGroup,
   type ReallocInput,
   type ReallocMove,
@@ -176,57 +177,12 @@ function isLiveOccupancy(r: ResRef, today: string): boolean {
 }
 
 /**
- * Group bookings as solver inputs, scoped and pinned exactly like
- * `planForUnallocated` does: departed stays dropped, cancellations ignored,
- * in-house/blackout/package pinned, guests arriving by tomorrow marked
- * `messaged` so the caller can prefer leaving them alone.
+ * Group bookings as solver inputs — the resolver's own builder, so a quote
+ * applies exactly the same rules (cancellations ignored, in-house/blackouts
+ * pinned, one guest's back-to-back bookings kept together, …).
  */
 function groupInputs(all: ResRef[], group: AllocationGroup, today: string): ReallocInput[] {
-  const tomorrow = addDaysISO(today, 1);
-  const unitNames = group.units.map((u) => u.room);
-  const inputs: ReallocInput[] = [];
-
-  for (const r of all) {
-    if (!isLiveOccupancy(r, today)) continue;
-
-    // Another unplaced booking of this type must be given a home too.
-    if (r.isUnallocatedVR) {
-      if (r.room === group.typeLabel) {
-        inputs.push({
-          reservationNumber: r.reservationNumber,
-          checkIn: r.checkInDate,
-          checkOut: r.checkOutDate,
-          currentRoom: null,
-          movable: true,
-          label: nameOf(r),
-        });
-      }
-      continue;
-    }
-
-    const occupied = unitsOf(r).filter((u) => unitNames.includes(u));
-    if (occupied.length === 0) continue;
-
-    const inHouse = r.checkInDate <= today;
-    // A guest holding several apartments contributes one row per unit, each
-    // movable on its own — swapping one apartment within the same room type is
-    // invisible to that guest. The legs share dates, so the solver's
-    // no-double-booking rule already keeps them in different units.
-    const movable = !inHouse && !r.isBlackout;
-
-    for (const unit of occupied) {
-      inputs.push({
-        reservationNumber: occupied.length > 1 ? `${r.reservationNumber}#${unit}` : r.reservationNumber,
-        checkIn: r.checkInDate,
-        checkOut: r.checkOutDate,
-        currentRoom: unit,
-        movable,
-        messaged: movable && r.checkInDate <= tomorrow,
-        label: nameOf(r),
-      });
-    }
-  }
-  return inputs;
+  return buildGroupInputs(all, group, today);
 }
 
 interface Fit {
@@ -253,25 +209,12 @@ function fitGroup(group: AllocationGroup, inputs: ReallocInput[], from: string, 
     label: "REQUEST",
   };
 
-  const silent = planReallocation(group, [...inputs.map((i) => (i.messaged ? { ...i, movable: false } : i)), request]);
-  if (silent.feasible) {
-    return {
-      room: silent.placements.find((p) => p.reservationNumber === REQUEST_ID)?.room ?? "?",
-      moves: silent.moves,
-      escalated: false,
-    };
-  }
-
-  const escalated = planReallocation(group, [...inputs, request]);
-  if (!escalated.feasible) return null;
-
-  const messagedIds = new Set(inputs.filter((i) => i.messaged).map((i) => i.reservationNumber));
+  const plan = solveTwoTier(group, [...inputs, request]);
+  if (!plan.feasible) return null;
   return {
-    room: escalated.placements.find((p) => p.reservationNumber === REQUEST_ID)?.room ?? "?",
-    moves: escalated.moves.map((m) =>
-      messagedIds.has(m.reservationNumber) ? { ...m, needsGuestNotice: true } : m,
-    ),
-    escalated: escalated.moves.length > 0,
+    room: plan.placements.find((p) => p.reservationNumber === REQUEST_ID)?.room ?? "?",
+    moves: plan.moves,
+    escalated: !!plan.escalated,
   };
 }
 

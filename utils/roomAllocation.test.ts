@@ -3,8 +3,12 @@ import {
   planReallocation,
   planForUnallocated,
   findMoveCreatedConflict,
+  buildGroupInputs,
+  verifyPlan,
+  guestKeyOf,
   ALLOCATION_GROUPS,
   type ReallocInput,
+  type ReallocPlan,
   type ResRef,
   type MoveBooking,
 } from "./roomAllocation";
@@ -321,5 +325,186 @@ describe("findMoveCreatedConflict (execute-time double-book check)", () => {
       ],
     };
     expect(findMoveCreatedConflict(ok, new Set([94705092]))).toBeNull();
+  });
+});
+
+describe("guest continuity — one guest's back-to-back bookings are one stay", () => {
+  const DELUXE_G = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Deluxe Studios")!; // K.202/K.203
+
+  // The real BH-95015797 (Sandra Feser) case, Oct 2026, as cached — including a
+  // cancelled ghost that spans the whole period. Piotr Marczewski stays Oct
+  // 22→27 in K.202 as TWO bookings: the main stay + a one-night extension.
+  const SANDRA: ResRef[] = [
+    { reservationNumber: "BH-95015797", room: "1KK Deluxe Studios", checkInDate: "2026-10-26", checkOutDate: "2026-10-31", isUnallocatedVR: true, firstName: "Sandra", lastName: "Feser" },
+    { reservationNumber: "BH-91818349", room: "K.202", checkInDate: "2026-09-08", checkOutDate: "2026-12-05", isCancelled: true, firstName: "suiyi", lastName: "zhou" },
+    { reservationNumber: "BH-94812257", room: "K.202", checkInDate: "2026-10-19", checkOutDate: "2026-10-22", firstName: "Agata", lastName: "Nowakova" },
+    { reservationNumber: "BH-93901799", room: "K.202", checkInDate: "2026-10-22", checkOutDate: "2026-10-26", firstName: "Piotr", lastName: "Marczewski" },
+    { reservationNumber: "BH-93987993", room: "K.202", checkInDate: "2026-10-26", checkOutDate: "2026-10-27", firstName: "Piotr", lastName: "Marczewski" },
+    { reservationNumber: "BH-94688106", room: "K.203", checkInDate: "2026-10-18", checkOutDate: "2026-10-23", firstName: "Mohamed", lastName: "Al Ali" },
+    { reservationNumber: "BH-89671752", room: "K.203", checkInDate: "2026-10-23", checkOutDate: "2026-10-25", firstName: "Marcelo", lastName: "Montebello" },
+    { reservationNumber: "BH-94998095", room: "K.203", checkInDate: "2026-10-29", checkOutDate: "2026-10-31", firstName: "gina", lastName: "cufi foradat" },
+    { reservationNumber: "BH-94868986", room: "K.203", checkInDate: "2026-11-02", checkOutDate: "2026-11-04", firstName: "Alechnavičius", lastName: "Edgaras" },
+  ];
+
+  for (const today of ["2026-10-21", "2026-10-22"]) {
+    it(`never moves an extension off its stay — Sandra case, today ${today}`, () => {
+      const out = planForUnallocated(SANDRA, "BH-95015797", today);
+      if ("error" in out) throw new Error(out.error);
+      expect(out.plan.feasible).toBe(true);
+      expect(out.plan.placements).toEqual([expect.objectContaining({ reservationNumber: "BH-95015797", room: "K.203" })]);
+      // The one-move answer: gina shifts to K.202, Piotr's stay is untouched.
+      expect(out.plan.moves).toEqual([
+        expect.objectContaining({ reservationNumber: "BH-94998095", from: "K.203", to: "K.202", checkIn: "2026-10-29", checkOut: "2026-10-31" }),
+      ]);
+    });
+  }
+
+  it("chains the main stay + extension into one row that moves whole", () => {
+    const inputs = buildGroupInputs(SANDRA, DELUXE_G, "2026-10-21");
+    const piotr = inputs.filter((i) => i.label === "Piotr Marczewski");
+    expect(piotr).toHaveLength(1);
+    expect(piotr[0]).toMatchObject({ currentRoom: "K.202", checkIn: "2026-10-22", checkOut: "2026-10-27", messaged: true });
+    expect(piotr[0].members?.map((m) => m.reservationNumber)).toEqual(["BH-93901799", "BH-93987993"]);
+    // The cancelled ghost holds nothing.
+    expect(inputs.some((i) => i.reservationNumber === "BH-91818349")).toBe(false);
+  });
+
+  // K.202: guest X stays Oct 5→14 as two bookings. K.203 is blacked out from
+  // Oct 14. S needs Oct 12→16 — only K.202 can take it, so X must go to K.203.
+  const WHOLE_STAY: ResRef[] = [
+    { reservationNumber: "S", room: "1KK Deluxe Studios", checkInDate: "2026-10-12", checkOutDate: "2026-10-16", isUnallocatedVR: true, firstName: "New", lastName: "Guest" },
+    { reservationNumber: "X1", room: "K.202", checkInDate: "2026-10-05", checkOutDate: "2026-10-09", firstName: "Xavier", lastName: "Long" },
+    { reservationNumber: "X2", room: "K.202", checkInDate: "2026-10-09", checkOutDate: "2026-10-14", firstName: "XAVIER", lastName: "long" },
+    { reservationNumber: "OV", room: "K.203", checkInDate: "2026-10-14", checkOutDate: "2026-10-20", isBlackout: true },
+  ];
+
+  it("moves BOTH bookings of a future stay together (never just the extension)", () => {
+    const out = planForUnallocated(WHOLE_STAY, "S", "2026-10-01");
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.feasible).toBe(true);
+    expect(out.plan.placements[0].room).toBe("K.202");
+    expect(out.plan.moves.map((m) => [m.reservationNumber, m.to])).toEqual([["X1", "K.203"], ["X2", "K.203"]]);
+  });
+
+  it("refuses rather than split a guest who is already staying", () => {
+    // Same layout, but X arrived yesterday: their stay is pinned whole, so the
+    // old answer (move only the X2 extension to K.203) is no longer allowed.
+    const out = planForUnallocated(WHOLE_STAY, "S", "2026-10-06");
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.feasible).toBe(false);
+    expect(out.plan.moves).toHaveLength(0);
+  });
+
+  it("puts an unplaced extension into the staying guest's unit, even at the cost of a move", () => {
+    // G is in K.202 until Oct 8; their extension E (Oct 8→10) landed on the VR.
+    // K.202 has F for one night; K.203 is free. Cheapest by moves would put E in
+    // K.203 — but that sends G across the corridor mid-stay. Move F instead.
+    const all: ResRef[] = [
+      { reservationNumber: "G", room: "K.202", checkInDate: "2026-10-03", checkOutDate: "2026-10-08", firstName: "Gabriela", lastName: "Nováková" },
+      { reservationNumber: "E", room: "1KK Deluxe Studios", checkInDate: "2026-10-08", checkOutDate: "2026-10-10", isUnallocatedVR: true, firstName: "Gabriela", lastName: "Novakova" },
+      { reservationNumber: "F", room: "K.202", checkInDate: "2026-10-08", checkOutDate: "2026-10-09", firstName: "Frank", lastName: "Other" },
+    ];
+    const out = planForUnallocated(all, "E", "2026-10-06");
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.placements).toEqual([expect.objectContaining({ reservationNumber: "E", room: "K.202" })]);
+    expect(out.plan.placements[0].splitFrom).toBeUndefined();
+    expect(out.plan.moves).toEqual([expect.objectContaining({ reservationNumber: "F", to: "K.203" })]);
+  });
+
+  it("flags the room change when keeping an extension with its stay is impossible", () => {
+    const all: ResRef[] = [
+      { reservationNumber: "G", room: "K.202", checkInDate: "2026-10-03", checkOutDate: "2026-10-08", firstName: "Gabriela", lastName: "Nováková" },
+      { reservationNumber: "E", room: "1KK Deluxe Studios", checkInDate: "2026-10-08", checkOutDate: "2026-10-10", isUnallocatedVR: true, firstName: "Gabriela", lastName: "Nováková" },
+      { reservationNumber: "OV", room: "K.202", checkInDate: "2026-10-08", checkOutDate: "2026-10-09", isBlackout: true },
+    ];
+    const out = planForUnallocated(all, "E", "2026-10-06");
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.feasible).toBe(true);
+    expect(out.plan.placements[0]).toMatchObject({ room: "K.203", splitFrom: "K.202" });
+    expect(out.plan.staySplits).toBe(1);
+  });
+
+  it("among equal-move plans, moves the guest who arrives later", () => {
+    // Either A (arrives Oct 10) or B (arrives Oct 14) can make way. Prefer B.
+    const base: ResRef[] = [
+      { reservationNumber: "S", room: "1KK Deluxe Studios", checkInDate: "2026-10-10", checkOutDate: "2026-10-15", isUnallocatedVR: true },
+      { reservationNumber: "A", room: "K.202", checkInDate: "2026-10-10", checkOutDate: "2026-10-11", firstName: "Anna", lastName: "Early" },
+      { reservationNumber: "B", room: "K.203", checkInDate: "2026-10-14", checkOutDate: "2026-10-15", firstName: "Bob", lastName: "Late" },
+    ];
+    for (const order of [base, [...base].reverse()]) {
+      const out = planForUnallocated(order, "S", "2026-10-01");
+      if ("error" in out) throw new Error(out.error);
+      expect(out.plan.moves.map((m) => m.reservationNumber)).toEqual(["B"]);
+      expect(out.plan.placements[0].room).toBe("K.203");
+    }
+  });
+
+  it("normalises guest identity (case, diacritics, word order, any script)", () => {
+    expect(guestKeyOf({ firstName: "Piotr", lastName: "Marczewski" })).toBe(guestKeyOf({ firstName: "MARCZEWSKI", lastName: "piotr" }));
+    expect(guestKeyOf({ firstName: "Gabriela", lastName: "Nováková" })).toBe(guestKeyOf({ firstName: "gabriela", lastName: "Novakova" }));
+    expect(guestKeyOf({ firstName: "Женя", lastName: "Шевченко" })).toBeTruthy();
+    expect(guestKeyOf({ firstName: "", lastName: "  " })).toBeUndefined();
+  });
+
+  it("addresses a package leg by unit even when only one leg is in this group", () => {
+    const all: ResRef[] = [
+      { reservationNumber: "BH-1", room: "K.102 + K.202", linkedRooms: ["K.102", "K.202"], checkInDate: "2026-10-10", checkOutDate: "2026-10-12" },
+    ];
+    expect(buildGroupInputs(all, DELUXE_G, "2026-10-01").map((i) => i.reservationNumber)).toEqual(["BH-1#K.202"]);
+  });
+
+  it("counts a mid-stay-moved guest only in the unit they're in now", () => {
+    const all: ResRef[] = [
+      {
+        reservationNumber: "M", room: "K.203", checkInDate: "2026-10-01", checkOutDate: "2026-10-10",
+        roomSegments: [
+          { room: "K.202", from: "2026-10-01", to: "2026-10-04", nights: 3, share: 1 / 3 },
+          { room: "K.203", from: "2026-10-04", to: "2026-10-10", nights: 6, share: 2 / 3 },
+        ],
+      },
+    ];
+    const inputs = buildGroupInputs(all, DELUXE_G, "2026-10-05");
+    expect(inputs).toEqual([expect.objectContaining({ reservationNumber: "M", currentRoom: "K.203", checkIn: "2026-10-05", movable: false })]);
+  });
+});
+
+describe("verifyPlan — independent safety net", () => {
+  const DELUXE_G = ALLOCATION_GROUPS.find((g) => g.typeLabel === "1KK Deluxe Studios")!;
+  const SANDRA: ResRef[] = [
+    { reservationNumber: "BH-95015797", room: "1KK Deluxe Studios", checkInDate: "2026-10-26", checkOutDate: "2026-10-31", isUnallocatedVR: true, firstName: "Sandra", lastName: "Feser" },
+    { reservationNumber: "BH-93901799", room: "K.202", checkInDate: "2026-10-22", checkOutDate: "2026-10-26", firstName: "Piotr", lastName: "Marczewski" },
+    { reservationNumber: "BH-93987993", room: "K.202", checkInDate: "2026-10-26", checkOutDate: "2026-10-27", firstName: "Piotr", lastName: "Marczewski" },
+    { reservationNumber: "BH-89671752", room: "K.203", checkInDate: "2026-10-23", checkOutDate: "2026-10-25", firstName: "Marcelo", lastName: "Montebello" },
+    { reservationNumber: "BH-94998095", room: "K.203", checkInDate: "2026-10-29", checkOutDate: "2026-10-31", firstName: "gina", lastName: "cufi foradat" },
+  ];
+  const plan = (p: Partial<ReallocPlan>): ReallocPlan => ({ feasible: true, placements: [], moves: [], assignment: {}, ...p });
+
+  it("passes the correct plan", () => {
+    const good = plan({
+      placements: [{ reservationNumber: "BH-95015797", room: "K.203" }],
+      moves: [{ reservationNumber: "BH-94998095", from: "K.203", to: "K.202" }],
+    });
+    expect(verifyPlan(SANDRA, DELUXE_G, good, "2026-10-21")).toBeNull();
+  });
+
+  it("rejects the old suggestion — moving only Piotr's extension splits his stay", () => {
+    const old = plan({
+      placements: [{ reservationNumber: "BH-95015797", room: "K.202" }],
+      moves: [{ reservationNumber: "BH-93987993", from: "K.202", to: "K.203" }],
+    });
+    expect(verifyPlan(SANDRA, DELUXE_G, old, "2026-10-21")).toMatch(/splits Piotr Marczewski's stay/);
+  });
+
+  it("rejects a double-booking", () => {
+    const bad = plan({ placements: [{ reservationNumber: "BH-95015797", room: "K.203" }] });
+    expect(verifyPlan(SANDRA, DELUXE_G, bad, "2026-10-21")).toMatch(/double-booked with gina/);
+  });
+
+  it("rejects moving a guest who is already staying", () => {
+    const all: ResRef[] = [
+      { reservationNumber: "H", room: "K.202", checkInDate: "2026-10-19", checkOutDate: "2026-10-25", firstName: "Hana", lastName: "Here" },
+    ];
+    const bad = plan({ moves: [{ reservationNumber: "H", from: "K.202", to: "K.203" }] });
+    expect(verifyPlan(all, DELUXE_G, bad, "2026-10-21")).toMatch(/already staying/);
   });
 });

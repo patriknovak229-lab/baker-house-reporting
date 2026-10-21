@@ -819,10 +819,11 @@ export default function TransactionsPage() {
               ? " — ⚠ guest already sent check-in info: inform them of the new room / door code"
               : "";
             const whichApartment = legUnit ? ` (their ${legUnit} apartment)` : "";
+            const nights = m.checkIn && m.checkOut ? ` for ${m.checkIn} → ${m.checkOut}` : "";
             const issue: Issue = {
               id: `${stamp}-${m.reservationNumber}`,
               category: "problem",
-              text: `🔀 Room reassigned${whichApartment} ${m.from} → ${m.to} to fit an arriving guest${notice}`,
+              text: `🔀 Room reassigned${whichApartment} ${m.from} → ${m.to}${nights} to fit an arriving guest${notice}`,
               actionableDate: todayIso,
               resolved: false,
               createdAt: new Date().toISOString(),
@@ -2233,11 +2234,28 @@ export default function TransactionsPage() {
                               {result.plan.placements.map((p) => `Assign to ${p.room}`).join(", ")}
                               {result.plan.moves.length === 0 && " — no other moves needed"}
                             </p>
+                            {/* Only when no plan could keep a guest's back-to-back
+                                bookings in one unit — they'd have to change rooms. */}
+                            {result.plan.placements
+                              .filter((p) => p.splitFrom)
+                              .map((p) => (
+                                <p key={`split-${p.reservationNumber}`} className="mt-1 text-[11px] font-medium text-rose-700">
+                                  ⚠ {p.label ?? p.reservationNumber}&apos;s adjoining booking is in {p.splitFrom} — they
+                                  would have to change rooms. No plan keeps them in one unit.
+                                </p>
+                              ))}
                             {result.plan.moves.length > 0 && (
                               <ul className="mt-1 space-y-0.5">
                                 {result.plan.moves.map((m) => (
                                   <li key={m.reservationNumber} className="text-[11px] text-amber-800">
                                     ↪ Move <span className="font-medium">{m.label ?? m.reservationNumber}</span>{" "}
+                                    {/* The nights being moved — a name alone hides WHICH booking
+                                        of a guest is meant (e.g. an extension vs. the main stay). */}
+                                    {m.checkIn && m.checkOut && (
+                                      <span className="text-amber-700">
+                                        ({m.checkIn} → {m.checkOut}){" "}
+                                      </span>
+                                    )}
                                     {m.from} → {m.to}
                                     {/* A guest holding several apartments only ever has ONE of
                                         them moved here; say so, or the name alone reads as if
