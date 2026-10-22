@@ -247,6 +247,26 @@ export interface PlatformRefund {
    * underneath a recorded refund.
    */
   originalPriceCzk: number;
+  /**
+   * Stripe refunds of the booking's web checkout that are included in
+   * `amountCzk` — written by `POST /api/stripe/web-payment/refund` (or /record
+   * for one made in the Stripe Dashboard). Keyed by Stripe refund id so the
+   * same refund can never be counted twice. Absent on refunds recorded by hand.
+   */
+  stripeRefunds?: PlatformRefundStripeEntry[];
+}
+
+/** One Stripe refund counted in a `PlatformRefund` — see `stripeRefunds`. */
+export interface PlatformRefundStripeEntry {
+  /** Stripe refund id (re_…). */
+  id: string;
+  /** Checkout session (cs_…) of the web booking the refund came off. */
+  sessionId: string;
+  amountCzk: number;
+  /** YYYY-MM-DD (Prague) the refund was issued. */
+  refundedAt: string;
+  /** Operator email that issued or recorded it. */
+  by: string;
 }
 
 /**

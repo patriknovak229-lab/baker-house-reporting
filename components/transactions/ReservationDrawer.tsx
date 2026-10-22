@@ -13,6 +13,7 @@ import CreateVoucherModal from "./CreateVoucherModal";
 import EmailGuestModal from "./EmailGuestModal";
 import Badge from "@/components/shared/Badge";
 import { StayLinkSection, type StayLinkAction } from "@/components/transactions/StayLinks";
+import { WebPaymentRefund } from "@/components/transactions/WebPaymentRefund";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
 import { platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
@@ -2908,6 +2909,11 @@ function ShortenedRevenueNote({ reservation }: { reservation: Reservation }) {
           Price lowered in Beds24: {formatCurrency(shortening.originalPriceCzk)} →{" "}
           {formatCurrency(reservation.price)} — the difference comes off the unused nights.
         </p>
+      ) : reservation.channel === "Direct-Web" ? (
+        <p className="text-amber-700">
+          ⏳ No refund recorded yet. Once it&apos;s agreed, use “↩︎ Refund via Stripe” in the Payment
+          section — it refunds the card and records it here. Leave the Beds24 price as it is.
+        </p>
       ) : (
         <p className="text-amber-700">
           ⏳ No refund recorded yet. Once it&apos;s agreed, record it with “↩︎ Mark partially refunded” —
@@ -3233,7 +3239,8 @@ export default function ReservationDrawer({
     if (!reservation) return;
     const r = reservation;
     const existing = r.platformRefund;
-    const amountCzk = Math.max(0, Math.round(patch.amountCzk ?? existing?.amountCzk ?? 0));
+    // To the haléř: a refund issued through Stripe can carry one (48 735,60 Kč).
+    const amountCzk = Math.max(0, Math.round((patch.amountCzk ?? existing?.amountCzk ?? 0) * 100) / 100);
     // `||` not `??` on the free-text fields: clearing an input yields "", and an
     // empty date would render a blank control the operator can't tell from
     // unset. An emptied reason genuinely means "no reason", so drop it.
@@ -3249,6 +3256,9 @@ export default function ReservationDrawer({
         // Frozen at first flag so the refund keeps its proportional share if the
         // booking price is later split across rooms or edited on the channel.
         originalPriceCzk: existing?.originalPriceCzk ?? r.price,
+        // Stripe refunds already counted in the amount (WebPaymentRefund) —
+        // kept so the same refund can't be recorded a second time.
+        ...(existing?.stripeRefunds ? { stripeRefunds: existing.stripeRefunds } : {}),
       },
     });
   }
@@ -5065,6 +5075,18 @@ export default function ReservationDrawer({
                 here. It comes off gross booking value, leaving the channel's fee
                 where it was — a higher effective rate on a smaller sale. Hidden
                 for non-arrivals, whose net-retained price already nets one off. */}
+            {/* Website booking → its Stripe checkout can be refunded from here,
+                recorded as the platform refund below in the same step. */}
+            {reservation.channel === "Direct-Web" && !reservation.nonArrival && canEditNonArrival && (
+              <WebPaymentRefund
+                key={reservation.reservationNumber}
+                reservation={reservation}
+                canRefund={naUserRole === "admin"}
+                canRecord={canEditNonArrival}
+                onPlatformRefund={(pr) => onUpdate({ ...reservation, platformRefund: pr })}
+              />
+            )}
+
             {!reservation.nonArrival && (
               <div className="mt-2">
                 {reservation.platformRefund ? (
@@ -5092,9 +5114,10 @@ export default function ReservationDrawer({
                       <label className="text-[11px] text-amber-700">
                         Refunded (Kč)
                         <input
+                          key={`pr-amount-${reservation.platformRefund.amountCzk}`}
                           type="number"
                           min={0}
-                          step={1}
+                          step={0.01}
                           defaultValue={reservation.platformRefund.amountCzk}
                           onBlur={(e) => setPlatformRefund({ amountCzk: Number(e.target.value) })}
                           disabled={!canEditNonArrival}
@@ -5104,6 +5127,7 @@ export default function ReservationDrawer({
                       <label className="text-[11px] text-amber-700">
                         Refunded on
                         <input
+                          key={`pr-date-${reservation.platformRefund.refundedAt}`}
                           type="date"
                           defaultValue={reservation.platformRefund.refundedAt}
                           onBlur={(e) => setPlatformRefund({ refundedAt: e.target.value })}
@@ -5114,6 +5138,7 @@ export default function ReservationDrawer({
                       <label className="text-[11px] text-amber-700 flex-1 min-w-[10rem]">
                         Reason
                         <input
+                          key={`pr-reason-${reservation.platformRefund.reason ?? ""}`}
                           type="text"
                           placeholder="e.g. goodwill after complaint"
                           defaultValue={reservation.platformRefund.reason ?? ""}
