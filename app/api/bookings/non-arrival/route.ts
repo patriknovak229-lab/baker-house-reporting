@@ -11,6 +11,8 @@
  *
  * Body: { reservationNumber: "BH-<id>" }
  * Auth: admin / super only — this mutates a real Beds24 booking.
+ * 409 for blackouts and for bookings already cancelled in Beds24 that aren't a
+ * non-arrival yet (see utils/nonArrival.ts).
  *
  * ⚠ allowChannelUpdate="none" is Beds24's "block all channel modifications"
  * (so a later channel sync can't reinstate our cancel and re-block the room).
@@ -21,6 +23,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { requireRole } from "@/utils/authGuard";
+import { nonArrivalBlockReason } from "@/utils/nonArrival";
+import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
+import type { NonArrival } from "@/types/reservation";
 
 const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -102,12 +107,31 @@ export async function POST(req: NextRequest) {
   if (!booking) {
     return NextResponse.json({ error: `Booking ${bookingId} not found` }, { status: 404 });
   }
-  if (booking.status === "black") {
-    return NextResponse.json({ error: "Blackouts can't be marked as non-arrival" }, { status: 409 });
+  // Already cancelled in Beds24 → only an existing non-arrival may go through
+  // (the flag lives in our overrides, so look it up only when it matters).
+  let nonArrival: NonArrival | null = null;
+  if (booking.status === "cancelled") {
+    try {
+      const overrides = await readAllReservationOverrides<{ nonArrival?: NonArrival | null }>();
+      nonArrival = overrides[`BH-${bookingId}`]?.nonArrival ?? null;
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Overrides lookup failed" },
+        { status: 502 },
+      );
+    }
+  }
+  const blocked = nonArrivalBlockReason({
+    isBlackout: booking.status === "black",
+    isCancelled: booking.status === "cancelled",
+    nonArrival,
+  });
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 409 });
   }
 
   // ── Execute: cancel + lock the channel in a single POST ──
-  // (Idempotent: re-running on an already-cancelled booking just re-asserts the lock.)
+  // (Idempotent: re-running on an existing non-arrival just re-asserts the lock.)
   const payload = [{ id: bookingId, status: "cancelled", allowChannelUpdate: LOCK_CHANNEL_UPDATE }];
   try {
     const res = await fetch(`${BEDS24_API_BASE}/bookings`, {

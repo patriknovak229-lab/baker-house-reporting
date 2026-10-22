@@ -22,8 +22,9 @@ export function computeAutoFlags(
 ): Set<CustomerFlag> {
   const flags = new Set<CustomerFlag>();
 
-  // High Value: >= 5 nights
-  if (res.numberOfNights >= 5) {
+  // High Value: >= 5 nights. A cancelled booking is worth nothing, so it doesn't
+  // qualify — unless it's a non-arrival, which still counts as revenue.
+  if (res.numberOfNights >= 5 && (!res.isCancelled || res.nonArrival)) {
     flags.add("High Value Customer");
   }
 

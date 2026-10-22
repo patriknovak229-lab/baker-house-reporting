@@ -118,6 +118,12 @@ A cancellation within `ABANDONED_CANCEL_MINUTES` (120) is an incomplete Stripe
 session, not a guest changing plans. Both Overview and Booking window count guest
 cancellations only, on **both** sides of the ratio. Headline rate 12.9%, not 24.5%.
 
+Beds24 saves an unpaid booking-page checkout (e.g. the first Google Hotel Ads
+"booking", BH-95080626) already cancelled with **no** `cancelTime` and
+`modifiedTime = bookingTime`. With no `cancelTime`, the class falls back to
+`modifiedTime` — an upper bound on when the cancellation happened — so such a row
+is abandoned, while one last modified weeks later stays a guest cancellation.
+
 ---
 
 ## 4. File map
@@ -329,7 +335,8 @@ weaker position.
 ## 7. Deliberately not built
 
 - **Nightly on-the-books snapshot table.** The booking curve is reconstructed from
-  `reservation_date` + Beds24 `cancelTime` (present on 105 of 107 cancellations),
+  `reservation_date` + Beds24 `cancelTime` (present on 105 of 107 cancellations;
+  the rest fall back to the booking time if abandoned, else `modifiedTime`),
   which is exact for cancellations and approximate for *modifications* — a modified
   booking replays in its final shape. A snapshot table would close that gap; not
   needed until the curve drives money.

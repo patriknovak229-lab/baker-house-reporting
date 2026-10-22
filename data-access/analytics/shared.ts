@@ -194,13 +194,21 @@ export const ALLOC_CTE = sql`
       b.is_unallocated_vr,
       b.synced_rating,
       (b.raw ->> 'cancelTime')::timestamptz              AS cancelled_at,
+      (b.raw ->> 'modifiedTime')::timestamptz            AS modified_at,
       (b.raw ->> 'rateDescription')                      AS rate_description,
       /* Abandoned checkout vs genuine guest cancellation — see
-         ABANDONED_CANCEL_MINUTES in data/analyticsConfig.ts. */
+         ABANDONED_CANCEL_MINUTES in data/analyticsConfig.ts.
+
+         Beds24 leaves cancelTime empty on some cancellations — notably an
+         unpaid booking-page checkout, which it saves ALREADY cancelled with
+         modifiedTime = bookingTime (e.g. BH-95080626). modifiedTime is the
+         last change, so it can only be at or after the cancellation: if even
+         that falls inside the window, the cancellation did too. A row last
+         touched long after booking (BH-91710143) stays a guest cancellation. */
       CASE
         WHEN b.is_cancelled = false THEN NULL
-        WHEN (b.raw ->> 'cancelTime') IS NULL OR b.booking_timestamp IS NULL THEN 'guest'
-        WHEN (b.raw ->> 'cancelTime')::timestamptz - b.booking_timestamp
+        WHEN COALESCE((b.raw ->> 'cancelTime')::timestamptz, (b.raw ->> 'modifiedTime')::timestamptz)
+             - b.booking_timestamp
              < (${ABANDONED_CANCEL_MINUTES} || ' minutes')::interval THEN 'abandoned'
         ELSE 'guest'
       END                                                AS cancel_class,
@@ -399,6 +407,11 @@ export const AVAILABLE_CTE = sql`
  * modifications are approximated. A nightly on-the-books snapshot table would
  * close that gap, and is the natural Phase 2 if the curve ever needs to be
  * audit-grade rather than decision-grade.
+ *
+ * A cancelled row with no cancelTime would read as never cancelled, i.e. on the
+ * books at every checkpoint. It gets an effective instant instead: an abandoned
+ * checkout was never live, so its booking timestamp; anything else its
+ * modifiedTime, the latest the cancellation can have happened.
  */
 export const ASOF_NIGHTS_CTE = sql`
   asof_nights AS (
@@ -407,7 +420,11 @@ export const ASOF_NIGHTS_CTE = sql`
       a.channel,
       a.room,
       a.reservation_date       AS booked_on,
-      a.cancelled_at,
+      CASE
+        WHEN a.is_cancelled = false OR a.cancelled_at IS NOT NULL THEN a.cancelled_at
+        WHEN a.cancel_class = 'abandoned' THEN a.booking_timestamp
+        ELSE COALESCE(a.modified_at, a.booking_timestamp)
+      END                      AS cancelled_at,
       a.is_cancelled,
       d::date                  AS stay_date,
       a.price / a.span_nights  AS night_price

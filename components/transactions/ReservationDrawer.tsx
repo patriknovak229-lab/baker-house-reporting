@@ -59,6 +59,7 @@ import type { PaymentQRInfo, InvoiceMandatoryField } from "@/utils/invoiceUtils"
 import { formatPhoneDisplay } from "@/utils/stringUtils";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
+import { nonArrivalBlockReason } from "@/utils/nonArrival";
 import type { Role } from "@/utils/roles";
 import {
   autoRatePerks,
@@ -3084,10 +3085,17 @@ export default function ReservationDrawer({
   }
 
   // Remove the non-arrival flag (overlay only) + its task. Does NOT un-cancel in
-  // Beds24 — reinstate the booking manually there if this was a mistake.
+  // Beds24 — reinstate the booking manually there if this was a mistake. Once
+  // removed it can't be re-marked (the booking is cancelled), hence the confirm.
   function unmarkNonArrival() {
     if (!reservation) return;
     const r = reservation;
+    if (
+      !window.confirm(
+        "Remove the non-arrival flag?\n\nThe booking stays cancelled in Beds24, so it drops out of revenue and can't be marked as a non-arrival again unless you reinstate it in Beds24 first.",
+      )
+    )
+      return;
     const taskId = `na-price-${r.reservationNumber}`;
     onUpdate({
       ...r,
@@ -5421,7 +5429,8 @@ export default function ReservationDrawer({
             {/* Non-arrival — guest can't come and can't cancel on the OTA. Marking
                 it cancels + channel-locks the booking in Beds24 (frees the room to
                 resell) while the guest stays charged on the OTA; revenue counts the
-                net retained after any channel-side refund, set below. */}
+                net retained after any channel-side refund, set below. Not offered
+                on a booking already cancelled in Beds24 (see utils/nonArrival). */}
             <div className="mt-3">
               {reservation.nonArrival ? (
                 <div className="rounded-lg border border-purple-300 bg-purple-50 px-3 py-2.5">
@@ -5459,7 +5468,7 @@ export default function ReservationDrawer({
                     </span>
                   </div>
                 </div>
-              ) : canEditNonArrival ? (
+              ) : canEditNonArrival && !nonArrivalBlockReason(reservation) ? (
                 <button
                   onClick={markNonArrival}
                   disabled={naBusy}

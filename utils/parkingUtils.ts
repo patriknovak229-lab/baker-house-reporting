@@ -103,8 +103,12 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     grid.set(ps.space, new Map());
   }
 
-  // Only consider non-refunded reservations
-  const active = reservations.filter((r) => r.paymentStatus !== "Refunded");
+  // Only bookings whose guest is actually coming hold a space: no refunds and
+  // no cancellations. That includes non-arrivals (cancelled in Beds24 on
+  // purpose, still revenue) and unpaid checkouts Beds24 saves already cancelled.
+  const active = reservations.filter(
+    (r) => r.paymentStatus !== "Refunded" && !r.isCancelled,
+  );
 
   // ── Pass 1: Manual overrides ──────────────────────────────────────────────
   for (const r of active) {
