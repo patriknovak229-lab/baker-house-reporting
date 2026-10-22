@@ -1,8 +1,8 @@
 'use client';
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import type { Reservation, Channel, PaymentStatus, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
-import Badge from "@/components/shared/Badge";
+import Badge, { GoogleWordmark } from "@/components/shared/Badge";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { computeStayStatus } from "@/utils/stayStatus";
@@ -67,9 +67,14 @@ const PAGE_SIZE = 10;
 function channelBadgeVariant(channel: Channel) {
   if (channel === "Booking.com")  return "booking-com";   // BCom brand blue
   if (channel === "Airbnb")       return "airbnb";        // Airbnb Rausch red
+  if (channel === "Google")       return "google";        // white chip, Google wordmark colours
   if (channel === "Direct-Phone") return "green";         // green
   if (channel === "Direct-Web")   return "green-light";   // mint/light green
   return "gray";                                          // legacy "Direct" — neutral
+}
+
+function channelBadgeLabel(channel: Channel): ReactNode {
+  return channel === "Google" ? <GoogleWordmark /> : channel;
 }
 
 function paymentBadgeVariant(status: PaymentStatus) {
@@ -560,7 +565,7 @@ function ReservationCard({
             </Badge>
           </span>
         )}
-        <Badge variant={channelBadgeVariant(res.channel)} size="xs">{res.channel}</Badge>
+        <Badge variant={channelBadgeVariant(res.channel)} size="xs">{channelBadgeLabel(res.channel)}</Badge>
         {res.corporateAgreementId && (
           <span title={`Created by corporate agreement  — see the Corporate tab`}>
             <Badge variant="indigo" size="xs">🏢 Corporate</Badge>
@@ -928,7 +933,7 @@ export default function ReservationTable({
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <Badge variant={channelBadgeVariant(res.channel)} size="xs">
-                        {res.channel}
+                        {channelBadgeLabel(res.channel)}
                       </Badge>
                       {res.corporateAgreementId && (
                         <span

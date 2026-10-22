@@ -66,6 +66,7 @@ const RATE_NONE: Palette = { f: '#D3D1C7', b: '#888780', t: '#2C2C2A', a: '#5F5E
 const CHANNEL_FILL: Record<string, Palette> = {
   "Booking.com":  { f: '#B5D4F4', b: '#378ADD', t: '#042C53', a: '#003B95' },
   "Airbnb":       { f: '#F7C1C1', b: '#E24B4A', t: '#501313', a: '#FF5A5F' },
+  "Google":       { f: '#FEEFC3', b: '#F9AB00', t: '#3C2A00', a: '#4285F4' },
   "Direct":       { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#534AB7' },
   "Direct-Phone": { f: '#7FB558', b: '#3F6E14', t: '#0F2603', a: '#2C5009' },
   "Direct-Web":   { f: '#C0DD97', b: '#639922', t: '#173404', a: '#3B6D11' },
@@ -607,6 +608,7 @@ export default function OccupancyCalendar({
       ? [
           { label: "Booking", pal: CHANNEL_FILL["Booking.com"] },
           { label: "Airbnb", pal: CHANNEL_FILL.Airbnb },
+          { label: "Google", pal: CHANNEL_FILL.Google },
           { label: "Web", pal: CHANNEL_FILL["Direct-Web"] },
           { label: "Phone", pal: CHANNEL_FILL["Direct-Phone"] },
           { label: "Direct", pal: CHANNEL_FILL.Direct },

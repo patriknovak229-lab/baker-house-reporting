@@ -40,6 +40,7 @@ import { readAllReservationOverrides, writeAllReservationOverrides } from '@/uti
 import type { Reservation, Issue, Room, InvoiceData, InvoiceModification } from '@/types/reservation';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
+import { isUnfinishedCheckout } from '@/utils/unfinishedCheckout';
 import { sendBeds24Message } from '@/utils/beds24Messages';
 import { translateReplyToGuest } from '@/utils/translateReply';
 import { readAutoSendCategories } from '@/data-access/autoSendCategories';
@@ -2797,6 +2798,8 @@ async function pollAndNotifyCancellations(redis: Redis | null): Promise<void> {
  * Skips: sub-bookings (price=0, master is notified), virtual/unmapped rooms, and
  * operator non-arrival cancellations (the guest did NOT cancel). Dedupes per
  * booking id so Beds24 retries / overlapping polls don't double-send.
+ * An unpaid Beds24 booking-page checkout (Google Hotel Ads) arrives here too —
+ * it is worded as "Booking not completed", not as a cancellation.
  */
 async function maybeNotifyCancellation(
   booking: CachedBooking,
@@ -2849,13 +2852,22 @@ async function maybeNotifyCancellation(
     ? `${Number(booking.price).toLocaleString('cs-CZ')} Kč`
     : '—';
 
+  // Booking-page checkout the guest never paid for — not a cancellation of a
+  // live booking, so say what actually happened (see isUnfinishedCheckout).
+  const unfinished = isUnfinishedCheckout(booking, Date.now(), NEW_BOOKING_WINDOW_MS);
+
   const text = [
-    `❌ <b>Booking Cancelled — ${room}</b>`,
+    unfinished
+      ? `💳 <b>Booking not completed — ${room}</b>`
+      : `❌ <b>Booking Cancelled — ${room}</b>`,
     `👤 ${firstName} ${lastName}`.trim() || '👤 —',
     `📅 ${formatDate(booking.arrival ?? '')} → ${formatDate(booking.departure ?? '')} (${nights} nights)`,
     `👥 ${guests} guests`,
     `📣 ${channel}`,
     `💰 ${price}`,
+    ...(unfinished
+      ? ['ℹ️ Guest left the booking page without paying — no room is held.']
+      : []),
   ].join('\n');
 
   await sendTelegram(text);

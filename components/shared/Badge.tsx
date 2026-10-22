@@ -20,7 +20,8 @@ interface BadgeProps {
   | "orange"
   | "orange-light"
   | "booking-com"
-  | "airbnb";
+  | "airbnb"
+  | "google";
   size?: "sm" | "xs";
 }
 
@@ -44,7 +45,25 @@ const variantClasses: Record<BadgeProps["variant"], string> = {
   // OTA brand colours
   "booking-com": "bg-[#003B95] text-white",
   "airbnb": "bg-[#FF5A5F] text-white",
+  // Google — white chip so the multi-colour wordmark (GoogleWordmark) reads
+  "google": "bg-white ring-1 ring-gray-200",
 };
+
+// Google's four brand colours, letter by letter as in the logo.
+const GOOGLE_LETTERS: Array<[string, string]> = [
+  ["G", "#4285F4"], ["o", "#EA4335"], ["o", "#FBBC05"],
+  ["g", "#4285F4"], ["l", "#34A853"], ["e", "#EA4335"],
+];
+
+export function GoogleWordmark() {
+  return (
+    <span className="font-semibold" aria-label="Google">
+      {GOOGLE_LETTERS.map(([ch, color], i) => (
+        <span key={i} style={{ color }} aria-hidden>{ch}</span>
+      ))}
+    </span>
+  );
+}
 
 export default function Badge({
   children,

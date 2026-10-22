@@ -205,7 +205,7 @@ function RoomFilterGrouped({
 export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
   const [open, setOpen] = useState(false);
 
-  const channels: Channel[] = ["Booking.com", "Airbnb", "Direct", "Direct-Phone", "Direct-Web"];
+  const channels: Channel[] = ["Booking.com", "Airbnb", "Google", "Direct", "Direct-Phone", "Direct-Web"];
   const paymentStatuses: PaymentStatus[] = [
     "Unpaid",
     "Partially Paid",

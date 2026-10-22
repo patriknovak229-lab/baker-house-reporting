@@ -113,6 +113,9 @@ export const APP_PHONE_MARKER = "[Created via Reporting App — Phone]";
 export function mapChannel(apiSource = "", referer = "", comments = ""): Channel {
   if (apiSource === "Booking.com") return "Booking.com";
   if (apiSource === "Airbnb") return "Airbnb";
+  // Google Hotel Ads click-through to the Beds24 booking page. Seen on
+  // BH-95080626: apiSource "Google Ads", channel "googleads", referer "google".
+  if (/google/i.test(apiSource)) return "Google";
 
   // Marker in comments wins over Beds24's overridden referer
   if (comments.includes(APP_PHONE_MARKER)) return "Direct-Phone";

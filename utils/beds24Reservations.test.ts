@@ -81,6 +81,10 @@ describe('mapChannel', () => {
     expect(mapChannel('Direct', 'API', '[Created via Reporting App — Phone]')).toBe('Direct-Phone');
     expect(mapChannel('Direct', 'API', '')).toBe('Direct-Web');
   });
+
+  it('recognises Google Hotel Ads bookings (BH-95080626)', () => {
+    expect(mapChannel('Google Ads', 'google', '')).toBe('Google');
+  });
 });
 
 /**

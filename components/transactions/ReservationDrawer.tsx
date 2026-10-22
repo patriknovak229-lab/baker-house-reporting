@@ -5180,11 +5180,13 @@ export default function ReservationDrawer({
 
               {/* Manual Stripe re-check — fallback when webhook didn't fire.
                   Shown for any reservation likely paid via Stripe: linked
-                  payment links, Direct-Web (rental site), or generic "Direct"
+                  payment links, Direct-Web (rental site), Google (Beds24
+                  booking page, Stripe gateway), or generic "Direct"
                   (legacy bookings — channel mapping falls back to "Direct"
                   when Beds24 referer doesn't contain "web"/"phone"). */}
               {((reservation.additionalPayments ?? []).length > 0 ||
                 reservation.channel === 'Direct-Web' ||
+                reservation.channel === 'Google' ||
                 reservation.channel === 'Direct') && (
                 <>
                   <button
