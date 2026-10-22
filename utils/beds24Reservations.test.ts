@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapToReservation, mapChannel, APP_PHONE_MARKER, type Beds24Booking } from './beds24Reservations';
+import { mapToReservation, mapChannel, compactInvoiceItems, APP_PHONE_MARKER, type Beds24Booking } from './beds24Reservations';
 
 // Regression guard for the pipeline extracted out of app/api/bookings/route.ts:
 // occupancy correctness depends on room mapping, dates and status being stable.
@@ -84,6 +84,52 @@ describe('mapChannel', () => {
 
   it('recognises Google Hotel Ads bookings (BH-95080626)', () => {
     expect(mapChannel('Google Ads', 'google', '')).toBe('Google');
+  });
+});
+
+/**
+ * Google Hotel Ads go through the Beds24 booking page, which fills `deposit`
+ * with the amount it ASKED for whether or not the guest paid. Only Beds24's
+ * payment lines may make such a booking Paid. Bookings go through
+ * compactInvoiceItems first, as they do in the sync.
+ */
+describe('payment status', () => {
+  const synced = (b: Beds24Booking) => mapToReservation(compactInvoiceItems(b));
+  const charge = (amount: number) => ({ type: 'charge', subType: 1, amount });
+  const payment = (amount: number) => ({ type: 'payment', subType: 200, amount });
+  const google = (overrides: Partial<Beds24Booking> = {}) =>
+    booking({ apiSource: 'Google Ads', referer: 'google', status: 'confirmed', price: 11968.8, deposit: 11968.8, ...overrides });
+
+  it('BH-95080626 (never paid, deposit = price, no payment line) is Unpaid', () => {
+    const r = synced(google({ id: 95080626, status: 'cancelled', invoiceItems: [charge(11968.8)] }));
+    expect(r.channel).toBe('Google');
+    expect(r).toMatchObject({ paymentStatus: 'Unpaid', amountPaid: 0 });
+  });
+
+  it('a Google booking with a payment line equal to the price is Paid', () => {
+    const r = synced(google({ invoiceItems: [charge(11968.8), payment(11968.8)] }));
+    expect(r).toMatchObject({ paymentStatus: 'Paid', amountPaid: 11968.8 });
+  });
+
+  it('a Google booking paid in part is Partially Paid', () => {
+    const r = synced(google({ invoiceItems: [charge(11968.8), payment(1196.88)] }));
+    expect(r).toMatchObject({ paymentStatus: 'Partially Paid', amountPaid: 1196.88 });
+  });
+
+  it('a Google booking cached before invoice items were fetched is Unpaid', () => {
+    expect(mapToReservation(google())).toMatchObject({ paymentStatus: 'Unpaid', amountPaid: 0 });
+  });
+
+  it('Direct-Web still reads deposit, which the rental site writes only after Stripe succeeds', () => {
+    const r = synced(booking({ apiSource: 'Direct', referer: 'API', price: 9000, deposit: 9000, invoiceItems: [charge(9000)] }));
+    expect(r.channel).toBe('Direct-Web');
+    expect(r).toMatchObject({ paymentStatus: 'Paid', amountPaid: 9000 });
+  });
+
+  it('folds invoice items into paymentsReceived and drops the array', () => {
+    const b = compactInvoiceItems(booking({ invoiceItems: [charge(4431.75), payment(3231.75), payment(-231.75)] }));
+    expect(b.paymentsReceived).toBe(3000);
+    expect('invoiceItems' in b).toBe(false);
   });
 });
 

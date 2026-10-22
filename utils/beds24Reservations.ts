@@ -180,6 +180,17 @@ function derivePayment(b: Beds24Booking): { paymentStatus: PaymentStatus; amount
   const price = b.price ?? 0;
   const deposit = b.deposit ?? 0;
 
+  // Google Hotel Ads land on the Beds24 booking page, which writes `deposit`
+  // as the amount it REQUESTED at checkout, paid or not (BH-95080626: deposit
+  // = price, guest never paid). Only Beds24's own payment lines count — a
+  // successful gateway payment adds one (see paymentsReceived).
+  if (mapChannel(b.apiSource, b.referer, b.comments ?? "") === "Google") {
+    const paid = b.paymentsReceived ?? 0;
+    if (paid >= price && price > 0) return { paymentStatus: "Paid", amountPaid: paid };
+    if (paid > 0) return { paymentStatus: "Partially Paid", amountPaid: paid };
+    return { paymentStatus: "Unpaid", amountPaid: 0 };
+  }
+
   // OTA pre-paid: full amount collected by the channel
   if (b.comments?.includes("PRE-PAID")) return { paymentStatus: "Paid", amountPaid: price };
   // Airbnb: payout handled by Airbnb
@@ -206,6 +217,8 @@ export interface Beds24Booking {
   apiReference?: string;   // channel's own reference; may carry the rate-plan name (rate detection signal)
   apiMessage?: string;     // channel's own booking blurb; Booking.com puts the cancellation-policy clause here
   infoItems?: Array<Record<string, unknown>>; // channel key/value extras (rate plan, meal plan, …) — requires includeInfoItems=true
+  invoiceItems?: Array<{ type?: string; amount?: number }>; // "Charges and Payments" — requires includeInvoiceItems=true; never cached (see compactInvoiceItems)
+  paymentsReceived?: number; // sum of the "payment" invoice lines, set by compactInvoiceItems; absent on bookings fetched without invoice items
   firstName: string;
   lastName: string;
   email: string;
@@ -709,6 +722,22 @@ const ALL_BOOKING_STATUSES = ['confirmed', 'new', 'request', 'cancelled', 'black
  * Belt-and-braces: cap iterations at 200 pages so a buggy response
  * (nextPageExists=true forever) can't lock the function up.
  */
+/**
+ * Replace a booking's invoice items with `paymentsReceived`: the sum of its
+ * `type: "payment"` lines (manual entries and gateway payments alike; a
+ * refund entered as a negative payment nets off). The arrays themselves are
+ * dropped because the whole map is cached in Redis, and at ~300 bytes per
+ * booking they would grow the ~1.2 MB cache by roughly a fifth.
+ */
+export function compactInvoiceItems(b: Beds24Booking): Beds24Booking {
+  if (!Array.isArray(b.invoiceItems)) return b;
+  const { invoiceItems, ...rest } = b;
+  const paid = invoiceItems
+    .filter((i) => i.type === "payment")
+    .reduce((s, i) => s + (Number(i.amount) || 0), 0);
+  return { ...rest, paymentsReceived: Math.round(paid * 100) / 100 };
+}
+
 async function paginateBookings(
   token: string,
   params: URLSearchParams,
@@ -718,6 +747,9 @@ async function paginateBookings(
   // rate-type detector has a signal beyond rateDescription. Harmless if Beds24
   // ignores the param — the array simply stays absent.
   params.set("includeInfoItems", "true");
+  // Invoice items carry Beds24's own payment record, which derivePayment needs
+  // for Google bookings. Folded into one number per booking before caching.
+  params.set("includeInvoiceItems", "true");
   const MAX_PAGES = 200; // defensive — Beds24's largest plausible page count for our scale
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     if (page > 1) params.set("page", String(page));
@@ -733,7 +765,7 @@ async function paginateBookings(
     }
     const json = await res.json();
     const data: Beds24Booking[] = Array.isArray(json) ? json : (json.data ?? []);
-    fetched.push(...data);
+    fetched.push(...data.map(compactInvoiceItems));
 
     // Beds24 wraps paginated responses in { pages, data, ... }. A bare-array
     // response is single-page by definition (no wrapper, no next-page flag).
