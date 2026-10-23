@@ -45,9 +45,22 @@ async function triggerAutoReplyPoll(): Promise<void> {
 /**
  * Side-effect on GET /api/messages: scan guest messages for Booking.com
  * "I need an invoice" auto-templates and persist new ones as pending
- * InvoiceRequest rows in Redis. Dedup is by beds24MessageId so re-fetches
- * never store duplicates. Anything missing fields is still stored — the
- * operator fills the gaps when accepting.
+ * InvoiceRequest rows. Anything missing fields is still stored — the operator
+ * fills the gaps when accepting.
+ *
+ * This is the LEGACY detector, and it now only covers bookings the multi-turn
+ * chat flow never picked up. Dedup by beds24MessageId alone is not enough:
+ * an invoice conversation runs across several messages, the flow creates ONE
+ * request from the first and merges the rest into it, so every other message
+ * still looks "new" here. Opening the drawer then minted a fresh `pending` row
+ * per message — BH-95025203 collected two on 2026-10-23 for a booking that was
+ * already auto-completed and queued, each offering an Accept that would clobber
+ * invoiceData and append a duplicate Send-invoice task.
+ *
+ * So: if the booking already has a live (non-rejected) request, the flow owns
+ * it and this detector stays out. `rejected` is excluded deliberately — the
+ * operator dismissed that one, and a genuinely new request afterwards should
+ * still surface.
  */
 async function detectAndStoreInvoiceRequests(
   bookingId: number,
@@ -59,6 +72,12 @@ async function detectAndStoreInvoiceRequests(
   if (guestMessages.length === 0) return;
 
   const existing = await readAllInvoiceRequests();
+  const reservationNumber = `BH-${bookingId}`;
+  const alreadyHandled = existing.some(
+    (r) => r.reservationNumber === reservationNumber && r.status !== 'rejected',
+  );
+  if (alreadyHandled) return;
+
   const knownIds = new Set(existing.map((r) => r.beds24MessageId));
   const newOnes: InvoiceRequest[] = [];
   for (const m of guestMessages) {
@@ -66,7 +85,7 @@ async function detectAndStoreInvoiceRequests(
     const parsed = parseInvoiceRequest(m.message);
     newOnes.push({
       id: `ir_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      reservationNumber: `BH-${bookingId}`,
+      reservationNumber,
       beds24MessageId: m.id,
       rawMessage: m.message,
       companyName: parsed.companyName,
