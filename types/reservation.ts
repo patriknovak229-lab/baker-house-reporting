@@ -327,6 +327,19 @@ export interface StayLink {
   linkedBy: string;
 }
 
+/**
+ * The guest's answer to "are you coming by car?" (Beds24 auto action right after
+ * booking). 'no-car' marks the stay's garage space as spare in the parking grid —
+ * the guest keeps it, it's just known to be empty.
+ */
+export interface ParkingUse {
+  status: "car" | "no-car";
+  /** Licence plate as the guest wrote it, upper-cased. Several cars → comma-separated. */
+  plate?: string;
+  source: "guest" | "operator";
+  updatedAt: string; // ISO
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -533,6 +546,9 @@ export interface Reservation {
   splitPayments?: SplitPayment[]; // scheduled future payments (cron-emailed when sendDate ≤ today)
   vouchers?: Voucher[]; // discount vouchers linked to this reservation
   parkingOverride?: string; // undefined = auto rules, "none" = no parking, "152"/"153"/etc = manual space
+  /** Is the guest actually bringing a car? From their reply to the post-booking
+   *  question (utils/guestContact) or set by the operator. undefined/null = not answered. */
+  parkingUse?: ParkingUse | null;
   invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
   /**
    * Split invoices — one booking billed to several parties (see InvoiceSplit).

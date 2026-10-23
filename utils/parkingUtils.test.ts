@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeParking, getFreeSpaces } from "./parkingUtils";
+import { computeParking, getFreeSpaces, getSpareSpaces } from "./parkingUtils";
 import type { Reservation } from "@/types/reservation";
 
 /**
@@ -113,5 +113,47 @@ describe("getFreeSpaces", () => {
     expect(getFreeSpaces(result, "2026-11-10", "2026-11-17")).not.toContain("15");
     // …except from that booking's own picker.
     expect(getFreeSpaces(result, "2026-11-10", "2026-11-17", "BH-1000")).toContain("15");
+  });
+});
+
+describe("guest not bringing a car (parkingUse no-car)", () => {
+  const noCar = { status: "no-car" as const, source: "guest" as const, updatedAt: "2026-10-23T12:00:00Z" };
+
+  it("keeps the space on the stay but marks it spare", () => {
+    const { byReservation, grid } = computeParking([res({ parkingUse: noCar })]);
+    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", spare: true });
+    expect(grid.get("15")!.get("2026-11-10")).toMatchObject({ reservationNumber: "BH-1000", spare: true });
+  });
+
+  it("offers the spare space to other bookings, labelled as spare", () => {
+    const result = computeParking([res({ parkingUse: noCar })]);
+    expect(getFreeSpaces(result, "2026-11-12", "2026-11-14", "BH-2000")).toContain("15");
+    expect(getSpareSpaces(result, "2026-11-12", "2026-11-14", "BH-2000")).toEqual(["15"]);
+    // A genuinely empty space is free but not "spare".
+    expect(getSpareSpaces(result, "2026-11-12", "2026-11-14", "BH-2000")).not.toContain("16");
+  });
+
+  it("lending it out is not a conflict", () => {
+    const owner = res({ parkingUse: noCar });
+    const borrower = res({ reservationNumber: "BH-2000", room: "K.201", parkingOverride: "15", checkInDate: "2026-11-12", checkOutDate: "2026-11-14" });
+    const { byReservation } = computeParking([owner, borrower]);
+    expect(byReservation.get("BH-2000")).toEqual({ space: "15", type: "manual" });
+    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", spare: true, lentTo: "BH-2000" });
+  });
+
+  it("the nights it isn't lent still show as spare", () => {
+    const owner = res({ parkingUse: noCar });
+    const borrower = res({ reservationNumber: "BH-2000", room: "K.201", parkingOverride: "15", checkInDate: "2026-11-12", checkOutDate: "2026-11-14" });
+    const { grid } = computeParking([owner, borrower]);
+    expect(grid.get("15")!.get("2026-11-12")?.reservationNumber).toBe("BH-2000");
+    expect(grid.get("15")!.get("2026-11-15")).toMatchObject({ reservationNumber: "BH-1000", spare: true });
+  });
+
+  it("carries the plate of a guest who is coming by car", () => {
+    const { grid } = computeParking([
+      res({ parkingUse: { status: "car", plate: "M-AB 123", source: "guest", updatedAt: "x" } }),
+    ]);
+    expect(grid.get("15")!.get("2026-11-10")).toMatchObject({ plate: "M-AB 123" });
+    expect(grid.get("15")!.get("2026-11-10")?.spare).toBeUndefined();
   });
 });

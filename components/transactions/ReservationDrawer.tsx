@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import QRCodeLib from "qrcode";
 import PaymentLinkModal from "./PaymentLinkModal";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, InvoiceSplit, RateType, StayShortening } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, InvoiceSplit, RateType, StayShortening, ParkingUse } from "@/types/reservation";
 import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
@@ -27,7 +27,7 @@ import {
   bookingGraceStatus,
 } from "@/utils/cancellationPolicy";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
-import { computeParking, getFreeSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
+import { computeParking, getFreeSpaces, getSpareSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
 import { PHYSICAL_ROOMS } from "@/utils/roomAllocation";
 import { occupiersByRoom, unallocatedOverlapping } from "@/utils/moveTargets";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
@@ -1689,6 +1689,69 @@ function PhoneEditField({
         >
           ✕
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Coming by car?" — filled automatically from the guest's reply to the
+ * post-booking question (utils/guestContactService), or set here by hand.
+ * "No car" marks the stay's space as spare in the parking grid.
+ */
+function ParkingUseField({
+  value,
+  onSave,
+}: {
+  value: ParkingUse | null | undefined;
+  onSave: (next: ParkingUse | null) => void;
+}) {
+  // The parent keys this component on the stored plate, so a new value resets the draft.
+  const [plate, setPlate] = useState(value?.plate ?? "");
+
+  const status = value?.status ?? "unknown";
+  const normalized = (p: string) => p.replace(/\s+/g, " ").trim().toUpperCase();
+  const save = (next: "unknown" | "car" | "no-car", p: string) => {
+    if (next === "unknown") return onSave(null);
+    const cleaned = normalized(p);
+    onSave({
+      status: next,
+      ...(next === "car" && cleaned ? { plate: cleaned } : {}),
+      source: "operator",
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 mb-0.5">
+        Car
+        {value?.source === "guest" && ` · from the guest's reply, ${formatDate(value.updatedAt.slice(0, 10))}`}
+      </p>
+      <div className="flex items-center gap-2">
+        <select
+          value={status}
+          onChange={(e) => save(e.target.value as "unknown" | "car" | "no-car", plate)}
+          className="border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+        >
+          <option value="unknown">Not answered</option>
+          <option value="car">Coming by car</option>
+          <option value="no-car">No car</option>
+        </select>
+        {status === "car" && (
+          <input
+            value={plate}
+            onChange={(e) => setPlate(e.target.value)}
+            onBlur={() => {
+              if (normalized(plate) !== (value?.plate ?? "")) save("car", plate);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            placeholder="Licence plate"
+            className="flex-1 min-w-0 border border-gray-200 rounded-md px-2 py-1.5 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          />
+        )}
       </div>
     </div>
   );
@@ -3457,6 +3520,10 @@ export default function ReservationDrawer({
   const freeSpaces = reservation
     ? getFreeSpaces(parkingResult, reservation.checkInDate, reservation.checkOutDate, reservation.reservationNumber)
     : [];
+  // Free only because their guest isn't bringing a car — labelled in the picker.
+  const spareSpaces = reservation
+    ? getSpareSpaces(parkingResult, reservation.checkInDate, reservation.checkOutDate, reservation.reservationNumber)
+    : [];
 
   useEffect(() => {
     if (reservation) {
@@ -4749,10 +4816,24 @@ export default function ReservationDrawer({
                   />
                 )}
               </div>
-              <PhoneEditField
-                value={reservation.phone}
-                onSave={(phone) => onUpdate({ ...reservation, phone })}
-              />
+              <div>
+                <PhoneEditField
+                  value={reservation.phone}
+                  onSave={(phone) => onUpdate({ ...reservation, phone })}
+                />
+                {/* Booking.com stopped sending phone numbers (29 Sep 2026). The
+                    guest is asked in the chat right after booking; a reply fills
+                    this in automatically. */}
+                {!reservation.phone &&
+                  reservation.channel === "Booking.com" &&
+                  !reservation.isCancelled &&
+                  reservation.checkOutDate >= pragueToday() && (
+                    <p className="mt-0.5 text-[11px] leading-snug text-amber-700">
+                      Not shared by Booking.com. Asked in the chat after booking — or copy it from the extranet
+                      (&ldquo;Show phone number&rdquo;).
+                    </p>
+                  )}
+              </div>
               <ReadOnlyField label="Guests" value={String(reservation.numberOfGuests)} />
               {reservation.nationality && (
                 <ReadOnlyField
@@ -4795,6 +4876,12 @@ export default function ReservationDrawer({
                 </div>
               ) : (
                 <p className="text-sm text-gray-400">No parking assigned</p>
+              )}
+              {myParking?.spare && (
+                <p className="text-xs text-emerald-700">
+                  Spare — the guest isn&apos;t bringing a car
+                  {myParking.lentTo ? ` · lent to ${myParking.lentTo}` : ""}
+                </p>
               )}
 
               {/* Conflict warning */}
@@ -4846,13 +4933,19 @@ export default function ReservationDrawer({
                 {freeSpaces.map((space) => {
                   const ps = PARKING_SPACES.find((p) => p.space === space);
                   const label = ps?.permanentRoom
-                    ? `Space ${space} (${ps.permanentRoom})`
+                    ? `Space ${space} (${ps.permanentRoom}${spareSpaces.includes(space) ? " · spare, guest has no car" : ""})`
                     : `Space ${space} (hot)`;
                   return (
                     <option key={space} value={space}>{label}</option>
                   );
                 })}
               </select>
+
+              <ParkingUseField
+                key={`${reservation.reservationNumber}:${reservation.parkingUse?.plate ?? ""}`}
+                value={reservation.parkingUse}
+                onSave={(next) => onUpdate({ ...reservation!, parkingUse: next })}
+              />
             </div>
           </DrawerSection>
 

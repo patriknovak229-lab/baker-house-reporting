@@ -86,6 +86,7 @@ import {
 import { autoRatePerks, effectiveRatePerks, type PerkOverrides } from '@/utils/ratePerks';
 import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
 import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
+import { runContactPass, tryCaptureContactReply } from '@/utils/guestContactService';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
 import { escapeHtml, invoiceAlertChatId, sendTelegram as sendTelegramTo } from '@/utils/telegram';
 import {
@@ -381,6 +382,17 @@ export async function POST(req: NextRequest) {
     }
   });
 
+  // ── Post-booking contact question (phone / car / plate) ──
+  // Catch-up capture, the one reminder, no-phone alerts, drawer phones → Beds24.
+  // Self-throttled to one pass per 15 min (Redis lock), so it can ride every fire.
+  after(async () => {
+    try {
+      await runContactPass(redis);
+    } catch (err) {
+      console.error('[beds24 webhook] contact pass failed:', err);
+    }
+  });
+
   // ── Auto-reply debounce ──
   // The auto-reply pipeline is expensive (Claude Haiku call per message,
   // Beds24 fetch, 10s natural-feel sleep). Collapsing SYNC_ROOM bursts
@@ -500,6 +512,23 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
       if (urgency.urgent) await notifyUrgentMessage(redis, m, urgency);
     } catch (err) {
       console.error(`[urgent] check failed for msg ${m.id}:`, err);
+    }
+
+    // An answer to the post-booking contact question? Whatever it finds is
+    // saved; true = the message was only that answer and the guest has been
+    // thanked, so nothing else needs to reply to it.
+    try {
+      const contactHandled = await tryCaptureContactReply({
+        redis,
+        bookingId: m.bookingId,
+        messageId: m.id,
+        messageText: m.message,
+        language: (await detectAutoReplyCategory(m.message)).language,
+        urgent: urgency.urgent,
+      });
+      if (contactHandled) continue;
+    } catch (err) {
+      console.error(`[guest-contact] capture failed for msg ${m.id}:`, err);
     }
 
     try {

@@ -25,8 +25,18 @@ export async function POST(req: NextRequest) {
   // Read → modify → write (whole map)
   const state = await readAllReservationOverrides<unknown>();
 
+  // `parkingUse` can be written server-side (a guest's chat reply, see
+  // utils/guestContactService) after the drawer loaded. The client sends the key
+  // whenever it knows a value — null when the operator cleared it — so an ABSENT
+  // key means "this tab never saw it": keep the stored answer instead of wiping it.
+  const stored = state[reservationNumber] as Record<string, unknown> | undefined;
+  const keepParkingUse =
+    stored?.parkingUse != null && (fields == null || !('parkingUse' in fields));
+
   if (fields && Object.keys(fields).length > 0) {
-    state[reservationNumber] = fields;
+    state[reservationNumber] = keepParkingUse ? { ...fields, parkingUse: stored!.parkingUse } : fields;
+  } else if (keepParkingUse) {
+    state[reservationNumber] = { parkingUse: stored!.parkingUse };
   } else {
     delete state[reservationNumber];
   }

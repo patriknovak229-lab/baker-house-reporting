@@ -1158,15 +1158,26 @@ export default function OccupancyCalendar({
                           ? reservations.find((r) => r.reservationNumber === cell!.reservationNumber)
                           : null;
                         const roomStr = occupantRes ? formatRoomForTooltip(occupantRes.room) : '';
+                        // Spare = held by a guest who said they're not coming by car.
+                        const spare = occupied && cell!.spare === true;
+                        const title = !occupied
+                          ? `P${ps.space} — free`
+                          : `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}${
+                              spare ? ' — spare, guest has no car' : cell!.plate ? ` — ${cell!.plate}` : ''
+                            }`;
                         return (
                           <div key={date} className="px-px flex items-center">
                             <div
-                              className={`w-full flex items-center justify-center rounded ${occupied ? "bg-rose-200" : "bg-emerald-50"} ${isToday ? 'ring-1 ring-indigo-300 ring-inset' : ''}`}
+                              className={`w-full flex items-center justify-center rounded ${
+                                spare ? "bg-emerald-50 border border-dashed border-emerald-400" : occupied ? "bg-rose-200" : "bg-emerald-50"
+                              } ${isToday ? 'ring-1 ring-indigo-300 ring-inset' : ''}`}
                               style={{ height: BAR_H }}
-                              title={occupied ? `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}` : `P${ps.space} — free`}
+                              title={title}
                             >
                               {occupied && (
-                                <span className="text-[9px] font-bold text-rose-800 leading-none select-none">{cell!.initials}</span>
+                                <span className={`text-[9px] font-bold leading-none select-none ${spare ? "text-emerald-700" : "text-rose-800"}`}>
+                                  {cell!.initials}
+                                </span>
                               )}
                             </div>
                           </div>

@@ -126,9 +126,9 @@ function verdictFor(
   cleanRate: number | null,
   dismissRate: number | null,
 ): CategoryVerdict {
-  // Invoice is handled end-to-end by the deterministic flow, not the review
-  // queue — its decision counts aren't a graduation signal.
-  if (category === 'invoice-request') return 'automated';
+  // Invoice and contact details (phone / car answers) are handled end-to-end by
+  // deterministic flows, not the review queue — their counts aren't a graduation signal.
+  if (category === 'invoice-request' || category === 'contact-details') return 'automated';
   if (decided < MIN_DECIDED_SAMPLE) return 'insufficient';
   if (cleanRate === null || dismissRate === null) return 'insufficient';
   // "other" is a heterogeneous catch-all — never a safe auto-send target no

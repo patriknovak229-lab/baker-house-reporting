@@ -69,3 +69,58 @@ export async function fetchRecentConversation(
       ...(Number.isFinite(Number(m.id)) && m.id != null ? { id: Number(m.id) } : {}),
     }));
 }
+
+/**
+ * Every guest/host message across the property from the last `maxAgeDays`
+ * days, grouped by booking id and sorted oldest first. One paged call instead
+ * of one per booking — used by the contact-details pass (utils/guestContactService).
+ * Returns an empty map on any failure.
+ */
+export async function fetchRecentMessagesByBooking(
+  maxAgeDays: number,
+  maxPages = 5,
+): Promise<Map<number, ConversationMessage[]>> {
+  const out = new Map<number, ConversationMessage[]>();
+  let token: string;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    console.error('[beds24Conversation] token fetch failed:', err instanceof Error ? err.message : err);
+    return out;
+  }
+
+  let url: string | null = `${BEDS24_API_BASE}/bookings/messages?${new URLSearchParams({ maxAge: String(maxAgeDays) })}`;
+  for (let page = 0; url && page < maxPages; page++) {
+    let json: unknown;
+    try {
+      const res: Response = await fetch(url, { headers: { token }, cache: 'no-store' });
+      if (!res.ok) break;
+      json = await res.json();
+    } catch (err) {
+      console.error('[beds24Conversation] bulk fetch failed:', err instanceof Error ? err.message : err);
+      break;
+    }
+    type RawMessage = { id?: number | string; bookingId?: number | string; source?: string; message?: string; time?: string };
+    const body = json as { data?: RawMessage[]; pages?: { nextPageExists?: boolean; nextPageLink?: string | null } };
+    const raw: RawMessage[] = Array.isArray(json) ? (json as RawMessage[]) : Array.isArray(body?.data) ? body.data : [];
+    for (const m of raw) {
+      const bookingId = Number(m.bookingId);
+      if (!Number.isFinite(bookingId)) continue;
+      if (m.source !== 'guest' && m.source !== 'host') continue;
+      if (typeof m.message !== 'string' || !m.message.trim()) continue;
+      const list = out.get(bookingId) ?? [];
+      list.push({
+        role: m.source,
+        text: m.message.trim(),
+        time: m.time ?? '',
+        ...(Number.isFinite(Number(m.id)) && m.id != null ? { id: Number(m.id) } : {}),
+      });
+      out.set(bookingId, list);
+    }
+    url = body?.pages?.nextPageExists && body.pages.nextPageLink ? body.pages.nextPageLink : null;
+  }
+  for (const list of out.values()) {
+    list.sort((a, b) => new Date(a.time || 0).getTime() - new Date(b.time || 0).getTime());
+  }
+  return out;
+}

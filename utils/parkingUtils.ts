@@ -36,12 +36,21 @@ export type ParkingAssignment = {
   space: string;
   type: "auto" | "manual";
   conflict?: string; // conflict description if auto-assign space was taken
+  /** The guest said they're not coming by car (Reservation.parkingUse) — the
+   *  space is theirs but empty, so it can be lent out. */
+  spare?: boolean;
+  /** Spare space currently lent to another reservation (no conflict raised). */
+  lentTo?: string;
 };
 
 /** space → date → occupant info (or null if free) */
 export type ParkingGridCell = {
   reservationNumber: string;
   initials: string;
+  /** Held by a guest who isn't bringing a car — offerable to someone else. */
+  spare?: boolean;
+  /** Licence plate of the car using it, when the guest gave one. */
+  plate?: string;
 } | null;
 
 export type ParkingResult = {
@@ -74,6 +83,19 @@ function dateRange(checkIn: string, checkOut: string): string[] {
 
 function getInitials(r: Reservation): string {
   return [r.firstName?.[0], r.lastName?.[0]].filter(Boolean).join("").toUpperCase();
+}
+
+function isNoCar(r: Reservation): boolean {
+  return r.parkingUse?.status === "no-car";
+}
+
+function occupantCell(r: Reservation): NonNullable<ParkingGridCell> {
+  return {
+    reservationNumber: r.reservationNumber,
+    initials: getInitials(r),
+    ...(isNoCar(r) ? { spare: true } : {}),
+    ...(r.parkingUse?.status === "car" && r.parkingUse.plate ? { plate: r.parkingUse.plate } : {}),
+  };
 }
 
 /** Check if room matches reservation (accounting for linkedRooms) */
@@ -119,10 +141,14 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     const spaceGrid = grid.get(override);
     if (!spaceGrid) continue; // invalid space — skip
 
-    byReservation.set(r.reservationNumber, { space: override, type: "manual" });
-    const initials = getInitials(r);
+    byReservation.set(r.reservationNumber, {
+      space: override,
+      type: "manual",
+      ...(isNoCar(r) ? { spare: true } : {}),
+    });
+    const cell = occupantCell(r);
     for (const d of dates) {
-      spaceGrid.set(d, { reservationNumber: r.reservationNumber, initials });
+      spaceGrid.set(d, cell);
     }
   }
 
@@ -138,7 +164,7 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     if (permSpaces.length === 0) continue; // no permanent space — skip (hot space needs manual)
 
     const dates = dateRange(r.checkInDate, r.checkOutDate);
-    const initials = getInitials(r);
+    const cell = occupantCell(r);
 
     for (const space of permSpaces) {
       const spaceGrid = grid.get(space)!;
@@ -146,6 +172,20 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
       const conflict = dates.find((d) => spaceGrid.get(d) != null);
       if (conflict) {
         const occupant = spaceGrid.get(conflict)!;
+        if (isNoCar(r)) {
+          // No car → the space was lent out on purpose (pass 1 put someone there).
+          // The nights it isn't lent still show as spare.
+          byReservation.set(r.reservationNumber, {
+            space,
+            type: "auto",
+            spare: true,
+            lentTo: occupant.reservationNumber,
+          });
+          for (const d of dates) {
+            if (spaceGrid.get(d) == null) spaceGrid.set(d, cell);
+          }
+          continue;
+        }
         byReservation.set(r.reservationNumber, {
           space,
           type: "auto",
@@ -153,9 +193,9 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
         });
       } else {
         // Auto-assign
-        byReservation.set(r.reservationNumber, { space, type: "auto" });
+        byReservation.set(r.reservationNumber, { space, type: "auto", ...(isNoCar(r) ? { spare: true } : {}) });
         for (const d of dates) {
-          spaceGrid.set(d, { reservationNumber: r.reservationNumber, initials });
+          spaceGrid.set(d, cell);
         }
       }
     }
@@ -166,7 +206,9 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
 
 // ─── Free spaces helper ──────────────────────────────────────────────────────
 
-/** Returns spaces that are free for every date in [checkIn, checkOut) */
+/** Returns spaces that are free for every date in [checkIn, checkOut).
+ *  A space held by a guest who isn't bringing a car counts as free here; use
+ *  getSpareSpaces to tell those apart in the UI. */
 export function getFreeSpaces(
   parkingResult: ParkingResult,
   checkIn: string,
@@ -180,10 +222,27 @@ export function getFreeSpaces(
     const spaceGrid = parkingResult.grid.get(ps.space)!;
     const occupied = dates.some((d) => {
       const cell = spaceGrid.get(d);
-      return cell != null && cell.reservationNumber !== excludeReservation;
+      return cell != null && cell.reservationNumber !== excludeReservation && !cell.spare;
     });
     if (!occupied) free.push(ps.space);
   }
 
   return free;
+}
+
+/** The free spaces (as getFreeSpaces) that are only free because their guest has no car. */
+export function getSpareSpaces(
+  parkingResult: ParkingResult,
+  checkIn: string,
+  checkOut: string,
+  excludeReservation?: string,
+): string[] {
+  const dates = dateRange(checkIn, checkOut);
+  return getFreeSpaces(parkingResult, checkIn, checkOut, excludeReservation).filter((space) => {
+    const spaceGrid = parkingResult.grid.get(space)!;
+    return dates.some((d) => {
+      const cell = spaceGrid.get(d);
+      return cell != null && cell.reservationNumber !== excludeReservation && cell.spare;
+    });
+  });
 }
