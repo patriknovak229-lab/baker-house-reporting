@@ -181,6 +181,7 @@ export const ALLOC_CTE = sql`
   alloc AS (
     SELECT
       b.reservation_number,
+      b.source,
       b.channel,
       b.rate_type,
       b.nationality,
@@ -234,7 +235,9 @@ export const ALLOC_CTE = sql`
       SELECT b.room, 1.0::numeric
       WHERE b.linked_rooms IS NULL OR cardinality(b.linked_rooms) <= 1
     ) r
-    WHERE b.source = 'beds24-booking'
+    /* Pre-Beds24 stays imported from the channels' exports count as bookings
+       too (revenue + commission only — see utils/legacyReservations.ts). */
+    WHERE b.source IN ('beds24-booking', 'legacy-import')
       AND b.check_in_date IS NOT NULL
       AND b.check_out_date IS NOT NULL
       AND ${TEST_BOOKING_PREDICATE}

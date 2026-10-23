@@ -15,6 +15,10 @@ interface MetaRow {
   blackouts: number;
   excluded_tests: number;
   unallocated: number;
+  legacy: number;
+  legacy_unallocated: number;
+  legacy_from: string | null;
+  legacy_to: string | null;
   last_synced_at: string | null;
   first_check_in: string | null;
   last_check_in: string | null;
@@ -37,14 +41,22 @@ export async function readAnalyticsMeta(todayIso: string): Promise<AnalyticsMeta
     query<MetaRow>(sql`
       SELECT
         COUNT(*) FILTER (
-          WHERE source = 'beds24-booking' AND is_blackout = false AND ${TEST_BOOKING_PREDICATE}
+          WHERE source IN ('beds24-booking', 'legacy-import') AND is_blackout = false AND ${TEST_BOOKING_PREDICATE}
         )::int                                                                          AS bookings,
         COUNT(*) FILTER (WHERE is_blackout = true OR source = 'inventory-override')::int AS blackouts,
         COUNT(*) FILTER (WHERE NOT (${TEST_BOOKING_PREDICATE}))::int                    AS excluded_tests,
         COUNT(*) FILTER (
-          WHERE is_unallocated_vr = true AND is_cancelled = false AND ${TEST_BOOKING_PREDICATE}
+          WHERE source = 'beds24-booking' AND is_unallocated_vr = true AND is_cancelled = false AND ${TEST_BOOKING_PREDICATE}
         )::int                                                                          AS unallocated,
-        to_char(MAX(synced_at), 'YYYY-MM-DD"T"HH24:MI:SSOF')                            AS last_synced_at,
+        COUNT(*) FILTER (WHERE source = 'legacy-import')::int                           AS legacy,
+        COUNT(*) FILTER (
+          WHERE source = 'legacy-import' AND is_unallocated_vr = true AND is_cancelled = false
+        )::int                                                                          AS legacy_unallocated,
+        MIN(check_in_date)  FILTER (WHERE source = 'legacy-import')::text               AS legacy_from,
+        MAX(check_out_date) FILTER (WHERE source = 'legacy-import')::text               AS legacy_to,
+        /* Freshness is a property of the Beds24 sync; a one-off legacy import
+           must not make a stalled archive look current. */
+        to_char(MAX(synced_at) FILTER (WHERE source <> 'legacy-import'), 'YYYY-MM-DD"T"HH24:MI:SSOF') AS last_synced_at,
         MIN(check_in_date) FILTER (WHERE ${TEST_BOOKING_PREDICATE})::text                AS first_check_in,
         MAX(check_in_date) FILTER (WHERE ${TEST_BOOKING_PREDICATE})::text                AS last_check_in
       FROM bookings_mirror b
@@ -52,7 +64,7 @@ export async function readAnalyticsMeta(todayIso: string): Promise<AnalyticsMeta
     query<ChannelRow>(sql`
       SELECT DISTINCT channel
       FROM bookings_mirror
-      WHERE source = 'beds24-booking'
+      WHERE source IN ('beds24-booking', 'legacy-import')
       ORDER BY channel
     `),
   ]);
@@ -89,6 +101,13 @@ export async function readAnalyticsMeta(todayIso: string): Promise<AnalyticsMeta
   if (excludedTests > 0) {
     caveats.push(
       `${excludedTests} development test booking${excludedTests === 1 ? '' : 's'} (guest named "Test…") are excluded from every figure. Left in, they would put the direct-channel cancellation rate above 80%.`,
+    );
+  }
+  const legacy = n(row?.legacy);
+  if (legacy > 0 && row?.legacy_from && row?.legacy_to) {
+    const legacyUnallocated = n(row.legacy_unallocated);
+    caveats.push(
+      `${legacy} reservations from before Beds24 (${row.legacy_from} – ${row.legacy_to}) were imported from the Booking.com and Airbnb exports. They carry revenue and commission only: no cleaning, laundry or other operating costs were logged then, so profit for that period is overstated and those stays are left out of the per-booking cost views. Airbnb cancellations from that period are missing${legacyUnallocated > 0 ? `, and ${legacyUnallocated} Booking.com studio stay${legacyUnallocated === 1 ? '' : 's'} don't say which studio (portfolio totals only)` : ''}.`,
     );
   }
   const unallocated = n(row?.unallocated);

@@ -203,6 +203,7 @@ export async function summarizeBookingsMirrorPg(): Promise<
   const summary = {
     'beds24-booking': blank(),
     'inventory-override': blank(),
+    'legacy-import': blank(),
   } satisfies Record<BookingsMirrorSource, ReturnType<typeof blank>>;
 
   for (const r of rows) {

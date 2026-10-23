@@ -112,7 +112,8 @@ async function readKpis(scope: AnalyticsScope): Promise<CoreKpis> {
       (SELECT COUNT(*)::int FROM available)                                          AS available_nights,
       (SELECT COUNT(*)::int FROM booking_agg)                                        AS bookings,
       (SELECT AVG(span_nights)::float8      FROM booking_agg)                        AS avg_los,
-      (SELECT AVG(guests)::float8           FROM booking_agg)                        AS avg_party,
+      /* 0 = party size unknown (Airbnb legacy imports) — not a party of zero. */
+      (SELECT AVG(NULLIF(guests, 0))::float8 FROM booking_agg)                       AS avg_party,
       (SELECT AVG(lead_days)::float8        FROM booking_agg WHERE lead_days IS NOT NULL) AS avg_lead,
       (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY lead_days)::float8
          FROM booking_agg WHERE lead_days IS NOT NULL)                               AS median_lead,

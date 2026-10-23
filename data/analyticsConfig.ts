@@ -21,11 +21,16 @@ import type { DemandEvent } from '@/utils/analyticsTypes';
  * booking. Format: room name → YYYY-MM-DD (first sellable night).
  *
  * Current defaults, derived from the archive, are roughly:
- *   K.202 / K.203 → 2026-02-06   K.201 → 2026-03-12
+ *   K.202 / K.203 → 2026-02-06 (Beds24; overridden below)   K.201 → 2026-03-12
  *   K.102 / K.103 / K.106 → 2026-05-22   O.308 → 2026-06-12
  */
 export const ROOM_ONLINE_OVERRIDES: Record<string, string> = {
   // 'K.102': '2026-05-15',
+  // The Deluxe studios traded on Booking.com / Airbnb before Beds24 (legacy
+  // import). Friends' opening stays from 27 Nov 2025 were left out of that
+  // import, so the sellable period starts with the first genuine guest.
+  'K.202': '2025-12-04',
+  'K.203': '2025-12-04',
 };
 
 /**

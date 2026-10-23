@@ -42,7 +42,15 @@ export type BookingsMirrorSource =
   /** Derived from a Beds24 /bookings record (reservation_number `BH-<id>`). */
   | 'beds24-booking'
   /** Synthetic blackout row from the Beds24 inventory calendar (`OV-<room>-<from>-<to>`). */
-  | 'inventory-override';
+  | 'inventory-override'
+  /**
+   * A stay from BEFORE Beds24, imported once from a channel export
+   * (`LG-BCOM-<ref>` / `LG-ABNB-<code>`) by `scripts/import/legacy-reservations.ts`.
+   * Never written by a sync. Its `raw` is the export row, NOT a Beds24 booking —
+   * a re-projection through `mapToReservation` must skip this source.
+   * See utils/legacyReservations.ts.
+   */
+  | 'legacy-import';
 
 export const bookingsMirror = pgTable(
   'bookings_mirror',

@@ -262,6 +262,10 @@ async function readCheckoutBookings(scope: AnalyticsScope): Promise<CheckoutBook
     WHERE alloc.is_cancelled = false
       AND alloc.is_blackout  = false
       AND alloc.span_nights  > 0
+      /* Stays from before Beds24 never had a cleaning logged against them, so
+         letting them in would read as zero-cost turnovers and flatter every
+         per-booking cost figure. */
+      AND alloc.source <> 'legacy-import'
       AND alloc.check_out_date BETWEEN ${scope.from}::date AND ${scope.to}::date
       AND ${roomFilter(sql`alloc.room`, scope)}
       AND ${channelFilter(sql`alloc.channel`, scope)}
