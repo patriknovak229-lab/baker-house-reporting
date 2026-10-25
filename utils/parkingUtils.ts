@@ -49,6 +49,8 @@ export type ParkingGridCell = {
   initials: string;
   /** Held by a guest who isn't bringing a car — offerable to someone else. */
   spare?: boolean;
+  /** The guest hasn't said yet whether they're coming by car (no parkingUse). */
+  unanswered?: boolean;
   /** Licence plate of the car using it, when the guest gave one. */
   plate?: string;
 } | null;
@@ -94,6 +96,7 @@ function occupantCell(r: Reservation): NonNullable<ParkingGridCell> {
     reservationNumber: r.reservationNumber,
     initials: getInitials(r),
     ...(isNoCar(r) ? { spare: true } : {}),
+    ...(!r.parkingUse ? { unanswered: true } : {}),
     ...(r.parkingUse?.status === "car" && r.parkingUse.plate ? { plate: r.parkingUse.plate } : {}),
   };
 }

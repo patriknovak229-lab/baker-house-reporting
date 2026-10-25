@@ -1160,22 +1160,30 @@ export default function OccupancyCalendar({
                         const roomStr = occupantRes ? formatRoomForTooltip(occupantRes.room) : '';
                         // Spare = held by a guest who said they're not coming by car.
                         const spare = occupied && cell!.spare === true;
+                        // Unanswered = the guest hasn't said yet whether they're bringing a car.
+                        const unanswered = occupied && cell!.unanswered === true;
                         const title = !occupied
                           ? `P${ps.space} — free`
                           : `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}${
-                              spare ? ' — spare, guest has no car' : cell!.plate ? ` — ${cell!.plate}` : ''
+                              spare ? ' — spare, guest has no car'
+                                : unanswered ? ' — no answer yet about a car'
+                                : cell!.plate ? ` — ${cell!.plate}` : ''
                             }`;
                         return (
                           <div key={date} className="px-px flex items-center">
                             <div
                               className={`w-full flex items-center justify-center rounded ${
-                                spare ? "bg-emerald-50 border border-dashed border-emerald-400" : occupied ? "bg-rose-200" : "bg-emerald-50"
+                                spare ? "bg-emerald-50 border border-dashed border-emerald-400"
+                                  : unanswered ? "bg-yellow-200"
+                                  : occupied ? "bg-rose-200" : "bg-emerald-50"
                               } ${isToday ? 'ring-1 ring-indigo-300 ring-inset' : ''}`}
                               style={{ height: BAR_H }}
                               title={title}
                             >
                               {occupied && (
-                                <span className={`text-[9px] font-bold leading-none select-none ${spare ? "text-emerald-700" : "text-rose-800"}`}>
+                                <span className={`text-[9px] font-bold leading-none select-none ${
+                                  spare ? "text-emerald-700" : unanswered ? "text-yellow-800" : "text-rose-800"
+                                }`}>
                                   {cell!.initials}
                                 </span>
                               )}
@@ -1188,6 +1196,15 @@ export default function OccupancyCalendar({
                   </div>
                 );
               })}
+              <div style={{ display: 'grid', gridTemplateColumns: rowCols }} className="mt-1.5">
+                <div />
+                <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-wrap">
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-rose-200" />Coming by car</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-yellow-200" />No answer yet</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-dashed border-emerald-400" />No car (spare)</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-100" />Free</span>
+                </div>
+              </div>
             </div>
           )}
           </>

@@ -156,4 +156,21 @@ describe("guest not bringing a car (parkingUse no-car)", () => {
     expect(grid.get("15")!.get("2026-11-10")).toMatchObject({ plate: "M-AB 123" });
     expect(grid.get("15")!.get("2026-11-10")?.spare).toBeUndefined();
   });
+
+  it("marks a stay whose guest hasn't answered the car question", () => {
+    const { grid } = computeParking([res()]);
+    expect(grid.get("15")!.get("2026-11-10")).toMatchObject({ reservationNumber: "BH-1000", unanswered: true });
+  });
+
+  it("an answer either way clears the unanswered mark", () => {
+    const car = computeParking([res({ parkingUse: { status: "car", source: "guest", updatedAt: "x" } })]);
+    const none = computeParking([res({ parkingUse: noCar })]);
+    expect(car.grid.get("15")!.get("2026-11-10")?.unanswered).toBeUndefined();
+    expect(none.grid.get("15")!.get("2026-11-10")?.unanswered).toBeUndefined();
+  });
+
+  it("an unanswered stay still holds its space", () => {
+    const result = computeParking([res()]);
+    expect(getFreeSpaces(result, "2026-11-12", "2026-11-14", "BH-2000")).not.toContain("15");
+  });
 });
