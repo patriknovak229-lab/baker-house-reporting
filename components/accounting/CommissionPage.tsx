@@ -308,13 +308,17 @@ export default function CommissionPage() {
                 </span>
               </div>
 
-              {/* Reconciliation status — click to inspect the cleaning events */}
+              {/* Cleanings billed this month — click for the breakdown + log */}
               <button
                 onClick={() => setLogUnitId(c.unitId)}
-                title="View cleaning events for this month"
+                title="How this month's cleanings add up, and who each one was for"
                 className={`mt-1 mb-3 w-full flex items-center justify-between gap-2 text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${c.reconciles ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
               >
-                <span>{c.reconciles ? '✓ Reconciled with cleaning app' : `⚠ ${c.reconcileNote}`}</span>
+                <span>
+                  {c.reconciles
+                    ? `✓ ${c.cleaningBreakdown.billed} cleanings · reconciled`
+                    : `⚠ ${c.cleaningBreakdown.billed} cleanings · ${Math.abs(c.cleaningBreakdown.billed - c.cleaningBreakdown.total)} to check`}
+                </span>
                 <span className="opacity-60 underline underline-offset-2 whitespace-nowrap">view log</span>
               </button>
 
@@ -476,70 +480,133 @@ export default function CommissionPage() {
         )}
       </div>
 
-      {/* Cleaning-events drill-down */}
+      {/* Cleaning log: how the month's cleanings add up, then every one of them */}
       {logUnitId && costs && (() => {
         const unit = getCommissionUnit(logUnitId);
-        if (!unit) return null;
-        const events = cleaningEventsForUnit(unit, month, costs);
-        const withLaundry = events.filter((e) => e.hasLaundry).length;
-        const noLaundry = events.length - withLaundry;
+        const settlement = computed.find((c) => c.unitId === logUnitId);
+        if (!unit || !settlement) return null;
+        const b = settlement.cleaningBreakdown;
+        const events = cleaningEventsForUnit(unit, month, costs, reservations);
+        const billed = events.filter((e) => e.cleaning > 0);
+        const noLaundry = billed.filter((e) => !e.hasLaundry).length;
         const scope = unit.mode === 'urban-pool' ? 'Urban pool (K.102 + K.103 + K.106)' : unit.id;
+        const diff = b.billed - b.total;
+        // The user's mental model, in order; optional lines only when they apply.
+        const lines: { label: string; value: number; sign: '' | '+' | '−'; always?: boolean }[] = [
+          { label: 'Reservations this month', value: b.reservations, sign: '', always: true },
+          { label: 'Check out next month', value: b.checkoutNextMonth, sign: '−', always: true },
+          { label: "Last month's reservations checking out this month", value: b.carryIn, sign: '+', always: true },
+          { label: 'Extra cleanings', value: b.extra, sign: '+', always: true },
+          { label: 'Room moves (vacated unit cleaned)', value: b.roomMoves, sign: '+' },
+          { label: 'Guests who never arrived', value: b.nonArrivals, sign: '−' },
+          { label: 'Removed in cleaning app', value: b.removed, sign: '−' },
+        ];
+        const forCell = (e: (typeof events)[number]) => {
+          const who = e.reservationNumber ? (
+            <>
+              <span className="text-gray-700">{e.guest ?? e.reservationNumber}</span>
+              {e.guest && <span className="text-gray-400"> · {e.reservationNumber}</span>}
+            </>
+          ) : null;
+          switch (e.kind) {
+            case 'checkout': return who;
+            case 'carry-in': return <>{who} <span className="text-gray-400">· last month&apos;s stay</span></>;
+            case 'room-move': return <>{who} <span className="text-gray-400">· moved to {e.movedTo ?? 'another unit'}</span></>;
+            case 'extra': return <span className="text-violet-600">Extra cleaning</span>;
+            case 'removed': return <>{who} {who && <span className="text-gray-400">· </span>}<span className="text-gray-400">removed in cleaning app</span></>;
+            case 'missing': return <>{who} <span className="text-amber-700 font-medium">· no cleaning billed</span></>;
+            case 'unmatched': return <span className="text-amber-700 font-medium">⚠ No stay checks out here</span>;
+          }
+        };
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setLogUnitId(null)}>
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100">
                 <div>
-                  <h3 className="text-base font-semibold text-gray-900">Cleaning events — {monthLabel(month)}</h3>
+                  <h3 className="text-base font-semibold text-gray-900">Cleanings billed — {monthLabel(month)}</h3>
                   <p className="text-xs text-gray-500 mt-0.5">{scope}</p>
                 </div>
                 <button onClick={() => setLogUnitId(null)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
               </div>
 
-              <div className="flex gap-2 px-5 py-3 border-b border-gray-100 text-xs">
-                <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700 font-medium">{events.length} cleanings</span>
-                <span className="px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 font-medium">{withLaundry} with laundry</span>
-                <span className={`px-2 py-1 rounded-md font-medium ${noLaundry > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-400'}`}>{noLaundry} no laundry</span>
-              </div>
-
               <div className="overflow-y-auto">
+                {/* Breakdown */}
+                <div className="px-5 py-4 border-b border-gray-100">
+                  <dl className="text-sm space-y-1 max-w-md">
+                    {lines.filter((l) => l.always || l.value > 0).map((l) => (
+                      <div key={l.label} className="flex justify-between gap-4">
+                        <dt className="text-gray-600">{l.label}</dt>
+                        <dd className={`tabular-nums ${l.sign === '−' && l.value > 0 ? 'text-rose-600' : l.sign === '+' && l.value > 0 ? 'text-violet-600' : 'text-gray-800'}`}>
+                          {l.value > 0 && l.sign ? `${l.sign}${l.value}` : l.value}
+                        </dd>
+                      </div>
+                    ))}
+                    <div className="flex justify-between gap-4 border-t border-gray-200 pt-1.5 mt-1.5 font-semibold text-gray-900">
+                      <dt>Total cleanings</dt>
+                      <dd className="tabular-nums">{b.total}</dd>
+                    </div>
+                  </dl>
+                  {diff === 0 ? (
+                    <p className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md bg-emerald-50 text-emerald-700">
+                      ✓ Reconciled — matches the {b.billed} cleaning{b.billed !== 1 ? 's' : ''} billed in the cleaning app
+                    </p>
+                  ) : (
+                    <p className="mt-3 text-xs font-medium px-2 py-1 rounded-md bg-amber-50 text-amber-700">
+                      ⚠ The cleaning app billed {b.billed}:{' '}
+                      {diff > 0
+                        ? `${diff} cleaning${diff !== 1 ? 's are' : ' is'} not linked to a stay`
+                        : `${-diff} checkout${diff !== -1 ? 's have' : ' has'} no cleaning yet`}
+                      {events.some((e) => e.kind === 'unmatched' || e.kind === 'missing') && ' — marked below'}.
+                    </p>
+                  )}
+                </div>
+
+                {/* Log */}
+                <div className="flex gap-2 px-5 py-3 border-b border-gray-100 text-xs">
+                  <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700 font-medium">{billed.length} cleanings</span>
+                  <span className="px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 font-medium">{billed.length - noLaundry} with laundry</span>
+                  <span className={`px-2 py-1 rounded-md font-medium ${noLaundry > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-400'}`}>{noLaundry} no laundry</span>
+                </div>
                 {events.length === 0 ? (
-                  <p className="px-5 py-8 text-sm text-gray-400 text-center">No cleaning events this month.</p>
+                  <p className="px-5 py-8 text-sm text-gray-400 text-center">No cleanings this month.</p>
                 ) : (
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-white">
                       <tr className="text-left text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
                         <th className="px-5 py-2">Date</th>
                         <th className="px-3 py-2">Room</th>
+                        <th className="px-3 py-2">For</th>
                         <th className="px-3 py-2 text-right">Cleaning</th>
-                        <th className="px-3 py-2 text-right">Laundry</th>
-                        <th className="px-5 py-2">Status</th>
+                        <th className="px-5 py-2 text-right">Laundry</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {events.map((e) => (
-                        <tr key={`${e.date}|${e.roomId}`} className={e.hasLaundry ? '' : 'bg-amber-50/50'}>
-                          <td className="px-5 py-2 whitespace-nowrap tabular-nums">{e.date}</td>
-                          <td className="px-3 py-2 font-medium text-gray-800">{e.room}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-gray-600">{formatCurrency(e.cleaning)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-gray-600">
-                            {e.hasLaundry ? `${formatCurrency(e.laundry)} · ${e.sets} set${e.sets !== 1 ? 's' : ''}` : '—'}
-                          </td>
-                          <td className="px-5 py-2">
-                            {e.hasLaundry ? (
-                              <span className="text-xs text-emerald-600">✓ laundry</span>
-                            ) : (
-                              <span className="text-xs font-medium text-amber-700">⚠ no laundry provider</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                      {events.map((e) => {
+                        const isBilled = e.cleaning > 0;
+                        const flagged = e.kind === 'unmatched' || e.kind === 'missing';
+                        return (
+                          <tr key={`${e.date}|${e.roomId}|${e.kind}`} className={flagged ? 'bg-amber-50/60' : isBilled ? '' : 'text-gray-400'}>
+                            <td className="px-5 py-2 whitespace-nowrap tabular-nums">{e.date}</td>
+                            <td className={`px-3 py-2 font-medium ${isBilled ? 'text-gray-800' : ''}`}>{e.room}</td>
+                            <td className="px-3 py-2 text-xs">{forCell(e)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-600">{isBilled ? formatCurrency(e.cleaning) : '—'}</td>
+                            <td className="px-5 py-2 text-right tabular-nums whitespace-nowrap">
+                              {!isBilled ? '—' : e.hasLaundry ? (
+                                <span className="text-gray-600">{formatCurrency(e.laundry)} · {e.sets} set{e.sets !== 1 ? 's' : ''}</span>
+                              ) : (
+                                <span className="text-xs font-medium text-amber-700">no laundry</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
               </div>
 
               <div className="px-5 py-3 border-t border-gray-100 text-[11px] text-gray-500">
-                A cleaning with <span className="text-amber-700 font-medium">no laundry provider</span> either had no linen change or is missing an assignment in the cleaning app. Amounts here are the raw cleaning-app costs before the ÷{unit.mode === 'urban-pool' ? '3 pool split' : '1'}.
+                A cleaning with <span className="text-amber-700 font-medium">no laundry</span> either had no linen change or is missing a laundry provider in the cleaning app. Amounts are the raw cleaning-app costs before the ÷{unit.mode === 'urban-pool' ? '3 pool split' : '1'}.
               </div>
             </div>
           </div>

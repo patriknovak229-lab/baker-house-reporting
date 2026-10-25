@@ -51,7 +51,7 @@ export interface CommissionSettlement {
   poolGrossProfit?: number;
 
   // ── Verification (cleaning-app reconciliation) ──────────────────────────
-  reconciles: boolean;            // expected cleanings === billed cleanings
+  reconciles: boolean;            // breakdown total === billed cleanings
   reconcileNote?: string;
 
   // ── Persistence / bank linking ──────────────────────────────────────────
@@ -63,4 +63,33 @@ export interface CommissionSettlement {
   emailedTo?: string;
   createdAt: string;
   createdBy: string;
+}
+
+/**
+ * How the month's billed cleanings are made up, at the level the settlement is
+ * computed (whole Urban pool, or the standalone unit). The signed lines add up
+ * to `total`; the month reconciles when that equals `billed`.
+ *
+ * Computed live only — there is no column for it, so an issued settlement keeps
+ * just `reconciles` + `reconcileNote`.
+ */
+export interface CleaningBreakdown {
+  /** Reservations with at least one night in the month (one per booking). */
+  reservations: number;
+  /** Of those, the ones checking out next month — cleaned and billed then. */
+  checkoutNextMonth: number;
+  /** Last month's reservations whose checkout falls in this month. */
+  carryIn: number;
+  /** Cleanings added by hand in the cleaning app, not on a checkout. */
+  extra: number;
+  /** Vacated-unit cleanings from mid-stay room moves. */
+  roomMoves: number;
+  /** Guests who never arrived — revenue kept, nothing to clean. */
+  nonArrivals: number;
+  /** Checkout cleanings removed in the cleaning app (e.g. stay prolonged). */
+  removed: number;
+  /** What the lines above add up to. */
+  total: number;
+  /** Cleanings the cleaning app actually billed. */
+  billed: number;
 }

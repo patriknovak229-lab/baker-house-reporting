@@ -186,7 +186,7 @@ export function buildSettlementHTML(s: CommissionSettlement): string {
       </tr>
     </table>
     <span class="status ${s.reconciles ? 'ok' : 'warn'}">${
-      s.reconciles ? '✓ Reconciled with cleaning app' : '⚠ Review — ' + (s.reconcileNote ?? 'cleaning mismatch')
+      s.reconciles ? '✓ Reconciled with cleaning app' : '⚠ ' + (s.reconcileNote ?? 'Cleanings to review')
     }</span>
     ${step1}
     ${step2}

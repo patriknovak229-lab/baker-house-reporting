@@ -84,6 +84,11 @@ export interface GrossProfitTotals {
    *  next-month exclusion can't subtract the same booking twice. */
   nonArrivalCount: number;
   extraCleaningCount: number;
+  /** Cleanings of the unit a guest moved OUT of mid-stay. The booking counts
+   *  once in `reservationCount`, but each in-scope piece after the first ends
+   *  in a cleaning of its own (vacated unit on the move date, then the real
+   *  checkout), so every repeat piece adds one. */
+  roomMoveCleaningCount: number;
   noLaundryCount: number;
   removedCleaningCount: number;
   carryInCount: number;
@@ -145,6 +150,7 @@ export function computeGrossProfit(
   let cleaningNextMonthCount = 0;
   let nonArrivalCount = 0;
   let carryInCount = 0;
+  let roomMoveCleaningCount = 0;
   const countedPieces = new Set<string>();
   for (const r of reservations) {
     if (r.paymentStatus === 'Refunded') continue;
@@ -164,6 +170,7 @@ export function computeGrossProfit(
     if (nights > 0 && roomInScopeForRes) {
       // A mid-stay move is one booking split over two apartments — one count.
       if (!isRepeatSegmentPiece(r, countedPieces)) reservationCount += 1;
+      else roomMoveCleaningCount += 1;
       // `else if`: a non-arrival departing next month is already excluded by
       // the line above, and subtracting it twice would under-state the count.
       if (r.checkOutDate > dateRange.end) cleaningNextMonthCount += 1;
@@ -272,6 +279,7 @@ export function computeGrossProfit(
     cleaningNextMonthCount,
     nonArrivalCount,
     extraCleaningCount,
+    roomMoveCleaningCount,
     noLaundryCount,
     removedCleaningCount,
     carryInCount,

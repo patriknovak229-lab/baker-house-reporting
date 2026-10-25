@@ -106,7 +106,7 @@ export default function GrossProfitBridgeView({
     dismissedCleaningKeys,
     selectedRooms
   );
-  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, misc, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, noLaundryCount, removedCleaningCount, carryInCount, manualOnCheckoutCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, miscUnitCount } = totals;
+  const { netSales, cleaning, laundry, consumables, subscriptions, wearTear, misc, totalVariableCosts, grossProfit, reservationCount, cleaningCount, laundryCount, cleaningNextMonthCount, extraCleaningCount, roomMoveCleaningCount, noLaundryCount, removedCleaningCount, carryInCount, manualOnCheckoutCount, laundrySetCount, consumableUnitCount, subscriptionCount, wearTearUnitCount, miscUnitCount } = totals;
   const months = countMonths(dateRange.start, dateRange.end);
   const margin = netSales > 0 ? Math.round((grossProfit / netSales) * 100) : 0;
   const isLoss = grossProfit < 0;
@@ -282,7 +282,8 @@ export default function GrossProfitBridgeView({
             event. These counts explain the gaps. */}
         {(() => {
           const expectedCleanings =
-            reservationCount - cleaningNextMonthCount - removedCleaningCount + extraCleaningCount + carryInCount;
+            reservationCount - cleaningNextMonthCount - removedCleaningCount + extraCleaningCount + carryInCount +
+            roomMoveCleaningCount;
           const expectedLaundry = cleaningCount - noLaundryCount;
           const cleaningReconciles = expectedCleanings === cleaningCount;
           const laundryReconciles = expectedLaundry === laundryCount;
@@ -326,7 +327,8 @@ export default function GrossProfitBridgeView({
                 <p>
                   <span className="font-semibold text-gray-700">Cleanings</span> = {reservationCount} reservations
                   − {cleaningNextMonthCount} rolling over − {removedCleaningCount} removed + {extraCleaningCount} extra
-                  + {carryInCount} carry-in ={" "}
+                  + {carryInCount} carry-in
+                  {roomMoveCleaningCount > 0 && <> + {roomMoveCleaningCount} room move{roomMoveCleaningCount !== 1 ? "s" : ""}</>} ={" "}
                   <span className="font-semibold">{expectedCleanings}</span>
                   {cleaningReconciles ? (
                     <span className="text-green-600"> ✓ matches {cleaningCount}</span>

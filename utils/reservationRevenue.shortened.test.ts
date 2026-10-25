@@ -252,6 +252,6 @@ describe("shortened stay — owner settlement", () => {
     });
     const oct = computeSettlement(unit, "2026-10", [r], costs);
     expect(oct.gbv * 3).toBeCloseTo(4_000, 6); // pool ÷ 3
-    expect(oct.reconcileNote).toMatch(/Expected 1 cleanings vs 0 billed/); // the 1 Oct checkout, nothing more
+    expect(oct.cleaningBreakdown).toMatchObject({ total: 1, billed: 0 }); // the 1 Oct checkout, nothing more
   });
 });
