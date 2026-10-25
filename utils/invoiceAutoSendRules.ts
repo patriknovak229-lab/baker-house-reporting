@@ -39,6 +39,69 @@ export function isBeyondAutoSendWindow(checkoutYmd: string, todayYmd: string): b
   return !!checkoutYmd && checkoutYmd < autoSendWindowStart(todayYmd);
 }
 
+// ─── Will this one go out by itself? ─────────────────────────────────────────
+
+/**
+ * Why a due invoice task will NOT be auto-sent, or null when it will.
+ *
+ * Mirrors the skip ladder in `app/api/cron/send-due-invoices` in the same
+ * order, so the dashboard can state what the cron is actually going to do
+ * rather than leaving the operator to infer it. The pending-tasks panel lists
+ * a "Send Invoice" row from the moment the task is created, which reads like a
+ * manual to-do even when the whole point is that nobody has to touch it —
+ * Patrik asked twice why such rows "weren't simply auto-sent", and both times
+ * the answer was that they were already scheduled.
+ *
+ * Kept pure, and alongside the other auto-send rules rather than in the UI, so
+ * the cron and the badge can't drift apart.
+ */
+export type InvoiceAutoSendBlocker =
+  | 'sent'        // already emailed; the cron just closes the task
+  | 'issued'      // operator generated it and is mid-handling
+  | 'held'        // guest named a different amount (e.g. Booking.com pays)
+  | 'split'       // billed to several parties; one auto-email would be wrong
+  | 'too-old'     // checkout beyond the ~6-month window
+  | 'not-live'    // cancelled or blackout booking
+  | 'incomplete'; // no company identifier, or no billing email
+
+export function invoiceAutoSendBlocker(input: {
+  invoiceStatus?: string | null;
+  /** Any open invoice task carrying holdAutoSend. */
+  held?: boolean;
+  splitCount?: number;
+  /** The invoice task's actionableDate (= checkout, normally). */
+  taskDate: string;
+  todayYmd: string;
+  isCancelled?: boolean;
+  isBlackout?: boolean;
+  ico?: string | null;
+  vatNumber?: string | null;
+  billingEmail?: string | null;
+}): InvoiceAutoSendBlocker | null {
+  if (input.invoiceStatus === 'Sent') return 'sent';
+  if (input.invoiceStatus === 'Issued') return 'issued';
+  if (input.held) return 'held';
+  if ((input.splitCount ?? 0) > 0) return 'split';
+  if (isBeyondAutoSendWindow(input.taskDate, input.todayYmd)) return 'too-old';
+  if (input.isCancelled || input.isBlackout) return 'not-live';
+  // The cron's completeness gate: a company identifier (IČO **or** any VAT —
+  // foreign companies have no IČO) plus somewhere to email it.
+  const hasId = !!input.ico?.trim() || !!input.vatNumber?.trim();
+  if (!hasId || !input.billingEmail?.trim()) return 'incomplete';
+  return null;
+}
+
+/** Short badge copy for the pending-tasks panel. */
+export const INVOICE_BLOCKER_LABEL: Record<InvoiceAutoSendBlocker, string> = {
+  sent: 'already sent',
+  issued: 'generated — send it yourself',
+  held: 'on hold — check the amount',
+  split: 'split — send each part yourself',
+  'too-old': 'too old to auto-send',
+  'not-live': 'booking not live',
+  incomplete: 'needs details',
+};
+
 // ─── Guest confirmation ──────────────────────────────────────────────────────
 
 /**

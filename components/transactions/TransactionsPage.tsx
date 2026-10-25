@@ -6,6 +6,7 @@ import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
 import { unsentInvoices } from "@/utils/invoiceUtils";
+import { invoiceAutoSendBlocker, INVOICE_BLOCKER_LABEL } from "@/utils/invoiceAutoSendRules";
 import UnsentInvoicesPanel from "./UnsentInvoicesPanel";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { RoomMoveNotice } from "@/types/roomMove";
@@ -2524,6 +2525,23 @@ export default function TransactionsPage() {
                       earlyCheckin: "Early Check-in Request",
                       lateCheckout: "Late Checkout Request",
                     };
+                    const invoiceBlocker =
+                      cat === "invoice"
+                        ? invoiceAutoSendBlocker({
+                            invoiceStatus: reservation.invoiceStatus,
+                            held: (reservation.issues ?? []).some(
+                              (i) => i.category === "invoice" && !i.resolved && !!i.holdAutoSend,
+                            ),
+                            splitCount: reservation.invoiceSplits?.length ?? 0,
+                            taskDate: issue.actionableDate,
+                            todayYmd: pragueToday(),
+                            isCancelled: reservation.isCancelled,
+                            isBlackout: reservation.isBlackout,
+                            ico: reservation.invoiceData?.ico,
+                            vatNumber: reservation.invoiceData?.vatNumber,
+                            billingEmail: reservation.invoiceData?.billingEmail,
+                          })
+                        : null;
                     const todayMs = new Date(new Date().toLocaleDateString("sv-SE") + "T00:00:00").getTime();
                     const dueMs = new Date(issue.actionableDate + "T00:00:00").getTime();
                     const daysLate = Math.round((todayMs - dueMs) / 86_400_000);
@@ -2550,6 +2568,23 @@ export default function TransactionsPage() {
                         <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>
                           <div className="flex items-center gap-1.5">
                             <span>{issue.actionableDate}</span>
+                            {/* An invoice row looks like a manual to-do when it
+                                is in fact scheduled. Say which it is. */}
+                            {cat === "invoice" && (invoiceBlocker === null ? (
+                              <span
+                                className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-semibold uppercase tracking-wide"
+                                title="Goes out by itself on this date — the 09:00 run. Nothing to do."
+                              >
+                                Auto
+                              </span>
+                            ) : (
+                              <span
+                                className="px-1.5 py-0.5 rounded bg-gray-200 text-gray-700 text-[9px] font-semibold uppercase tracking-wide"
+                                title="This one will not auto-send — open the reservation and send it from the Invoice section."
+                              >
+                                {INVOICE_BLOCKER_LABEL[invoiceBlocker]}
+                              </span>
+                            ))}
                             {overdue && (
                               <span
                                 className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-bold uppercase tracking-wide"
