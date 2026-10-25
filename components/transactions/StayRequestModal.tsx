@@ -14,6 +14,7 @@
  * moves it lists are what the operator WOULD have to do, not what it did.
  */
 import { Fragment, useState } from 'react';
+import FloatingPanel from '@/components/shared/FloatingPanel';
 import type { Reservation } from '@/types/reservation';
 import { pragueToday } from '@/utils/periodUtils';
 import {
@@ -177,370 +178,362 @@ export default function StayRequestModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8" onClick={onClose}>
-      <div
-        className="bg-white rounded-xl shadow-2xl w-full max-w-3xl mx-4 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-cyan-50">
-          <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <h2 className="text-base font-semibold text-gray-800">Stay Request — can we take it?</h2>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+    <FloatingPanel
+      id="stay-request"
+      title="Stay Request — can we take it?"
+      chipLabel="Stay Request"
+      icon={
+        <svg className="w-5 h-5 text-cyan-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      }
+      headerClassName="bg-cyan-50"
+      width={768}
+      onClose={onClose}
+    >
+      <div className="px-5 py-4 space-y-4">
+        {/* Inputs */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500">Check-in</span>
+            <input
+              type="date" value={arrival} onChange={(e) => setArrival(e.target.value)}
+              className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500">Check-out</span>
+            <input
+              type="date" value={departure} min={arrival} onChange={(e) => setDeparture(e.target.value)}
+              className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500">Adults</span>
+            <input
+              type="number" min={1} value={adults} onChange={(e) => setAdults(Number(e.target.value))}
+              className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500">Children</span>
+            <input
+              type="number" min={0} value={children} onChange={(e) => setChildren(Number(e.target.value))}
+              className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
+            />
+          </label>
+        </div>
+
+        {/* Which types to offer — the lever for "the guest wants something cheaper" */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-1 border-b border-gray-100">
+          <span className="text-xs font-medium text-gray-500">Offer</span>
+          {SELLABLE_UNITS.map((s) => (
+            <label key={s.roomId} className="flex items-center gap-1.5 text-sm text-gray-600">
+              <input
+                type="checkbox"
+                checked={allowedIds.includes(s.roomId)}
+                onChange={(e) => {
+                  const next = e.target.checked
+                    ? [...allowedIds, s.roomId]
+                    : allowedIds.filter((id) => id !== s.roomId);
+                  setAllowedIds(next);
+                  // A preference for a type no longer on offer would be ignored anyway.
+                  if (!next.includes(preferredId)) setPreferredId(0);
+                }}
+                className="rounded"
+              />
+              {s.label}
+              <span className="text-xs text-gray-400">· sleeps {s.sleeps}</span>
+            </label>
+          ))}
+          <label className="flex items-center gap-1.5 text-sm text-gray-600 ml-auto">
+            <span className="text-xs font-medium text-gray-500">Maximise nights in</span>
+            <select
+              value={preferredId}
+              onChange={(e) => setPreferredId(Number(e.target.value))}
+              className="px-2 py-1 rounded-md border border-gray-200 text-sm"
+            >
+              <option value={0}>— fewest room changes</option>
+              {SELLABLE_UNITS.filter((s) => allowedIds.includes(s.roomId)).map((s) => (
+                <option key={s.roomId} value={s.roomId}>{s.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-sm text-gray-600">
+            <span
+              className="text-xs font-medium text-gray-500"
+              title="Cap how often the guest changes room. Fewer changes means fewer nights in the preferred type — the itinerary shows the trade."
+            >
+              Max room changes
+            </span>
+            <select
+              value={maxChanges}
+              onChange={(e) => setMaxChanges(e.target.value)}
+              className="px-2 py-1 rounded-md border border-gray-200 text-sm"
+            >
+              <option value="">any</option>
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input type="checkbox" checked={allowShuffle} onChange={(e) => setAllowShuffle(e.target.checked)} className="rounded" />
+            Allow moving other guests within a room type
+          </label>
+          <label
+            className="flex items-center gap-2 text-sm text-gray-600"
+            title="Housing the party in several apartments at once, as separate simultaneous reservations. Only used when one apartment cannot take them — four guests still go in a single 4-sleeper whenever one is free."
+          >
+            <input
+              type="checkbox"
+              checked={multiApartment}
+              onChange={(e) => setMultiApartment(e.target.checked)}
+              className="rounded"
+            />
+            Allow splitting across apartments
+          </label>
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            Discount
+            <input
+              type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))}
+              className="w-16 px-2 py-1 rounded-md border border-gray-200 text-sm"
+            />
+            %
+          </label>
+          <span className="text-xs text-gray-400">{nights > 0 ? `${nights} nights` : 'pick dates'}</span>
+          <button
+            onClick={handleCheck}
+            disabled={loading || nights <= 0 || allowedIds.length === 0}
+            className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Pricing…' : 'Check'}
           </button>
         </div>
 
-        <div className="px-5 py-4 space-y-4">
-          {/* Inputs */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <label className="block">
-              <span className="text-xs font-medium text-gray-500">Check-in</span>
-              <input
-                type="date" value={arrival} onChange={(e) => setArrival(e.target.value)}
-                className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs font-medium text-gray-500">Check-out</span>
-              <input
-                type="date" value={departure} min={arrival} onChange={(e) => setDeparture(e.target.value)}
-                className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs font-medium text-gray-500">Adults</span>
-              <input
-                type="number" min={1} value={adults} onChange={(e) => setAdults(Number(e.target.value))}
-                className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs font-medium text-gray-500">Children</span>
-              <input
-                type="number" min={0} value={children} onChange={(e) => setChildren(Number(e.target.value))}
-                className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-200 text-sm"
-              />
-            </label>
-          </div>
+        {error && (
+          <div className="px-3 py-2 rounded-md bg-rose-50 border border-rose-200 text-sm text-rose-700">{error}</div>
+        )}
 
-          {/* Which types to offer — the lever for "the guest wants something cheaper" */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-1 border-b border-gray-100">
-            <span className="text-xs font-medium text-gray-500">Offer</span>
-            {SELLABLE_UNITS.map((s) => (
-              <label key={s.roomId} className="flex items-center gap-1.5 text-sm text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={allowedIds.includes(s.roomId)}
-                  onChange={(e) => {
-                    const next = e.target.checked
-                      ? [...allowedIds, s.roomId]
-                      : allowedIds.filter((id) => id !== s.roomId);
-                    setAllowedIds(next);
-                    // A preference for a type no longer on offer would be ignored anyway.
-                    if (!next.includes(preferredId)) setPreferredId(0);
-                  }}
-                  className="rounded"
-                />
-                {s.label}
-                <span className="text-xs text-gray-400">· sleeps {s.sleeps}</span>
-              </label>
-            ))}
-            <label className="flex items-center gap-1.5 text-sm text-gray-600 ml-auto">
-              <span className="text-xs font-medium text-gray-500">Maximise nights in</span>
-              <select
-                value={preferredId}
-                onChange={(e) => setPreferredId(Number(e.target.value))}
-                className="px-2 py-1 rounded-md border border-gray-200 text-sm"
-              >
-                <option value={0}>— fewest room changes</option>
-                {SELLABLE_UNITS.filter((s) => allowedIds.includes(s.roomId)).map((s) => (
-                  <option key={s.roomId} value={s.roomId}>{s.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 text-sm text-gray-600">
-              <span
-                className="text-xs font-medium text-gray-500"
-                title="Cap how often the guest changes room. Fewer changes means fewer nights in the preferred type — the itinerary shows the trade."
-              >
-                Max room changes
-              </span>
-              <select
-                value={maxChanges}
-                onChange={(e) => setMaxChanges(e.target.value)}
-                className="px-2 py-1 rounded-md border border-gray-200 text-sm"
-              >
-                <option value="">any</option>
-                <option value="0">0</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4">
-            <label className="flex items-center gap-2 text-sm text-gray-600">
-              <input type="checkbox" checked={allowShuffle} onChange={(e) => setAllowShuffle(e.target.checked)} className="rounded" />
-              Allow moving other guests within a room type
-            </label>
-            <label
-              className="flex items-center gap-2 text-sm text-gray-600"
-              title="Housing the party in several apartments at once, as separate simultaneous reservations. Only used when one apartment cannot take them — four guests still go in a single 4-sleeper whenever one is free."
-            >
-              <input
-                type="checkbox"
-                checked={multiApartment}
-                onChange={(e) => setMultiApartment(e.target.checked)}
-                className="rounded"
-              />
-              Allow splitting across apartments
-            </label>
-            <label className="flex items-center gap-2 text-sm text-gray-600">
-              Discount
-              <input
-                type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))}
-                className="w-16 px-2 py-1 rounded-md border border-gray-200 text-sm"
-              />
-              %
-            </label>
-            <span className="text-xs text-gray-400">{nights > 0 ? `${nights} nights` : 'pick dates'}</span>
-            <button
-              onClick={handleCheck}
-              disabled={loading || nights <= 0 || allowedIds.length === 0}
-              className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
-            >
-              {loading ? 'Pricing…' : 'Check'}
-            </button>
-          </div>
-
-          {error && (
-            <div className="px-3 py-2 rounded-md bg-rose-50 border border-rose-200 text-sm text-rose-700">{error}</div>
-          )}
-
-          {/* Not possible — say exactly which night killed it and who holds the rooms */}
-          {plan && !plan.feasible && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
-              <p className="text-sm font-semibold text-rose-800">
-                {plan.reason ? 'Not possible' : `Not possible — blocked on ${plan.blockedAt}`}
+        {/* Not possible — say exactly which night killed it and who holds the rooms */}
+        {plan && !plan.feasible && (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
+            <p className="text-sm font-semibold text-rose-800">
+              {plan.reason ? 'Not possible' : `Not possible — blocked on ${plan.blockedAt}`}
+            </p>
+            {plan.reason ? (
+              <p className="text-xs text-rose-700 mt-0.5">
+                {plan.reason}
+                {!multiApartment && ' Tick “Allow splitting across apartments” to house them in two smaller ones.'}
               </p>
-              {plan.reason ? (
-                <p className="text-xs text-rose-700 mt-0.5">
-                  {plan.reason}
-                  {!multiApartment && ' Tick “Allow splitting across apartments” to house them in two smaller ones.'}
-                </p>
-              ) : (
-                <p className="text-xs text-rose-700 mt-0.5">
-                  {allowedIds.length === SELLABLE_UNITS.length ? 'No room type' : 'None of the selected room types'} has a
-                  free unit that night{allowShuffle ? ', even after shuffling movable guests' : ' (shuffling is switched off)'}.
-                  {allowShuffle && ' A shuffle only changes which unit a guest occupies — it cannot add one.'}
-                  {!multiApartment && adults + children > 2 &&
-                    ' Splitting the party across apartments is switched off — turning it on may find room in smaller units.'}
-                </p>
-              )}
-              {plan.holders.length > 0 && (
-                <table className="mt-3 w-full text-xs">
-                  <tbody>
-                    {plan.holders.map((h) => (
-                      <tr key={h.room} className="border-t border-rose-100">
-                        <td className="py-1 pr-3 font-medium text-gray-700 whitespace-nowrap">{h.room}</td>
-                        <td className="py-1 pr-3 text-gray-700">{h.who ?? <span className="text-emerald-700">free</span>}</td>
-                        <td className="py-1 pr-3 text-gray-500 whitespace-nowrap">
-                          {h.from ? `${h.from} → ${h.to}` : ''}
-                        </td>
-                        <td className="py-1 text-gray-500">{h.inHouse ? 'in-house' : ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-
-          {/* Possible — the itinerary */}
-          {plan?.feasible && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 overflow-hidden">
-              <div className="px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
-                {/* Room changes are per apartment: each apartment's FIRST segment
-                    is an arrival, not a change. Counting them globally told a
-                    party of four in two studios they had "one room change". */}
-                {(() => {
-                  const changes = plan.segments.length - plan.apartments;
-                  const changeText =
-                    changes === 0
-                      ? 'no room change'
-                      : `${changes} room change${changes > 1 ? 's' : ''} for the guest`;
-                  return (
-                    <p className="text-sm font-semibold text-emerald-800">
-                      Possible — {plan.apartments > 1 && `${plan.apartments} apartments (${plan.partySizes.join(' + ')} guests), `}
-                      {plan.segments.length} reservation{plan.segments.length > 1 ? 's' : ''}, {changeText}
-                    </p>
-                  );
-                })()}
-                {/* An empty Unit column is ambiguous — say plainly whether anyone is disturbed. */}
-                {(() => {
-                  const moves = plan.segments.flatMap((s) => s.moves);
-                  const notices = moves.filter((m) => m.needsGuestNotice).length;
-                  return moves.length === 0 ? (
-                    <p className="text-xs text-emerald-700 mt-0.5">No other guests need to move.</p>
-                  ) : (
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      {moves.length} other guest{moves.length > 1 ? 's' : ''} must change room — listed per segment below
-                      {notices > 0 && `, ${notices} of whom already has a room/door code and must be told`}.
-                    </p>
-                  );
-                })()}
-                {preferredId > 0 && (
-                  <p className="text-xs text-emerald-700 mt-0.5">
-                    {plan.segments.filter((s) => s.sellableRoomId === preferredId).reduce((n, s) => n + s.nights, 0)}
-                    {' of '}{plan.totalNights} nights in {SELLABLE_UNITS.find((s) => s.roomId === preferredId)?.label}
-                    {' — the rest bridges nights it could not cover.'}
-                  </p>
-                )}
-              </div>
-
-              <table className="w-full text-xs">
-                <thead className="text-gray-500">
-                  <tr className="border-b border-emerald-100">
-                    <th className="text-left py-2 px-3 font-medium">#</th>
-                    <th className="text-left py-2 px-3 font-medium">Dates</th>
-                    <th className="text-right py-2 px-3 font-medium">Nights</th>
-                    <th className="text-left py-2 px-3 font-medium">Room type</th>
-                    <th className="text-left py-2 px-3 font-medium">Unit</th>
-                    <th className="text-right py-2 px-3 font-medium">Price</th>
-                    <th className="text-right py-2 px-3 font-medium">ADR</th>
-                  </tr>
-                </thead>
+            ) : (
+              <p className="text-xs text-rose-700 mt-0.5">
+                {allowedIds.length === SELLABLE_UNITS.length ? 'No room type' : 'None of the selected room types'} has a
+                free unit that night{allowShuffle ? ', even after shuffling movable guests' : ' (shuffling is switched off)'}.
+                {allowShuffle && ' A shuffle only changes which unit a guest occupies — it cannot add one.'}
+                {!multiApartment && adults + children > 2 &&
+                  ' Splitting the party across apartments is switched off — turning it on may find room in smaller units.'}
+              </p>
+            )}
+            {plan.holders.length > 0 && (
+              <table className="mt-3 w-full text-xs">
                 <tbody>
-                  {plan.segments.map((s, i) => {
-                    const priced = quote?.segments[i];
-                    // Segments arrive grouped by apartment, so a change of
-                    // apartment is the start of a new parallel itinerary.
-                    const opensApartment =
-                      plan.apartments > 1 && (i === 0 || plan.segments[i - 1].apartment !== s.apartment);
-                    return (
-                      <Fragment key={`${s.apartment}-${s.from}-${s.room}`}>
-                      {opensApartment && (
-                        <tr className="bg-emerald-50">
-                          <td colSpan={7} className="py-1.5 px-3 text-[11px] font-semibold text-emerald-800">
-                            Apartment {s.apartment + 1} · {s.guests} guest{s.guests === 1 ? '' : 's'}
-                            <span className="font-normal text-emerald-700"> · own reservation, same dates</span>
-                          </td>
-                        </tr>
-                      )}
-                      <tr className="border-b border-emerald-100 align-top">
-                        <td className="py-2 px-3 text-gray-500">{i + 1}</td>
-                        <td className="py-2 px-3 text-gray-700 whitespace-nowrap">{s.from} → {s.to}</td>
-                        <td className="py-2 px-3 text-right text-gray-700">{s.nights}</td>
-                        <td className="py-2 px-3 text-gray-700">{s.sellableLabel}</td>
-                        <td className="py-2 px-3 text-gray-700">
-                          {s.room}
-                          {s.moves.length > 0 && (
-                            <ul className="mt-1 space-y-0.5">
-                              {s.moves.map((m) => (
-                                <li key={m.reservationNumber} className="text-[11px] text-amber-700">
-                                  {m.needsGuestNotice && '⚠ '}move {m.label ?? m.reservationNumber} {m.from} → {m.to}
-                                  {m.needsGuestNotice && ' (inform guest)'}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-right whitespace-nowrap">
-                          {priced?.price == null
-                            ? <span className="text-gray-400">{loading ? '…' : '—'}</span>
-                            : <span className="text-gray-800 font-medium">{formatCZK(priced.price * factor)}</span>}
-                          {priced?.source === 'calendar-nominal' && (
-                            <span className="block text-[10px] text-amber-600">nominal</span>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-right text-gray-500 whitespace-nowrap">
-                          {priced?.adr == null ? '—' : formatCZK(priced.adr * factor)}
-                        </td>
-                      </tr>
-                      </Fragment>
-                    );
-                  })}
+                  {plan.holders.map((h) => (
+                    <tr key={h.room} className="border-t border-rose-100">
+                      <td className="py-1 pr-3 font-medium text-gray-700 whitespace-nowrap">{h.room}</td>
+                      <td className="py-1 pr-3 text-gray-700">{h.who ?? <span className="text-emerald-700">free</span>}</td>
+                      <td className="py-1 pr-3 text-gray-500 whitespace-nowrap">
+                        {h.from ? `${h.from} → ${h.to}` : ''}
+                      </td>
+                      <td className="py-1 text-gray-500">{h.inHouse ? 'in-house' : ''}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
+            )}
+          </div>
+        )}
 
-              {/* Totals */}
-              {quote && (
-                <div className="px-4 py-3 bg-white border-t border-emerald-100 space-y-1 text-sm">
-                  {/* Nothing priced at all: show "—", never a 0 Kč that reads as free. */}
-                  <div className="flex justify-between text-gray-600">
-                    <span>
-                      List total (
-                      {plan.apartments > 1
-                        ? `${plan.apartments} apartments · ${quote.totalNights} apartment-nights`
-                        : `${quote.totalNights} nights`}
-                      )
-                    </span>
-                    <span>{anyPriced ? formatCZK(listTotal) : '—'}</span>
-                  </div>
-                  {discount > 0 && anyPriced && (
-                    <div className="flex justify-between text-amber-700">
-                      <span>Discount −{discount}%</span>
-                      <span>−{formatCZK(listTotal - quoteTotal)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between font-semibold text-gray-900 pt-1 border-t border-gray-100">
-                    <span>Quote</span>
-                    <span>
-                      {anyPriced
-                        ? `${formatCZK(quoteTotal)} · ${formatCZK(quoteTotal / (plan.totalNights || 1))}/night${
-                            plan.apartments > 1 ? ' (whole party)' : ''
-                          }`
-                        : 'no price available'}
-                    </span>
-                  </div>
-
-                  {!quote.complete && (
-                    <p className="text-xs text-rose-700 pt-1">
-                      ⚠ Beds24 could not price every segment — the total above is partial. A segment with no
-                      offer is usually blocked by a min-stay/max-stay rule or guest count over capacity.
-                    </p>
-                  )}
-                  {quote.hasNominalPrices && (
-                    <p className="text-xs text-amber-700 pt-1">
-                      ⚠ Segments marked <em>nominal</em> are a sum of daily calendar rates, not a Beds24 offer —
-                      no rate-plan or length-of-stay pricing applied, so they read high.
-                    </p>
-                  )}
-                  <p className="text-xs text-gray-400 pt-1">
-                    Each segment is priced as its own booking, so length-of-stay discounts restart per segment —
-                    a split stay lists higher than one continuous booking of the same nights.
+        {/* Possible — the itinerary */}
+        {plan?.feasible && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 overflow-hidden">
+            <div className="px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
+              {/* Room changes are per apartment: each apartment's FIRST segment
+                  is an arrival, not a change. Counting them globally told a
+                  party of four in two studios they had "one room change". */}
+              {(() => {
+                const changes = plan.segments.length - plan.apartments;
+                const changeText =
+                  changes === 0
+                    ? 'no room change'
+                    : `${changes} room change${changes > 1 ? 's' : ''} for the guest`;
+                return (
+                  <p className="text-sm font-semibold text-emerald-800">
+                    Possible — {plan.apartments > 1 && `${plan.apartments} apartments (${plan.partySizes.join(' + ')} guests), `}
+                    {plan.segments.length} reservation{plan.segments.length > 1 ? 's' : ''}, {changeText}
                   </p>
-
-                  <div className="pt-2">
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(quoteText(plan.segments, plan.apartments, quote));
-                        setCopied(true);
-                      }}
-                      className="px-3 py-1.5 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                    >
-                      {copied ? 'Copied' : 'Copy quote'}
-                    </button>
-                  </div>
-                </div>
+                );
+              })()}
+              {/* An empty Unit column is ambiguous — say plainly whether anyone is disturbed. */}
+              {(() => {
+                const moves = plan.segments.flatMap((s) => s.moves);
+                const notices = moves.filter((m) => m.needsGuestNotice).length;
+                return moves.length === 0 ? (
+                  <p className="text-xs text-emerald-700 mt-0.5">No other guests need to move.</p>
+                ) : (
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    {moves.length} other guest{moves.length > 1 ? 's' : ''} must change room — listed per segment below
+                    {notices > 0 && `, ${notices} of whom already has a room/door code and must be told`}.
+                  </p>
+                );
+              })()}
+              {preferredId > 0 && (
+                <p className="text-xs text-emerald-700 mt-0.5">
+                  {plan.segments.filter((s) => s.sellableRoomId === preferredId).reduce((n, s) => n + s.nights, 0)}
+                  {' of '}{plan.totalNights} nights in {SELLABLE_UNITS.find((s) => s.roomId === preferredId)?.label}
+                  {' — the rest bridges nights it could not cover.'}
+                </p>
               )}
             </div>
-          )}
 
-          <p className="text-[11px] text-gray-400">
-            Nothing here books or moves anything — it is a what-if against the reservations currently loaded.
-            Sync first if the data looks stale, and re-check before you promise dates.
-          </p>
-        </div>
+            <table className="w-full text-xs">
+              <thead className="text-gray-500">
+                <tr className="border-b border-emerald-100">
+                  <th className="text-left py-2 px-3 font-medium">#</th>
+                  <th className="text-left py-2 px-3 font-medium">Dates</th>
+                  <th className="text-right py-2 px-3 font-medium">Nights</th>
+                  <th className="text-left py-2 px-3 font-medium">Room type</th>
+                  <th className="text-left py-2 px-3 font-medium">Unit</th>
+                  <th className="text-right py-2 px-3 font-medium">Price</th>
+                  <th className="text-right py-2 px-3 font-medium">ADR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.segments.map((s, i) => {
+                  const priced = quote?.segments[i];
+                  // Segments arrive grouped by apartment, so a change of
+                  // apartment is the start of a new parallel itinerary.
+                  const opensApartment =
+                    plan.apartments > 1 && (i === 0 || plan.segments[i - 1].apartment !== s.apartment);
+                  return (
+                    <Fragment key={`${s.apartment}-${s.from}-${s.room}`}>
+                    {opensApartment && (
+                      <tr className="bg-emerald-50">
+                        <td colSpan={7} className="py-1.5 px-3 text-[11px] font-semibold text-emerald-800">
+                          Apartment {s.apartment + 1} · {s.guests} guest{s.guests === 1 ? '' : 's'}
+                          <span className="font-normal text-emerald-700"> · own reservation, same dates</span>
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="border-b border-emerald-100 align-top">
+                      <td className="py-2 px-3 text-gray-500">{i + 1}</td>
+                      <td className="py-2 px-3 text-gray-700 whitespace-nowrap">{s.from} → {s.to}</td>
+                      <td className="py-2 px-3 text-right text-gray-700">{s.nights}</td>
+                      <td className="py-2 px-3 text-gray-700">{s.sellableLabel}</td>
+                      <td className="py-2 px-3 text-gray-700">
+                        {s.room}
+                        {s.moves.length > 0 && (
+                          <ul className="mt-1 space-y-0.5">
+                            {s.moves.map((m) => (
+                              <li key={m.reservationNumber} className="text-[11px] text-amber-700">
+                                {m.needsGuestNotice && '⚠ '}move {m.label ?? m.reservationNumber} {m.from} → {m.to}
+                                {m.needsGuestNotice && ' (inform guest)'}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                        {priced?.price == null
+                          ? <span className="text-gray-400">{loading ? '…' : '—'}</span>
+                          : <span className="text-gray-800 font-medium">{formatCZK(priced.price * factor)}</span>}
+                        {priced?.source === 'calendar-nominal' && (
+                          <span className="block text-[10px] text-amber-600">nominal</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-right text-gray-500 whitespace-nowrap">
+                        {priced?.adr == null ? '—' : formatCZK(priced.adr * factor)}
+                      </td>
+                    </tr>
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {/* Totals */}
+            {quote && (
+              <div className="px-4 py-3 bg-white border-t border-emerald-100 space-y-1 text-sm">
+                {/* Nothing priced at all: show "—", never a 0 Kč that reads as free. */}
+                <div className="flex justify-between text-gray-600">
+                  <span>
+                    List total (
+                    {plan.apartments > 1
+                      ? `${plan.apartments} apartments · ${quote.totalNights} apartment-nights`
+                      : `${quote.totalNights} nights`}
+                    )
+                  </span>
+                  <span>{anyPriced ? formatCZK(listTotal) : '—'}</span>
+                </div>
+                {discount > 0 && anyPriced && (
+                  <div className="flex justify-between text-amber-700">
+                    <span>Discount −{discount}%</span>
+                    <span>−{formatCZK(listTotal - quoteTotal)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold text-gray-900 pt-1 border-t border-gray-100">
+                  <span>Quote</span>
+                  <span>
+                    {anyPriced
+                      ? `${formatCZK(quoteTotal)} · ${formatCZK(quoteTotal / (plan.totalNights || 1))}/night${
+                          plan.apartments > 1 ? ' (whole party)' : ''
+                        }`
+                      : 'no price available'}
+                  </span>
+                </div>
+
+                {!quote.complete && (
+                  <p className="text-xs text-rose-700 pt-1">
+                    ⚠ Beds24 could not price every segment — the total above is partial. A segment with no
+                    offer is usually blocked by a min-stay/max-stay rule or guest count over capacity.
+                  </p>
+                )}
+                {quote.hasNominalPrices && (
+                  <p className="text-xs text-amber-700 pt-1">
+                    ⚠ Segments marked <em>nominal</em> are a sum of daily calendar rates, not a Beds24 offer —
+                    no rate-plan or length-of-stay pricing applied, so they read high.
+                  </p>
+                )}
+                <p className="text-xs text-gray-400 pt-1">
+                  Each segment is priced as its own booking, so length-of-stay discounts restart per segment —
+                  a split stay lists higher than one continuous booking of the same nights.
+                </p>
+
+                <div className="pt-2">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(quoteText(plan.segments, plan.apartments, quote));
+                      setCopied(true);
+                    }}
+                    className="px-3 py-1.5 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                  >
+                    {copied ? 'Copied' : 'Copy quote'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <p className="text-[11px] text-gray-400">
+          Nothing here books or moves anything — it is a what-if against the reservations currently loaded.
+          Sync first if the data looks stale, and re-check before you promise dates.
+        </p>
       </div>
-    </div>
+    </FloatingPanel>
   );
 }

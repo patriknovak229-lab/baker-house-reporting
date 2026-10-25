@@ -31,6 +31,8 @@ import PriceCheckModal from "./PriceCheckModal";
 import MassMessageModal from "./MassMessageModal";
 import StayRequestModal from "./StayRequestModal";
 import TranslateModal from "./TranslateModal";
+import ReservationForm, { reservationFormId, type OpenReservationForm, type ReservationFormKind } from "./ReservationForms";
+import { focusFloatingPanel } from "@/components/shared/FloatingPanel";
 import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
@@ -319,6 +321,19 @@ export default function TransactionsPage() {
   const [showMassMessageModal, setShowMassMessageModal] = useState(false);
   const [showStayRequest, setShowStayRequest] = useState(false);
   const [showTranslate, setShowTranslate] = useState(false);
+  // Floating forms opened from the drawer (email guest, payment link, voucher) —
+  // mounted here so closing the drawer doesn't wipe them. See ReservationForms.tsx.
+  const [reservationForms, setReservationForms] = useState<OpenReservationForm[]>([]);
+  const openReservationForm = (kind: ReservationFormKind, r: Reservation) => {
+    setReservationForms((list) =>
+      list.some((f) => f.kind === kind && f.reservationNumber === r.reservationNumber)
+        ? list
+        : [...list, { kind, reservationNumber: r.reservationNumber, snapshot: r }],
+    );
+    focusFloatingPanel(reservationFormId(kind, r.reservationNumber));
+  };
+  const closeReservationForm = (kind: ReservationFormKind, reservationNumber: string) =>
+    setReservationForms((list) => list.filter((f) => !(f.kind === kind && f.reservationNumber === reservationNumber)));
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
   // Single source of truth for "are we saving / did we save / did it fail" so
   // the drawer can render one consistent toast for any onUpdate-driven write.
@@ -1333,7 +1348,7 @@ export default function TransactionsPage() {
           {role && canMutate(role, "transactions") && (
             <>
             <button
-              onClick={() => setShowPriceCheck(true)}
+              onClick={() => { setShowPriceCheck(true); focusFloatingPanel("price-check"); }}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-emerald-200 text-emerald-700 text-sm font-medium transition-colors hover:bg-emerald-50 shadow-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1342,7 +1357,7 @@ export default function TransactionsPage() {
               Price Check
             </button>
             <button
-              onClick={() => setShowStayRequest(true)}
+              onClick={() => { setShowStayRequest(true); focusFloatingPanel("stay-request"); }}
               title="Check whether a stay request we have no reservation for can be accommodated — including a split itinerary and a shuffle of other guests — and what it would cost"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-cyan-200 text-cyan-700 text-sm font-medium transition-colors hover:bg-cyan-50 shadow-sm"
             >
@@ -1352,7 +1367,7 @@ export default function TransactionsPage() {
               Stay Request
             </button>
             <button
-              onClick={() => setShowVoucherModal(true)}
+              onClick={() => { setShowVoucherModal(true); focusFloatingPanel("voucher"); }}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-purple-200 text-purple-700 text-sm font-medium transition-colors hover:bg-purple-50 shadow-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1361,7 +1376,7 @@ export default function TransactionsPage() {
               Create Voucher
             </button>
             <button
-              onClick={() => setShowPaymentModal(true)}
+              onClick={() => { setShowPaymentModal(true); focusFloatingPanel("payment-link"); }}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-indigo-200 text-indigo-700 text-sm font-medium transition-colors hover:bg-indigo-50 shadow-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1370,7 +1385,7 @@ export default function TransactionsPage() {
               Manual Payment
             </button>
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => { setShowCreateModal(true); focusFloatingPanel("new-booking"); }}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors shadow-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1379,7 +1394,7 @@ export default function TransactionsPage() {
               New Booking
             </button>
             <button
-              onClick={() => setShowBlackoutModal(true)}
+              onClick={() => { setShowBlackoutModal(true); focusFloatingPanel("blackout"); }}
               title="Close a room for a date range without creating a reservation"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium transition-colors shadow-sm"
             >
@@ -1389,7 +1404,7 @@ export default function TransactionsPage() {
               Black Out
             </button>
             <button
-              onClick={() => setShowRestrictionModal(true)}
+              onClick={() => { setShowRestrictionModal(true); focusFloatingPanel("no-checkin-out"); }}
               title="Stop check-ins and/or check-outs on chosen days (e.g. cleaners off) without closing the nights"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors shadow-sm"
             >
@@ -1399,7 +1414,7 @@ export default function TransactionsPage() {
               No Check-in/out
             </button>
             <button
-              onClick={() => setShowMassMessageModal(true)}
+              onClick={() => { setShowMassMessageModal(true); focusFloatingPanel("mass-message"); }}
               title="Broadcast a one-way message to a segment of current or upcoming guests"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium transition-colors shadow-sm"
             >
@@ -1409,7 +1424,7 @@ export default function TransactionsPage() {
               Message Guests
             </button>
             <button
-              onClick={() => setShowTranslate(true)}
+              onClick={() => { setShowTranslate(true); focusFloatingPanel("translate"); }}
               title="Translate a message from Czech or English into any language, then copy it into WhatsApp or an email"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-sky-200 text-sky-700 text-sm font-medium transition-colors hover:bg-sky-50 shadow-sm"
             >
@@ -3049,7 +3064,18 @@ export default function TransactionsPage() {
         saveStatus={saveStatus}
         onStayLink={(earlier, later, action) => handleStayLink(earlier, later, action)}
         onOpenReservation={setSelectedReservation}
+        onOpenForm={openReservationForm}
       />
+
+      {reservationForms.map((f) => (
+        <ReservationForm
+          key={reservationFormId(f.kind, f.reservationNumber)}
+          kind={f.kind}
+          reservation={reservations.find((r) => r.reservationNumber === f.reservationNumber) ?? f.snapshot}
+          onClose={() => closeReservationForm(f.kind, f.reservationNumber)}
+          onChanged={() => { fetchReservations(); fetchRoomMoves(); }}
+        />
+      ))}
 
       {/* Create booking modal */}
       {showCreateModal && (

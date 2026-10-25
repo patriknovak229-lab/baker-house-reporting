@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from "react";
+import FloatingPanel from "@/components/shared/FloatingPanel";
 import type { InvoiceData, Reservation } from "@/types/reservation";
 import { COUNTRY_OPTIONS, languageNameForCountry } from "@/utils/countries";
 import { pragueToday } from "@/utils/periodUtils";
@@ -945,137 +946,128 @@ export default function CreateBookingModal({ reservations, onClose, onCreated }:
     const inv = created.invoice;
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
-            <h2 className="text-base font-semibold text-gray-900">
-              Booking Created
-              {displayRows.length > 0 && ` · ${displayRows.length} ${displayRows.length === 1 ? 'Payment Link' : 'Payments'}`}
-            </h2>
-            <button onClick={() => { onCreated(); }} className="text-gray-400 hover:text-gray-600 transition-colors">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+      <FloatingPanel
+        id="new-booking"
+        title={`Booking Created${displayRows.length > 0 ? ` · ${displayRows.length} ${displayRows.length === 1 ? 'Payment Link' : 'Payments'}` : ''}`}
+        chipLabel="Booking Created"
+        onClose={() => { onCreated(); }}
+      >
+        <div className="px-6 py-5 space-y-4">
+          {/* Success notice */}
+          <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <span>
+              Booking {created.reservationNumber ? <strong>{created.reservationNumber}</strong> : null} created for {guestLine}
+            </span>
           </div>
 
-          <div className="px-6 py-5 space-y-4">
-            {/* Success notice */}
-            <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              <span>
-                Booking {created.reservationNumber ? <strong>{created.reservationNumber}</strong> : null} created for {guestLine}
-              </span>
-            </div>
+          {/* Summary */}
+          <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-1">
+            <p className="text-sm font-medium text-gray-900">
+              Baker House — {form.arrival} to {form.departure}
+            </p>
+            <p className="text-xl font-bold text-indigo-700">
+              {submittedTotal.toLocaleString('cs-CZ')} Kč
+            </p>
+          </div>
 
-            {/* Summary */}
-            <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-1">
-              <p className="text-sm font-medium text-gray-900">
-                Baker House — {form.arrival} to {form.departure}
-              </p>
-              <p className="text-xl font-bold text-indigo-700">
-                {submittedTotal.toLocaleString('cs-CZ')} Kč
-              </p>
-            </div>
+          {/* Payment link failed — the booking itself is fine */}
+          {created.paymentError && (
+            <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              Payment link not created: {created.paymentError}. Create it from the reservation drawer (Request Payment) — don&apos;t re-create the booking.
+            </p>
+          )}
 
-            {/* Payment link failed — the booking itself is fine */}
-            {created.paymentError && (
-              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                Payment link not created: {created.paymentError}. Create it from the reservation drawer (Request Payment) — don&apos;t re-create the booking.
-              </p>
-            )}
-
-            {/* Payment rows */}
-            {displayRows.length > 0 && (
-              <div className="space-y-3">
-                {displayRows.map((row, idx) => (
-                  <div
-                    key={idx}
-                    className="border border-gray-200 rounded-lg px-4 py-3 space-y-2"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {row.totalPayments > 1
-                            ? `Payment ${row.paymentNumber} of ${row.totalPayments}`
-                            : 'Payment'}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {row.amountCzk.toLocaleString('cs-CZ')} Kč
-                        </p>
-                      </div>
-                      {row.status === 'sent' ? (
-                        <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
-                          Link ready
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-medium uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                          Scheduled
-                        </span>
-                      )}
-                    </div>
-
-                    {row.status === 'sent' && row.url ? (
-                      <>
-                        <div className="flex items-center gap-2">
-                          <input
-                            readOnly
-                            value={row.url}
-                            className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-[11px] text-gray-500 bg-gray-50 truncate"
-                          />
-                          <button
-                            onClick={() => handleCopy(idx, row.url!)}
-                            className={`px-2.5 py-1.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap ${
-                              copiedIdx === idx ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                            }`}
-                          >
-                            {copiedIdx === idx ? 'Copied!' : 'Copy'}
-                          </button>
-                        </div>
-                        {form.phone && (
-                          <button
-                            onClick={() => {
-                              const text = encodeURIComponent(
-                                `Hi ${leadGuestName || 'there'}, here is your payment link${row.totalPayments > 1 ? ` (Payment ${row.paymentNumber} of ${row.totalPayments})` : ''} for your Baker House stay: ${row.url}`,
-                              );
-                              const num = form.phone.replace(/\D/g, '');
-                              window.open(`https://wa.me/${num}?text=${text}`, '_blank');
-                            }}
-                            className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-green-200 text-green-700 text-[11px] font-medium rounded hover:bg-green-50 transition-colors"
-                          >
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
-                              <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.527 5.845L0 24l6.333-1.505A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.647-.494-5.17-1.358l-.37-.216-3.758.893.939-3.65-.24-.384A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-                            </svg>
-                            Send via WhatsApp
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-xs text-gray-500">
-                        Will be emailed to the guest automatically on{' '}
-                        <span className="font-medium text-gray-700">{row.sendDate}</span>.
+          {/* Payment rows */}
+          {displayRows.length > 0 && (
+            <div className="space-y-3">
+              {displayRows.map((row, idx) => (
+                <div
+                  key={idx}
+                  className="border border-gray-200 rounded-lg px-4 py-3 space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">
+                        {row.totalPayments > 1
+                          ? `Payment ${row.paymentNumber} of ${row.totalPayments}`
+                          : 'Payment'}
                       </p>
+                      <p className="text-xs text-gray-500">
+                        {row.amountCzk.toLocaleString('cs-CZ')} Kč
+                      </p>
+                    </div>
+                    {row.status === 'sent' ? (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                        Link ready
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                        Scheduled
+                      </span>
                     )}
                   </div>
-                ))}
-              </div>
-            )}
 
-            {/* Invoice */}
-            {inv && <InvoiceOutcomeCard outcome={inv} />}
+                  {row.status === 'sent' && row.url ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={row.url}
+                          className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-[11px] text-gray-500 bg-gray-50 truncate"
+                        />
+                        <button
+                          onClick={() => handleCopy(idx, row.url!)}
+                          className={`px-2.5 py-1.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap ${
+                            copiedIdx === idx ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {copiedIdx === idx ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                      {form.phone && (
+                        <button
+                          onClick={() => {
+                            const text = encodeURIComponent(
+                              `Hi ${leadGuestName || 'there'}, here is your payment link${row.totalPayments > 1 ? ` (Payment ${row.paymentNumber} of ${row.totalPayments})` : ''} for your Baker House stay: ${row.url}`,
+                            );
+                            const num = form.phone.replace(/\D/g, '');
+                            window.open(`https://wa.me/${num}?text=${text}`, '_blank');
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-green-200 text-green-700 text-[11px] font-medium rounded hover:bg-green-50 transition-colors"
+                        >
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+                            <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.116 1.527 5.845L0 24l6.333-1.505A11.955 11.955 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.647-.494-5.17-1.358l-.37-.216-3.758.893.939-3.65-.24-.384A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+                          </svg>
+                          Send via WhatsApp
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Will be emailed to the guest automatically on{' '}
+                      <span className="font-medium text-gray-700">{row.sendDate}</span>.
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
-            <button
-              onClick={() => { onCreated(); }}
-              className="w-full py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
-            >
-              Done
-            </button>
-          </div>
+          {/* Invoice */}
+          {inv && <InvoiceOutcomeCard outcome={inv} />}
+
+          <button
+            onClick={() => { onCreated(); }}
+            className="w-full py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            Done
+          </button>
         </div>
-      </div>
+      </FloatingPanel>
     );
   }
 
@@ -1086,673 +1078,663 @@ export default function CreateBookingModal({ reservations, onClose, onCreated }:
   const lastRowNumber = form.units.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden max-h-[95vh] overflow-y-auto">
+    <FloatingPanel
+      id="new-booking"
+      title="New Direct Booking"
+      subtitle="Bypasses min-stay · Custom price"
+      width={576}
+      onClose={onClose}
+    >
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">New Direct Booking</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Bypasses min-stay · Custom price</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+        {/* Dates */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Check-in">
+            <input
+              type="date"
+              required
+              value={form.arrival}
+              onChange={(e) => {
+                const arrival = e.target.value;
+                setForm((prev) => ({
+                  ...prev,
+                  arrival,
+                  // Keep the stay at least one night when check-in moves past check-out.
+                  departure: arrival && prev.departure && prev.departure <= arrival ? addDays(arrival, 1) : prev.departure,
+                }));
+              }}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Check-out">
+            <input
+              type="date"
+              required
+              value={form.departure}
+              min={form.arrival ? addDays(form.arrival, 1) : undefined}
+              onChange={(e) => set("departure", e.target.value)}
+              className={inputCls}
+            />
+          </Field>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+        {/* Guests — up here because the availability check prices for them */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Adults">
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={form.numAdult}
+              onChange={(e) => set("numAdult", parseInt(e.target.value) || 1)}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Children">
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={form.numChild}
+              onChange={(e) => set("numChild", parseInt(e.target.value) || 0)}
+              className={inputCls}
+            />
+          </Field>
+        </div>
 
-          {/* Dates */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Check-in">
-              <input
-                type="date"
-                required
-                value={form.arrival}
-                onChange={(e) => {
-                  const arrival = e.target.value;
-                  setForm((prev) => ({
-                    ...prev,
-                    arrival,
-                    // Keep the stay at least one night when check-in moves past check-out.
-                    departure: arrival && prev.departure && prev.departure <= arrival ? addDays(arrival, 1) : prev.departure,
-                  }));
-                }}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Check-out">
-              <input
-                type="date"
-                required
-                value={form.departure}
-                min={form.arrival ? addDays(form.arrival, 1) : undefined}
-                onChange={(e) => set("departure", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-          </div>
-
-          {/* Guests — up here because the availability check prices for them */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Adults">
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={form.numAdult}
-                onChange={(e) => set("numAdult", parseInt(e.target.value) || 1)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Children">
-              <input
-                type="number"
-                min={0}
-                max={10}
-                value={form.numChild}
-                onChange={(e) => set("numChild", parseInt(e.target.value) || 0)}
-                className={inputCls}
-              />
-            </Field>
-          </div>
-
-          {/* Availability & prices — what the Price Check pill shows, usable in place */}
-          <div className="space-y-2">
-            <button
-              type="button"
-              onClick={checkAvailability}
-              disabled={!datesValid || checking}
-              className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              title={datesValid ? 'List every apartment with its Beds24 price and free units for these dates' : 'Set check-in and check-out first'}
-            >
-              {checking ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                  </svg>
-                  Checking Beds24…
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  {availability && !listStale ? 'Check again' : 'Check availability & prices'}
-                </>
-              )}
-            </button>
-            {!datesValid && (
-              <p className="text-[11px] text-gray-400 text-center">Pick check-in and check-out to see what&apos;s free and what it costs.</p>
+        {/* Availability & prices — what the Price Check pill shows, usable in place */}
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={checkAvailability}
+            disabled={!datesValid || checking}
+            className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            title={datesValid ? 'List every apartment with its Beds24 price and free units for these dates' : 'Set check-in and check-out first'}
+          >
+            {checking ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+                Checking Beds24…
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                {availability && !listStale ? 'Check again' : 'Check availability & prices'}
+              </>
             )}
+          </button>
+          {!datesValid && (
+            <p className="text-[11px] text-gray-400 text-center">Pick check-in and check-out to see what&apos;s free and what it costs.</p>
+          )}
 
-            {availability && (
-              <AvailabilityList
-                result={availability}
-                stale={listStale}
-                usedRoomIds={usedRoomIds}
-                targetRow={lastRowNumber}
-                noOccupancyData={reservations.length === 0}
-                onUse={applyFromList}
-              />
-            )}
-            {checkError && (
-              <p className="text-[11px] text-red-600">{checkError}</p>
-            )}
-          </div>
+          {availability && (
+            <AvailabilityList
+              result={availability}
+              stale={listStale}
+              usedRoomIds={usedRoomIds}
+              targetRow={lastRowNumber}
+              noOccupancyData={reservations.length === 0}
+              onUse={applyFromList}
+            />
+          )}
+          {checkError && (
+            <p className="text-[11px] text-red-600">{checkError}</p>
+          )}
+        </div>
 
-          {/* Units — one or more rows. Each row becomes a separate Beds24
-              booking; multi-row bookings are linked into a single visual
-              reservation via a group marker in comments. */}
-          <div className="space-y-2">
-            <p className="text-xs font-medium text-gray-600">Units</p>
-            {form.units.map((unit, idx) => {
-              const su = SELLING_UNIT_BY_ROOM_ID[unit.roomId];
-              const showQty = su?.maxQty && su.maxQty > 1;
-              const quoteStale = !!unit.quotedFor && unit.quotedFor !== quoteDates;
-              return (
-                <div key={idx} className="space-y-1">
-                  <div
-                    className={`grid ${showQty ? 'grid-cols-[1fr_70px_120px_28px]' : 'grid-cols-[1fr_120px_28px]'} gap-2 items-end`}
-                  >
-                    <Field label={idx === 0 ? "Selling unit" : ""}>
+        {/* Units — one or more rows. Each row becomes a separate Beds24
+            booking; multi-row bookings are linked into a single visual
+            reservation via a group marker in comments. */}
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-gray-600">Units</p>
+          {form.units.map((unit, idx) => {
+            const su = SELLING_UNIT_BY_ROOM_ID[unit.roomId];
+            const showQty = su?.maxQty && su.maxQty > 1;
+            const quoteStale = !!unit.quotedFor && unit.quotedFor !== quoteDates;
+            return (
+              <div key={idx} className="space-y-1">
+                <div
+                  className={`grid ${showQty ? 'grid-cols-[1fr_70px_120px_28px]' : 'grid-cols-[1fr_120px_28px]'} gap-2 items-end`}
+                >
+                  <Field label={idx === 0 ? "Selling unit" : ""}>
+                    <select
+                      value={unit.roomId}
+                      onChange={(e) => changeUnit(idx, parseInt(e.target.value))}
+                      className={inputCls}
+                    >
+                      {SELLING_UNIT_GROUPS.map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.options.map((o) => (
+                            <option key={o.roomId} value={o.roomId}>{o.label}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                  {showQty && (
+                    <Field label={idx === 0 ? "Qty" : ""}>
                       <select
-                        value={unit.roomId}
-                        onChange={(e) => changeUnit(idx, parseInt(e.target.value))}
+                        value={unit.roomQty}
+                        onChange={(e) => changeQty(idx, parseInt(e.target.value))}
                         className={inputCls}
                       >
-                        {SELLING_UNIT_GROUPS.map((group) => (
-                          <optgroup key={group.label} label={group.label}>
-                            {group.options.map((o) => (
-                              <option key={o.roomId} value={o.roomId}>{o.label}</option>
-                            ))}
-                          </optgroup>
+                        {Array.from({ length: su!.maxQty }, (_, i) => i + 1).map((n) => (
+                          <option key={n} value={n}>{n}</option>
                         ))}
                       </select>
                     </Field>
-                    {showQty && (
-                      <Field label={idx === 0 ? "Qty" : ""}>
-                        <select
-                          value={unit.roomQty}
-                          onChange={(e) => changeQty(idx, parseInt(e.target.value))}
-                          className={inputCls}
-                        >
-                          {Array.from({ length: su!.maxQty }, (_, i) => i + 1).map((n) => (
-                            <option key={n} value={n}>{n}</option>
-                          ))}
-                        </select>
-                      </Field>
-                    )}
-                    <Field label={idx === 0 ? "Price (Kč)" : ""}>
-                      <input
-                        type="number"
-                        min={0}
-                        value={unit.price}
-                        onChange={(e) => updateUnit(idx, { price: e.target.value, quotedUnitPrice: undefined, quotedFor: undefined })}
-                        placeholder="0"
-                        className={inputCls}
-                      />
-                    </Field>
-                    {form.units.length > 1 ? (
-                      <button
-                        type="button"
-                        onClick={() => removeUnit(idx)}
-                        className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
-                        title="Remove this unit"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    ) : <span />}
-                  </div>
-                  {quoteStale && (
-                    <p className="text-[11px] text-amber-700">
-                      This price was fetched for other dates — check availability again or adjust it.
-                    </p>
                   )}
-                </div>
-              );
-            })}
-
-            <div className="flex items-center justify-between pt-1">
-              <button
-                type="button"
-                onClick={addUnit}
-                className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add another unit
-              </button>
-              {form.units.length > 1 && (
-                <div className="text-xs text-gray-600">
-                  Total: <strong>{priceNum.toLocaleString('cs-CZ')} Kč</strong>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Guest name */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="First name">
-              <input
-                type="text"
-                required
-                value={form.firstName}
-                onChange={(e) => set("firstName", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Last name" optional>
-              <input
-                type="text"
-                value={form.lastName}
-                onChange={(e) => set("lastName", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-          </div>
-
-          {/* Additional guests — written into the Beds24 booking and printed
-              on the invoice next to the lead guest. */}
-          {form.additionalGuests.length > 0 && (
-            <div className="space-y-2">
-              {form.additionalGuests.map((g, idx) => (
-                <div key={idx} className="grid grid-cols-[1fr_1fr_28px] gap-3 items-end">
-                  <Field label={`Guest ${idx + 2} — first name`}>
+                  <Field label={idx === 0 ? "Price (Kč)" : ""}>
                     <input
-                      type="text"
-                      value={g.firstName}
-                      onChange={(e) => updateGuest(idx, { firstName: e.target.value })}
+                      type="number"
+                      min={0}
+                      value={unit.price}
+                      onChange={(e) => updateUnit(idx, { price: e.target.value, quotedUnitPrice: undefined, quotedFor: undefined })}
+                      placeholder="0"
                       className={inputCls}
                     />
                   </Field>
-                  <Field label="Last name" optional>
-                    <input
-                      type="text"
-                      value={g.lastName}
-                      onChange={(e) => updateGuest(idx, { lastName: e.target.value })}
-                      className={inputCls}
-                    />
-                  </Field>
-                  <button
-                    type="button"
-                    onClick={() => removeGuest(idx)}
-                    className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
-                    title="Remove this guest"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  {form.units.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeUnit(idx)}
+                      className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+                      title="Remove this unit"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  ) : <span />}
                 </div>
-              ))}
-            </div>
-          )}
-          <div className="-mt-1 flex items-center justify-between gap-3">
+                {quoteStale && (
+                  <p className="text-[11px] text-amber-700">
+                    This price was fetched for other dates — check availability again or adjust it.
+                  </p>
+                )}
+              </div>
+            );
+          })}
+
+          <div className="flex items-center justify-between pt-1">
             <button
               type="button"
-              onClick={addGuest}
+              onClick={addUnit}
               className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              Add guest
+              Add another unit
             </button>
-            {form.additionalGuests.length > 0 && (
-              <p className="text-[11px] text-gray-400 text-right">
-                Saved on the Beds24 booking and printed on the invoice.
+            {form.units.length > 1 && (
+              <div className="text-xs text-gray-600">
+                Total: <strong>{priceNum.toLocaleString('cs-CZ')} Kč</strong>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Guest name */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="First name">
+            <input
+              type="text"
+              required
+              value={form.firstName}
+              onChange={(e) => set("firstName", e.target.value)}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Last name" optional>
+            <input
+              type="text"
+              value={form.lastName}
+              onChange={(e) => set("lastName", e.target.value)}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+
+        {/* Additional guests — written into the Beds24 booking and printed
+            on the invoice next to the lead guest. */}
+        {form.additionalGuests.length > 0 && (
+          <div className="space-y-2">
+            {form.additionalGuests.map((g, idx) => (
+              <div key={idx} className="grid grid-cols-[1fr_1fr_28px] gap-3 items-end">
+                <Field label={`Guest ${idx + 2} — first name`}>
+                  <input
+                    type="text"
+                    value={g.firstName}
+                    onChange={(e) => updateGuest(idx, { firstName: e.target.value })}
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="Last name" optional>
+                  <input
+                    type="text"
+                    value={g.lastName}
+                    onChange={(e) => updateGuest(idx, { lastName: e.target.value })}
+                    className={inputCls}
+                  />
+                </Field>
+                <button
+                  type="button"
+                  onClick={() => removeGuest(idx)}
+                  className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+                  title="Remove this guest"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="-mt-1 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={addGuest}
+            className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Add guest
+          </button>
+          {form.additionalGuests.length > 0 && (
+            <p className="text-[11px] text-gray-400 text-right">
+              Saved on the Beds24 booking and printed on the invoice.
+            </p>
+          )}
+        </div>
+
+        {/* Contact */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Email" optional>
+            <input
+              type="email"
+              value={form.email}
+              onChange={(e) => set("email", e.target.value)}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="Phone" optional>
+            <input
+              type="tel"
+              value={form.phone}
+              onChange={(e) => set("phone", e.target.value)}
+              className={inputCls}
+            />
+          </Field>
+        </div>
+
+        {/* Nationality — mandatory. The server turns it into Beds24's
+            `country` + `lang`; `lang` is what selects the template language
+            for auto-actions, so leaving it unset made every automated guest
+            message go out in English. Same country→language mapping the
+            rental-site checkout uses. */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Nationality">
+            <select
+              required
+              value={form.nationality}
+              onChange={(e) => set("nationality", e.target.value)}
+              className={inputCls}
+            >
+              <option value="">Select country…</option>
+              {COUNTRY_OPTIONS.map((c) => (
+                <option key={c.code} value={c.code}>{c.name}</option>
+              ))}
+            </select>
+          </Field>
+          <div className="flex items-end">
+            <p className="text-[11px] text-gray-500 leading-snug pb-2">
+              {form.nationality
+                ? `Beds24 will send automated guest messages in ${languageNameForCountry(form.nationality)}.`
+                : "Sets the guest country in Beds24 and the language of its automated messages."}
+            </p>
+          </div>
+        </div>
+
+        {/* Notes */}
+        <Field label="Notes" optional>
+          <textarea
+            value={form.notes}
+            onChange={(e) => set("notes", e.target.value)}
+            rows={2}
+            className={`${inputCls} resize-none`}
+          />
+        </Field>
+
+        {/* Invoice info — for bookings the customer pays by invoice */}
+        <button
+          type="button"
+          onClick={toggleInvoice}
+          className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+        >
+          <Switch on={invoiceOn} />
+          Add invoice info
+        </button>
+
+        {invoiceOn && (
+          <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
+            <Field label="Company name">
+              <input
+                type="text"
+                value={invoiceData.companyName}
+                onChange={(e) => setInvoiceField('companyName', e.target.value)}
+                placeholder="Acme s.r.o."
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Company address" optional>
+              <input
+                type="text"
+                value={invoiceData.companyAddress}
+                onChange={(e) => setInvoiceField('companyAddress', e.target.value)}
+                placeholder="Šumavská 10, 602 00 Brno"
+                className={inputCls}
+              />
+            </Field>
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="IČO">
+                <input
+                  type="text"
+                  value={invoiceData.ico}
+                  onChange={(e) => setInvoiceField('ico', e.target.value)}
+                  placeholder="19876107"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="DIČ / VAT">
+                <input
+                  type="text"
+                  value={invoiceData.vatNumber}
+                  onChange={(e) => setInvoiceField('vatNumber', e.target.value)}
+                  placeholder="CZ19876107"
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Billing email">
+                <input
+                  type="email"
+                  value={invoiceData.billingEmail}
+                  onChange={(e) => setInvoiceField('billingEmail', e.target.value)}
+                  placeholder="accounting@acme.cz"
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+            {!sendInvoice && (
+              <p className="text-[11px] text-gray-400">
+                Saved on the reservation — the invoice is ready to issue from the drawer. To send it from here, turn on Send invoice below.
               </p>
             )}
           </div>
+        )}
 
-          {/* Contact */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Email" optional>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => set("email", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Phone" optional>
-              <input
-                type="tel"
-                value={form.phone}
-                onChange={(e) => set("phone", e.target.value)}
-                className={inputCls}
-              />
-            </Field>
-          </div>
+        {/* Payment link toggle */}
+        <button
+          type="button"
+          onClick={() => {
+            const next = !includePaymentLink;
+            setIncludePaymentLink(next);
+            if (!next) setSplitPayment(false); // turning off parent disables child
+          }}
+          className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+        >
+          <Switch on={includePaymentLink} />
+          Send payment link after booking
+        </button>
 
-          {/* Nationality — mandatory. The server turns it into Beds24's
-              `country` + `lang`; `lang` is what selects the template language
-              for auto-actions, so leaving it unset made every automated guest
-              message go out in English. Same country→language mapping the
-              rental-site checkout uses. */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Nationality">
-              <select
-                required
-                value={form.nationality}
-                onChange={(e) => set("nationality", e.target.value)}
-                className={inputCls}
-              >
-                <option value="">Select country…</option>
-                {COUNTRY_OPTIONS.map((c) => (
-                  <option key={c.code} value={c.code}>{c.name}</option>
-                ))}
-              </select>
-            </Field>
-            <div className="flex items-end">
-              <p className="text-[11px] text-gray-500 leading-snug pb-2">
-                {form.nationality
-                  ? `Beds24 will send automated guest messages in ${languageNameForCountry(form.nationality)}.`
-                  : "Sets the guest country in Beds24 and the language of its automated messages."}
-              </p>
-            </div>
-          </div>
-
-          {/* Notes */}
-          <Field label="Notes" optional>
-            <textarea
-              value={form.notes}
-              onChange={(e) => set("notes", e.target.value)}
-              rows={2}
-              className={`${inputCls} resize-none`}
-            />
-          </Field>
-
-          {/* Invoice info — for bookings the customer pays by invoice */}
-          <button
-            type="button"
-            onClick={toggleInvoice}
-            className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
-          >
-            <Switch on={invoiceOn} />
-            Add invoice info
-          </button>
-
-          {invoiceOn && (
-            <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
-              <Field label="Company name">
-                <input
-                  type="text"
-                  value={invoiceData.companyName}
-                  onChange={(e) => setInvoiceField('companyName', e.target.value)}
-                  placeholder="Acme s.r.o."
-                  className={inputCls}
-                />
-              </Field>
-              <Field label="Company address" optional>
-                <input
-                  type="text"
-                  value={invoiceData.companyAddress}
-                  onChange={(e) => setInvoiceField('companyAddress', e.target.value)}
-                  placeholder="Šumavská 10, 602 00 Brno"
-                  className={inputCls}
-                />
-              </Field>
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="IČO">
-                  <input
-                    type="text"
-                    value={invoiceData.ico}
-                    onChange={(e) => setInvoiceField('ico', e.target.value)}
-                    placeholder="19876107"
-                    className={inputCls}
-                  />
-                </Field>
-                <Field label="DIČ / VAT">
-                  <input
-                    type="text"
-                    value={invoiceData.vatNumber}
-                    onChange={(e) => setInvoiceField('vatNumber', e.target.value)}
-                    placeholder="CZ19876107"
-                    className={inputCls}
-                  />
-                </Field>
-                <Field label="Billing email">
-                  <input
-                    type="email"
-                    value={invoiceData.billingEmail}
-                    onChange={(e) => setInvoiceField('billingEmail', e.target.value)}
-                    placeholder="accounting@acme.cz"
-                    className={inputCls}
-                  />
-                </Field>
-              </div>
-              {!sendInvoice && (
-                <p className="text-[11px] text-gray-400">
-                  Saved on the reservation — the invoice is ready to issue from the drawer. To send it from here, turn on Send invoice below.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Payment link toggle */}
-          <button
-            type="button"
-            onClick={() => {
-              const next = !includePaymentLink;
-              setIncludePaymentLink(next);
-              if (!next) setSplitPayment(false); // turning off parent disables child
-            }}
-            className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
-          >
-            <Switch on={includePaymentLink} />
-            Send payment link after booking
-          </button>
-
-          {/* Split payment sub-toggle */}
-          {includePaymentLink && (
-            <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
-              <button
-                type="button"
-                onClick={() => toggleSplit(!splitPayment)}
-                className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
-              >
-                <Switch on={splitPayment} />
-                Split payment
-              </button>
-
-              {splitPayment && (
-                <div className="space-y-3">
-                  {/* Mode pill */}
-                  <div className="inline-flex rounded-md border border-gray-200 overflow-hidden text-xs">
-                    <button
-                      type="button"
-                      onClick={() => switchMode('pct')}
-                      className={`px-3 py-1.5 font-medium transition-colors flex items-center gap-1 ${
-                        paymentMode === 'pct'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-white text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 5L5 19M9 7a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                      Percent
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchMode('czk')}
-                      className={`px-3 py-1.5 font-medium transition-colors flex items-center gap-1 ${
-                        paymentMode === 'czk'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-white text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                      </svg>
-                      Kč
-                    </button>
-                  </div>
-
-                  {/* Payment rows */}
-                  <div className="space-y-2">
-                    {payments.map((p, idx) => {
-                      const total = payments.length;
-                      const computedKc = rowAmountCzk(p, priceNum);
-                      return (
-                        <div key={idx} className="grid grid-cols-[1fr_90px_140px_28px] gap-2 items-end">
-                          <div className="text-xs">
-                            <p className="font-medium text-gray-700">
-                              Payment {idx + 1} of {total}
-                            </p>
-                            {paymentMode === 'pct' && computedKc > 0 && (
-                              <p className="text-[10px] text-gray-400">
-                                ≈ {computedKc.toLocaleString('cs-CZ')} Kč
-                              </p>
-                            )}
-                          </div>
-                          <div className="relative">
-                            <input
-                              type="number"
-                              min={0}
-                              step={paymentMode === 'pct' ? 1 : 1}
-                              value={p.amount}
-                              onChange={(e) => updatePayment(idx, { amount: e.target.value })}
-                              placeholder={paymentMode === 'pct' ? '50' : '2500'}
-                              className={`${inputCls} pr-8`}
-                            />
-                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
-                              {paymentMode === 'pct' ? '%' : 'Kč'}
-                            </span>
-                          </div>
-                          <input
-                            type="date"
-                            value={p.sendDate}
-                            min={todayLocal()}
-                            onChange={(e) => updatePayment(idx, { sendDate: e.target.value })}
-                            className={inputCls}
-                          />
-                          {idx >= 2 ? (
-                            <button
-                              type="button"
-                              onClick={() => removePaymentRow(idx)}
-                              className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
-                              title="Remove this payment"
-                            >
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                              </svg>
-                            </button>
-                          ) : (
-                            <span />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Add payment button */}
-                  {payments.length < 3 && (
-                    <button
-                      type="button"
-                      onClick={addPaymentRow}
-                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                      </svg>
-                      Add a payment
-                    </button>
-                  )}
-
-                  {/* Sum line */}
-                  <div className={`text-xs px-3 py-1.5 rounded ${
-                    sumMatches
-                      ? 'bg-green-50 text-green-700 border border-green-200'
-                      : 'bg-amber-50 text-amber-800 border border-amber-200'
-                  }`}>
-                    {paymentMode === 'pct' ? (
-                      <>Sum: <strong>{sumPct}%</strong> of 100% {sumMatches ? '✓' : '⚠️'}</>
-                    ) : (
-                      <>Sum: <strong>{sumActual.toLocaleString('cs-CZ')} Kč</strong> of {Math.round(priceNum).toLocaleString('cs-CZ')} Kč {sumMatches ? '✓' : '⚠️'}</>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Send invoice — needs the invoice info above */}
-          {invoiceOn && (
-            <>
-              <button
-                type="button"
-                onClick={() => setSendInvoice((v) => !v)}
-                className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
-              >
-                <Switch on={sendInvoice} />
-                Send invoice
-              </button>
-
-              {sendInvoice && (
-                <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="invoice-timing"
-                        checked={invoiceTiming === 'now'}
-                        onChange={() => chooseInvoiceTiming('now')}
-                        className="accent-indigo-600"
-                      />
-                      Issue &amp; send now
-                      <span className="text-gray-400">— emailed right after the booking is created</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="invoice-timing"
-                        checked={invoiceTiming === 'schedule'}
-                        onChange={() => chooseInvoiceTiming('schedule')}
-                        className="accent-indigo-600"
-                      />
-                      Schedule for
-                      <input
-                        type="date"
-                        value={invoiceSendDate}
-                        min={addDays(todayLocal(), 1)}
-                        onChange={(e) => { setInvoiceSendDate(e.target.value); setInvoiceTiming('schedule'); }}
-                        className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                      />
-                    </label>
-                    {invoiceTiming === 'schedule' && (
-                      <p className="text-[11px] text-gray-400 pl-5">
-                        Goes out with the morning invoice run (≈ 10–11:00) on that day. Until then it shows as a Send-invoice task on the reservation.
-                      </p>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setInvoicePaymentDetails((v) => !v)}
-                    className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
-                  >
-                    <Switch on={invoicePaymentDetails} />
-                    Include payment details
-                    <span className="font-normal text-gray-400">— bank account, VS and QR code</span>
-                  </button>
-                  {includePaymentLink && invoicePaymentDetails && (
-                    <p className="text-[11px] text-amber-700">
-                      The guest also gets a Stripe payment link — with bank details on the invoice they could pay twice.
-                    </p>
-                  )}
-
-                  {invoiceProblem && (
-                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                      {invoiceProblem}
-                    </p>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          {/* Error */}
-          {error && (
-            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
-          )}
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-1">
+        {/* Split payment sub-toggle */}
+        {includePaymentLink && (
+          <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
             <button
               type="button"
-              onClick={onClose}
-              disabled={submitting}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+              onClick={() => toggleSplit(!splitPayment)}
+              className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
             >
-              Cancel
+              <Switch on={splitPayment} />
+              Split payment
             </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {submitting
-                ? (progress ?? "Creating…")
-                : includePaymentLink
-                  ? "Create & Get Link"
-                  : delivery === 'now'
-                    ? "Create & Send Invoice"
-                    : "Create Booking"}
-            </button>
+
+            {splitPayment && (
+              <div className="space-y-3">
+                {/* Mode pill */}
+                <div className="inline-flex rounded-md border border-gray-200 overflow-hidden text-xs">
+                  <button
+                    type="button"
+                    onClick={() => switchMode('pct')}
+                    className={`px-3 py-1.5 font-medium transition-colors flex items-center gap-1 ${
+                      paymentMode === 'pct'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 5L5 19M9 7a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    Percent
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchMode('czk')}
+                    className={`px-3 py-1.5 font-medium transition-colors flex items-center gap-1 ${
+                      paymentMode === 'czk'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                    </svg>
+                    Kč
+                  </button>
+                </div>
+
+                {/* Payment rows */}
+                <div className="space-y-2">
+                  {payments.map((p, idx) => {
+                    const total = payments.length;
+                    const computedKc = rowAmountCzk(p, priceNum);
+                    return (
+                      <div key={idx} className="grid grid-cols-[1fr_90px_140px_28px] gap-2 items-end">
+                        <div className="text-xs">
+                          <p className="font-medium text-gray-700">
+                            Payment {idx + 1} of {total}
+                          </p>
+                          {paymentMode === 'pct' && computedKc > 0 && (
+                            <p className="text-[10px] text-gray-400">
+                              ≈ {computedKc.toLocaleString('cs-CZ')} Kč
+                            </p>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min={0}
+                            step={paymentMode === 'pct' ? 1 : 1}
+                            value={p.amount}
+                            onChange={(e) => updatePayment(idx, { amount: e.target.value })}
+                            placeholder={paymentMode === 'pct' ? '50' : '2500'}
+                            className={`${inputCls} pr-8`}
+                          />
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
+                            {paymentMode === 'pct' ? '%' : 'Kč'}
+                          </span>
+                        </div>
+                        <input
+                          type="date"
+                          value={p.sendDate}
+                          min={todayLocal()}
+                          onChange={(e) => updatePayment(idx, { sendDate: e.target.value })}
+                          className={inputCls}
+                        />
+                        {idx >= 2 ? (
+                          <button
+                            type="button"
+                            onClick={() => removePaymentRow(idx)}
+                            className="h-9 w-7 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
+                            title="Remove this payment"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        ) : (
+                          <span />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Add payment button */}
+                {payments.length < 3 && (
+                  <button
+                    type="button"
+                    onClick={addPaymentRow}
+                    className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Add a payment
+                  </button>
+                )}
+
+                {/* Sum line */}
+                <div className={`text-xs px-3 py-1.5 rounded ${
+                  sumMatches
+                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}>
+                  {paymentMode === 'pct' ? (
+                    <>Sum: <strong>{sumPct}%</strong> of 100% {sumMatches ? '✓' : '⚠️'}</>
+                  ) : (
+                    <>Sum: <strong>{sumActual.toLocaleString('cs-CZ')} Kč</strong> of {Math.round(priceNum).toLocaleString('cs-CZ')} Kč {sumMatches ? '✓' : '⚠️'}</>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        </form>
-      </div>
-    </div>
+        )}
+
+        {/* Send invoice — needs the invoice info above */}
+        {invoiceOn && (
+          <>
+            <button
+              type="button"
+              onClick={() => setSendInvoice((v) => !v)}
+              className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+            >
+              <Switch on={sendInvoice} />
+              Send invoice
+            </button>
+
+            {sendInvoice && (
+              <div className="pl-4 ml-2 border-l-2 border-indigo-100 space-y-3">
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="invoice-timing"
+                      checked={invoiceTiming === 'now'}
+                      onChange={() => chooseInvoiceTiming('now')}
+                      className="accent-indigo-600"
+                    />
+                    Issue &amp; send now
+                    <span className="text-gray-400">— emailed right after the booking is created</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="invoice-timing"
+                      checked={invoiceTiming === 'schedule'}
+                      onChange={() => chooseInvoiceTiming('schedule')}
+                      className="accent-indigo-600"
+                    />
+                    Schedule for
+                    <input
+                      type="date"
+                      value={invoiceSendDate}
+                      min={addDays(todayLocal(), 1)}
+                      onChange={(e) => { setInvoiceSendDate(e.target.value); setInvoiceTiming('schedule'); }}
+                      className="rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                  </label>
+                  {invoiceTiming === 'schedule' && (
+                    <p className="text-[11px] text-gray-400 pl-5">
+                      Goes out with the morning invoice run (≈ 10–11:00) on that day. Until then it shows as a Send-invoice task on the reservation.
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setInvoicePaymentDetails((v) => !v)}
+                  className="flex items-center gap-2 text-xs font-medium text-gray-600 hover:text-gray-900"
+                >
+                  <Switch on={invoicePaymentDetails} />
+                  Include payment details
+                  <span className="font-normal text-gray-400">— bank account, VS and QR code</span>
+                </button>
+                {includePaymentLink && invoicePaymentDetails && (
+                  <p className="text-[11px] text-amber-700">
+                    The guest also gets a Stripe payment link — with bank details on the invoice they could pay twice.
+                  </p>
+                )}
+
+                {invoiceProblem && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    {invoiceProblem}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Error */}
+        {error && (
+          <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-3 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting
+              ? (progress ?? "Creating…")
+              : includePaymentLink
+                ? "Create & Get Link"
+                : delivery === 'now'
+                  ? "Create & Send Invoice"
+                  : "Create Booking"}
+          </button>
+        </div>
+      </form>
+    </FloatingPanel>
   );
 }
 

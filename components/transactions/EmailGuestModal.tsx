@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo, useRef } from 'react';
+import FloatingPanel from '@/components/shared/FloatingPanel';
 import type { Reservation } from '@/types/reservation';
 import { generateCode, generateSuffix } from '@/utils/voucherCode';
 import {
@@ -632,6 +633,7 @@ export default function EmailGuestModal({
       : channel === 'sms'
         ? `SMS ${toE164(phone) || phone || '(no phone on file)'}`
         : (defaultEmail || '(no email on file)');
+  const channelTitle = channel === 'whatsapp' ? 'WhatsApp Guest' : channel === 'sms' ? 'SMS Guest' : 'Email Guest';
   const senderHint =
     channel === 'whatsapp'
       ? ' · opens in your WhatsApp account'
@@ -640,444 +642,428 @@ export default function EmailGuestModal({
         : ' · from reservations@bakerhouseapartments.cz';
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className={`bg-white rounded-2xl shadow-xl w-full ${
-          step === 'preview'
-            ? channel !== 'email' ? 'max-w-xl' : 'max-w-4xl'
-            : 'max-w-md'
-        } max-h-[90vh] overflow-hidden flex flex-col`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">
-              {channel === 'whatsapp' ? 'WhatsApp Guest' : channel === 'sms' ? 'SMS Guest' : 'Email Guest'}
-              {step !== 'template' && activeTemplate ? ` · ${activeTemplate.label}` : ''}
-            </h2>
-            <p className="text-[11px] text-gray-500 mt-0.5">
-              To: <span className="font-mono">{recipientDisplay}</span>
-              <span className="text-gray-400">{senderHint}</span>
-            </p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+    <FloatingPanel
+      id={`${channel}:${reservation.reservationNumber}`}
+      title={`${channelTitle}${step !== 'template' && activeTemplate ? ` · ${activeTemplate.label}` : ''}`}
+      chipLabel={`${channelTitle} · ${[reservation.firstName, reservation.lastName].filter(Boolean).join(' ') || reservation.reservationNumber}`}
+      subtitle={
+        <>
+          To: <span className="font-mono">{recipientDisplay}</span>
+          <span className="text-gray-400">{senderHint}</span>
+        </>
+      }
+      width={step === 'preview' ? (channel !== 'email' ? 576 : 896) : 448}
+      onClose={onClose}
+    >
+      {/* Body — varies per step */}
+      <div className={`px-6 py-5 ${step === 'preview' ? 'flex-1 overflow-y-auto' : ''} space-y-3`}>
 
-        {/* Body — varies per step */}
-        <div className={`px-6 py-5 ${step === 'preview' ? 'flex-1 overflow-y-auto' : ''} space-y-3`}>
-
-          {/* Step 1: template picker */}
-          {step === 'template' && (
-            <>
-              <p className="text-xs font-medium text-gray-600">Pick a template</p>
-              <div className="space-y-2">
-                {TEMPLATES.filter((t) => !t.channels || t.channels.includes(channel)).map((tpl) => (
-                  <button
-                    key={tpl.id}
-                    disabled={tpl.disabled}
-                    onClick={() => handlePickTemplate(tpl.id)}
-                    className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
-                      selectedTemplateId === tpl.id
-                        ? 'border-indigo-400 bg-indigo-50'
-                        : 'border-gray-200 hover:bg-gray-50'
-                    } ${tpl.disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <span className="text-xl leading-none">{tpl.icon}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900">{tpl.label}</p>
-                        <p className="text-[11px] text-gray-500 mt-0.5">{tpl.description}</p>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* Step 2: voucher mode choice */}
-          {step === 'voucher-choice' && (
-            <>
-              <p className="text-xs font-medium text-gray-600">
-                The Thank You email includes a voucher. How should we add it?
-              </p>
-              <div className="space-y-2">
+        {/* Step 1: template picker */}
+        {step === 'template' && (
+          <>
+            <p className="text-xs font-medium text-gray-600">Pick a template</p>
+            <div className="space-y-2">
+              {TEMPLATES.filter((t) => !t.channels || t.channels.includes(channel)).map((tpl) => (
                 <button
-                  onClick={() => handlePickVoucherMode('generate')}
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
+                  key={tpl.id}
+                  disabled={tpl.disabled}
+                  onClick={() => handlePickTemplate(tpl.id)}
+                  className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
+                    selectedTemplateId === tpl.id
+                      ? 'border-indigo-400 bg-indigo-50'
+                      : 'border-gray-200 hover:bg-gray-50'
+                  } ${tpl.disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
                   <div className="flex items-start gap-3">
-                    <span className="text-xl leading-none">✨</span>
+                    <span className="text-xl leading-none">{tpl.icon}</span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">Generate a new voucher</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">
-                        Creates a fresh code linked to {reservation.firstName}&apos;s reservation
-                      </p>
+                      <p className="text-sm font-medium text-gray-900">{tpl.label}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">{tpl.description}</p>
                     </div>
                   </div>
                 </button>
-                <button
-                  onClick={() => handlePickVoucherMode('manual')}
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl leading-none">⌨️</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">Enter an existing code</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">
-                        Type in a voucher code you&apos;ve already created
-                      </p>
-                    </div>
-                  </div>
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* Step 3a: generate voucher config */}
-          {step === 'voucher-config' && voucherMode === 'generate' && (
-            <>
-              <p className="text-xs font-medium text-gray-600">New voucher details</p>
-              <div className="space-y-3">
-                <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setVoucherType('fixed')}
-                    className={`flex-1 py-2 text-xs font-medium transition-colors ${
-                      voucherType === 'fixed'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    Fixed (CZK)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setVoucherType('percentage')}
-                    className={`flex-1 py-2 text-xs font-medium transition-colors ${
-                      voucherType === 'percentage'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    Percentage (%)
-                  </button>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Amount {voucherType === 'fixed' ? '(CZK)' : '(%)'}
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max={voucherType === 'percentage' ? 100 : undefined}
-                    value={voucherAmount}
-                    onChange={(e) => setVoucherAmount(e.target.value)}
-                    placeholder={voucherType === 'fixed' ? '1000' : '10'}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                  />
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Step 3b: manual code entry */}
-          {step === 'voucher-config' && voucherMode === 'manual' && (
-            <>
-              <p className="text-xs font-medium text-gray-600">Voucher code</p>
-              <input
-                type="text"
-                value={manualCode}
-                onChange={(e) => setManualCode(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleValidateManualCode(); }}
-                placeholder="e.g. Tamara-1000-A3F9"
-                autoFocus
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
-              />
-              <p className="text-[11px] text-gray-400">
-                We&apos;ll check the code is active and not expired before including it.
-              </p>
-            </>
-          )}
-
-          {/* Step 4: language toggle — visible on the preview step for both
-              channels. Switching resets body + (for email) subject to the
-              new language's defaults so the operator never accidentally
-              sends a mixed-language message. */}
-          {step === 'preview' && (resolvedVoucher || isArrivalGuide) && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-gray-500 font-medium">Language:</span>
-              <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => handleLangChange('en')}
-                  className={`px-3 py-1 text-xs font-medium transition-colors ${
-                    lang === 'en'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-white text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  English
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLangChange('cs')}
-                  className={`px-3 py-1 text-xs font-medium transition-colors ${
-                    lang === 'cs'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-white text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  Čeština
-                </button>
-              </div>
-              <span className="text-gray-400">(switching resets edited body)</span>
+              ))}
             </div>
-          )}
+          </>
+        )}
 
-          {/* Step 4a: EMAIL preview + manual edit */}
-          {step === 'preview' && (resolvedVoucher || isArrivalGuide) && channel === 'email' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Left: editable fields */}
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Subject</label>
-                  <input
-                    type="text"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Message body
-                    <span className="text-gray-400 font-normal"> (separate paragraphs with a blank line)</span>
-                  </label>
-                  <textarea
-                    value={bodyText}
-                    onChange={(e) => setBodyText(e.target.value)}
-                    rows={10}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
-                  />
-                </div>
-                {resolvedVoucher && (
-                  <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-[11px] text-gray-600 space-y-1">
-                    <p><strong>Voucher attached:</strong></p>
-                    <p>
-                      Code <code className="font-mono bg-white px-1 py-0.5 rounded border border-gray-200">{resolvedVoucher.code}</code>
-                      {' · '}
-                      Value <strong>{formatAmount(resolvedVoucher)}</strong>
+        {/* Step 2: voucher mode choice */}
+        {step === 'voucher-choice' && (
+          <>
+            <p className="text-xs font-medium text-gray-600">
+              The Thank You email includes a voucher. How should we add it?
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={() => handlePickVoucherMode('generate')}
+                className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="text-xl leading-none">✨</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900">Generate a new voucher</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Creates a fresh code linked to {reservation.firstName}&apos;s reservation
                     </p>
                   </div>
-                )}
-              </div>
-
-              {/* Right: live HTML preview */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Live preview</label>
-                <div className="rounded-lg border border-gray-200 overflow-hidden bg-gray-50" style={{ height: '500px' }}>
-                  <iframe
-                    ref={iframeRef}
-                    title="Email preview"
-                    sandbox="allow-same-origin"
-                    className="w-full h-full bg-white"
-                  />
                 </div>
-              </div>
+              </button>
+              <button
+                onClick={() => handlePickVoucherMode('manual')}
+                className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="text-xl leading-none">⌨️</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900">Enter an existing code</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Type in a voucher code you&apos;ve already created
+                    </p>
+                  </div>
+                </div>
+              </button>
             </div>
-          )}
+          </>
+        )}
 
-          {/* Step 4b: WHATSAPP preview — single editable textarea representing
-              the message that will be passed to wa.me (or copied). The
-              operator can tweak it freely; on Open we patch the staged
-              voucher code in case it changed on a 409 retry. */}
-          {step === 'preview' && resolvedVoucher && channel !== 'email' && (
+        {/* Step 3a: generate voucher config */}
+        {step === 'voucher-config' && voucherMode === 'generate' && (
+          <>
+            <p className="text-xs font-medium text-gray-600">New voucher details</p>
             <div className="space-y-3">
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setVoucherType('fixed')}
+                  className={`flex-1 py-2 text-xs font-medium transition-colors ${
+                    voucherType === 'fixed'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Fixed (CZK)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVoucherType('percentage')}
+                  className={`flex-1 py-2 text-xs font-medium transition-colors ${
+                    voucherType === 'percentage'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Percentage (%)
+                </button>
+              </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  {channel === 'sms' ? 'SMS message' : 'WhatsApp message'}
-                  <span className="text-gray-400 font-normal"> (edit freely — exactly what will be sent)</span>
+                  Amount {voucherType === 'fixed' ? '(CZK)' : '(%)'}
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max={voucherType === 'percentage' ? 100 : undefined}
+                  value={voucherAmount}
+                  onChange={(e) => setVoucherAmount(e.target.value)}
+                  placeholder={voucherType === 'fixed' ? '1000' : '10'}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Step 3b: manual code entry */}
+        {step === 'voucher-config' && voucherMode === 'manual' && (
+          <>
+            <p className="text-xs font-medium text-gray-600">Voucher code</p>
+            <input
+              type="text"
+              value={manualCode}
+              onChange={(e) => setManualCode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleValidateManualCode(); }}
+              placeholder="e.g. Tamara-1000-A3F9"
+              autoFocus
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+            <p className="text-[11px] text-gray-400">
+              We&apos;ll check the code is active and not expired before including it.
+            </p>
+          </>
+        )}
+
+        {/* Step 4: language toggle — visible on the preview step for both
+            channels. Switching resets body + (for email) subject to the
+            new language's defaults so the operator never accidentally
+            sends a mixed-language message. */}
+        {step === 'preview' && (resolvedVoucher || isArrivalGuide) && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-gray-500 font-medium">Language:</span>
+            <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => handleLangChange('en')}
+                className={`px-3 py-1 text-xs font-medium transition-colors ${
+                  lang === 'en'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                English
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLangChange('cs')}
+                className={`px-3 py-1 text-xs font-medium transition-colors ${
+                  lang === 'cs'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Čeština
+              </button>
+            </div>
+            <span className="text-gray-400">(switching resets edited body)</span>
+          </div>
+        )}
+
+        {/* Step 4a: EMAIL preview + manual edit */}
+        {step === 'preview' && (resolvedVoucher || isArrivalGuide) && channel === 'email' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Left: editable fields */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Subject</label>
+                <input
+                  type="text"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Message body
+                  <span className="text-gray-400 font-normal"> (separate paragraphs with a blank line)</span>
                 </label>
                 <textarea
-                  value={renderedWhatsApp}
-                  onChange={(e) => setWhatsAppTextOverride(e.target.value)}
-                  rows={16}
-                  className={`w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono leading-snug focus:outline-none focus:ring-2 resize-y ${
-                    channel === 'sms' ? 'focus:ring-indigo-300' : 'focus:ring-green-300'
-                  }`}
+                  value={bodyText}
+                  onChange={(e) => setBodyText(e.target.value)}
+                  rows={10}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-y"
                 />
-                <div className="flex items-center justify-between mt-1">
-                  {whatsAppTextOverride !== null ? (
-                    <button
-                      type="button"
-                      onClick={() => setWhatsAppTextOverride(null)}
-                      className="text-[11px] text-indigo-600 hover:text-indigo-800"
-                    >
-                      Reset to template
-                    </button>
-                  ) : (
-                    <span />
-                  )}
-                  {channel === 'sms' && (() => {
-                    const t = renderedWhatsApp;
-                    const chars = [...t].length;
-                    const unicode = /[^\x00-\x7F]/.test(t);
-                    const seg = chars <= (unicode ? 70 : 160)
-                      ? 1
-                      : Math.ceil(chars / (unicode ? 67 : 153));
-                    return (
-                      <span className="text-[11px] text-gray-400">
-                        {chars} chars · ~{seg} SMS{unicode ? ' · unicode' : ''}
-                      </span>
-                    );
-                  })()}
+              </div>
+              {resolvedVoucher && (
+                <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-[11px] text-gray-600 space-y-1">
+                  <p><strong>Voucher attached:</strong></p>
+                  <p>
+                    Code <code className="font-mono bg-white px-1 py-0.5 rounded border border-gray-200">{resolvedVoucher.code}</code>
+                    {' · '}
+                    Value <strong>{formatAmount(resolvedVoucher)}</strong>
+                  </p>
                 </div>
-              </div>
-
-              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-[11px] text-gray-600 space-y-1">
-                <p>
-                  <strong>Voucher attached:</strong>{' '}
-                  Code <code className="font-mono bg-white px-1 py-0.5 rounded border border-gray-200">{resolvedVoucher.code}</code>
-                  {' · '}
-                  Value <strong>{formatAmount(resolvedVoucher)}</strong>
-                </p>
-                <p className="text-[10.5px] text-gray-500">
-                  {channel === 'sms'
-                    ? 'Sent immediately as an SMS from “BakerHouse”. Some destinations (e.g. US/Canada) may show a number instead of the name. Longer messages cost multiple SMS segments.'
-                    : '“Open in WhatsApp” launches your WhatsApp Web/app with this text pre-filled. You still confirm send inside WhatsApp itself.'}
-                </p>
-              </div>
-
-              {copiedHint && (
-                <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                  Text copied — paste it into WhatsApp or any other channel.
-                </p>
               )}
             </div>
-          )}
 
-          {voucherError && (
-            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              {voucherError}
-            </p>
-          )}
-          {sendError && step === 'preview' && (
-            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              {sendError}
-            </p>
+            {/* Right: live HTML preview */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Live preview</label>
+              <div className="rounded-lg border border-gray-200 overflow-hidden bg-gray-50" style={{ height: '500px' }}>
+                <iframe
+                  ref={iframeRef}
+                  title="Email preview"
+                  sandbox="allow-same-origin"
+                  className="w-full h-full bg-white"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 4b: WHATSAPP preview — single editable textarea representing
+            the message that will be passed to wa.me (or copied). The
+            operator can tweak it freely; on Open we patch the staged
+            voucher code in case it changed on a 409 retry. */}
+        {step === 'preview' && resolvedVoucher && channel !== 'email' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                {channel === 'sms' ? 'SMS message' : 'WhatsApp message'}
+                <span className="text-gray-400 font-normal"> (edit freely — exactly what will be sent)</span>
+              </label>
+              <textarea
+                value={renderedWhatsApp}
+                onChange={(e) => setWhatsAppTextOverride(e.target.value)}
+                rows={16}
+                className={`w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono leading-snug focus:outline-none focus:ring-2 resize-y ${
+                  channel === 'sms' ? 'focus:ring-indigo-300' : 'focus:ring-green-300'
+                }`}
+              />
+              <div className="flex items-center justify-between mt-1">
+                {whatsAppTextOverride !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => setWhatsAppTextOverride(null)}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800"
+                  >
+                    Reset to template
+                  </button>
+                ) : (
+                  <span />
+                )}
+                {channel === 'sms' && (() => {
+                  const t = renderedWhatsApp;
+                  const chars = [...t].length;
+                  const unicode = /[^\x00-\x7F]/.test(t);
+                  const seg = chars <= (unicode ? 70 : 160)
+                    ? 1
+                    : Math.ceil(chars / (unicode ? 67 : 153));
+                  return (
+                    <span className="text-[11px] text-gray-400">
+                      {chars} chars · ~{seg} SMS{unicode ? ' · unicode' : ''}
+                    </span>
+                  );
+                })()}
+              </div>
+            </div>
+
+            <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-[11px] text-gray-600 space-y-1">
+              <p>
+                <strong>Voucher attached:</strong>{' '}
+                Code <code className="font-mono bg-white px-1 py-0.5 rounded border border-gray-200">{resolvedVoucher.code}</code>
+                {' · '}
+                Value <strong>{formatAmount(resolvedVoucher)}</strong>
+              </p>
+              <p className="text-[10.5px] text-gray-500">
+                {channel === 'sms'
+                  ? 'Sent immediately as an SMS from “BakerHouse”. Some destinations (e.g. US/Canada) may show a number instead of the name. Longer messages cost multiple SMS segments.'
+                  : '“Open in WhatsApp” launches your WhatsApp Web/app with this text pre-filled. You still confirm send inside WhatsApp itself.'}
+              </p>
+            </div>
+
+            {copiedHint && (
+              <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                Text copied — paste it into WhatsApp or any other channel.
+              </p>
+            )}
+          </div>
+        )}
+
+        {voucherError && (
+          <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {voucherError}
+          </p>
+        )}
+        {sendError && step === 'preview' && (
+          <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {sendError}
+          </p>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-6 py-3 border-t border-gray-100 flex justify-between gap-2">
+        <div>
+          {step !== 'template' && (
+            <button
+              onClick={handleBack}
+              className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
+            >
+              ← Back
+            </button>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-100 flex justify-between gap-2">
-          <div>
-            {step !== 'template' && (
-              <button
-                onClick={handleBack}
-                className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
-              >
-                ← Back
-              </button>
-            )}
-          </div>
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-700 border border-gray-200 rounded-md hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          {step === 'template' && (
             <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-gray-700 border border-gray-200 rounded-md hover:bg-gray-50"
+              onClick={handleContinueFromTemplate}
+              disabled={!selectedTemplateId}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Cancel
+              Continue
             </button>
-            {step === 'template' && (
+          )}
+          {step === 'voucher-config' && voucherMode === 'generate' && (
+            <button
+              onClick={handleGenerateVoucher}
+              disabled={voucherLoading || !voucherAmount}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {voucherLoading ? 'Preparing…' : 'Continue'}
+            </button>
+          )}
+          {step === 'voucher-config' && voucherMode === 'manual' && (
+            <button
+              onClick={handleValidateManualCode}
+              disabled={voucherLoading || !manualCode.trim()}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {voucherLoading ? 'Validating…' : 'Use this code'}
+            </button>
+          )}
+          {step === 'preview' && channel === 'email' && (
+            <button
+              onClick={handleSend}
+              disabled={sending}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {sending ? 'Sending…' : 'Send email'}
+            </button>
+          )}
+          {step === 'preview' && channel === 'whatsapp' && (
+            <>
               <button
-                onClick={handleContinueFromTemplate}
-                disabled={!selectedTemplateId}
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Continue
-              </button>
-            )}
-            {step === 'voucher-config' && voucherMode === 'generate' && (
-              <button
-                onClick={handleGenerateVoucher}
-                disabled={voucherLoading || !voucherAmount}
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {voucherLoading ? 'Preparing…' : 'Continue'}
-              </button>
-            )}
-            {step === 'voucher-config' && voucherMode === 'manual' && (
-              <button
-                onClick={handleValidateManualCode}
-                disabled={voucherLoading || !manualCode.trim()}
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {voucherLoading ? 'Validating…' : 'Use this code'}
-              </button>
-            )}
-            {step === 'preview' && channel === 'email' && (
-              <button
-                onClick={handleSend}
+                onClick={handleCopyWhatsApp}
                 disabled={sending}
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Copy the message text to clipboard"
               >
-                {sending ? 'Sending…' : 'Send email'}
+                Copy text
               </button>
-            )}
-            {step === 'preview' && channel === 'whatsapp' && (
-              <>
-                <button
-                  onClick={handleCopyWhatsApp}
-                  disabled={sending}
-                  className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Copy the message text to clipboard"
-                >
-                  Copy text
-                </button>
-                <button
-                  onClick={handleSendWhatsApp}
-                  disabled={sending || !phone}
-                  className="px-4 py-2 text-sm bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                  title={phone ? 'Open WhatsApp with this message pre-filled' : 'No phone on file'}
-                >
-                  <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-                  </svg>
-                  {sending ? 'Opening…' : 'Open in WhatsApp'}
-                </button>
-              </>
-            )}
-            {step === 'preview' && channel === 'sms' && (
-              <>
-                <button
-                  onClick={handleCopyWhatsApp}
-                  disabled={sending}
-                  className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Copy the message text to clipboard"
-                >
-                  Copy text
-                </button>
-                <button
-                  onClick={handleSendSms}
-                  disabled={sending || !phone}
-                  className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                  title={phone ? 'Send this message as an SMS now' : 'No phone on file'}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 3v-3z" />
-                  </svg>
-                  {sending ? 'Sending…' : 'Send SMS'}
-                </button>
-              </>
-            )}
-          </div>
+              <button
+                onClick={handleSendWhatsApp}
+                disabled={sending || !phone}
+                className="px-4 py-2 text-sm bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                title={phone ? 'Open WhatsApp with this message pre-filled' : 'No phone on file'}
+              >
+                <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                </svg>
+                {sending ? 'Opening…' : 'Open in WhatsApp'}
+              </button>
+            </>
+          )}
+          {step === 'preview' && channel === 'sms' && (
+            <>
+              <button
+                onClick={handleCopyWhatsApp}
+                disabled={sending}
+                className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Copy the message text to clipboard"
+              >
+                Copy text
+              </button>
+              <button
+                onClick={handleSendSms}
+                disabled={sending || !phone}
+                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                title={phone ? 'Send this message as an SMS now' : 'No phone on file'}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 3v-3z" />
+                </svg>
+                {sending ? 'Sending…' : 'Send SMS'}
+              </button>
+            </>
+          )}
         </div>
       </div>
-    </div>
+    </FloatingPanel>
   );
 }

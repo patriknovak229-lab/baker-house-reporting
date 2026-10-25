@@ -2,15 +2,13 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import QRCodeLib from "qrcode";
-import PaymentLinkModal from "./PaymentLinkModal";
 import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, InvoiceSplit, RateType, StayShortening, ParkingUse } from "@/types/reservation";
 import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import MessageThread from "./MessageThread";
-import CreateVoucherModal from "./CreateVoucherModal";
-import EmailGuestModal from "./EmailGuestModal";
+import type { ReservationFormKind } from "./ReservationForms";
 import Badge from "@/components/shared/Badge";
 import { StayLinkSection, type StayLinkAction } from "@/components/transactions/StayLinks";
 import { WebPaymentRefund } from "@/components/transactions/WebPaymentRefund";
@@ -898,6 +896,9 @@ interface ReservationDrawerProps {
   onStayLink?: (earlier: Reservation, later: Reservation, action: StayLinkAction) => Promise<void>;
   /** Switch the drawer to another reservation (e.g. the other half of a linked stay). */
   onOpenReservation?: (r: Reservation) => void;
+  /** Open a floating form for this booking (Email/WhatsApp/SMS guest, payment link,
+   *  voucher). Mounted by TransactionsPage so it outlives the drawer (ReservationForms.tsx). */
+  onOpenForm?: (kind: ReservationFormKind, r: Reservation) => void;
 }
 
 function SourceLabel({ source, color }: { source: string; color?: string }) {
@@ -3078,6 +3079,7 @@ export default function ReservationDrawer({
   saveStatus = 'idle',
   onStayLink,
   onOpenReservation,
+  onOpenForm,
 }: ReservationDrawerProps) {
   const { data: naSession } = useSession();
   const naUserEmail = (naSession?.user as { email?: string } | undefined)?.email ?? "";
@@ -3361,11 +3363,6 @@ export default function ReservationDrawer({
   const [isSavingToDrive, setIsSavingToDrive] = useState(false);
   const [driveSaveResult, setDriveSaveResult] = useState<{ url: string; name: string } | null>(null);
   const [driveSaveError, setDriveSaveError] = useState<string | null>(null);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [showVoucherModal, setShowVoucherModal] = useState(false);
-  const [showEmailGuestModal, setShowEmailGuestModal] = useState(false);
-  const [showWhatsAppGuestModal, setShowWhatsAppGuestModal] = useState(false);
-  const [showSmsGuestModal, setShowSmsGuestModal] = useState(false);
 
   // ── Manual "move to another room" (maintenance / ad-hoc) ──
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -4962,7 +4959,7 @@ export default function ReservationDrawer({
                   || reservation.invoiceData?.billingEmail
                   || reservation.email) && (
                   <button
-                    onClick={() => setShowEmailGuestModal(true)}
+                    onClick={() => onOpenForm?.("email", reservation)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors"
                     title={`Send a templated email to ${reservation.firstName}`}
                   >
@@ -4979,7 +4976,7 @@ export default function ReservationDrawer({
                     Direct-Phone, Direct-Web) — only requires a phone. */}
                 {reservation.phone && (
                   <button
-                    onClick={() => setShowWhatsAppGuestModal(true)}
+                    onClick={() => onOpenForm?.("whatsapp", reservation)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-semibold transition-colors"
                     title={`Send a templated WhatsApp message to ${reservation.firstName}`}
                   >
@@ -4994,7 +4991,7 @@ export default function ReservationDrawer({
                     Only requires a phone. */}
                 {reservation.phone && (
                   <button
-                    onClick={() => setShowSmsGuestModal(true)}
+                    onClick={() => onOpenForm?.("sms", reservation)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold transition-colors"
                     title={`Send a templated SMS to ${reservation.firstName}`}
                   >
@@ -5270,7 +5267,7 @@ export default function ReservationDrawer({
 
             <div className="flex items-center gap-2 flex-wrap mt-2">
               <button
-                onClick={() => setShowPaymentModal(true)}
+                onClick={() => onOpenForm?.("payment-link", reservation)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors w-fit"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -5451,7 +5448,7 @@ export default function ReservationDrawer({
             <SubTitle>Vouchers</SubTitle>
 
             <button
-              onClick={() => setShowVoucherModal(true)}
+              onClick={() => onOpenForm?.("voucher", reservation)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors w-fit"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -6643,78 +6640,6 @@ export default function ReservationDrawer({
               </div>
             )}
           </DrawerSection>
-
-          {/* Modals — overlays, so their position among these siblings is
-               immaterial; kept together at the end. */}
-          {showPaymentModal && (
-            <PaymentLinkModal
-              defaultEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
-              defaultPhone={reservation.phone}
-              defaultAmount={reservation.paymentStatus === "Partially Paid" ? reservation.price - reservation.amountPaid : undefined}
-              defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
-              reservationNumber={reservation.reservationNumber}
-              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
-              onPaymentCreated={onPaymentCreated}
-              onClose={() => setShowPaymentModal(false)}
-            />
-          )}
-
-
-
-          {showVoucherModal && (
-            <CreateVoucherModal
-              reservationNumber={reservation.reservationNumber}
-              guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
-              guestEmail={reservation.additionalEmail || reservation.invoiceData?.billingEmail || undefined}
-              guestPhone={reservation.phone}
-              onVoucherCreated={onPaymentCreated}
-              onClose={() => setShowVoucherModal(false)}
-            />
-          )}
-
-          {showEmailGuestModal && (
-            <EmailGuestModal
-              reservation={reservation}
-              channel="email"
-              defaultEmail={
-                reservation.additionalEmail
-                  || reservation.invoiceData?.billingEmail
-                  || reservation.email
-                  || ''
-              }
-              onClose={() => setShowEmailGuestModal(false)}
-              onSent={() => {
-                setShowEmailGuestModal(false);
-                onPaymentCreated?.();
-              }}
-            />
-          )}
-
-          {showWhatsAppGuestModal && reservation.phone && (
-            <EmailGuestModal
-              reservation={reservation}
-              channel="whatsapp"
-              phone={reservation.phone}
-              onClose={() => setShowWhatsAppGuestModal(false)}
-              onSent={() => {
-                setShowWhatsAppGuestModal(false);
-                onPaymentCreated?.();
-              }}
-            />
-          )}
-
-          {showSmsGuestModal && reservation.phone && (
-            <EmailGuestModal
-              reservation={reservation}
-              channel="sms"
-              phone={reservation.phone}
-              onClose={() => setShowSmsGuestModal(false)}
-              onSent={() => {
-                setShowSmsGuestModal(false);
-                onPaymentCreated?.();
-              }}
-            />
-          )}
 
           {/* Move-to-another-room confirmation modal — maintenance / ad-hoc.
               Allows any room incl. cross-type and in-house guests. Occupied
