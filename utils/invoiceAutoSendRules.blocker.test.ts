@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { invoiceAutoSendBlocker } from "./invoiceAutoSendRules";
+import { invoiceAutoSendBlocker, invoiceNeedsOperator } from "./invoiceAutoSendRules";
 
 // This predicate exists to tell the operator, on the pending-tasks row,
 // whether an invoice is going out by itself. It is only useful if it agrees
@@ -76,5 +76,24 @@ describe("invoiceAutoSendBlocker", () => {
     expect(
       invoiceAutoSendBlocker({ ...ok, taskDate: "2026-01-01", isCancelled: true, billingEmail: "" }),
     ).toBe("too-old");
+  });
+});
+
+describe("invoiceNeedsOperator", () => {
+  // Decides what reaches the pending-tasks panel. The panel is a to-do list:
+  // an invoice nobody has to touch does not belong in it, however healthy.
+  it("keeps out an invoice the cron will send by itself", () => {
+    expect(invoiceNeedsOperator(null)).toBe(false);
+  });
+
+  it("keeps out one that already went out", () => {
+    // The next run closes the task; there is nothing to act on meanwhile.
+    expect(invoiceNeedsOperator("sent")).toBe(false);
+  });
+
+  it("lists every blocker that needs a human", () => {
+    for (const blocker of ["issued", "held", "split", "too-old", "not-live", "incomplete"] as const) {
+      expect(invoiceNeedsOperator(blocker)).toBe(true);
+    }
   });
 });

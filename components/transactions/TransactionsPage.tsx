@@ -6,7 +6,11 @@ import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
 import { unsentInvoices } from "@/utils/invoiceUtils";
-import { invoiceAutoSendBlocker, INVOICE_BLOCKER_LABEL } from "@/utils/invoiceAutoSendRules";
+import {
+  invoiceAutoSendBlocker,
+  invoiceNeedsOperator,
+  INVOICE_BLOCKER_LABEL,
+} from "@/utils/invoiceAutoSendRules";
 import UnsentInvoicesPanel from "./UnsentInvoicesPanel";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { RoomMoveNotice } from "@/types/roomMove";
@@ -170,6 +174,28 @@ async function publishRatePerks(r: Reservation): Promise<void> {
 }
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+/**
+ * Why this invoice task will not be auto-sent, or null when the cron will
+ * handle it unattended. Shared by the pending-tasks filter and the row badge
+ * so the panel never hides a row for one reason and labels it for another.
+ */
+function invoiceBlockerFor(reservation: Reservation, issue: Issue, todayYmd: string) {
+  return invoiceAutoSendBlocker({
+    invoiceStatus: reservation.invoiceStatus,
+    held: (reservation.issues ?? []).some(
+      (i) => i.category === "invoice" && !i.resolved && !!i.holdAutoSend,
+    ),
+    splitCount: reservation.invoiceSplits?.length ?? 0,
+    taskDate: issue.actionableDate,
+    todayYmd,
+    isCancelled: reservation.isCancelled,
+    isBlackout: reservation.isBlackout,
+    ico: reservation.invoiceData?.ico,
+    vatNumber: reservation.invoiceData?.vatNumber,
+    billingEmail: reservation.invoiceData?.billingEmail,
+  });
+}
 
 const UNREAD_POLL_INTERVAL_MS = 30_000;
 // Move notices only change when an operator moves something, and whoever does
@@ -717,16 +743,21 @@ export default function TransactionsPage() {
    *  An OVERDUE invoice task moves to the "invoices unsent" pill instead of
    *  being counted twice — a past stay whose invoice never went out is a
    *  different job (chase details, send by hand) from a task due next week. */
-  const upcomingUnresolved = useMemo(
-    () =>
-      allUpcomingUnresolved.filter((x) => {
-        const cat = x.issue.category ?? "problem";
-        if (cat === "earlyCheckin" || cat === "lateCheckout") return false;
-        if (cat === "invoice" && x.overdue) return false;
-        return true;
-      }),
-    [allUpcomingUnresolved],
-  );
+  const upcomingUnresolved = useMemo(() => {
+    const today = pragueToday();
+    return allUpcomingUnresolved.filter((x) => {
+      const cat = x.issue.category ?? "problem";
+      if (cat === "earlyCheckin" || cat === "lateCheckout") return false;
+      if (cat === "invoice" && x.overdue) return false;
+      // An invoice the cron will send by itself is an FYI, not a to-do. Listing
+      // it buried the rows that DO need a human — "put wine in the room", an
+      // invoice missing details — among entries where nothing is required.
+      if (cat === "invoice" && !invoiceNeedsOperator(invoiceBlockerFor(x.reservation, x.issue, today))) {
+        return false;
+      }
+      return true;
+    });
+  }, [allUpcomingUnresolved]);
 
   // Early check-in / late checkout requests become moot once their date
   // passes (the arrival/departure already happened), so — unlike the generic
@@ -2525,23 +2556,10 @@ export default function TransactionsPage() {
                       earlyCheckin: "Early Check-in Request",
                       lateCheckout: "Late Checkout Request",
                     };
+                    // Auto-sending invoices are filtered out above, so any
+                    // invoice row still here is blocked on something.
                     const invoiceBlocker =
-                      cat === "invoice"
-                        ? invoiceAutoSendBlocker({
-                            invoiceStatus: reservation.invoiceStatus,
-                            held: (reservation.issues ?? []).some(
-                              (i) => i.category === "invoice" && !i.resolved && !!i.holdAutoSend,
-                            ),
-                            splitCount: reservation.invoiceSplits?.length ?? 0,
-                            taskDate: issue.actionableDate,
-                            todayYmd: pragueToday(),
-                            isCancelled: reservation.isCancelled,
-                            isBlackout: reservation.isBlackout,
-                            ico: reservation.invoiceData?.ico,
-                            vatNumber: reservation.invoiceData?.vatNumber,
-                            billingEmail: reservation.invoiceData?.billingEmail,
-                          })
-                        : null;
+                      cat === "invoice" ? invoiceBlockerFor(reservation, issue, pragueToday()) : null;
                     const todayMs = new Date(new Date().toLocaleDateString("sv-SE") + "T00:00:00").getTime();
                     const dueMs = new Date(issue.actionableDate + "T00:00:00").getTime();
                     const daysLate = Math.round((todayMs - dueMs) / 86_400_000);
@@ -2568,23 +2586,16 @@ export default function TransactionsPage() {
                         <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>
                           <div className="flex items-center gap-1.5">
                             <span>{issue.actionableDate}</span>
-                            {/* An invoice row looks like a manual to-do when it
-                                is in fact scheduled. Say which it is. */}
-                            {cat === "invoice" && (invoiceBlocker === null ? (
-                              <span
-                                className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-semibold uppercase tracking-wide"
-                                title="Goes out by itself on this date — the 09:00 run. Nothing to do."
-                              >
-                                Auto
-                              </span>
-                            ) : (
+                            {/* Says why this one needs a human, since every
+                                invoice that doesn't is filtered out. */}
+                            {invoiceBlocker && (
                               <span
                                 className="px-1.5 py-0.5 rounded bg-gray-200 text-gray-700 text-[9px] font-semibold uppercase tracking-wide"
-                                title="This one will not auto-send — open the reservation and send it from the Invoice section."
+                                title="This invoice will not auto-send — open the reservation and send it from the Invoice section."
                               >
                                 {INVOICE_BLOCKER_LABEL[invoiceBlocker]}
                               </span>
-                            ))}
+                            )}
                             {overdue && (
                               <span
                                 className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-bold uppercase tracking-wide"

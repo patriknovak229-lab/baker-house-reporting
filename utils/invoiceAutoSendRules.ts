@@ -102,6 +102,21 @@ export const INVOICE_BLOCKER_LABEL: Record<InvoiceAutoSendBlocker, string> = {
   incomplete: 'needs details',
 };
 
+/**
+ * Does this invoice task belong in the operator's pending-tasks list?
+ *
+ * Only if a human has to do something. The panel is a to-do list, not a
+ * progress report: an invoice the cron will send on its own is an FYI, and
+ * mixing those in with "put a bottle of wine in the room" or "this invoice is
+ * incomplete" buries the work that actually needs doing.
+ *
+ * `sent` is excluded for the same reason — the invoice is out and the next run
+ * closes the task; there is nothing to act on.
+ */
+export function invoiceNeedsOperator(blocker: InvoiceAutoSendBlocker | null): boolean {
+  return blocker !== null && blocker !== 'sent';
+}
+
 // ─── Guest confirmation ──────────────────────────────────────────────────────
 
 /**
