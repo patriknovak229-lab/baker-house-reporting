@@ -46,7 +46,7 @@ function buildPrompt(args: { message: string; askedPhone: boolean; guestCountry?
 Extract their answers from the message below.
 
 - phone: the guest's OWN contact number, only if they give one. Return it in international format with a leading "+" (e.g. "+49 151 2345678"). If they wrote a national number with a leading 0 and their country is known${args.guestCountry ? ` (booking country: ${args.guestCountry})` : ''}, replace the 0 with that country's calling code. Never return a booking number, PIN, price, date or a number they quote from us. null when absent.
-- car: "yes" if they say they are coming by car (including "my partner drives", a rental car, or giving a plate), "no" if they say they are not (train, plane, no car, walking…). null when they don't answer it.
+- car: "yes" if they are coming by car. That includes asking for, requesting or asking about a parking space, the garage or where to park — a guest only asks about parking when they bring a car — as well as "my partner drives", a rental car, or giving a plate. "no" if they say they are not (train, plane, no car, walking, "we don't need parking"…). null when nothing in the message touches on a car or parking.
 - plate: the licence plate(s) exactly as written; several cars → comma-separated. null when absent.
 - onlyContactInfo: true when the message contains nothing beyond these answers, greetings and thanks. false when it also asks a question, makes a request or says anything else that needs a reply (check-in time, parking location, early arrival, a problem…).
 

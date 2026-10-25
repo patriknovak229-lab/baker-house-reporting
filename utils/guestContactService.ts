@@ -132,6 +132,46 @@ async function loadBookings(redis: Redis): Promise<Record<string, CachedBooking>
   return (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
 }
 
+/**
+ * Read bookings straight from Beds24. The Redis cache only refreshes when
+ * someone loads the dashboard, but guests often answer within a minute of
+ * booking (BH-95199521 replied after 44 s) — before the booking is cached.
+ * Read-only; returns [] on any failure.
+ */
+async function fetchBookingsFromBeds24(ids: number[]): Promise<CachedBooking[]> {
+  if (ids.length === 0) return [];
+  try {
+    const token = await getAccessToken();
+    const params = new URLSearchParams();
+    for (const id of ids.slice(0, 20)) params.append('id', String(id));
+    for (const st of ['confirmed', 'new', 'request']) params.append('status', st);
+    const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, { headers: { token }, cache: 'no-store' });
+    if (!res.ok) {
+      console.error(`[guest-contact] Beds24 booking read ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return [];
+    }
+    const json: unknown = await res.json();
+    const rows = Array.isArray(json) ? json : Array.isArray((json as { data?: unknown })?.data) ? (json as { data: unknown[] }).data : [];
+    return (rows as CachedBooking[]).filter((b) => b && Number.isFinite(Number(b.id)));
+  } catch (err) {
+    console.error('[guest-contact] Beds24 booking read failed:', err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+/** Bookings that got our question in the last few days but aren't in the cache yet. */
+export function uncachedAskedBookingIds(
+  recent: Map<number, ConversationMessage[]>,
+  cached: Record<string, unknown>,
+): number[] {
+  const ids: number[] = [];
+  for (const [bookingId, thread] of recent) {
+    if (cached[String(bookingId)]) continue;
+    if (findContactAsk(thread)) ids.push(bookingId);
+  }
+  return ids;
+}
+
 // ─── Saving ───────────────────────────────────────────────────────────────────
 
 interface Saved {
@@ -320,7 +360,8 @@ export async function tryCaptureContactReply(args: {
   const now = new Date();
 
   const bookings = await loadBookings(redis);
-  const b = bookings[String(bookingId)];
+  // A reply right after booking usually beats the cache refresh — read it live.
+  const b = bookings[String(bookingId)] ?? (await fetchBookingsFromBeds24([bookingId]))[0];
   if (!b || !isLive(b, pragueDate(now))) return false;
   const overrides = await readAllReservationOverrides<OverrideFields>();
   const own = overrides[`BH-${bookingId}`];
@@ -383,7 +424,12 @@ export async function runContactPass(redis: Redis | null, now = new Date()): Pro
   const overBudget = () => Date.now() - started > PASS_TIME_BUDGET_MS;
 
   const today = pragueDate(now);
-  const bookings = Object.values(await loadBookings(redis)).filter((b) => isMaster(b) && isLive(b, today));
+  const cached = await loadBookings(redis);
+  const recent = await fetchRecentMessagesByBooking(7);
+  // New bookings that already got our question may not be cached yet (the cache
+  // only refreshes when the dashboard loads) — read those from Beds24 directly.
+  const fresh = await fetchBookingsFromBeds24(uncachedAskedBookingIds(recent, cached));
+  const bookings = [...Object.values(cached), ...fresh].filter((b) => isMaster(b) && isLive(b, today));
   let overrides = await readAllReservationOverrides<OverrideFields>();
 
   let extractions = 0;
@@ -406,7 +452,6 @@ export async function runContactPass(redis: Redis | null, now = new Date()): Pro
     const n = needsFor(b, overrides[`BH-${b.id}`]);
     return n.phone || n.parking;
   });
-  const recent = needy.length > 0 ? await fetchRecentMessagesByBooking(7) : new Map<number, ConversationMessage[]>();
 
   for (const b of needy) {
     if (overBudget()) break;
@@ -519,6 +564,6 @@ export async function runContactPass(redis: Redis | null, now = new Date()): Pro
   }
 
   console.log(
-    `[guest-contact] pass: ${bookings.length} live, ${extractions} extracted, ${reminders} reminders, ${noPhone.length} no-phone alerts, ${phoneSyncs} phone syncs, ${threadFetches} thread reads`,
+    `[guest-contact] pass: ${bookings.length} live (${fresh.length} read from Beds24), ${extractions} extracted, ${reminders} reminders, ${noPhone.length} no-phone alerts, ${phoneSyncs} phone syncs, ${threadFetches} thread reads`,
   );
 }

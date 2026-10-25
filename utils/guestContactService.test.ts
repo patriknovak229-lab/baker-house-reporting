@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planSave } from "./guestContactService";
+import { planSave, uncachedAskedBookingIds } from "./guestContactService";
 import { parseContact } from "./guestContactExtractor";
 
 const NOW = new Date("2026-10-23T12:00:00Z");
@@ -54,5 +54,20 @@ describe("planSave", () => {
     const fromOperator = { status: "no-car" as const, source: "operator" as const, updatedAt: "x" };
     expect(planSave(answer, { phone: false, parking: false }, fromGuest, NOW).parking?.status).toBe("car");
     expect(planSave(answer, { phone: false, parking: false }, fromOperator, NOW).parking).toBeUndefined();
+  });
+});
+
+describe("uncachedAskedBookingIds", () => {
+  const ask = { role: "host" as const, text: "Are you coming by car? (yes / no) If yes…", time: "2026-10-25T07:21:26Z" };
+  const reply = { role: "guest" as const, text: "Please provide us with car parking place.", time: "2026-10-25T07:22:10Z" };
+  const other = { role: "host" as const, text: "Your reservation is confirmed.", time: "2026-10-25T07:21:27Z" };
+
+  it("picks bookings that got our question but aren't cached yet", () => {
+    const recent = new Map([
+      [95199521, [ask, other, reply]], // booked 44 s before the reply — not cached
+      [90000001, [ask]], // cached already
+      [90000002, [other]], // never asked
+    ]);
+    expect(uncachedAskedBookingIds(recent, { "90000001": {} })).toEqual([95199521]);
   });
 });
