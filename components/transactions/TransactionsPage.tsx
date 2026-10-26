@@ -703,14 +703,15 @@ export default function TransactionsPage() {
   const [taskAlertOpen, setTaskAlertOpen] = useState(false);
   const [earlyCheckinPanelOpen, setEarlyCheckinPanelOpen] = useState(false);
   const [lateCheckoutPanelOpen, setLateCheckoutPanelOpen] = useState(false);
-  const [clashPanelOpen, setClashPanelOpen] = useState(false);
   const [unallocatedPanelOpen, setUnallocatedPanelOpen] = useState(false);
-  const [blackoutsPanelOpen, setBlackoutsPanelOpen] = useState(false);
+  /** One "Stay Restrictions" pill covers check-in/out restrictions, active
+   *  blackouts and turnover clashes: long-lived, often not actionable, so
+   *  they stay out of the way until clicked. */
+  const [stayRestrictionsOpen, setStayRestrictionsOpen] = useState(false);
   /** Per-blackout deletion state (reservationNumber → pending). Keeps the
    *  "Remove" button responsive when the operator clicks multiple in
    *  quick succession. */
   const [removingBlackoutId, setRemovingBlackoutId] = useState<string | null>(null);
-  const [restrictionsPanelOpen, setRestrictionsPanelOpen] = useState(false);
   const [removingRestrictionId, setRemovingRestrictionId] = useState<string | null>(null);
   const [postStayPanelOpen, setPostStayPanelOpen] = useState(false);
   const [ackingPostStayId, setAckingPostStayId] = useState<string | null>(null);
@@ -1051,6 +1052,8 @@ export default function TransactionsPage() {
       .filter((r) => r.to >= today)
       .sort((a, b) => a.from.localeCompare(b.from) || a.unitLabel.localeCompare(b.unitLabel));
   }, [restrictions]);
+
+  const stayRestrictionCount = activeRestrictions.length + activeBlackouts.length + turnoverClashes.length;
 
   async function removeRestriction(r: StayRestriction) {
     if (removingRestrictionId) return; // one at a time
@@ -1602,8 +1605,38 @@ export default function TransactionsPage() {
         || unsentInvoiceRows.length > 0
         || postStayChanges.length > 0) && (
         <div className="mb-3 space-y-2">
-          {/* Pills row */}
-          <div className="flex flex-wrap items-start gap-2">
+          {/* Pills row. Desktop is three columns so Pending tasks sits in the
+              middle of the screen: the small Stay Restrictions pill on the
+              left, the other to-dos flowing right. Mobile is one wrapping row. */}
+          <div className="flex flex-wrap items-center gap-2 lg:grid lg:grid-cols-[1fr_auto_1fr]">
+            {stayRestrictionCount > 0 && (
+              <button
+                onClick={() => setStayRestrictionsOpen((o) => !o)}
+                title={[
+                  activeRestrictions.length > 0 &&
+                    `${activeRestrictions.length} check-in/out ${activeRestrictions.length === 1 ? "restriction" : "restrictions"}`,
+                  activeBlackouts.length > 0 &&
+                    `${activeBlackouts.length} active ${activeBlackouts.length === 1 ? "blackout" : "blackouts"}`,
+                  turnoverClashes.length > 0 &&
+                    `${turnoverClashes.length} turnover ${turnoverClashes.length === 1 ? "clash" : "clashes"}`,
+                ].filter(Boolean).join(" · ")}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-xs font-medium hover:bg-amber-100 transition-colors lg:col-start-1 lg:row-start-1 lg:justify-self-start"
+              >
+                <svg className="w-3 h-3 shrink-0 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2zM10 14l4 4m0-4l-4 4" />
+                </svg>
+                Stay Restrictions
+                <span className="px-1.5 rounded-full bg-amber-200/70 text-amber-900 text-[10px] font-semibold">
+                  {stayRestrictionCount}
+                </span>
+                <svg
+                  className={`w-3 h-3 transition-transform ${stayRestrictionsOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
             {upcomingUnresolved.length > 0 && (
               <button
                 onClick={() => setTaskAlertOpen((o) => !o)}
@@ -1611,14 +1644,15 @@ export default function TransactionsPage() {
                 // when everything's still upcoming (heads-up only). Stops the
                 // "everything is red" anxiety when the only pending items
                 // are e.g. invoice-send tasks dated for next week's checkout.
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                // Larger than its neighbours: this is the row's main to-do.
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-[15px] font-semibold shadow-sm transition-colors lg:col-start-2 lg:row-start-1 ${
                   overdueCount > 0
-                    ? 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100'
-                    : 'bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100'
+                    ? 'bg-red-50 border border-red-300 text-red-700 hover:bg-red-100'
+                    : 'bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100'
                 }`}
               >
                 <span
-                  className={`flex items-center justify-center w-4 h-4 rounded-full text-white text-[9px] font-bold shrink-0 ${
+                  className={`flex items-center justify-center w-5 h-5 rounded-full text-white text-[11px] font-bold shrink-0 ${
                     overdueCount > 0 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
                   }`}
                 >!</span>
@@ -1628,15 +1662,18 @@ export default function TransactionsPage() {
                     {overdueCount} overdue
                   </span>
                 )}
-                <span className={`font-normal ${overdueCount > 0 ? 'text-red-500' : 'text-amber-600'}`}>· next 7 days</span>
+                <span className={`text-sm font-normal ${overdueCount > 0 ? 'text-red-500' : 'text-amber-600'}`}>· next 7 days</span>
                 <svg
-                  className={`w-3.5 h-3.5 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
+                  className={`w-4 h-4 transition-transform ${taskAlertOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
             )}
+            {/* Everything else. `contents` on mobile so these pills wrap in the
+                same row; on desktop they're the right-hand column. */}
+            <div className="contents lg:col-start-3 lg:row-start-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
             {unsentInvoiceRows.length > 0 && (
               <button
                 onClick={() => setUnsentInvoicePanelOpen((o) => !o)}
@@ -1745,45 +1782,6 @@ export default function TransactionsPage() {
                 </svg>
               </button>
             )}
-            {activeBlackouts.length > 0 && (
-              <button
-                onClick={() => setBlackoutsPanelOpen((o) => !o)}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-50 border border-rose-300 text-rose-800 text-sm font-medium hover:bg-rose-100 transition-colors"
-              >
-                <svg className="w-3.5 h-3.5 shrink-0 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 105.636 5.636m12.728 12.728L5.636 5.636" />
-                </svg>
-                {activeBlackouts.length} active {activeBlackouts.length === 1 ? "blackout" : "blackouts"}
-                <span className="text-rose-600 font-normal">· manage</span>
-                <svg
-                  className={`w-3.5 h-3.5 transition-transform ${blackoutsPanelOpen ? "rotate-180" : ""}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            )}
-            {activeRestrictions.length > 0 && (
-              <button
-                onClick={() => setRestrictionsPanelOpen((o) => !o)}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-sm font-medium hover:bg-amber-100 transition-colors"
-              >
-                <svg className="w-3.5 h-3.5 shrink-0 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2zM10 14l4 4m0-4l-4 4" />
-                </svg>
-                {activeRestrictions.length} check-in/out {activeRestrictions.length === 1 ? "restriction" : "restrictions"}
-                {activeRestrictions.some((r) => !r.effective) && (
-                  <span className="text-amber-700" title="At least one is set on a single studio unit in Beds24 and restricts nothing">⚠</span>
-                )}
-                <span className="text-amber-600 font-normal">· manage</span>
-                <svg
-                  className={`w-3.5 h-3.5 transition-transform ${restrictionsPanelOpen ? "rotate-180" : ""}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            )}
             {upcomingEarlyCheckins.length > 0 && (
               <button
                 onClick={() => setEarlyCheckinPanelOpen((o) => !o)}
@@ -1816,25 +1814,6 @@ export default function TransactionsPage() {
                 <span className="text-orange-500 font-normal">· next 7 days</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${lateCheckoutPanelOpen ? "rotate-180" : ""}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            )}
-            {turnoverClashes.length > 0 && (
-              <button
-                onClick={() => setClashPanelOpen((o) => !o)}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-rose-50 border border-rose-300 text-rose-800 text-sm font-medium hover:bg-rose-100 transition-colors"
-              >
-                <svg className="w-3.5 h-3.5 shrink-0 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                </svg>
-                {turnoverClashes.length} turnover {turnoverClashes.length === 1 ? "clash" : "clashes"}
-                <span className="text-rose-600 font-normal">· late-out vs early-in</span>
-                <svg
-                  className={`w-3.5 h-3.5 transition-transform ${clashPanelOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -1884,6 +1863,7 @@ export default function TransactionsPage() {
                 </button>
               );
             })()}
+            </div>
           </div>
 
           {/* Unsent invoices panel — past stays the guest asked to be invoiced for */}
@@ -1964,59 +1944,6 @@ export default function TransactionsPage() {
                       </td>
                       <td className="px-4 py-2 text-orange-700 max-w-md">
                         <div className="line-clamp-2">{issue.text}</div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Turnover clashes panel — late checkout vs early check-in, same room/day */}
-          {turnoverClashes.length > 0 && clashPanelOpen && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 overflow-hidden">
-              <div className="px-4 py-2 border-b border-rose-200 text-xs text-rose-700">
-                Same room, same day: a late checkout (until 12:00) meets an early check-in (from 13:00) — the cleaning window is ~1&nbsp;hour. Coordinate with cleaners, or use the suggested like-for-like move.
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-rose-200">
-                    {["Room", "Turnover", "Leaving · late 12:00", "Arriving · early 13:00", "Suggestion"].map((h) => (
-                      <th key={h} className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-rose-100">
-                  {turnoverClashes.map((c) => (
-                    <tr key={`${c.room}-${c.date}-${c.incoming.reservationNumber}`} className="hover:bg-rose-100">
-                      <td className="px-4 py-2 font-medium text-rose-900 whitespace-nowrap">{c.room}</td>
-                      <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{c.date}</td>
-                      <td className="px-4 py-2 whitespace-nowrap">
-                        <button
-                          onClick={() => { setSelectedReservation(c.outgoing); setClashPanelOpen(false); }}
-                          className="text-rose-800 hover:underline text-left"
-                        >
-                          {c.outgoing.firstName} {c.outgoing.lastName}{" "}
-                          <span className="text-rose-400 font-mono text-[11px]">{c.outgoing.reservationNumber}</span>
-                        </button>
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap">
-                        <button
-                          onClick={() => { setSelectedReservation(c.incoming); setClashPanelOpen(false); }}
-                          className="text-rose-800 hover:underline text-left"
-                        >
-                          {c.incoming.firstName} {c.incoming.lastName}{" "}
-                          <span className="text-rose-400 font-mono text-[11px]">{c.incoming.reservationNumber}</span>
-                        </button>
-                      </td>
-                      <td className="px-4 py-2 text-rose-700 text-xs">
-                        {c.suggestion ? (
-                          <>Move {c.suggestion.who === "incoming" ? "arriving" : "leaving"} guest → <span className="font-semibold text-rose-900">{c.suggestion.toRoom}</span> <span className="text-rose-400">(free)</span></>
-                        ) : (
-                          <span className="text-rose-400">no free like-for-like room</span>
-                        )}
                       </td>
                     </tr>
                   ))}
@@ -2116,125 +2043,190 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {/* Active blackouts panel — only PROSPECTIVE ones (still blocking
-              future dates). Each row has an inline Remove button that calls
-              the override-clear endpoint and refetches. Operator can also
-              open the drawer (click row) to get the full blackout details. */}
-          {activeBlackouts.length > 0 && blackoutsPanelOpen && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 overflow-hidden">
-              <div className="px-4 py-2 bg-rose-100/60 border-b border-rose-200 flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-rose-900">
-                  Active blackouts
-                </span>
-                <span className="text-[11px] text-rose-700">
-                  Showing only blackouts still blocking future dates · {activeBlackouts.length} total
-                </span>
+          {/* Stay Restrictions panel — the three long-lived kinds behind the
+              one small pill: check-in/out restrictions, blackouts still
+              blocking future dates, and turnover clashes. */}
+          {stayRestrictionCount > 0 && stayRestrictionsOpen && (
+            <div className="space-y-2">
+            {/* Check-in/out restrictions panel: the ones still ahead, each with an
+                inline Remove that resets those days to "none" in Beds24. */}
+            {activeRestrictions.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+                <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                    Check-in/out restrictions
+                  </span>
+                  <span className="text-[11px] text-amber-700">
+                    Nights stay on sale; only arrivals and/or departures on these days are blocked · {activeRestrictions.length} total
+                  </span>
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-amber-200">
+                      {["Rooms", "Blocks", "First day", "Last day", ""].map((h, i) => (
+                        <th
+                          key={i}
+                          className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left"
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-200">
+                    {activeRestrictions.map((r) => {
+                      const pending = removingRestrictionId === r.id;
+                      return (
+                        <tr key={r.id}>
+                          <td className="px-4 py-2 font-medium text-amber-900 whitespace-nowrap">
+                            {r.rooms.length > 1 ? `${r.unitLabel} (${r.rooms.join(", ")})` : r.rooms[0]}
+                            {!r.effective && (
+                              <span
+                                className="ml-2 text-[11px] font-normal text-red-700"
+                                title={`Set on this unit only in Beds24. Booking.com, Airbnb and the website sell the ${r.unitLabel} type, so it restricts nothing. Remove it and set it here instead.`}
+                              >
+                                ⚠ unit only, has no effect
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 text-amber-800 text-xs whitespace-nowrap">{RESTRICTION_LABEL[r.kind]}</td>
+                          <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.from}</td>
+                          <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.to}</td>
+                          <td className="px-4 py-2 text-right whitespace-nowrap">
+                            {role && canMutate(role, "transactions") && (
+                              <button
+                                onClick={() => removeRestriction(r)}
+                                disabled={pending || removingRestrictionId !== null}
+                                className="px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-40 transition-colors"
+                              >
+                                {pending ? 'Removing…' : 'Remove'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-rose-200">
-                    {["Room", "From", "To", "Nights", ""].map((h, i) => (
-                      <th
-                        key={i}
-                        className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left"
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-rose-200">
-                  {activeBlackouts.map((b) => {
-                    const pending = removingBlackoutId === b.reservationNumber;
-                    return (
-                      <tr
-                        key={b.reservationNumber}
-                        className="hover:bg-rose-100/70 cursor-pointer"
-                        onClick={() => { setSelectedReservation(b); setBlackoutsPanelOpen(false); }}
-                      >
-                        <td className="px-4 py-2 font-medium text-rose-900 whitespace-nowrap">{b.room}</td>
-                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.checkInDate}</td>
-                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.checkOutDate}</td>
-                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.numberOfNights}</td>
-                        <td className="px-4 py-2 text-right whitespace-nowrap">
-                          <button
-                            // Stop the row click from also firing — operator
-                            // wants to remove, not open the drawer.
-                            onClick={(e) => { e.stopPropagation(); removeBlackout(b.reservationNumber); }}
-                            disabled={pending || removingBlackoutId !== null}
-                            className="px-2.5 py-1 rounded-md bg-rose-600 text-white text-xs font-medium hover:bg-rose-700 disabled:opacity-40 transition-colors"
-                          >
-                            {pending ? 'Removing…' : 'Remove'}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+            )}
 
-          {/* Check-in/out restrictions panel: the ones still ahead, each with an
-              inline Remove that resets those days to "none" in Beds24. */}
-          {activeRestrictions.length > 0 && restrictionsPanelOpen && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
-              <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-amber-900">
-                  Check-in/out restrictions
-                </span>
-                <span className="text-[11px] text-amber-700">
-                  Nights stay on sale; only arrivals and/or departures on these days are blocked · {activeRestrictions.length} total
-                </span>
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-amber-200">
-                    {["Rooms", "Blocks", "First day", "Last day", ""].map((h, i) => (
-                      <th
-                        key={i}
-                        className="px-4 py-2 text-xs font-medium text-amber-700 uppercase tracking-wide text-left"
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-amber-200">
-                  {activeRestrictions.map((r) => {
-                    const pending = removingRestrictionId === r.id;
-                    return (
-                      <tr key={r.id}>
-                        <td className="px-4 py-2 font-medium text-amber-900 whitespace-nowrap">
-                          {r.rooms.length > 1 ? `${r.unitLabel} (${r.rooms.join(", ")})` : r.rooms[0]}
-                          {!r.effective && (
-                            <span
-                              className="ml-2 text-[11px] font-normal text-red-700"
-                              title={`Set on this unit only in Beds24. Booking.com, Airbnb and the website sell the ${r.unitLabel} type, so it restricts nothing. Remove it and set it here instead.`}
-                            >
-                              ⚠ unit only, has no effect
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2 text-amber-800 text-xs whitespace-nowrap">{RESTRICTION_LABEL[r.kind]}</td>
-                        <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.from}</td>
-                        <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.to}</td>
-                        <td className="px-4 py-2 text-right whitespace-nowrap">
-                          {role && canMutate(role, "transactions") && (
+            {/* Active blackouts panel — only PROSPECTIVE ones (still blocking
+                future dates). Each row has an inline Remove button that calls
+                the override-clear endpoint and refetches. Operator can also
+                open the drawer (click row) to get the full blackout details. */}
+            {activeBlackouts.length > 0 && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 overflow-hidden">
+                <div className="px-4 py-2 bg-rose-100/60 border-b border-rose-200 flex items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-rose-900">
+                    Active blackouts
+                  </span>
+                  <span className="text-[11px] text-rose-700">
+                    Showing only blackouts still blocking future dates · {activeBlackouts.length} total
+                  </span>
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-rose-200">
+                      {["Room", "From", "To", "Nights", ""].map((h, i) => (
+                        <th
+                          key={i}
+                          className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left"
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-rose-200">
+                    {activeBlackouts.map((b) => {
+                      const pending = removingBlackoutId === b.reservationNumber;
+                      return (
+                        <tr
+                          key={b.reservationNumber}
+                          className="hover:bg-rose-100/70 cursor-pointer"
+                          onClick={() => { setSelectedReservation(b); setStayRestrictionsOpen(false); }}
+                        >
+                          <td className="px-4 py-2 font-medium text-rose-900 whitespace-nowrap">{b.room}</td>
+                          <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.checkInDate}</td>
+                          <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.checkOutDate}</td>
+                          <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{b.numberOfNights}</td>
+                          <td className="px-4 py-2 text-right whitespace-nowrap">
                             <button
-                              onClick={() => removeRestriction(r)}
-                              disabled={pending || removingRestrictionId !== null}
-                              className="px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-40 transition-colors"
+                              // Stop the row click from also firing — operator
+                              // wants to remove, not open the drawer.
+                              onClick={(e) => { e.stopPropagation(); removeBlackout(b.reservationNumber); }}
+                              disabled={pending || removingBlackoutId !== null}
+                              className="px-2.5 py-1 rounded-md bg-rose-600 text-white text-xs font-medium hover:bg-rose-700 disabled:opacity-40 transition-colors"
                             >
                               {pending ? 'Removing…' : 'Remove'}
                             </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Turnover clashes panel — late checkout vs early check-in, same room/day */}
+            {turnoverClashes.length > 0 && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 overflow-hidden">
+                <div className="px-4 py-2 bg-rose-100/60 border-b border-rose-200 flex items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-rose-900">
+                    Turnover clashes
+                  </span>
+                  <span className="text-[11px] text-rose-700">
+                    Same room, same day: a late checkout (until 12:00) meets an early check-in (from 13:00) — the cleaning window is ~1&nbsp;hour. Coordinate with cleaners, or use the suggested like-for-like move.
+                  </span>
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-rose-200">
+                      {["Room", "Turnover", "Leaving · late 12:00", "Arriving · early 13:00", "Suggestion"].map((h) => (
+                        <th key={h} className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-rose-100">
+                    {turnoverClashes.map((c) => (
+                      <tr key={`${c.room}-${c.date}-${c.incoming.reservationNumber}`} className="hover:bg-rose-100">
+                        <td className="px-4 py-2 font-medium text-rose-900 whitespace-nowrap">{c.room}</td>
+                        <td className="px-4 py-2 text-rose-700 text-xs whitespace-nowrap">{c.date}</td>
+                        <td className="px-4 py-2 whitespace-nowrap">
+                          <button
+                            onClick={() => { setSelectedReservation(c.outgoing); setStayRestrictionsOpen(false); }}
+                            className="text-rose-800 hover:underline text-left"
+                          >
+                            {c.outgoing.firstName} {c.outgoing.lastName}{" "}
+                            <span className="text-rose-400 font-mono text-[11px]">{c.outgoing.reservationNumber}</span>
+                          </button>
+                        </td>
+                        <td className="px-4 py-2 whitespace-nowrap">
+                          <button
+                            onClick={() => { setSelectedReservation(c.incoming); setStayRestrictionsOpen(false); }}
+                            className="text-rose-800 hover:underline text-left"
+                          >
+                            {c.incoming.firstName} {c.incoming.lastName}{" "}
+                            <span className="text-rose-400 font-mono text-[11px]">{c.incoming.reservationNumber}</span>
+                          </button>
+                        </td>
+                        <td className="px-4 py-2 text-rose-700 text-xs">
+                          {c.suggestion ? (
+                            <>Move {c.suggestion.who === "incoming" ? "arriving" : "leaving"} guest → <span className="font-semibold text-rose-900">{c.suggestion.toRoom}</span> <span className="text-rose-400">(free)</span></>
+                          ) : (
+                            <span className="text-rose-400">no free like-for-like room</span>
                           )}
                         </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             </div>
           )}
 
