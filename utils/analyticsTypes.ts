@@ -992,5 +992,11 @@ export interface WebFunnelResponse {
     firstDay: string | null;
     channels: WebTrafficRow[];
     sourceMedium: WebTrafficRow[];
+    /**
+     * GA purchases vs archive bookings over the SAME days, starting no earlier than
+     * GA_PURCHASES_SINCE (the site only sends `purchase` to GA from then). Null when
+     * the window holds none of those days.
+     */
+    purchaseCheck: { since: string; until: string; gaPurchases: number; webBookings: number } | null;
   };
 }

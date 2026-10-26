@@ -21,6 +21,9 @@ import { funnelKeyPrefix, funnelRedisConfigured, gaConfigured } from './webFunne
 /** The rental site's channel in the bookings archive. */
 const WEB_CHANNEL = 'Direct-Web';
 
+/** First day the site sent GA4 `purchase` (rental-site 6e74e70). Earlier GA days have none by design. */
+const GA_PURCHASES_SINCE = '2026-10-26';
+
 const isoOrNull = (v: unknown) => (typeof v === 'string' && v ? v : null);
 
 type Runner = <T>(statement: SQL) => Promise<T[]>;
@@ -147,6 +150,28 @@ export async function readWebFunnel(
     searches: n(r.searches),
     noAvailability: n(r.none),
   }));
+  // Like-for-like coverage check: both sides over the same days, and only days on
+  // which GA could have seen a purchase at all.
+  const checkFrom = from > GA_PURCHASES_SINCE ? from : GA_PURCHASES_SINCE;
+  const checkTo = to < todayIso ? to : todayIso;
+  let purchaseCheck: WebFunnelResponse['ga']['purchaseCheck'] = null;
+  if (checkFrom <= checkTo) {
+    const [gaP, booked] = await Promise.all([
+      run<{ n: number }>(sql`
+        SELECT COALESCE(SUM(purchases), 0)::int AS n FROM web_traffic_daily
+        WHERE day BETWEEN ${checkFrom}::date AND ${checkTo}::date
+      `),
+      run<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM bookings_mirror b
+        WHERE b.source = 'beds24-booking' AND b.channel = ${WEB_CHANNEL}
+          AND b.is_blackout = false AND b.is_cancelled = false
+          AND b.reservation_date BETWEEN ${checkFrom}::date AND ${checkTo}::date
+          AND ${TEST_BOOKING_PREDICATE}
+      `),
+    ]);
+    purchaseCheck = { since: checkFrom, until: checkTo, gaPurchases: n(gaP[0]?.n), webBookings: n(booked[0]?.n) };
+  }
+
   const traffic = (rows: typeof channelRows): WebTrafficRow[] =>
     rows.map((r) => ({
       key: r.key,
@@ -173,6 +198,7 @@ export async function readWebFunnel(
       firstDay: isoOrNull(gaMeta[0]?.first_day),
       channels: traffic(channelRows),
       sourceMedium: traffic(sourceRows),
+      purchaseCheck,
     },
   };
 }

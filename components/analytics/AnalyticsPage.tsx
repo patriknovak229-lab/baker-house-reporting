@@ -85,6 +85,8 @@ export default function AnalyticsPage({
   const [rates, setRates] = useState<SectionState<RatesResponse>>(idle);
   const [costs, setCosts] = useState<SectionState<CostsResponse>>(idle);
   const [webFunnel, setWebFunnel] = useState<SectionState<WebFunnelResponse>>(idle);
+  /** "Copy now" result — held here because the reload it triggers remounts the section. */
+  const [webFunnelCopyNote, setWebFunnelCopyNote] = useState<string | null>(null);
 
   /**
    * The market benchmark is loaded once at page level rather than per section,
@@ -423,7 +425,9 @@ export default function AnalyticsPage({
             {(data) => (
               <WebFunnelSection
                 data={data}
-                onReload={() => {
+                copyNote={webFunnelCopyNote}
+                onReload={(note) => {
+                  setWebFunnelCopyNote(note);
                   loadedFor.current['web-funnel'] = null;
                   void load<WebFunnelResponse>('web-funnel', 'web-funnel', setWebFunnel);
                 }}

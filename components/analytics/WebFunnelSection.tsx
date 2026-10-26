@@ -112,10 +112,13 @@ function sumRows(a: Row, b: Row): Row {
 export default function WebFunnelSection({
   data,
   onReload,
+  copyNote = null,
 }: {
   data: WebFunnelResponse;
-  /** Refetch this section after a manual copy. */
-  onReload: () => void;
+  /** Refetch this section after a manual copy; `note` is the copy's result line. */
+  onReload: (note: string) => void;
+  /** Result of the last "Copy now", kept by the page — the reload remounts this section. */
+  copyNote?: string | null;
 }) {
   const [granularity, setGranularity] = useState<Granularity>('day');
 
@@ -145,7 +148,7 @@ export default function WebFunnelSection({
 
   return (
     <>
-      <SourceBanner data={data} onReload={onReload} />
+      <SourceBanner data={data} onReload={onReload} copyNote={copyNote} />
 
       {!hasCounts ? (
         <Card title="No first-party counts yet">
@@ -324,20 +327,26 @@ export default function WebFunnelSection({
         </>
       )}
 
-      <TrafficCard data={data} bookings={bookings} />
+      <TrafficCard data={data} />
     </>
   );
 }
 
 // ── Source banner + manual copy ──────────────────────────────────────────────
 
-function SourceBanner({ data, onReload }: { data: WebFunnelResponse; onReload: () => void }) {
+function SourceBanner({
+  data,
+  onReload,
+  copyNote,
+}: {
+  data: WebFunnelResponse;
+  onReload: (note: string) => void;
+  copyNote: string | null;
+}) {
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
 
   async function copyNow() {
     setBusy(true);
-    setNote(null);
     const notes: string[] = [];
     for (const [label, path] of [
       ['Funnel', '/api/cron/web-funnel-sync'],
@@ -359,9 +368,8 @@ function SourceBanner({ data, onReload }: { data: WebFunnelResponse; onReload: (
         notes.push(`${label}: ${err instanceof Error ? err.message : 'failed'}`);
       }
     }
-    setNote(notes.join(' · '));
     setBusy(false);
-    onReload();
+    onReload(`${notes.join(' · ')} (${new Date().toLocaleTimeString('cs-CZ')})`);
   }
 
   return (
@@ -385,7 +393,7 @@ function SourceBanner({ data, onReload }: { data: WebFunnelResponse; onReload: (
             {busy ? 'Copying…' : 'Copy now'}
           </button>
           <span className="text-[11px] opacity-80">
-            {note ?? 'Runs nightly anyway (01:15 UTC funnel, 01:30 UTC GA4); this also pulls today so far.'}
+            {copyNote ?? 'Runs nightly anyway (01:15 UTC funnel, 01:30 UTC GA4); this also pulls today so far.'}
           </span>
         </div>
       </Callout>
@@ -631,10 +639,9 @@ function DataQuality({ metrics }: { metrics: Record<string, number> }) {
 
 // ── GA4 traffic sources ──────────────────────────────────────────────────────
 
-function TrafficCard({ data, bookings }: { data: WebFunnelResponse; bookings: number }) {
+function TrafficCard({ data }: { data: WebFunnelResponse }) {
   const { ga } = data;
   const sessions = ga.channels.reduce((s, r) => s + r.sessions, 0);
-  const purchases = ga.channels.reduce((s, r) => s + r.purchases, 0);
   return (
     <Card
       title="Traffic sources — GA4 sample"
@@ -653,10 +660,21 @@ function TrafficCard({ data, bookings }: { data: WebFunnelResponse; bookings: nu
           <TrafficTable title="Default channel group" rows={ga.channels} sessions={sessions} />
           <TrafficTable title="Source / medium (top 20)" rows={ga.sourceMedium} sessions={sessions} />
           <p className="text-[11px] text-gray-400 xl:col-span-2">
-            GA recorded {num(purchases)} purchase{purchases === 1 ? '' : 's'} against {num(bookings)} real web booking
-            {bookings === 1 ? '' : 's'} in the archive for the days above
-            {bookings > 0 ? ` — GA sees about ${ratePct(rate(purchases, bookings))} of them` : ''}. Users are summed per
-            day, so a returning visitor counts once per day.
+            {ga.purchaseCheck
+              ? `From ${dayLabel(ga.purchaseCheck.since, false)} (when the site started sending purchases to GA) to ${dayLabel(
+                  ga.purchaseCheck.until,
+                  false,
+                )}, GA recorded ${num(ga.purchaseCheck.gaPurchases)} purchase${
+                  ga.purchaseCheck.gaPurchases === 1 ? '' : 's'
+                } against ${num(ga.purchaseCheck.webBookings)} real web booking${
+                  ga.purchaseCheck.webBookings === 1 ? '' : 's'
+                }${
+                  ga.purchaseCheck.webBookings > 0
+                    ? ` — GA sees about ${ratePct(rate(ga.purchaseCheck.gaPurchases, ga.purchaseCheck.webBookings))} of them`
+                    : ''
+                }. `
+              : 'GA purchases are only sent from 26 Oct 2026, so this period has nothing to compare. '}
+            Users are summed per day, so a returning visitor counts once per day.
             {ga.lastFetchedAt ? ` Last pulled ${new Date(ga.lastFetchedAt).toLocaleString('cs-CZ')}.` : ''}
           </p>
         </div>
