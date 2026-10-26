@@ -506,6 +506,7 @@ export async function GET(req: NextRequest) {
             nights: Math.round(
               (Date.parse(`${b.departure}T00:00:00Z`) - Date.parse(`${b.arrival}T00:00:00Z`)) / 86_400_000,
             ),
+            bookingTime: b.bookingTime,
           });
           return {
             reservationNumber: `BH-${b.id}`,

@@ -7,7 +7,10 @@ import {
   cancellationTone,
   cancellationShortLabel,
   bookingGraceStatus,
-  HOUSE_FREE_CANCEL_DAYS,
+  cancellationSummary,
+  houseCancellationPolicy,
+  HOUSE_SHORT_STAY_FREE_CANCEL_DAYS,
+  HOUSE_LONG_STAY_FREE_CANCEL_DAYS,
 } from "./cancellationPolicy";
 
 /**
@@ -217,10 +220,31 @@ describe("deriveCancellationPolicy", () => {
 
   it("applies the published house policy to every direct channel", () => {
     for (const channel of ["Direct", "Direct-Web", "Direct-Phone"] as const) {
-      const p = deriveCancellationPolicy({ channel, arrivalDate: "2026-09-20" })!;
+      const p = deriveCancellationPolicy({
+        channel,
+        arrivalDate: "2026-09-20",
+        nights: 3,
+        bookingTime: "2026-08-10T10:00:00Z",
+      })!;
       expect(p.source).toBe("House policy");
-      expect(p.freeDays).toBe(HOUSE_FREE_CANCEL_DAYS);
+      expect(p.freeDays).toBe(HOUSE_SHORT_STAY_FREE_CANCEL_DAYS);
       expect(p.freeUntilDate).toBe("2026-09-13");
+    }
+  });
+
+  it("anchors a 7+ night direct stay booked under the new T&Cs 14 days out", () => {
+    // The case this change exists for: under the old flat 7 days the column
+    // would show the money as banked a week while the guest can still cancel.
+    for (const channel of ["Direct", "Direct-Web", "Direct-Phone"] as const) {
+      const p = deriveCancellationPolicy({
+        channel,
+        arrivalDate: "2026-12-20",
+        nights: 9,
+        bookingTime: "2026-10-27T14:00:00Z",
+      })!;
+      expect(p.freeDays).toBe(HOUSE_LONG_STAY_FREE_CANCEL_DAYS);
+      expect(p.freeUntilDate).toBe("2026-12-06");
+      expect(freeCancelDaysLeft(p, "2026-12-01")).toBe(5);
     }
   });
 
@@ -233,6 +257,68 @@ describe("deriveCancellationPolicy", () => {
     expect(
       deriveCancellationPolicy({ channel: "Airbnb", arrivalDate: "2026-09-08", rateDescription: "" }),
     ).toBeNull();
+  });
+});
+
+describe("houseCancellationPolicy", () => {
+  const NEW = "2026-10-27T09:00:00Z";
+  const OLD = "2026-10-20T09:00:00Z";
+
+  it("gives stays of up to 6 nights 7 days under the new T&Cs", () => {
+    const p = houseCancellationPolicy({ nights: 6, bookingTime: NEW });
+    expect(p.freeDays).toBe(7);
+    expect(p.sourceText).toContain("up to 6 nights");
+  });
+
+  it("gives stays of 7+ nights 14 days under the new T&Cs — 7 is the threshold, not 8", () => {
+    expect(houseCancellationPolicy({ nights: 7, bookingTime: NEW }).freeDays).toBe(14);
+    expect(houseCancellationPolicy({ nights: 30, bookingTime: NEW }).freeDays).toBe(14);
+  });
+
+  it("keeps the old flat 7 days for a long stay booked before the T&Cs took effect", () => {
+    const p = houseCancellationPolicy({ nights: 10, bookingTime: OLD });
+    expect(p.freeDays).toBe(7);
+    expect(p.sourceText).toContain("before the 2026-10-26 T&Cs");
+    // The old site stated no penalty, so none is attributed to these bookings.
+    expect(p.penaltyNote).toBeUndefined();
+  });
+
+  it("cuts over on the Prague calendar day, not the UTC one", () => {
+    // DST ended 25 Oct 2026, so Prague is UTC+1: 23:30Z on the 25th is
+    // already 00:30 on the 26th in Prague, 22:30Z is still the 25th.
+    expect(houseCancellationPolicy({ nights: 8, bookingTime: "2026-10-25T23:30:00Z" }).freeDays).toBe(14);
+    expect(houseCancellationPolicy({ nights: 8, bookingTime: "2026-10-25T22:30:00Z" }).freeDays).toBe(7);
+  });
+
+  it("assumes the new T&Cs — the longer window — when the booking time is missing or unusable", () => {
+    for (const bookingTime of [undefined, null, "", "not-a-date"]) {
+      const p = houseCancellationPolicy({ nights: 9, bookingTime });
+      expect(p.freeDays).toBe(14);
+      expect(p.sourceText).toContain("booking date unknown");
+    }
+  });
+
+  it("says which rule applied and why, for the drawer", () => {
+    const p = houseCancellationPolicy({ nights: 9, bookingTime: NEW });
+    expect(p.sourceText).toBe(
+      "9-night stay booked 2026-10-27, under the T&Cs of 2026-10-26: free cancellation until " +
+        "23:59 Prague time 14 days before arrival (stays of 7+ nights; up to 6 nights get 7).",
+    );
+  });
+
+  it("states the new T&Cs' full-price penalty in the summary, not an invented percentage", () => {
+    const p = deriveCancellationPolicy({
+      channel: "Direct-Web",
+      arrivalDate: "2026-12-20",
+      nights: 9,
+      bookingTime: NEW,
+    })!;
+    expect(p.penaltyPercent).toBeNull();
+    const daysLeft = freeCancelDaysLeft(p, "2026-12-07")!;
+    expect(cancellationSummary(p, daysLeft, cancellationTone(p, daysLeft))).toBe(
+      "Free cancellation ended 2026-12-06 — revenue locked in. After that, or on a no-show, the guest " +
+        "pays the full price of the stay — less whatever we earn by re-letting any of those nights (T&Cs § 4.3).",
+    );
   });
 });
 

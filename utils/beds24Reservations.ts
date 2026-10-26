@@ -614,6 +614,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
           apiMessage: b.apiMessage,
           rateDescription: b.rateDescription,
           nights,
+          bookingTime: b.bookingTime,
         });
 
   return {

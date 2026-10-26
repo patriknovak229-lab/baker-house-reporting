@@ -21,15 +21,17 @@
  *     deadline.
  *   Airbnb — first line of `rateDescription`: "Cancel policy <code>". Live
  *     codes: `tiered_pricing_non_refundable`, `moderate`.
- *   Direct (web/phone) — nothing from Beds24; it's our own house policy,
- *     published on the booking site: free cancellation up to 7 days before
- *     check-in. Hard-coded below as HOUSE_FREE_CANCEL_DAYS.
+ *   Direct (web/phone) — nothing from Beds24; it's our own house policy from
+ *     the rental-site T&Cs: free cancellation up to 7 days before check-in, or
+ *     14 days for stays of 7+ nights booked from 26 Oct 2026. Hard-coded below
+ *     (HOUSE_* constants, houseCancellationPolicy).
  *
  * Re-calibrate the Booking.com phrasings and Airbnb codes via
  * GET /api/bookings?debugCancellation=true if a channel changes wording.
  */
 
 import type { Channel } from "@/types/reservation";
+import { pragueDateOf } from "@/utils/stayLinkCleanings";
 
 /** What kind of answer we could give for a booking. */
 export type CancellationKind =
@@ -72,12 +74,81 @@ export interface CancellationPolicy {
 }
 
 /**
- * House policy for direct bookings, from the published booking-site terms:
- * "Free cancellation up to 7 days before check-in" (rental-site
- * src/pages/rezervace.astro / en/booking.astro). The site states no penalty for
- * later cancellations, so we don't invent one — penaltyPercent stays null.
+ * House policy for direct bookings (Direct / Direct-Web / Direct-Phone — the
+ * T&Cs cover web, phone, e-mail and WhatsApp bookings alike). Mirrors the
+ * rental site's src/lib/legal.ts → freeCancellation(); change both together.
+ *
+ * T&Cs effective 26 Oct 2026 (§ 4.1): free until 23:59 Prague time on the 7th
+ * day before arrival for stays of up to 6 nights, the 14th day for 7+ nights.
+ * § 4.3: later cancellation or no-show = full price, minus whatever we re-let.
+ *
+ * Before that the site said only "free cancellation up to 7 days before
+ * check-in", for every stay length and with no penalty stated — and bookings
+ * made then keep those terms, so the 14-day window applies only to stays BOOKED
+ * on/after the effective date. The cutoff is the Prague calendar day; the T&Cs
+ * actually went live mid-morning on the 26th, so a booking from earlier that
+ * day shows 14 days where it was sold with 7 — the safe direction (money shown
+ * as still at risk, never as banked early).
  */
-export const HOUSE_FREE_CANCEL_DAYS = 7;
+export const HOUSE_SHORT_STAY_FREE_CANCEL_DAYS = 7;
+export const HOUSE_LONG_STAY_FREE_CANCEL_DAYS = 14;
+/** Stays of this many nights or more get the longer window (new T&Cs only). */
+export const HOUSE_LONG_STAY_MIN_NIGHTS = 7;
+/** Prague date from which direct bookings are sold under the 7/14-day T&Cs. */
+export const HOUSE_TERMS_EFFECTIVE_DATE = "2026-10-26";
+
+const HOUSE_TERMS_PENALTY_NOTE =
+  "After that, or on a no-show, the guest pays the full price of the stay — less whatever " +
+  "we earn by re-letting any of those nights (T&Cs § 4.3).";
+
+/**
+ * Which house rule a direct booking was sold under, and the sentence the drawer
+ * shows to say why. The booking time decides old vs new terms; when it's
+ * missing or unparseable we assume the NEW terms, because for a 7+ night stay
+ * that's the longer window — the direction where the operator sees money as
+ * still at risk rather than banked while the guest can in fact cancel free.
+ */
+export function houseCancellationPolicy(input: {
+  nights?: number;
+  bookingTime?: string | null;
+}): CancellationPolicy {
+  const nights = input.nights ?? 0;
+  const bookedOn = input.bookingTime ? pragueDateOf(input.bookingTime) : null;
+  const newTerms = bookedOn == null || bookedOn >= HOUSE_TERMS_EFFECTIVE_DATE;
+  const longStay = nights >= HOUSE_LONG_STAY_MIN_NIGHTS;
+  const stay = nights > 0 ? `${nights}-night stay` : "Stay";
+
+  let freeDays: number;
+  let sourceText: string;
+  if (!newTerms) {
+    freeDays = HOUSE_SHORT_STAY_FREE_CANCEL_DAYS;
+    sourceText =
+      `${stay} booked ${bookedOn}, before the ${HOUSE_TERMS_EFFECTIVE_DATE} T&Cs — sold under the old ` +
+      `flat policy: free cancellation up to ${freeDays} days before check-in, whatever the stay length.`;
+  } else {
+    freeDays = longStay ? HOUSE_LONG_STAY_FREE_CANCEL_DAYS : HOUSE_SHORT_STAY_FREE_CANCEL_DAYS;
+    const rule =
+      `free cancellation until 23:59 Prague time ${freeDays} days before arrival ` +
+      (longStay
+        ? `(stays of ${HOUSE_LONG_STAY_MIN_NIGHTS}+ nights; up to ${HOUSE_LONG_STAY_MIN_NIGHTS - 1} nights get ${HOUSE_SHORT_STAY_FREE_CANCEL_DAYS}).`
+        : `(stays of up to ${HOUSE_LONG_STAY_MIN_NIGHTS - 1} nights; ${HOUSE_LONG_STAY_MIN_NIGHTS}+ nights get ${HOUSE_LONG_STAY_FREE_CANCEL_DAYS}).`);
+    sourceText =
+      bookedOn != null
+        ? `${stay} booked ${bookedOn}, under the T&Cs of ${HOUSE_TERMS_EFFECTIVE_DATE}: ${rule}`
+        : `${stay}, booking date unknown — assuming the T&Cs of ${HOUSE_TERMS_EFFECTIVE_DATE} ` +
+          `(the longer window, so nothing shows as locked in early): ${rule}`;
+  }
+
+  return {
+    kind: "free-window",
+    freeUntilDate: null, // filled in by deriveCancellationPolicy, which knows the arrival
+    freeDays,
+    penaltyPercent: null,
+    ...(newTerms ? { penaltyNote: HOUSE_TERMS_PENALTY_NOTE } : {}),
+    source: "House policy",
+    sourceText,
+  };
+}
 
 // ─── Booking.com ─────────────────────────────────────────────────────────────
 
@@ -355,8 +426,11 @@ export function deriveCancellationPolicy(input: {
   arrivalDate: string;
   apiMessage?: string | null;
   rateDescription?: string | null;
-  /** Stay length — Airbnb applies different policy rules from 28 nights up. */
+  /** Stay length — Airbnb applies different policy rules from 28 nights up,
+   *  and the house policy gives 7+ night stays a longer window. */
   nights?: number;
+  /** Beds24 bookingTime — decides which house T&Cs a direct booking was sold under. */
+  bookingTime?: string | null;
 }): CancellationPolicy | null {
   const { channel, arrivalDate } = input;
 
@@ -368,14 +442,7 @@ export function deriveCancellationPolicy(input: {
     policy = parseAirbnbPolicy(input.rateDescription, { nights: input.nights });
   } else {
     // Direct / Direct-Web / Direct-Phone — our own published house policy.
-    policy = {
-      kind: "free-window",
-      freeUntilDate: null,
-      freeDays: HOUSE_FREE_CANCEL_DAYS,
-      penaltyPercent: null,
-      source: "House policy",
-      sourceText: `Free cancellation up to ${HOUSE_FREE_CANCEL_DAYS} days before check-in (booking-site terms).`,
-    };
+    policy = houseCancellationPolicy({ nights: input.nights, bookingTime: input.bookingTime });
   }
 
   if (!policy) return null;
