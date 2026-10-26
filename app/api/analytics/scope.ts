@@ -6,7 +6,7 @@
  */
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
-import { ANALYTICS_ROLES } from '@/utils/roles';
+import { ANALYTICS_ROLES, type Role } from '@/utils/roles';
 import { pragueToday } from '@/utils/periodUtils';
 import { PHYSICAL_ROOMS, type AnalyticsScope } from '@/data-access/analytics/shared';
 
@@ -42,8 +42,10 @@ export interface ParsedRequest {
  */
 export async function parseAnalyticsRequest(
   request: Request,
+  /** Narrower for admin-only sections (e.g. the web funnel); defaults to every analytics role. */
+  roles: Role[] = ANALYTICS_ROLES,
 ): Promise<ParsedRequest | { error: NextResponse }> {
-  const guard = await requireRole(ANALYTICS_ROLES);
+  const guard = await requireRole(roles);
   if ('error' in guard) return { error: guard.error };
 
   const url = new URL(request.url);

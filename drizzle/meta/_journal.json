@@ -148,6 +148,13 @@
       "when": 1791796328975,
       "tag": "0020_classy_stellaris",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793019074584,
+      "tag": "0021_silky_colleen_wing",
+      "breakpoints": true
     }
   ]
 }

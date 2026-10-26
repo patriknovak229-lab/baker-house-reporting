@@ -39,6 +39,8 @@ export interface WatchedCronJob {
 export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
   { job: 'send-due-invoices', label: 'Invoice auto-send (09:00)', maxAgeHours: 36 },
   { job: 'check-reviews', label: 'Review sync (08:00)', maxAgeHours: 36 },
+  { job: 'web-funnel-sync', label: 'Web funnel copy (01:15 UTC)', maxAgeHours: 36 },
+  { job: 'ga-traffic-sync', label: 'GA4 traffic sync (01:30 UTC)', maxAgeHours: 36 },
 ];
 
 export interface CronHeartbeat {

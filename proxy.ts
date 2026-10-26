@@ -65,11 +65,16 @@ export const config = {
   //     answering 405 to every run. Fixed 2026-09-30. A route added here must
   //     export GET, or it stays just as dead and looks reachable.
   //
+  //   - `api/cron/web-funnel-sync` + `api/cron/ga-traffic-sync` (2026-10-26) —
+  //     exempted in the same commit that scheduled them, export GET, gated by
+  //     cronAuth (manual runs need admin). Both only READ upstream (rental-site
+  //     Redis with a read-only token, GA4 Data API) and upsert analytics tables.
+  //
   // `api/cron/send-scheduled-payments` is DELIBERATELY still behind the
   // middleware. It charges guests and emails them, it has never run in
   // production, and switching it on is a business decision that wants its own
   // review — list it here only after that happens. This is why the exemptions
   // are per-path rather than a blanket `api/cron`: a prefix would have turned
   // it on silently.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews|api/cron/web-funnel-sync|api/cron/ga-traffic-sync).*)'],
 };

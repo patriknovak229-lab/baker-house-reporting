@@ -929,3 +929,68 @@ export interface MarketResponse {
     marketMultiple: number | null;
   } | null;
 }
+
+// ── Web funnel (admin only) ──────────────────────────────────────────────────
+
+/** One Prague day of the site's own counters, joined with real web bookings. */
+export interface WebFunnelDay {
+  day: string;
+  /** Raw counters for the day (`view_item_list`, `select_item|room=679714`, …). */
+  metrics: Record<string, number>;
+  /** Direct-Web bookings made that day (bookings archive, cancellations excluded). */
+  bookings: number;
+  /** Their gross value, CZK. */
+  bookingsRevenue: number;
+  /** Direct-Web bookings made that day and since cancelled. */
+  cancelled: number;
+}
+
+/** Searches grouped by the ARRIVAL date the guest asked for. */
+export interface WebDemandRow {
+  arrival: string;
+  searches: number;
+  /** Searches for this arrival that came back with nothing bookable. */
+  noAvailability: number;
+  avgNights: number;
+  avgGuests: number;
+  /** Largest party asking for this arrival. */
+  maxGuests: number;
+}
+
+export interface WebPartySizeRow {
+  guests: number;
+  searches: number;
+  noAvailability: number;
+}
+
+export interface WebTrafficRow {
+  key: string;
+  sessions: number;
+  /** Sum of GA's daily user counts — a returning visitor counts once per day. */
+  users: number;
+  purchases: number;
+  revenue: number;
+}
+
+export interface WebFunnelResponse {
+  /** Every figure here is dated by when it HAPPENED on the site, not by stay date. */
+  basis: 'event';
+  from: string;
+  to: string;
+  todayIso: string;
+  /** First day the archive has first-party counts for; null = nothing copied yet. */
+  countingSince: string | null;
+  lastCopiedAt: string | null;
+  /** Which Redis inbox the copy reads — anything but `bh:funnel` is test data. */
+  copySource: { configured: boolean; prefix: string };
+  days: WebFunnelDay[];
+  demand: WebDemandRow[];
+  partySize: WebPartySizeRow[];
+  ga: {
+    configured: boolean;
+    lastFetchedAt: string | null;
+    firstDay: string | null;
+    channels: WebTrafficRow[];
+    sourceMedium: WebTrafficRow[];
+  };
+}

@@ -20,7 +20,7 @@ export const metadata = {
 export default async function Page() {
   // Local dev bypass, matching app/page.tsx: skip OAuth when DEV_ADMIN_EMAIL is set.
   if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
-    return <AnalyticsPage canRefreshMarket />;
+    return <AnalyticsPage canRefreshMarket canSeeWebFunnel />;
   }
 
   const session = await auth();
@@ -37,5 +37,11 @@ export default async function Page() {
    * button only appears for the roles the refresh route itself accepts. Everyone
    * else sees whatever the daily cron last captured.
    */
-  return <AnalyticsPage canRefreshMarket={role === 'admin' || role === 'super'} />;
+  return (
+    <AnalyticsPage
+      canRefreshMarket={role === 'admin' || role === 'super'}
+      // New sections default to admin only; the web-funnel route enforces it too.
+      canSeeWebFunnel={role === 'admin'}
+    />
+  );
 }

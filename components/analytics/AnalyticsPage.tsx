@@ -27,6 +27,7 @@ import type {
   OccupancyResponse,
   OverviewResponse,
   RatesResponse,
+  WebFunnelResponse,
 } from '@/utils/analyticsTypes';
 import { ALL_ROOMS_BY_CATEGORY, groupRoomsByCategory } from '@/utils/roomCategory';
 import { Callout } from './kit';
@@ -36,6 +37,7 @@ import OccupancySection from './OccupancySection';
 import BookingWindowSection from './BookingWindowSection';
 import RatesSection from './RatesSection';
 import CostsSection from './CostsSection';
+import WebFunnelSection from './WebFunnelSection';
 
 /**
  * The five questions the section exists to answer, in the order a revenue decision
@@ -48,6 +50,8 @@ const SECTIONS = [
   { id: 'booking-window', label: 'Booking window', blurb: 'How far ahead, and what sticks' },
   { id: 'rates', label: 'Rates', blurb: 'What the ADR is made of' },
   { id: 'costs', label: 'Costs & commissions', blurb: 'What a night costs to sell and service' },
+  /** Admin only (new tabs default to admin) — hidden from the nav for every other role. */
+  { id: 'web-funnel', label: 'Web funnel', blurb: 'Site searches to direct bookings' },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -62,9 +66,12 @@ const idle = <T,>(): SectionState<T> => ({ data: null, loading: false, error: nu
 
 export default function AnalyticsPage({
   canRefreshMarket = false,
+  canSeeWebFunnel = false,
 }: {
   /** Admin/super only — the refresh spends PriceLabs credit. */
   canRefreshMarket?: boolean;
+  /** Admin only — the route enforces it too. */
+  canSeeWebFunnel?: boolean;
 }) {
   const [filters, setFilters] = useState<AnalyticsFilters>(defaultFilters);
   const [section, setSection] = useState<SectionId>('overview');
@@ -77,6 +84,7 @@ export default function AnalyticsPage({
   const [bookingWindow, setBookingWindow] = useState<SectionState<BookingWindowResponse>>(idle);
   const [rates, setRates] = useState<SectionState<RatesResponse>>(idle);
   const [costs, setCosts] = useState<SectionState<CostsResponse>>(idle);
+  const [webFunnel, setWebFunnel] = useState<SectionState<WebFunnelResponse>>(idle);
 
   /**
    * The market benchmark is loaded once at page level rather than per section,
@@ -98,6 +106,7 @@ export default function AnalyticsPage({
     'booking-window': null,
     rates: null,
     costs: null,
+    'web-funnel': null,
   });
 
   useEffect(() => {
@@ -174,7 +183,9 @@ export default function AnalyticsPage({
       void load<BookingWindowResponse>('booking-window', 'booking-window', setBookingWindow);
     if (section === 'rates') void load<RatesResponse>('rates', 'rates', setRates);
     if (section === 'costs') void load<CostsResponse>('costs', 'costs', setCosts);
-  }, [section, load]);
+    if (section === 'web-funnel' && canSeeWebFunnel)
+      void load<WebFunnelResponse>('web-funnel', 'web-funnel', setWebFunnel);
+  }, [section, load, canSeeWebFunnel]);
 
   const resetCaches = useCallback(() => {
     loadedFor.current = {
@@ -183,12 +194,14 @@ export default function AnalyticsPage({
       'booking-window': null,
       rates: null,
       costs: null,
+      'web-funnel': null,
     };
     setOverview(idle);
     setOccupancy(idle);
     setBookingWindow(idle);
     setRates(idle);
     setCosts(idle);
+    setWebFunnel(idle);
   }, []);
 
   const onFiltersChange = useCallback(
@@ -358,7 +371,7 @@ export default function AnalyticsPage({
         />
 
         <nav className="flex gap-1 mt-6 mb-6 overflow-x-auto -mx-1 px-1 print:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {SECTIONS.map((s) => (
+          {SECTIONS.filter((s) => s.id !== 'web-funnel' || canSeeWebFunnel).map((s) => (
             <button
               key={s.id}
               onClick={() => setSection(s.id)}
@@ -403,6 +416,19 @@ export default function AnalyticsPage({
         {section === 'costs' && (
           <SectionFrame state={costs} onRetry={() => { loadedFor.current.costs = null; void load<CostsResponse>('costs', 'costs', setCosts); }}>
             {(data) => <CostsSection data={data} />}
+          </SectionFrame>
+        )}
+        {section === 'web-funnel' && canSeeWebFunnel && (
+          <SectionFrame state={webFunnel} onRetry={() => { loadedFor.current['web-funnel'] = null; void load<WebFunnelResponse>('web-funnel', 'web-funnel', setWebFunnel); }}>
+            {(data) => (
+              <WebFunnelSection
+                data={data}
+                onReload={() => {
+                  loadedFor.current['web-funnel'] = null;
+                  void load<WebFunnelResponse>('web-funnel', 'web-funnel', setWebFunnel);
+                }}
+              />
+            )}
           </SectionFrame>
         )}
       </div>

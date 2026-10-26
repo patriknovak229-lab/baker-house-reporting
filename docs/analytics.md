@@ -1,8 +1,10 @@
 # Analytics section
 
 Five tabs at **`/analytics`**, reachable from the nav for `admin` / `super` /
-`viewer` / `accountant`. Reads the Postgres bookings archive plus a locally cached
-PriceLabs market snapshot; never calls Beds24, never calls PriceLabs on a page load.
+`viewer` / `accountant`, plus a sixth, **Web funnel**, for `admin` only (§10). Reads
+the Postgres bookings archive plus locally cached snapshots (PriceLabs market, the
+rental site's funnel counts, GA4 traffic); never calls Beds24, PriceLabs, the rental
+site or Google on a page load.
 
 ---
 
@@ -15,6 +17,7 @@ PriceLabs market snapshot; never calls Beds24, never calls PriceLabs on a page l
 | **Booking window** | When did it sell, and did it stick? | booked |
 | **Rates** | What is the ADR actually made of? | stay |
 | **Costs & commissions** | What did a night cost to sell and service? | stay revenue, checkout-date turnover cost |
+| **Web funnel** (admin) | Who searched the website, where did they drop out, what dates did we turn away? | event date |
 
 Booking window will not tie to Overview, and that is correct — they answer
 different questions. Every response carries a `basis` field and each tab says so.
@@ -145,16 +148,24 @@ data-access/analytics/
   market.ts                          MPI + market series (reads the snapshot)
   marketRefresh.ts                   the only caller of PriceLabs
   marketTypes.ts                     server-only import seam for the client
+  webFunnel.ts                       Web funnel reader (Postgres only)
+  webFunnelSync.ts                   rental-site Redis → Postgres copy, GA4 → Postgres
+utils/webFunnel.ts                   Redis contract, parsing, funnel maths (client-safe)
+utils/ga4.ts                         GA4 Data API client — READ-ONLY, server only
+lib/db/schema/webFunnel.ts           web_funnel_daily / web_funnel_searches / web_traffic_daily
 app/api/analytics/
   scope.ts                           shared auth + query validation
   {meta,overview,occupancy,booking-window,rates,costs,market}/route.ts
   market/refresh/route.ts            POST/GET — cron or admin/super
+  web-funnel/route.ts                admin only
+app/api/cron/web-funnel-sync         nightly copy of the site's counts (cron or admin)
+app/api/cron/ga-traffic-sync         nightly GA4 pull (cron or admin; 503 until configured)
 app/analytics/page.tsx               server component, role gate
 components/analytics/
   kit.tsx                            formatters, Card/Tile/Table/heatmap
   AnalyticsPage.tsx                  shell, lazy sections, market fetch
   FilterBar.tsx                      period / room / channel
-  {Overview,Occupancy,BookingWindow,Rates,Costs}Section.tsx
+  {Overview,Occupancy,BookingWindow,Rates,Costs,WebFunnel}Section.tsx
 ```
 
 ---
@@ -381,3 +392,111 @@ saying so.
   `platform-prices` job, so the two do not overlap.
 - Three migrations add the market tables: `0009`, `0010`, `0011`. All additive; no
   existing table is touched.
+
+---
+
+## 10. Web funnel (admin only)
+
+**Question:** of the people who searched bakerhouseapartments.cz, how many got as far
+as Stripe and how many booked — and which stays did we turn away?
+
+### Three sources, never mixed
+
+| Source | What it is | Used for |
+|---|---|---|
+| The site's own counts | anonymous, cookie-free beacon per funnel step → rental-site Redis → `web_funnel_*` | every funnel volume, conversion and the demand view |
+| `bookings_mirror` | Direct-Web reservations by `reservation_date`, test names and cancellations out | the last step ("Booked") and revenue |
+| GA4 Data API | sessions / users / purchases per day × channel × source/medium → `web_traffic_daily` | traffic sources ONLY |
+
+**Why not GA for the funnel?** Since the cookie banner (2026-10-26) GA only sees
+visitors who press Accept and don't block Google, so its funnel is a sample. The
+site's beacon carries no cookie, no localStorage, no visitor/session ID, no IP and no
+user agent, so it needs no consent and sees everyone. The price: **no visitor ID, so
+every rate is per search or step, not per person** — a guest who tries three date
+ranges is three searches. Accepted by Patrik. GA also keeps event data for only two
+months, another reason the counts live in Postgres.
+
+### The pipeline
+
+1. Rental site (`src/lib/analytics.ts`) → `navigator.sendBeacon('/api/funnel', …)` on
+   `view_item_list`, `no_availability`, `select_item`, `begin_checkout`,
+   `add_payment_info`, `purchase` (booking-success, confirmed view) and
+   `generate_lead` (corporate form). Separate from `window.bhTrack`, which stays
+   consent-gated.
+2. `/api/funnel` (rental site) whitelists the payload, drops crawler UAs and cross-site
+   posts, rate-limits site-wide (600/min, 20 000/day — per-visitor limits would need an
+   ID), de-dupes confirmation-page reloads by a sha256 of the Stripe session id (7 d),
+   and writes:
+   - `bh:funnel:d:{day}` HASH — counters (`{event}`, `{event}|lang=cs`,
+     `{event}|room=679714`, `{event}|combo`, `select_item|method=user`,
+     `{event}|value`, `_accepted`, `_dropped|bot|invalid|rate|cap|dupe`)
+   - `bh:funnel:s:{day}` LIST — one record per search: arrival, departure, adults,
+     children, offers shown, offered room ids, page language. No time of day. Capped
+     at 3 000/day, append-only, so a record's position is a stable key.
+   - Keys expire after 180 days. `astro dev` writes `bh:funnel:dev:*` instead.
+3. `/api/cron/web-funnel-sync` (01:15 UTC nightly) reads those keys with a
+   **read-only** token and upserts `web_funnel_daily (day, metric)` and
+   `web_funnel_searches (day, seq)`. Default window: last 3 days through today, so a
+   missed night heals itself. Backfill: `?from=YYYY-MM-DD&to=YYYY-MM-DD` (≤ 180 days).
+   An expired Redis day deletes nothing: Postgres is the archive.
+4. `/api/cron/ga-traffic-sync` (01:30 UTC) pulls the 4 days up to yesterday (GA keeps
+   revising ~48 h) into `web_traffic_daily`. Backfill from `2026-03-28` (GA's first
+   day) with `?from=2026-03-28&to=…`. Answers **503** until the key is set.
+
+Both crons export GET, are exempted in `proxy.ts`, gate on `utils/cronAuth`, write a
+heartbeat and are in `WATCHED_CRON_JOBS`. "Not configured" is recorded as a completed
+no-op, so the watchdog stays quiet until the env vars exist. The tab's **Copy now**
+button runs both for an admin and includes today so far.
+
+### Reading the tab
+
+- **Searches** = `view_item_list + no_availability`; **Saw offers** = `view_item_list`.
+- **Chose an offer** counts every card picked (switching cards adds one each), so it
+  can exceed "Saw offers" on a day.
+- **Confirmed page** is the site's view of a finished payment; **Booked (archive)** is
+  the truth. A gap means guests closed the tab before the success page.
+- **Dates guests wanted** groups searches by requested arrival. "Nothing available" =
+  no bookable offer at all — sold out, minimum stay, or a party over 4 (no single
+  booking on the site fits more).
+- Basis is the **event date**. Room and channel filters do not apply.
+- **GA table = consent-only sample.** Users are summed per day. The footnote compares
+  GA purchases with archive bookings so the sample's coverage is visible.
+
+### Setup (Patrik, once)
+
+**a) Database.** `npm run db:migrate` applies `0021` (three new tables, nothing else
+touched). Do this before the push, or the cron and the tab fail on missing tables.
+
+**b) Rental-site Redis, read-only** (Vercel → baker-house-reporting → Settings →
+Environment Variables, Production):
+1. console.upstash.com → Redis → the **rental site's** database (the one whose
+   endpoint matches the rental-site project's `UPSTASH_REDIS_REST_URL` — NOT this
+   app's own) → *REST API* section.
+2. Copy the REST URL → `RENTAL_SITE_REDIS_REST_URL`.
+3. Switch the token view to **Read-Only Token**, copy it →
+   `RENTAL_SITE_REDIS_REST_TOKEN`. Never the read/write token.
+4. Redeploy. Optional `FUNNEL_KEY_PREFIX` exists only for testing
+   (`bh:funnel:dev`); leave it unset in production.
+
+**c) GA4 service account** (the repo is public — the key lives only in Vercel):
+1. console.cloud.google.com → project picker (top bar) → pick the project that holds
+   the "Reporting Sign In" OAuth client (or create a new one).
+2. *APIs & Services → Library* → search **Google Analytics Data API** → **Enable**.
+3. *IAM & Admin → Service Accounts* → **+ Create service account** → name
+   `bha-reporting-ga4` → **Create and continue** → skip the role step → **Done**.
+4. Open it → **Keys** tab → **Add key → Create new key → JSON → Create**. A `.json`
+   file downloads; keep it out of every repo and chat.
+5. Copy the account's e-mail (`bha-reporting-ga4@<project>.iam.gserviceaccount.com`).
+6. analytics.google.com (patriknovak229@gmail.com) → **Admin** (gear, bottom left) →
+   property **529936917** → **Property access management** → **+ → Add users** →
+   paste the e-mail → untick "Notify new users by email" → role **Viewer** → **Add**.
+7. Vercel → baker-house-reporting → Settings → Environment Variables → add
+   `GA4_SERVICE_ACCOUNT_JSON` = the whole file contents (raw JSON or base64), mark it
+   **Sensitive**, Production → Save → redeploy.
+8. Check: Analytics → Web funnel → **Copy now** should report "GA4: n rows". Backfill
+   while signed in as admin: open
+   `/api/cron/ga-traffic-sync?from=2026-03-28&to=<yesterday>` in the browser.
+
+If step 4 is greyed out, the Cloud organisation blocks key creation
+(`iam.disableServiceAccountKeyCreation`); a personal Google account has no such policy.
+

@@ -15,6 +15,14 @@
     {
       "path": "/api/analytics/market/refresh",
       "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/web-funnel-sync",
+      "schedule": "15 1 * * *"
+    },
+    {
+      "path": "/api/cron/ga-traffic-sync",
+      "schedule": "30 1 * * *"
     }
   ]
 }

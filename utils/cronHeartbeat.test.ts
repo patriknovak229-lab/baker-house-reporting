@@ -61,10 +61,15 @@ describe("staleCronJobs", () => {
     expect(staleCronJobs({ daily: { ranAt: "not-a-date" } }, NOW, JOBS)).toEqual([]);
   });
 
-  it("watches the two unblocked crons by default, not the payments one", () => {
+  it("watches the unblocked crons by default, not the payments one", () => {
     // send-scheduled-payments is deliberately still middleware-blocked, so
     // watching it would alert forever about a job nobody wants running yet.
-    expect(WATCHED_CRON_JOBS.map((j) => j.job)).toEqual(["send-due-invoices", "check-reviews"]);
+    expect(WATCHED_CRON_JOBS.map((j) => j.job)).toEqual([
+      "send-due-invoices",
+      "check-reviews",
+      "web-funnel-sync",
+      "ga-traffic-sync",
+    ]);
   });
 });
 
