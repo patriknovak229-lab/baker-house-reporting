@@ -497,6 +497,17 @@ Environment Variables, Production):
    while signed in as admin: open
    `/api/cron/ga-traffic-sync?from=2026-03-28&to=<yesterday>` in the browser.
 
-If step 4 is greyed out, the Cloud organisation blocks key creation
-(`iam.disableServiceAccountKeyCreation`); a personal Google account has no such policy.
+**Done 2026-10-26** — the account lives in the `baker-house-reporting` Cloud project,
+which sits in the `bakerhouseapartments.cz` organisation. That organisation enforces
+`iam.disableServiceAccountKeyCreation` (Google's secure-by-default), so step 4 failed
+with "Service account key creation is disabled". What worked, as info@:
+1. Organisation → IAM → pencil on info@ → add role **Organization Policy
+   Administrator** (Organization Administrator alone cannot change policies).
+2. Project `baker-house-reporting` → IAM & Admin → Organization Policies →
+   `iam.disableServiceAccountKeyCreation` (NOT the `iam.managed.…` one) → Manage
+   policy → Override parent's policy → rule Off → Set policy → create the key.
+3. Same policy → Inherit parent's policy → Set policy. The policy only blocks
+   creating keys; the existing key keeps working.
+Rotating the key later means repeating 2–3. Leave "Service account key exposure
+response" on — it disables a key that leaks publicly.
 
