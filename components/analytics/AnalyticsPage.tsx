@@ -47,7 +47,7 @@ import WebFunnelSection from './WebFunnelSection';
 const SECTIONS = [
   { id: 'overview', label: 'Overview', blurb: 'Volume, ADR and net' },
   { id: 'occupancy', label: 'Occupancy', blurb: 'Vs market, and what it earned' },
-  { id: 'booking-window', label: 'Booking window', blurb: 'How far ahead, and what sticks' },
+  { id: 'booking-window', label: 'Booking window', blurb: 'When it sells, and what it earns' },
   { id: 'rates', label: 'Rates', blurb: 'Plans, deals and channels in gross profit' },
   { id: 'costs', label: 'Costs & commissions', blurb: 'What a night costs to sell and service' },
   /** Admin only (new tabs default to admin) — hidden from the nav for every other role. */

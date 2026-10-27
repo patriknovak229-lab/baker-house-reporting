@@ -328,64 +328,155 @@ export interface SeasonalityResponse {
 }
 
 // ── Booking window ──────────────────────────────────────────────────────────
+//
+// Every booking-window figure comes per room class — '1kk' (studios), '2kk'
+// (two-bedroom apartments) and 'all' — because the two classes fill on
+// different clocks and earn different margins. Gross profit here is net sales
+// minus the stay's turnover cost (cleaning + laundry + consumables); monthly
+// fixed costs do not depend on when a night was booked and are left out.
 
-export interface LeadTimeBucket {
+/** One booking-window band (how many days before arrival the booking was made). */
+export interface BookingWindowBandRow {
+  id: string;
   label: string;
-  /** Inclusive lower bound in days. */
   minDays: number;
-  /** Inclusive upper bound in days, or null for open-ended. */
   maxDays: number | null;
+  /** Surviving bookings arriving in the window. */
+  bookings: number;
+  /** Sold room-nights inside the window (stay basis). */
+  nights: number;
+  /** Share of the class's sold nights. 0–1. */
+  nightShare: number;
+  gbv: number;
+  netSales: number;
+  turnoverCost: number;
+  grossProfit: number;
+  adr: number;
+  netAdr: number;
+  turnoverPerNight: number;
+  gpPerNight: number;
+  /**
+   * GP per night against the class's average GP per night for the SAME stay
+   * months. 1.0 = an average night; above 1 = this window earns more than the
+   * month average. Controls for "early bookings land on strong months".
+   */
+  gpIndex: number | null;
+  netAdrIndex: number | null;
+  avgLos: number;
+  /** Bookings arriving in the window incl. guest cancellations (abandoned checkouts excluded). */
+  bookedBookings: number;
+  cancelledBookings: number;
+  cancellationRate: number;
+  /** Cancelled room-nights ÷ booked room-nights. */
+  cancelledNightShare: number;
+}
+
+/** Pooled on-the-books curve point for completed nights. */
+export interface BookingWindowCurvePoint {
+  daysBefore: number;
+  /** Room-nights on the books N days before the night ÷ sellable room-nights. */
+  occupancy: number;
+  /** The same, as a share of what was finally sold. */
+  shareOfFinal: number;
+}
+
+/** Today's forward book over one horizon band, against history and the market. */
+export interface BookingWindowForwardBand {
+  label: string;
+  minDays: number;
+  maxDays: number;
+  availableNights: number;
+  onBooks: number;
+  occupancy: number;
+  /** What our own history says should be on the books at this lead. */
+  historyOccupancy: number | null;
+  /** PriceLabs comp-set occupancy for the same nights, capacity-weighted. */
+  marketOccupancy: number | null;
+}
+
+export interface BookingWindowMonthRow {
+  month: string;
+  availableNights: number;
+  soldNights: number;
+  occupancy: number;
+  /** On-the-books occupancy N days before each night (completed nights only). */
+  otb60: number | null;
+  otb30: number | null;
+  otb14: number | null;
+  otb7: number | null;
+  netAdr: number;
+  gpPerNight: number;
+  gpPerAvailableNight: number;
+  /** Mean booking lead of bookings arriving in the month. */
+  avgLeadDays: number | null;
+  marketAvgLeadDays: number | null;
+  inProgress: boolean;
+}
+
+export interface BookingWindowChannelRow {
+  channel: string;
   bookings: number;
   nights: number;
-  gbv: number;
+  nightShare: number;
   adr: number;
-  share: number;
-  /** Cancellation rate for bookings made in this window. 0–1. */
+  netAdr: number;
+  gpPerNight: number;
+  grossProfit: number;
+  avgLos: number;
+  medianLeadDays: number | null;
+  /** Share of the channel's nights booked 15+ days ahead. */
+  share15Plus: number;
+  bookedBookings: number;
   cancellationRate: number;
+  /** GP per night by booking-window band (null where the channel sold nothing). */
+  bands: { id: string; nights: number; gpPerNight: number | null }[];
 }
 
-export interface BookingCurvePoint {
-  /** Days before arrival (0 = day of arrival). Descending series. */
-  daysBefore: number;
-  /** Cumulative share of the month's final booked nights already on the books. */
-  cumulativeShare: number;
-  cumulativeNights: number;
-}
-
-export interface BookingCurveSeries {
-  /** YYYY-MM stay month, or 'all' for the pooled curve. */
-  month: string;
-  /** Final (or current) booked nights for the month — the curve's 100%. */
-  finalNights: number;
-  /** True when the month is still selling, so the curve is incomplete. */
-  inProgress: boolean;
-  points: BookingCurvePoint[];
-}
-
-export interface LeadTimeTrendPoint {
-  /** YYYY-MM of the BOOKING date. */
-  month: string;
-  bookings: number;
-  avgLeadDays: number;
-  medianLeadDays: number;
-  p90LeadDays: number;
-}
-
-export interface CancellationAnalysis {
-  totalBookings: number;
-  cancelledBookings: number
+export interface BookingWindowCancellations {
+  bookedBookings: number;
+  cancelledBookings: number;
   cancellationRate: number;
-  /** GBV that was cancelled (nights × allocated price), i.e. demand lost. */
-  cancelledGbv: number;
-  /** Mean days between cancellation and arrival. */
-  avgDaysBeforeArrival: number | null;
-  byChannel: { channel: string; bookings: number; cancelled: number; rate: number; cancelledGbv: number; avgDaysBeforeArrival: number | null }[];
-  byLeadBucket: { label: string; bookings: number; cancelled: number; rate: number }[];
-  /** How long a cancelled booking survived before being cancelled. */
-  survivalBuckets: { label: string; cancelled: number; share: number }[];
-  /** Cancellations that were re-sold: the same room-night booked again later. */
-  recoveredNights: number;
+  /** Guest-cancelled room-nights inside the window. */
   cancelledNights: number;
+  /** Their value at the booked rate (recovered from Beds24's per-night rate lines). */
+  cancelledValue: number;
+  /** Cancelled nights with no recoverable rate — excluded from the value. */
+  unvaluedNights: number;
+  avgNoticeDays: number | null;
+  notice: { label: string; cancelled: number; share: number }[];
+  /** Cancelled nights whose date has passed — the base for the resale rate. */
+  pastCancelledNights: number;
+  /** Re-sold: the unit still ended up full that night. */
+  resoldNights: number;
+  lostNights: number;
+  /** Cancelled nights still in the future — resale still possible. */
+  openNights: number;
+  resaleRate: number | null;
+  /** Re-sold nights' rate ÷ the cancelled nights' rate. */
+  resalePriceRatio: number | null;
+  /** How many days before the night the replacement was booked. */
+  resaleLeadDays: number | null;
+  /** Value of the cancelled nights that were never re-sold. */
+  lostValue: number;
+}
+
+/** Promo calendar row for an upcoming stay month. */
+export interface BookingWindowPromoRow {
+  month: string;
+  availableNights: number;
+  onBooks: number;
+  occupancy: number;
+  /** What history says should be on the books by today. */
+  expectedOccupancy: number | null;
+  marketOccupancy: number | null;
+  /** onBooks ÷ expected. */
+  pace: number | null;
+  /** 'too-early' when history says under 3 % should be sold by now. */
+  status: 'ahead' | 'on-pace' | 'behind' | 'too-early';
+  /** Dates by which 25 / 50 / 75 % of a mid-month night is typically sold. */
+  quarterBookedBy: string | null;
+  halfBookedBy: string | null;
+  threeQuartersBookedBy: string | null;
 }
 
 export interface BookingHeatCell {
@@ -396,28 +487,66 @@ export interface BookingHeatCell {
   bookings: number;
 }
 
+export interface BookingWindowClassBlock {
+  classId: '1kk' | '2kk' | 'all';
+  label: string;
+  description: string;
+  rooms: string[];
+  summary: {
+    bookings: number;
+    medianLeadDays: number;
+    avgLeadDays: number;
+    p90LeadDays: number;
+    nights: number;
+    availableNights: number;
+    grossProfit: number;
+    gpPerNight: number;
+    gpPerAvailableNight: number;
+    netAdr: number;
+    /** Share of sold nights booked ≤7 / ≥15 / ≥30 days ahead. */
+    shareWithin7: number;
+    share15Plus: number;
+    share30Plus: number;
+    gpWithin7: { gpPerNight: number; nights: number } | null;
+    gp8to29: { gpPerNight: number; nights: number } | null;
+    gp30Plus: { gpPerNight: number; nights: number } | null;
+    otbAt60: number | null;
+    otbAt30: number | null;
+    otbAt14: number | null;
+    otbAt7: number | null;
+    finalOccupancy: number | null;
+    cancellationRate: number;
+    resaleRate: number | null;
+    /** Our mean lead over the months the market reports, for a like-for-like mean. */
+    ourAvgLeadVsMarket: number | null;
+    marketAvgLeadDays: number | null;
+  };
+  bands: BookingWindowBandRow[];
+  curve: BookingWindowCurvePoint[];
+  forward: BookingWindowForwardBand[];
+  months: BookingWindowMonthRow[];
+  channels: BookingWindowChannelRow[];
+  cancellations: BookingWindowCancellations;
+  /** Sold nights by month booked × month stayed. */
+  production: { bookedMonth: string; stayMonth: string; nights: number }[];
+  /** Night-level lead percentiles (days between booking and the night). */
+  nightLeads: { p25: number; p50: number; p75: number; p90: number; nights: number } | null;
+  promo: BookingWindowPromoRow[];
+  heat: BookingHeatCell[];
+  /** Booking window by BOOKING month, whole history. */
+  trend: { month: string; bookings: number; medianLeadDays: number; avgLeadDays: number }[];
+}
+
 export interface BookingWindowResponse {
   basis: 'booked';
   query: OverviewResponse['query'];
-  leadTime: LeadTimeBucket[];
-  summary: {
-    bookings: number;
-    avgLeadDays: number;
-    medianLeadDays: number;
-    p90LeadDays: number;
-    /** Share of bookings made 7 or fewer days out. 0–1. */
-    lastMinuteShare: number;
-    /** Share of bookings made 60+ days out. 0–1. */
-    earlyBirdShare: number;
-  };
-  curves: BookingCurveSeries[];
-  trend: LeadTimeTrendPoint[];
-  byChannel: { channel: string; bookings: number; avgLeadDays: number; medianLeadDays: number }[];
-  byRoom: { room: string; bookings: number; avgLeadDays: number; medianLeadDays: number }[];
-  /** Lead time by stay month — is the window for peak months longer? */
-  byStayMonth: { month: string; bookings: number; avgLeadDays: number; medianLeadDays: number }[];
-  cancellations: CancellationAnalysis;
-  bookingHeat: BookingHeatCell[];
+  todayIso: string;
+  /** Sellable nights per month by class, against all units × days. */
+  capacity: { month: string; days: number; oneKk: number; twoKk: number; total: number; fullCapacity: number }[];
+  classes: BookingWindowClassBlock[];
+  costCoverage: { costsAvailable: boolean; costedStays: number; imputedStays: number };
+  market: { capturedAt: string | null } | null;
+  notes: string[];
 }
 
 // ── Costs & commissions ─────────────────────────────────────────────────────

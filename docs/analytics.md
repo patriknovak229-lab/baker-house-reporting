@@ -14,7 +14,7 @@ site or Google on a page load.
 |---|---|---|
 | **Overview** | How much did we make? | stay |
 | **Occupancy** | How full was each room class, against the market — and did it turn into gross profit? | stay |
-| **Booking window** | When did it sell, and did it stick? | booked |
+| **Booking window** | When did it sell, what did it earn, and did it stick? | booked (rates) · stay (money) |
 | **Rates** | Do the rate plans, deals and channels raise gross profit? Per 1KK / 2KK (§11) | stay |
 | **Costs & commissions** | What did a night cost to sell and service? | stay revenue, checkout-date turnover cost |
 | **Web funnel** (admin) | Who searched the website, where did they drop out, what dates did we turn away? | event date |
@@ -176,6 +176,61 @@ seasonality.
 
 All of it lives in `occupancyModel.ts`, a pure module with a unit test.
 `occupancy.ts` only fetches.
+
+### The Booking window tab answers six questions, per room class, on gross profit
+
+Reworked 2026-10-27 around Patrik's questions: does selling further ahead make
+more money, where are we behind the market, do far-out bookings cancel and get
+re-sold, which channels work, and when should each month's promo be live. Every
+view is split 1KK / 2KK (`ROOM_CLASSES`), with All units alongside.
+
+- **Yardstick: gross profit per night** = net sales − the stay's turnover cost
+  (cleaning + laundry + consumables billed at its checkout, the Costs tab's
+  `channelProfit` rule). Wear & tear and misc incidents are not tied to a booking,
+  so they are left out here — GP per sellable night reads slightly higher than on
+  the Occupancy tab, which deducts them. A stay with no cost cell (pre-Beds24
+  legacy, pre-March 2026, or a checkout still ahead) is charged its class's average
+  turnover per checkout rather than zero; zero would flatter exactly the far-out
+  bands, which are full of future checkouts.
+- **Bands follow the pricing levers**: 0–3, 4–7, 8–14 (Booking Last-minute Deal
+  ends), 15–29 (Early Booker starts), 30–59 (PriceLabs ramp starts for Urban),
+  60–89 (ramp starts for Deluxe/O.308), 90+.
+- **"vs same months" index** divides a band's GP by what the class's average night
+  earned in the same stay months, so "early bookings land on strong months" is not
+  mistaken for the window paying.
+- **On-the-books curve is per night**, not per month start: how full each completed
+  night was N days before it, ÷ sellable nights. The capacity card above it shows
+  the denominator month by month (217 / 210 with all seven units).
+- **Forward book vs market vs "our usual"**: every night of the next 180 days, by
+  distance. "Our usual" is the whole trading history (not the selected period), so
+  the comparison still works on "Next 90 days". All channels, whatever the filter.
+- **Cancelled bookings are valued from `rateDescription`**: Beds24 zeroes `price`
+  on most cancellations, so the old "value cancelled" read near zero. The per-night
+  rate lines reproduce the booked price within 1 % on 340 of 350 live bookings.
+- **Re-sold is capacity-aware, at unit level**: a cancelled night counts as re-sold
+  only if the unit (Urban trio, Deluxe pair, K.201, O.308) ended up full that night.
+  A later booking that took a room that was free anyway replaced nothing.
+- **Promo calendar**: per upcoming month and class, on the books vs "usual by now"
+  (pace; ±15 % = on pace; under 3 % expected = too early to judge), and the dates
+  by which a mid-month night is typically 25 / 50 / 75 % sold, from the whole
+  history's night-level lead percentiles.
+
+What it showed on 2026-10-27 (all time, Jan–Oct 2026):
+
+| | 1KK | 2KK |
+|---|---|---|
+| GP/night booked 0–3 d (vs same months) | 1 361 Kč (−17 %) | 2 191 Kč (−16 %) |
+| GP/night booked 8–59 d (vs same months) | 1 845 Kč (+9 %) | 2 782 Kč (+8 %) |
+| On the books 30 d / 7 d out → final | 36 % / 59 % → 89 % | 38 % / 57 % → 85 % |
+| Cancel rate, bookings made 60+ d out | 48 % | 30 % |
+| Cancelled nights re-sold | 80 % | 84 % |
+| Nights 30–59 d out on the books today (usual / market) | 8 % (19 % / 25 %) | 3 % (30 % / 26 %) |
+
+Last-minute nights earn the least: short stays carry a full turnover over ~2
+nights, and the Last-minute Deal discounts them. The 8–59-day window earns the most
+even after its higher cancellation rate, because ~80 % of what cancels is re-sold.
+December is the live gap: both classes are far behind their own usual pace and the
+market 30–59 days out.
 
 ---
 
