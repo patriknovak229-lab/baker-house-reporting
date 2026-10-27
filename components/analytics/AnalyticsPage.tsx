@@ -48,7 +48,7 @@ const SECTIONS = [
   { id: 'overview', label: 'Overview', blurb: 'Volume, ADR and net' },
   { id: 'occupancy', label: 'Occupancy', blurb: 'How full, and where we ran out' },
   { id: 'booking-window', label: 'Booking window', blurb: 'How far ahead, and what sticks' },
-  { id: 'rates', label: 'Rates', blurb: 'What the ADR is made of' },
+  { id: 'rates', label: 'Rates', blurb: 'Plans, deals and channels in gross profit' },
   { id: 'costs', label: 'Costs & commissions', blurb: 'What a night costs to sell and service' },
   /** Admin only (new tabs default to admin) — hidden from the nav for every other role. */
   { id: 'web-funnel', label: 'Web funnel', blurb: 'Site searches to direct bookings' },

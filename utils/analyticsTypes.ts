@@ -731,39 +731,179 @@ export interface OccupancyResponse {
 }
 
 // ── Rates section ───────────────────────────────────────────────────────────
+//
+// Organised around the four questions the tab exists to answer, every one of
+// them in GROSS PROFIT rather than ADR — because a plan, promotion or channel
+// that lifts ADR while cancelling more, costing more commission or selling
+// shorter stays can still lose money:
+//   1. Do the rate plans (non-refundable / standard / flexible) make sense?
+//   2. Are the time-limited deals working?
+//   3. Which rates cancel, do we resell those nights, and at what price?
+//   4. Is the direct channel earning more, or is it priced too cheap?
+//
+// Everything is computed per room CLASS — 1KK studios and 2KK apartments have
+// different ADR, seasonality and guest mix, so a blended figure hides more
+// than it shows. Each response carries one view per class plus the blend.
+
+export type RateClassId = 'all' | '1kk' | '2kk';
 
 /**
- * Rate composition — what mix of rate plans produced the ADR.
+ * Gross profit per night, and everything it is built from, for one slice of the
+ * book (a plan, a promotion, a channel, a class).
  *
- * ADR is an outcome, not a decision. It moves when the mix moves: more Genius
- * nights, more non-refundable, more OTA and less direct. Splitting it out is the
- * difference between "ADR fell" and "ADR fell because Booking.com share rose 9
- * points", which are different problems with different fixes.
+ * Gross profit here = gross − OTA commission − payment fees − TURNOVER cost
+ * (cleaning, laundry, consumables, charged once per checkout and spread over the
+ * stay's nights). Subscriptions and wear & tear are the same whichever rate sold
+ * the night, so they are left out of every comparison on this tab.
  */
-export interface RateMixRow {
-  /** The bucket: a rate-plan family, a promotion name, or a channel. */
-  label: string;
-  /** 'All' for channel rows; the owning channel for plan and promotion rows. */
-  channel: string;
+export interface RateEconomics {
+  /** Live bookings with at least one night in the window. */
   bookings: number;
   nights: number;
-  gbv: number;
-  adr: number;
-  /** Share of nights in the window. 0–1. */
+  /** Share of the class's nights in the window. 0–1. */
   nightShare: number;
-  /** adr ÷ portfolio adr − 1. */
-  adrIndex: number;
+  gbv: number;
+  commission: number;
+  paymentFees: number;
+  turnoverCost: number;
+  netSales: number;
+  grossProfit: number;
+  adr: number;
+  /** (gross − commission − fees) per night. */
+  netAdr: number;
+  gpPerNight: number;
+  /** (commission + fees) ÷ gross. */
+  takeRate: number;
+  turnoverPerNight: number;
   avgLengthOfStay: number;
   avgLeadDays: number;
+  /** Live + guest-cancelled bookings whose stay touches the window. */
+  cancellableBookings: number;
+  guestCancellations: number;
   cancellationRate: number;
 }
 
-export interface RateMixMonthPoint {
-  month: string;
+/**
+ * The same unit on the same night, sold two different ways.
+ *
+ * Comparing plan or channel averages mixes in WHEN each sold — a plan that
+ * happens to sell in August looks dearer than one that sells in February. Pairing
+ * nights of the same sellable unit on the same date takes the season, weekday and
+ * events out, so what is left is the plan (or channel) itself. Each matched
+ * (unit, date) cell counts once.
+ */
+export interface SameDateComparison {
+  /** What is being compared against, e.g. "Booking.com Non-refundable". */
+  against: string;
+  /**
+   * 'date' = same unit, same night. 'week' = same unit, same ISO week and the
+   * same kind of night (Fri/Sat vs the rest) — the fallback for single-room
+   * units (K.201, O.308), where two bookings can never share a night.
+   */
+  grain: 'date' | 'week';
+  matchedDates: number;
+  /** Distinct bookings behind the compared side's matched nights. */
+  matchedBookings: number;
+  /** MEDIAN over matched cells of (slice ÷ reference) − 1, so one odd booking cannot move it. */
+  adrDelta: number | null;
+  netAdrDelta: number | null;
+  gpDelta: number | null;
+  /** True when both floors (matched cells, distinct bookings) are cleared and the deltas are reported. */
+  comparable: boolean;
+}
+
+export interface RatePlanRow extends RateEconomics {
+  channel: string;
+  plan: string;
+  vsNonRefundable: SameDateComparison | null;
+  /** Guest-cancelled room-nights in the window that are already in the past. */
+  cancelledNights: number;
+  resoldNights: number;
+  /**
+   * Gross profit per night this plan BOOKED, after its cancellations:
+   * (GP of the nights that stayed + GP recovered by reselling its cancelled
+   * nights) ÷ (stayed + cancelled nights). The fair way to compare a cheap
+   * plan that sticks with a dearer one that cancels.
+   */
+  gpPerBookedNight: number;
+}
+
+export interface PromoCampaignRow {
+  /** The promotion name exactly as the channel sent it. */
+  name: string;
+  firstBooked: string | null;
+  lastBooked: string | null;
+  bookings: number;
+  nights: number;
   adr: number;
-  /** Night share per channel, so a mix shift is visible against the ADR line. */
-  shares: Record<string, number>;
-  adrByChannel: Record<string, number>;
+  gpPerNight: number;
+  cancellationRate: number;
+}
+
+export interface PromoRow extends RateEconomics {
+  promo: string;
+  /** Standing promotion (always on) or a time-limited one switched on by hand. */
+  timeLimited: boolean;
+  /** Against every other night that sold for the same unit on the same date. */
+  vsSameDate: SameDateComparison | null;
+  /**
+   * How full the rest of the class was on the nights this promotion sold —
+   * other rooms' sold nights ÷ other rooms' available nights. A discount that
+   * lands on nights the class was filling anyway is the expensive kind.
+   */
+  dateStrength: number | null;
+  campaigns: PromoCampaignRow[];
+}
+
+export interface ChannelRow extends RateEconomics {
+  channel: string;
+  vsBookingCom: SameDateComparison | null;
+}
+
+/**
+ * Is the direct channel priced too cheap?
+ *
+ * A direct night can sell `breakEvenDiscount` below Booking.com and net exactly
+ * the same; the commission saving beyond that is margin kept. Compared on the
+ * same unit and date so the season cannot masquerade as a pricing decision.
+ */
+export interface DirectPricingCheck {
+  channel: string;
+  takeRate: number;
+  bookingComTakeRate: number;
+  breakEvenDiscount: number;
+  /** How the same-night comparison was matched (see SameDateComparison.grain). */
+  grain: 'date' | 'week';
+  matchedDates: number;
+  /** Direct gross ÷ Booking.com gross − 1, same unit, same date. Negative = cheaper. */
+  sameDateGrossDelta: number | null;
+  sameDateNetDelta: number | null;
+  sameDateGpDelta: number | null;
+  verdict: 'too-cheap' | 'near-break-even' | 'keeping-margin' | 'insufficient-data';
+}
+
+/** Cancelled room-nights and what became of them, for one plan or one unit. */
+export interface ResaleRow {
+  label: string;
+  channel: string | null;
+  cancelledBookings: number;
+  /** Past cancelled room-nights — the ones whose fate is known. */
+  cancelledNights: number;
+  resoldNights: number;
+  resaleRate: number;
+  /** Per-night price the cancelled booking had agreed. Null when unknown (direct). */
+  originalAdr: number | null;
+  /** Per-night price the replacement booking paid. */
+  resaleAdr: number | null;
+  /** resaleAdr ÷ originalAdr over resold nights where both are known. */
+  priceRatio: number | null;
+  /** GP the cancelled nights would have made vs what the resale made. */
+  originalGp: number | null;
+  recoveredGp: number;
+  avgDaysBeforeArrival: number | null;
+  avgDaysToResell: number | null;
+  /** Cancelled nights still in the future — fate not yet known. */
+  openNights: number;
 }
 
 /**
@@ -782,6 +922,7 @@ export interface LeadAdrRow {
   nights: number;
   bookings: number;
   adr: number;
+  gpPerNight: number;
   /** adr ÷ the near-in reference bucket's adr − 1. */
   vsReference: number | null;
   nightShare: number;
@@ -791,31 +932,42 @@ export interface LeadAdrRow {
   riskAdjustedAdr: number;
 }
 
-export interface RatesResponse {
-  basis: 'stay';
-  query: OverviewResponse['query'];
+export interface RateMixMonthPoint {
+  month: string;
   adr: number;
-  /** Rate-plan families: non-refundable, flexible, weekly, one-night, standard. */
-  planMix: RateMixRow[];
-  /**
-   * OTA promotions the booking arrived on — Last Minute Deal, Early Booker Deal,
-   * Mobile app rate and friends, parsed out of Beds24's rate description.
-   *
-   * This is where most of the ADR story lives. A promotion is a standing discount
-   * off the rate the pricing engine pushed, so the mix here decides how much of the
-   * pushed rate is actually collected.
-   */
-  promoMix: RateMixRow[];
-  /** Channel mix, the third lever on ADR. */
-  channelMix: RateMixRow[];
-  mixMonthly: RateMixMonthPoint[];
-  channels: string[];
+  gpPerNight: number;
+  /** Night share per channel, so a mix shift is visible against the ADR line. */
+  shares: Record<string, number>;
+}
+
+export interface RatesClassView {
+  classId: RateClassId;
+  label: string;
+  description: string;
+  /** Sellable units in the class (see SELLABLE_UNITS). */
+  unitIds: string[];
+  totals: RateEconomics;
+  /** Share of nights sold on a non-refundable plan. */
+  nonRefundableShare: number;
+  /** Share of nights that arrived on any promotion. */
+  promoShare: number;
+  /** Share of nights on a time-limited deal. */
+  timeLimitedShare: number;
+  /** Share of nights sold direct (web + phone). */
+  directShare: number;
+  /** How full the rest of the class was, on average, on the nights it sold — the baseline for a promotion's dateStrength. */
+  avgDateStrength: number | null;
+  plans: RatePlanRow[];
+  promos: PromoRow[];
+  channels: ChannelRow[];
+  directPricing: DirectPricingCheck[];
+  resaleByPlan: ResaleRow[];
+  resaleByUnit: ResaleRow[];
+  resaleTotal: ResaleRow;
   leadAdr: LeadAdrRow[];
-  /** The far-out premium the pricing engine is configured to charge. */
-  configuredFarOutPremium: { nearDays: number; farDays: number; premium: number };
-  /** What the data says the far-out premium actually is, same two horizons. */
   achievedFarOutPremium: number | null;
-  /** Genius penetration and what it costs, when the sample allows it. */
+  mixMonthly: RateMixMonthPoint[];
+  channelList: string[];
   genius: {
     geniusNights: number;
     totalBookingComNights: number;
@@ -826,8 +978,30 @@ export interface RatesResponse {
     comparable: boolean;
     minComparisonBookings: number;
   } | null;
-  /** Length-of-stay mix, since it moves ADR as much as any rate plan. */
-  losMix: { label: string; bookings: number; nights: number; adr: number; nightShare: number }[];
+  losMix: { label: string; bookings: number; nights: number; adr: number; gpPerNight: number; nightShare: number }[];
+}
+
+export interface RatesResponse {
+  basis: 'stay';
+  query: OverviewResponse['query'];
+  /** 1KK, 2KK and the blend, in that order. */
+  classes: RatesClassView[];
+  /** The far-out premium the pricing engine is configured to charge. */
+  configuredFarOutPremium: { nearDays: number; farDays: number; premium: number };
+  /** Same-date comparisons need at least this many matched dates… */
+  minMatchedDates: number;
+  /** …from at least this many distinct bookings. */
+  minMatchedBookings: number;
+  /** How the turnover cost in every GP figure was sourced. */
+  costCoverage: {
+    available: boolean;
+    /** Booking-rooms whose checkout cleaning is logged in the cleaning app. */
+    actual: number;
+    /** Booking-rooms costed at their unit's average turnover (future, legacy or unlogged). */
+    estimated: number;
+    perCheckoutByUnit: { unitId: string; label: string; perCheckout: number; samples: number }[];
+  };
+  notes: string[];
 }
 
 // ── Market benchmark (PriceLabs) ────────────────────────────────────────────

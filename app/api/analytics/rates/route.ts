@@ -1,9 +1,10 @@
 /**
  * GET /api/analytics/rates?from&to&rooms&channels
  *
- * What the ADR is made of: rate-plan families, OTA promotions, channel mix, Genius
- * penetration, length-of-stay mix, and achieved ADR by lead time — the test of
- * whether the pricing engine's far-out premium is actually being paid.
+ * Gross profit by rate plan, promotion and channel, per room class (1KK / 2KK):
+ * do the plans make sense, are the time-limited deals working, are cancelled
+ * nights resold and at what price, is direct priced too cheap. Plus the far-out
+ * premium test, Genius penetration and the length-of-stay mix.
  *
  * STAY basis for money, booking grain for per-booking averages, so a seven-night
  * stay does not count seven times in "average length of stay".
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
   const parsed = await parseAnalyticsRequest(request);
   if ('error' in parsed) return parsed.error;
   try {
-    return NextResponse.json(await readRates(parsed.scope));
+    return NextResponse.json(await readRates(parsed.scope, parsed.todayIso));
   } catch (err) {
     return analyticsError(err);
   }

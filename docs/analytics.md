@@ -15,7 +15,7 @@ site or Google on a page load.
 | **Overview** | How much did we make? | stay |
 | **Occupancy** | How full were we, and where did we run out? | stay |
 | **Booking window** | When did it sell, and did it stick? | booked |
-| **Rates** | What is the ADR actually made of? | stay |
+| **Rates** | Do the rate plans, deals and channels raise gross profit? Per 1KK / 2KK (§11) | stay |
 | **Costs & commissions** | What did a night cost to sell and service? | stay revenue, checkout-date turnover cost |
 | **Web funnel** (admin) | Who searched the website, where did they drop out, what dates did we turn away? | event date |
 
@@ -143,7 +143,7 @@ data-access/analytics/
   overview.ts                        stay-basis performance, units, forward book
   occupancy.ts                       compression, transient weekday, month × unit
   bookingWindow.ts                   lead time, booking curve, cancellations
-  rates.ts                           rate mix, promotions, far-out premium test
+  rates.ts                           Rates reads (nights, bookings, capacity, turnover) → engine
   costs.ts                           commission, operating cost, unit economics
   market.ts                          MPI + market series (reads the snapshot)
   marketRefresh.ts                   the only caller of PriceLabs
@@ -151,6 +151,8 @@ data-access/analytics/
   webFunnel.ts                       Web funnel reader (Postgres only)
   webFunnelSync.ts                   rental-site Redis → Postgres copy, GA4 → Postgres
 utils/webFunnel.ts                   Redis contract, parsing, funnel maths (client-safe)
+utils/ratesAnalysis.ts               Rates engine: GP by plan/promo/channel, resale, per class (pure, tested)
+utils/rateDescription.ts             Beds24 rateDescription → plan, promotion, Genius, cancelled value
 utils/ga4.ts                         GA4 Data API client — READ-ONLY, server only
 lib/db/schema/webFunnel.ts           web_funnel_daily / web_funnel_searches / web_traffic_daily
 app/api/analytics/
@@ -510,4 +512,95 @@ with "Service account key creation is disabled". What worked, as info@:
    creating keys; the existing key keeps working.
 Rotating the key later means repeating 2–3. Leave "Service account key exposure
 response" on — it disables a key that leaks publicly.
+
+---
+
+## 11. Rates — plans, deals, cancellations, direct (in gross profit)
+
+Rebuilt 2026-10-27. Four questions, each answered in **gross profit**, per room
+**class** — 1KK studios (Urban K.102/K.103/K.106 + Deluxe K.202/K.203) and 2KK
+apartments (K.201, O.308) — because the two have different prices, seasons and
+guests and a blended plan or channel comparison mostly measures which class each
+one sold in. The tab opens on a 1KK | 2KK | both table; every card below follows
+a class switch (default 1KK).
+
+**Gross profit** on this tab = gross − OTA commission − payment fees − the stay's
+**turnover** cost (cleaning + laundry + consumables, logged at checkout, spread
+over its nights). Subscriptions and wear & tear are the same whichever rate sold
+the night, so they stay on the Costs tab. Stays with no logged checkout (future,
+legacy, unlogged — 29 of 448 on 2026-10-27) use their unit's average turnover:
+Urban 823 Kč, Deluxe 866 Kč, K.201 1 351 Kč, O.308 1 367 Kč per checkout.
+
+### How it is computed
+
+- **Rows, not SQL aggregates.** `data-access/analytics/rates.ts` reads the
+  `nights` CTE, every `alloc` row (whole archive, live and cancelled), the
+  `available` capacity and the turnover cells, and hands them to the pure engine
+  `utils/ratesAnalysis.ts` (unit-tested). It still uses the one definition of a
+  night in `shared.ts`.
+- **Plan and promotion** come from the first line of Beds24's `rateDescription`
+  (`utils/rateDescription.ts`). A line with only a rate id (`65571709 rewritten
+  from Early Booker Deal`) gets its plan from other bookings that name that id.
+  Airbnb cancellation policies map onto the same ladder (non_refundable →
+  Non-refundable, moderate/flexible → Flexible, firm/strict → Standard).
+  **Time-limited** = Booking.com Limited Time Deals + operator-named seasonal
+  campaigns ("August Deal", "Sezonni nabidka"); each campaign is listed with the
+  dates it was booked.
+- **Same-night comparisons are the numbers to believe.** Nights of the same
+  sellable unit on the same date sold two ways; the **median** gap over matched
+  cells (one mispriced booking cannot move it). Floors: 10 matched cells from at
+  least 5 distinct bookings, else "n/a". K.201 and O.308 are single rooms, so two
+  bookings never share a night — there the cells widen to the same unit, ISO week
+  and night type (Fri/Sat vs rest), marked "wk".
+- **Resale** is judged per sellable unit and date (Beds24 reshuffles studios),
+  capacity-aware: a cancelled night counts as resold only if the unit ran out of
+  rooms that night, and it is matched to the earliest booking made after the
+  cancellation. Future cancelled nights are "still ahead", not unsold.
+- **A cancelled booking's value** is read back from the description (Beds24
+  zeroes `price`): the MEAN of the per-night `CZK x` lines (Beds24 truncates long
+  stays, so sum ÷ nights would understate), or Airbnb's whole-stay Base Price ÷
+  nights — divided by the group size, because Airbnb repeats a two-room group's
+  total on every room. Direct cancellations carry no price.
+- **GP per booked night** = (GP of the nights that stayed + GP of the replacement
+  bookings that resold its cancelled nights) ÷ (stayed + cancelled nights). The
+  fair way to compare a cheap plan that sticks with a dearer one that cancels.
+- **Rest of class full** (date strength) = how full the class's OTHER rooms ended
+  on the nights a promotion sold. A deal that lands on nights the class filled
+  anyway gave its discount away.
+- **Direct break-even** = 1 − (1 − Booking.com take) ÷ (1 − direct take);
+  verdict from the same-night NET gap: < −3 % too cheap, ±3 % break-even
+  (the saving all goes to the guest), > +3 % keeping margin.
+
+### What it said on 2026-10-27 (all time to 26 Oct)
+
+| | 1KK | 2KK |
+|---|---|---|
+| ADR / GP per night | 2 273 / 1 607 Kč | 3 552 / 2 504 Kč |
+| Non-refundable share | 51 % | 66 % |
+| Guest cancellations | 14 % | 10 % |
+| Cancelled nights resold | 79 % of 266, at 95 % of the rate | 78 % of 37, at 99 % |
+
+1. **Plans (1KK, Booking.com).** On the same nights Standard sells **+14 %**
+   above Non-refundable (+20 % GP) and Flexible **+20 %** (+29 % GP). Standard
+   cancels 36 %, Flexible 43 %, but ~85 % of those nights are resold, so after
+   cancellations they keep 87–88 % of their GP: **GP per booked night 1 609 Kč
+   Standard, 1 796 Kč Flexible, 1 424 Kč Non-refundable**. The non-refundable
+   discount (~14–20 %) is larger than the cancellation risk it removes (~12–13 %).
+   Caveat stated on the card: this does not prove NR guests would book Standard at
+   full price. 2KK has too few shared weeks to compare plans directly.
+2. **Time-limited deals.** 1KK: 56 nights (5.9 %), GP 1 513 vs 1 607 Kč/night,
+   and they land on nights the rest of the class ended **93 % full vs 91 %** on an
+   average night — discounting nights that were filling anyway. 2KK: 24 nights on
+   nights 83 % full vs 92 % — those do hit softer dates. Costliest standing
+   promotion: 1KK Super Last Minute (−18 % GP same night), 2KK Last Minute Deal
+   (−22 % price, −25 % GP same week).
+3. **Cancellations.** Weekly (126 nights) and Standard (73) lose the most; resale
+   keeps 95–99 % of the price but only ~72–76 % of the GP (a fifth of the nights
+   never resell). Flexible resells at only 82 % of its rate.
+4. **Direct (1KK).** Direct-Web sells **15 % below** Booking.com on the same
+   nights against a 17.5 % break-even, so it nets **+5 %** — we keep about a
+   quarter of the commission saving and hand three quarters to the guest. 2KK has
+   too few shared nights to say. **BH-92586229** (Direct-Web, K.103, 27 Sep–3 Oct,
+   6 nights at 8 123 Kč/night, no Stripe payment linked) inflates Direct-Web's
+   average ADR; the median comparison is immune, but the booking is worth a look.
 
