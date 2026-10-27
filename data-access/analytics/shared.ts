@@ -30,6 +30,7 @@ import { db } from '@/lib/db';
 import { ALL_ROOMS_BY_CATEGORY, roomToCategory } from '@/utils/roomCategory';
 import {
   ABANDONED_CANCEL_MINUTES,
+  ROOM_CLASSES,
   ROOM_ONLINE_OVERRIDES,
   SELLABLE_UNITS,
   TEST_BOOKING_NAME_REGEX,
@@ -246,6 +247,55 @@ export const ALLOC_CTE = sql`
 
 
 /**
+ * `room_cuts` — mid-stay room moves, one row per cut date, in SQL form.
+ *
+ * Beds24 only knows a booking's CURRENT room, so a guest moved part-way through
+ * a stay (BH-93371888: K.106 → K.103 on 4 Oct 2026) reads as having slept every
+ * night in the new room — which double-books it against whoever really held
+ * that room before the move and empties the old one. `room_moves.effective_from`
+ * is the app's record of the real split. This is a SQL transcription of
+ * `buildRoomSegments` (utils/roomSegments.ts), same rules:
+ *   - only cuts recorded after the booking's latest whole-stay move count;
+ *   - a cut date outside (check-in, check-out) is ignored (stay shortened since);
+ *   - two cuts on the same date → the later one wins;
+ *   - the chain must END in the booking's current room, else it is stale and
+ *     ignored (someone moved the booking outside this app since);
+ *   - multi-apartment (linked-room) bookings are never split.
+ */
+export const ROOM_CUTS_CTE = sql`
+  room_cuts AS (
+    SELECT x.reservation_number, x.effective_from, x.from_room, x.to_room
+    FROM (
+      SELECT
+        d.*,
+        first_value(d.to_room) OVER (
+          PARTITION BY d.reservation_number ORDER BY d.effective_from DESC
+        ) AS last_to_room
+      FROM (
+        SELECT DISTINCT ON (m.reservation_number, m.effective_from)
+          m.reservation_number,
+          m.effective_from::date AS effective_from,
+          m.from_room,
+          m.to_room,
+          b.room                 AS booking_room
+        FROM room_moves m
+        JOIN bookings_mirror b ON b.reservation_number = m.reservation_number
+        WHERE m.effective_from IS NOT NULL
+          AND m.effective_from > b.check_in_date
+          AND m.effective_from < b.check_out_date
+          AND (b.linked_rooms IS NULL OR cardinality(b.linked_rooms) <= 1)
+          AND m.moved_at > COALESCE((
+            SELECT MAX(w.moved_at) FROM room_moves w
+            WHERE w.reservation_number = m.reservation_number AND w.effective_from IS NULL
+          ), '-infinity'::timestamptz)
+        ORDER BY m.reservation_number, m.effective_from, m.moved_at DESC
+      ) d
+    ) x
+    WHERE x.last_to_room = x.booking_room
+  )
+`;
+
+/**
  * `nights` — one row per sold room-night: the grain every occupancy, ADR and
  * RevPAR figure is computed on.
  *
@@ -263,7 +313,22 @@ export const NIGHTS_CTE = sql`
     SELECT
       a.reservation_number,
       a.channel,
-      a.room,
+      /* The room the guest actually slept in that night — differs from the
+         booking's Beds24 room only for a mid-stay move (see ROOM_CUTS_CTE).
+         Before the first cut: the first cut's from_room; after a cut: its
+         to_room; no cuts: the booking's room. */
+      COALESCE(
+        (SELECT rc.to_room FROM room_cuts rc
+          WHERE rc.reservation_number = a.reservation_number AND rc.effective_from <= d::date
+          ORDER BY rc.effective_from DESC LIMIT 1),
+        (SELECT rc.from_room FROM room_cuts rc
+          WHERE rc.reservation_number = a.reservation_number
+          ORDER BY rc.effective_from ASC LIMIT 1),
+        a.room
+      )                                           AS room,
+      /* The booking's own (final, Beds24) room — the one its checkout cleaning
+         is logged against. */
+      a.room                                      AS stay_room,
       a.rate_type,
       a.nationality,
       a.check_in_date,
@@ -448,6 +513,7 @@ export function baseCtes(scope: AnalyticsScope): SQL {
   return sql`
     WITH ${STRIPE_FEES_CTE},
     ${ALLOC_CTE},
+    ${ROOM_CUTS_CTE},
     ${NIGHTS_CTE},
     ${BLACKOUT_NIGHTS_CTE},
     ${ROOM_ONLINE_CTE},
@@ -610,4 +676,19 @@ export function transientCtes(scope: AnalyticsScope): SQL {
     ${LONG_NIGHTS_CTE},
     ${TRANSIENT_AVAILABLE_CTE}
   `;
+}
+
+// ── Room classes (1KK / 2KK) ─────────────────────────────────────────────────
+
+/**
+ * SQL CASE mapping a room column to its room-class id ('1kk' | '2kk'), or
+ * 'other' for a label no class claims (callers filter it out explicitly).
+ * Virtual-room labels map to their class — see `ROOM_CLASSES`.
+ */
+export function classIdOf(roomColumn: SQL): SQL {
+  const branches = ROOM_CLASSES.map(
+    (c) =>
+      sql`WHEN ${roomColumn} = ANY (string_to_array(${[...c.rooms, ...c.virtualRoomLabels].join(LIST_DELIMITER)}, chr(31))) THEN ${c.id}`,
+  );
+  return sql`CASE ${sql.join(branches, sql` `)} ELSE 'other' END`;
 }

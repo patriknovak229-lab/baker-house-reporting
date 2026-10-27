@@ -13,7 +13,7 @@ site or Google on a page load.
 | Tab | Question | Basis |
 |---|---|---|
 | **Overview** | How much did we make? | stay |
-| **Occupancy** | How full were we, and where did we run out? | stay |
+| **Occupancy** | How full was each room class, against the market — and did it turn into gross profit? | stay |
 | **Booking window** | When did it sell, and did it stick? | booked |
 | **Rates** | Do the rate plans, deals and channels raise gross profit? Per 1KK / 2KK (§11) | stay |
 | **Costs & commissions** | What did a night cost to sell and service? | stay revenue, checkout-date turnover cost |
@@ -127,6 +127,56 @@ Beds24 saves an unpaid booking-page checkout (e.g. the first Google Hotel Ads
 `modifiedTime` — an upper bound on when the cancellation happened — so such a row
 is abandoned, while one last modified weeks later stays a guest cancellation.
 
+### The Occupancy tab reads by room class and judges occupancy on gross profit
+
+Reworked 2026-10-27. Patrik's two corrections drove it. First, the old compression
+tile read "58 of 93 nights" with all seven rooms selected: it counted **dates on
+which every room was sold** and labelled them nights. Second, he needs the room
+classes kept apart on every view (`ROOM_CLASSES`): the 1KK studios (K.102, K.103,
+K.106, K.202, K.203) and the 2KK apartments (K.201, O.308) have different ADR and
+seasonality.
+
+- **Room-nights, not dates.** Occupancy is always shown as sold ÷ on-sale
+  room-nights (e.g. 1KK 438 / 465). "Sold out" is per class and counted in
+  **dates** on which every room of that class on sale was taken.
+- **Gross profit per available night (GP / avail. night) is the ranking metric.**
+  GP = net sales minus stay costs (cleaning, laundry, consumables, wear & tear,
+  misc). Fixed subscriptions are left out of every comparison: they don't move
+  with price, occupancy or stay length, only the Urban studios pay for parking,
+  and O.308 carries none. The scorecard shows them separately, pro-rated by day.
+- **Stay-basis costs.** A checkout turnover is spread over the nights of the stay
+  that caused it. A cost with no checkout behind it (a manual cleaning, the
+  vacated room of a mid-stay move) and every wear & tear / misc incident stays
+  on its own (room, date). Leaving turnovers on the checkout date would make a
+  week-long stay's month look free.
+- **GP only covers nights already slept, from the month cost logging began
+  (March 2026).** Earlier nights would read as free, and future checkouts are
+  not fully costed yet.
+- **Same class, same month pairs** answer "is 90% better than 80%?". With class
+  and month held fixed, they show whether the fuller room also earned more GP
+  per available night.
+- **Long-stay comparison.** Each 7+ night stay (`LONG_STAY_MIN_NIGHTS`) is set
+  against same-class sibling rooms over exactly the nights it covered, with
+  their empty nights and extra turnovers counted. Siblings that held a long stay
+  of their own on those dates are excluded. A stay's per-night GP alone can't
+  answer the question, because it ignores whether the nights would have sold.
+- **Market:** the comp set for each class is weighted by our nights on sale per
+  listing. Both sides of the MPI cover the same months. PriceLabs' monthly
+  series stops at the current month, so no MPI is shown when under half the
+  window has a market figure. The forward table covers the future instead.
+- **Unallocated studio nights** (the 40 pre-Beds24 "1KK Deluxe Studios" nights)
+  count in 1KK totals and sold-out dates, but in no room row.
+- **Mid-stay moves** are now applied in the shared `nights` CTE (`room_cuts`,
+  a SQL transcription of `buildRoomSegments`). Before this change, BH-93371888
+  (moved K.106 → K.103 on 4 Oct) double-booked K.103 for 6 nights in every
+  analytics figure.
+- Removed: local demand events (Patrik's call; `DEMAND_EVENTS` stays because the
+  pricing radar uses it), the indexed monthly shape, and the sellable-unit grid.
+  The room × month grid replaces the last of those.
+
+All of it lives in `occupancyModel.ts`, a pure module with a unit test.
+`occupancy.ts` only fetches.
+
 ---
 
 ## 4. File map
@@ -141,7 +191,8 @@ data-access/analytics/
   shared.ts                          the CTE stack — read this first
   meta.ts                            coverage + freshness + caveats
   overview.ts                        stay-basis performance, units, forward book
-  occupancy.ts                       compression, transient weekday, month × unit
+  occupancy.ts                       fetch layer for the Occupancy tab (room-days, nights, costs, market)
+  occupancyModel.ts                  pure model: class scorecard, GP, pairs, long-stay comparison, sold-out
   bookingWindow.ts                   lead time, booking curve, cancellations
   rates.ts                           Rates reads (nights, bookings, capacity, turnover) → engine
   costs.ts                           commission, operating cost, unit economics
@@ -250,6 +301,8 @@ All-time to date (2026-01-01 → 2026-08-18), all rooms, all channels.
 ### The headline: there is almost no spare capacity
 
 **123 of 194 nights (63%) sold out**, with a longest unbroken run of 15 nights.
+(August 2026, old portfolio-wide definition: dates with every room sold. The
+Occupancy tab now counts sold-out dates per room class.)
 Sold-out rate by unit: O.308 90%, K.201 86%, Urban 80%, Deluxe 77%. A sold-out
 night could not have sold more at any price, so its rate never had to ration
 demand.
@@ -375,7 +428,9 @@ Everything below is a one-line edit in `data/analyticsConfig.ts`:
 | `TRANSIENT_LOS_MAX` | the stay length above which a booking stops being transient demand |
 | `CONFIGURED_FAR_OUT_PREMIUM` | the premium PriceLabs is set to charge, so the Rates tab can test it |
 | `ROOM_ONLINE_OVERRIDES` | fix a room whose real listing date precedes its first booking |
-| `DEMAND_EVENTS` | the Brno event calendar the occupancy view measures |
+| `ROOM_CLASSES` | the 1KK / 2KK split every Occupancy view uses |
+| `LONG_STAY_MIN_NIGHTS` | the weekly-stay threshold for the length-of-stay comparison |
+| `DEMAND_EVENTS` | the Brno event calendar (pricing radar; no longer shown on Occupancy) |
 | `TEST_BOOKING_NAME_REGEX` | which guest names count as development noise |
 | `ABANDONED_CANCEL_MINUTES` | the abandoned-vs-guest cancellation boundary |
 | `EXPECTED_COMMISSION_RATES` | drift alerts on the Costs tab |

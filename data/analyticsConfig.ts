@@ -258,3 +258,73 @@ export const CONFIGURED_FAR_OUT_PREMIUM = {
   /** Intended price uplift of far over near. */
   premium: 0.15,
 };
+
+// ── Room classes (1KK / 2KK) ─────────────────────────────────────────────────
+
+/**
+ * The two room CLASSES the business prices and reads as separate products.
+ *
+ * Coarser than `SELLABLE_UNITS` on purpose. Units answer "which listing was
+ * full" (the PriceLabs / allocator grain); classes answer "how is the studio
+ * business doing versus the two-bedroom business". The two have different ADR,
+ * seasonality and guest mix, so any figure that blends them hides more than it
+ * shows — every occupancy view splits by class.
+ *
+ *   1KK — the five studios: Urban K.102/K.103/K.106 + Deluxe K.202/K.203
+ *   2KK — the two-bedroom apartments: K.201, O.308
+ *
+ * `virtualRoomLabels` are the Beds24 virtual-room names a booking carries while
+ * it is not yet allocated to a physical room (and that the pre-Beds24 legacy
+ * imports carry permanently). They belong to a class — a "1KK Deluxe Studios"
+ * night is a studio night — even though they belong to no physical room.
+ */
+export type RoomClassId = '1kk' | '2kk';
+
+export interface RoomClass {
+  id: RoomClassId;
+  label: string;
+  /** Plain-language description for subtitles. */
+  description: string;
+  /** Physical rooms, canonical order. */
+  rooms: string[];
+  virtualRoomLabels: string[];
+}
+
+export const ROOM_CLASSES: RoomClass[] = [
+  {
+    id: '1kk',
+    label: '1KK',
+    description: 'Studios — K.102, K.103, K.106, K.202, K.203',
+    rooms: ['K.102', 'K.103', 'K.106', 'K.202', 'K.203'],
+    virtualRoomLabels: ['1KK Urban Studios', '1KK Deluxe Studios'],
+  },
+  {
+    id: '2kk',
+    label: '2KK',
+    description: 'Two-bedroom apartments — K.201, O.308',
+    rooms: ['K.201', 'O.308'],
+    virtualRoomLabels: [],
+  },
+];
+
+const ROOM_CLASS_BY_ROOM = new Map<string, RoomClass>(
+  ROOM_CLASSES.flatMap((c) => [...c.rooms, ...c.virtualRoomLabels].map((r) => [r, c] as const)),
+);
+
+/** The class a physical room (or virtual-room label) belongs to; null if unknown. */
+export function roomClassOf(room: string): RoomClass | null {
+  return ROOM_CLASS_BY_ROOM.get(room) ?? null;
+}
+
+/**
+ * A stay of this many nights or more is a LONG stay in the Occupancy section's
+ * length-of-stay analysis — the weekly-discount threshold.
+ *
+ * Long stays sell at a lower ADR but fill every night and cost one cleaning,
+ * laundry and consumables set; the section measures whether that trade actually
+ * out-earns the shorter stays sibling rooms sold over the same dates.
+ *
+ * Distinct from `TRANSIENT_LOS_MAX` (stays ABOVE 7 nights), which other
+ * sections use to strip negotiated monthly rates out of weekday signals.
+ */
+export const LONG_STAY_MIN_NIGHTS = 7;

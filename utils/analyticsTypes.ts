@@ -636,97 +636,280 @@ export interface UnitPerformance {
 }
 
 // ── Occupancy section ───────────────────────────────────────────────────────
+//
+// Every figure is split by ROOM CLASS (1KK studios vs 2KK apartments — see
+// `ROOM_CLASSES` in data/analyticsConfig.ts): the two have different ADR and
+// seasonality, so a blended number hides more than it shows.
+
+export type OccupancyClassId = '1kk' | '2kk';
 
 /**
- * Weekday performance on a TRANSIENT basis.
+ * Gross profit for a slice, on the nights that have both HAPPENED and been
+ * COSTED (cost logging began in March 2026).
  *
- * The plain weekday view is contaminated by long stays: a Monday night inside a
- * 25-night booking was bought once, at a negotiated rate, months earlier — and it
- * then blocks the room against every later Monday enquiry. It drags weekday ADR
- * down while pushing weekday occupancy up, so the two errors cannot cancel.
- *
- * Here, stays longer than `transientLosMax` are removed from the sold side AND
- * their room-nights are removed from the available side, because a room committed
- * to a monthly guest was never on sale to a Friday transient booker.
+ * "Gross profit" here is net sales minus STAY costs — cleaning, laundry,
+ * consumables, wear & tear and misc — i.e. before the fixed monthly
+ * subscriptions. Subscriptions do not move with occupancy, price or stay length,
+ * and they differ by room for reasons unrelated to demand (only the Urban
+ * studios pay for parking; O.308 carries none), so leaving them in would bias
+ * every room-to-room comparison. The class scorecard shows them separately.
  */
-export interface TransientWeekdayPoint {
+export interface ProfitSlice {
+  /** Room-nights on sale in the costed, completed part of the slice. */
+  availableNights: number;
+  soldNights: number;
+  occupancy: number;
+  /** Gross ADR on the same nights. */
+  adr: number;
+  netSales: number;
+  /** Cleaning + laundry + consumables + wear & tear + misc. */
+  stayCosts: number;
+  grossProfit: number;
+  /** grossProfit ÷ availableNights — THE number this section ranks on. */
+  perAvailableNight: number;
+  perSoldNight: number;
+}
+
+/** Occupancy and money for one slice (a class, a room, a month, …). */
+export interface OccSlice {
+  /** Room-nights on sale (room online, not blacked out). */
+  availableNights: number;
+  /** Room-nights sold. */
+  soldNights: number;
+  occupancy: number;
+  gbv: number;
+  /** gbv − OTA commission − payment fees. */
+  netSales: number;
+  adr: number;
+  netAdr: number;
+  /** gbv ÷ availableNights = occupancy × ADR. */
+  revpar: number;
+  netRevpar: number;
+  /** Distinct bookings with a night in the slice. */
+  stays: number;
+  /** Mean full length of those bookings, in nights. */
+  avgLos: number;
+  /** Share of sold nights that came from stays of `longStayMinNights`+. */
+  longStayShare: number;
+  /** Null when no night in the slice is both completed and costed. */
+  profit: ProfitSlice | null;
+}
+
+export interface MarketPosition {
+  /** Comp-set occupancy, weighted by our nights on sale in each listing. */
+  occupancy: number | null;
+  /** Our occupancy ÷ market occupancy. */
+  mpi: number | null;
+  /** Comp-set ADR — Airbnb-listed prices, context only (different fee load). */
+  adr: number | null;
+}
+
+export interface OccupancyClassInfo {
+  id: OccupancyClassId;
+  label: string;
+  description: string;
+  /** Physical rooms of the class that are in scope. */
+  rooms: string[];
+}
+
+export interface ClassScorecard {
+  classId: OccupancyClassId | 'all';
+  label: string;
+  rooms: string[];
+  slice: OccSlice;
+  market: MarketPosition;
+  /** Fixed subscriptions over the costed nights, pro-rated by day. */
+  subscriptions: number | null;
+  /** profit.grossProfit − subscriptions. */
+  grossProfitAfterSubscriptions: number | null;
+}
+
+export interface ClassMonthPoint {
+  month: string;
+  /** Month not fully inside the window, or not finished yet. */
+  partial: boolean;
+  slice: OccSlice;
+  market: MarketPosition;
+}
+
+export interface ClassForwardHorizon {
+  horizonDays: number;
+  label: string;
+  ourOccupancy: number;
+  ourSoldNights: number;
+  ourAvailableNights: number;
+  marketOccupancy: number | null;
+  mpi: number | null;
+}
+
+export interface RoomMonthCell {
+  room: string;
+  classId: OccupancyClassId;
+  month: string;
+  partial: boolean;
+  slice: OccSlice;
+}
+
+/**
+ * Same class, same month, two rooms whose occupancy differed by at least
+ * `minOccupancyGap`: did the FULLER room earn more gross profit per available
+ * night? Holding class and month fixed is what takes season and product out of
+ * the comparison, leaving price and stay mix.
+ */
+export interface SameMonthPairSummary {
+  classId: OccupancyClassId;
+  minOccupancyGap: number;
+  pairs: number;
+  /** Pairs where the fuller room also earned more GP per available night. */
+  fullerEarnedMore: number;
+  /** Mean (fuller − emptier) occupancy, in ratio points. */
+  avgOccupancyGap: number;
+  /** Mean fuller ADR ÷ emptier ADR − 1. */
+  avgAdrGap: number;
+  /** Mean (fuller − emptier) GP per available night, Kč. */
+  avgProfitGap: number;
+  /** The pairs where the emptier room won, largest margin first. */
+  counterExamples: {
+    month: string;
+    fuller: { room: string; occupancy: number; adr: number; perAvailableNight: number };
+    emptier: { room: string; occupancy: number; adr: number; perAvailableNight: number };
+  }[];
+}
+
+export interface LosEconomicsBucket {
+  label: string;
+  stays: number;
+  nights: number;
+  adr: number;
+  netAdr: number;
+  /** Cleaning + laundry + consumables, spread over the stay's nights. */
+  turnoverCostPerNight: number;
+  /** netAdr − turnoverCostPerNight. */
+  profitPerNight: number;
+}
+
+/**
+ * A long stay against its sibling rooms over EXACTLY the same nights.
+ *
+ * The question it answers: a weekly guest takes a discount but fills every night
+ * and costs one cleaning — did that room out-earn the same-class rooms that sold
+ * the same dates to shorter stays (gaps and extra turnovers included)?
+ * Siblings that themselves held a long stay on those dates are left out, so the
+ * comparison is long stay vs short stays.
+ */
+export interface LongStayDuel {
+  classId: OccupancyClassId;
+  reservationNumber: string;
+  channel: string;
+  /** Room(s) the stay occupied (two for a mid-stay move). */
+  rooms: string[];
+  /** Full booking. */
+  checkIn: string;
+  checkOut: string;
+  stayNights: number;
+  /** First and last compared night (completed, costed, in the window). */
+  from: string;
+  to: string;
+  /** Nights compared. */
+  nights: number;
+  adr: number;
+  netAdr: number;
+  profitPerNight: number;
+  siblings: {
+    rooms: string[];
+    availableNights: number;
+    occupancy: number;
+    adr: number;
+    stays: number;
+    profitPerAvailableNight: number;
+  };
+  /** profitPerNight − siblings.profitPerAvailableNight. */
+  deltaPerNight: number;
+  /** deltaPerNight × nights. */
+  deltaTotal: number;
+}
+
+export interface LongStaySummary {
+  classId: OccupancyClassId;
+  duels: number;
+  /** Duels the long stay won (positive delta). */
+  won: number;
+  nights: number;
+  /** Night-weighted mean delta per night. */
+  avgDeltaPerNight: number;
+  totalDelta: number;
+}
+
+export interface SoldOutDay {
+  date: string;
+  capacity: number;
+  sold: number;
+  soldOut: boolean;
+  future: boolean;
+}
+
+export interface ClassWeekdayPoint {
   isoDow: number;
   label: string;
-  /** Sold transient room-nights. */
-  soldNights: number;
-  /** Room-nights that were genuinely on sale to transient demand. */
+  dates: number;
   availableNights: number;
+  soldNights: number;
   occupancy: number;
-  adr: number;
-  revpar: number;
-  /** Room-nights removed because a long stay already held them. */
-  longStayNights: number;
-  /** Calendar dates of this weekday where transient capacity hit zero. */
   soldOutDates: number;
-  /** Calendar dates of this weekday inside the window. */
-  totalDates: number;
-  /** soldOutDates ÷ totalDates — how often this weekday ran out of rooms. */
   soldOutRate: number;
-  /**
-   * ADR achieved on the dates that sold out, versus dates with capacity left.
-   *
-   * The diagnostic, not the headline. If sold-out nights are earning LESS than
-   * nights with spare rooms, price is not rationing demand on the days that
-   * matter — the classic underpricing signature. Null when either group is empty.
-   */
-  adrWhenSoldOut: number | null;
-  adrWhenSpare: number | null;
+  /** ADR of stays shorter than `longStayMinNights` — weekly rates excluded. */
+  shortStayAdr: number;
+  /** Same, on sold-out dates vs dates with a room left. */
+  shortStayAdrSoldOut: number | null;
+  shortStayAdrSpare: number | null;
   spareDates: number;
 }
 
-/** One calendar date's compression state, for the strip chart. */
-export interface CompressionDay {
-  stayDate: string;
-  isoDow: number;
-  capacity: number;
-  sold: number;
-  occupancy: number;
-  soldOut: boolean;
-  adr: number;
-}
-
-export interface UnitHeatCell {
-  month: string;
-  unitId: string;
-  soldNights: number;
-  availableNights: number;
-  occupancy: number;
-  adr: number;
-  revpar: number;
+export interface ClassSoldOut {
+  classId: OccupancyClassId;
+  /** Physical rooms of the class in scope. */
+  rooms: number;
+  /** Calendar dates with at least one room of the class on sale. */
+  dates: number;
+  /** Dates on which every room of the class on sale that night was sold. */
+  soldOutDates: number;
+  soldOutRate: number;
+  longestRun: number;
+  days: SoldOutDay[];
+  weekday: ClassWeekdayPoint[];
 }
 
 export interface OccupancyResponse {
   basis: 'stay';
   query: OverviewResponse['query'];
-  /** Portfolio totals per month. */
-  monthly: MonthlyPoint[];
-  /** Month × sellable unit grid — the group-level heatmap. */
-  unitHeatmap: UnitHeatCell[];
-  /** Month × physical room grid, kept as the detail view. */
-  roomHeatmap: HeatmapCell[];
-  /** Raw weekday view, all stay lengths. */
-  weekday: WeekdayPoint[];
-  /** Weekday view with long stays removed from both sides. */
-  weekdayTransient: TransientWeekdayPoint[];
-  /** The LOS ceiling used to define transient demand. */
-  transientLosMax: number;
-  compression: {
-    /** Dates where every transient-available room sold. */
-    soldOutDates: number;
-    totalDates: number;
-    soldOutRate: number;
-    /** Room-nights lost to long stays inside the window. */
-    longStayNights: number;
-    longStayBookings: number;
-    days: CompressionDay[];
+  classes: OccupancyClassInfo[];
+  /** Stays of this many nights or more count as long (weekly-rate) stays. */
+  longStayMinNights: number;
+  /** What the gross-profit figures cover. */
+  profitCoverage: {
+    costsAvailable: boolean;
+    /** First night with logged stay costs (YYYY-MM-DD), or null. */
+    costsFrom: string | null;
+    /** GP covers nights strictly before this date (today). */
+    completedBefore: string;
   };
-  seasonIndex: { month: string; revparIndex: number; occupancyIndex: number; adrIndex: number; partial: boolean }[];
-  events: EventImpactRow[];
+  scorecard: ClassScorecard[];
+  monthly: { classId: OccupancyClassId; points: ClassMonthPoint[] }[];
+  forward: { classId: OccupancyClassId; compSetListings: number | null; horizons: ClassForwardHorizon[] }[];
+  roomMonths: RoomMonthCell[];
+  /** Each room over the whole window — the grid's "Period" column. */
+  roomTotals: { room: string; classId: OccupancyClassId; slice: OccSlice }[];
+  sameMonthPairs: SameMonthPairSummary[];
+  losEconomics: { classId: OccupancyClassId; buckets: LosEconomicsBucket[] }[];
+  longStayDuels: LongStayDuel[];
+  longStaySummary: LongStaySummary[];
+  soldOut: ClassSoldOut[];
+  market: {
+    configured: boolean;
+    capturedAt: string | null;
+    source: string;
+  };
+  notes: string[];
   confidence: { completeMonths: number; partialYear: boolean; message: string };
 }
 

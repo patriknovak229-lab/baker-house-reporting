@@ -46,7 +46,7 @@ import WebFunnelSection from './WebFunnelSection';
  */
 const SECTIONS = [
   { id: 'overview', label: 'Overview', blurb: 'Volume, ADR and net' },
-  { id: 'occupancy', label: 'Occupancy', blurb: 'How full, and where we ran out' },
+  { id: 'occupancy', label: 'Occupancy', blurb: 'Vs market, and what it earned' },
   { id: 'booking-window', label: 'Booking window', blurb: 'How far ahead, and what sticks' },
   { id: 'rates', label: 'Rates', blurb: 'Plans, deals and channels in gross profit' },
   { id: 'costs', label: 'Costs & commissions', blurb: 'What a night costs to sell and service' },
