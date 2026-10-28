@@ -45,7 +45,11 @@ export function expandLinkedReservations(reservations: Reservation[]): Reservati
     const revenueSpans = revenueSpansOf(res) ?? undefined;
     const shares = res.linkedRoomShares?.length === n ? res.linkedRoomShares : null;
     if (shares) {
-      const parts = Object.fromEntries(PRORATED_FIELDS.map((f) => [f, allocate(res[f] ?? 0, shares)])) as Record<
+      // In haléř, not whole CZK: the shares come from each apartment's own
+      // Beds24 price, so the pieces land on exactly those prices (6 290.20 +
+      // 3 897.58), the last one absorbing any rounding.
+      const toHaler = (total: number) => allocate(Math.round(total * 100), shares).map((h) => h / 100);
+      const parts = Object.fromEntries(PRORATED_FIELDS.map((f) => [f, toHaler(res[f] ?? 0)])) as Record<
         (typeof PRORATED_FIELDS)[number],
         number[]
       >;

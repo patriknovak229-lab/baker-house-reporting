@@ -29,16 +29,17 @@ describe("expandLinkedReservations", () => {
     ]);
   });
 
-  it("gives each separately priced apartment its own share (O.308 6 290 + Urban 3 898)", () => {
+  it("gives each separately priced apartment exactly its own Beds24 price (O.308 6 290.20 + Urban 3 897.58)", () => {
     const shares = [6290.2 / 10187.78, 3897.58 / 10187.78];
-    const pieces = expandLinkedReservations([mk({ linkedRoomShares: shares })]);
+    const booking = mk({ price: 10187.78, amountPaid: 10187.78, linkedRoomShares: shares });
+    const pieces = expandLinkedReservations([booking]);
     expect(pieces.map((p) => [p.room, p.price])).toEqual([
-      ["O.308", 6_290],
-      ["K.106", 3_898],
+      ["O.308", 6290.2],
+      ["K.106", 3897.58],
     ]);
-    // Whole CZK that add back up to the booking, for every money field.
+    // Pieces add back up to the booking, to the haléř, for every money field.
     for (const f of ["price", "commissionAmount", "paymentChargeAmount", "amountPaid"] as const) {
-      expect(pieces.reduce((s, p) => s + p[f], 0)).toBe(mk()[f]);
+      expect(pieces.reduce((s, p) => s + p[f], 0)).toBeCloseTo(booking[f], 2);
     }
     expect(pieces.every((p) => p.linkedRooms === undefined && p.linkedRoomShares === undefined)).toBe(true);
   });
