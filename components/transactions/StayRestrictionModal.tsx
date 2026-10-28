@@ -1,7 +1,13 @@
 'use client';
 import { useState } from 'react';
 import FloatingPanel from '@/components/shared/FloatingPanel';
-import { RESTRICTION_LABEL, eachDay, unitForRoomId, type RestrictionKind } from '@/utils/stayRestrictions';
+import {
+  RESTRICTION_LABEL,
+  eachDay,
+  unitForRoomId,
+  type RestrictionKind,
+  type StayRestriction,
+} from '@/utils/stayRestrictions';
 
 // Same chips as BlackoutModal. The difference is where the change lands: a
 // restriction goes on the room each unit is SOLD as, so picking one Urban or
@@ -37,6 +43,9 @@ const KIND_OPTIONS: { kind: RestrictionKind; label: string; hint: string }[] = [
 interface Props {
   onClose: () => void;
   onCreated: () => void;
+  /** Modify this restriction instead of adding one. Its unit stays fixed:
+   *  moving it elsewhere is Remove + a new one. */
+  editing?: StayRestriction | null;
 }
 
 interface FormState {
@@ -92,8 +101,12 @@ function unitChipIds(roomId: number): number[] {
   return ROOM_OPTIONS.filter((r) => ids.has(r.roomId)).map((r) => r.roomId);
 }
 
-export default function StayRestrictionModal({ onClose, onCreated }: Props) {
-  const [form, setForm] = useState<FormState>(DEFAULT_FORM);
+export default function StayRestrictionModal({ onClose, onCreated, editing }: Props) {
+  const [form, setForm] = useState<FormState>(() =>
+    editing
+      ? { ...DEFAULT_FORM, roomIds: [editing.roomId], kind: editing.kind, from: editing.from, to: editing.to }
+      : DEFAULT_FORM,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,7 +136,7 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
   }
 
   async function handleSubmit() {
-    if (form.roomIds.length === 0) {
+    if (!editing && form.roomIds.length === 0) {
       setError('Pick at least one room.');
       return;
     }
@@ -140,17 +153,16 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
     setSubmitting(true);
     try {
       const res = await fetch('/api/bookings/restrictions', {
-        method: 'POST',
+        method: editing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomIds: form.roomIds,
-          kind: form.kind,
-          from: form.from,
-          to: form.to,
-        }),
+        body: JSON.stringify(
+          editing
+            ? { id: editing.id, kind: form.kind, from: form.from, to: form.to }
+            : { roomIds: form.roomIds, kind: form.kind, from: form.from, to: form.to },
+        ),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to set restriction');
+      if (!res.ok) throw new Error(json.error ?? (editing ? 'Failed to modify restriction' : 'Failed to set restriction'));
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to set restriction');
@@ -167,12 +179,23 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
   return (
     <FloatingPanel
       id="no-checkin-out"
-      title="No Check-in / Check-out"
+      title={editing ? 'Modify restriction' : 'No Check-in / Check-out'}
       subtitle={<>Inventory override: same as Beds24&apos;s &ldquo;No check in / No check out&rdquo; options in the calendar.</>}
       onClose={onClose}
     >
       <div className="px-6 py-5 space-y-4">
         {/* Rooms */}
+        {editing ? (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">Rooms</label>
+            <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800">
+              {editing.rooms.length > 1 ? `${editing.unitLabel} (${editing.rooms.join(', ')})` : editing.rooms[0]}
+            </p>
+            <p className="text-[10px] text-gray-400 mt-1">
+              To restrict other rooms, add a new restriction. To move this one, remove it and add it there.
+            </p>
+          </div>
+        ) : (
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="block text-xs font-medium text-gray-600">
@@ -229,6 +252,7 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
             Booking.com, Airbnb and the website, so they&apos;re restricted together.
           </p>
         </div>
+        )}
 
         {/* Restriction */}
         <div>
@@ -297,7 +321,8 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
           )}
         </div>
 
-        {/* Reason */}
+        {/* Reason (never sent anywhere, so there's nothing to show when modifying) */}
+        {!editing && (
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">
             Reason <span className="text-gray-400 font-normal">(optional, local-only)</span>
@@ -313,6 +338,7 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
             Beds24 calendar overrides don&apos;t carry comments, so the reason is just a note for you.
           </p>
         </div>
+        )}
 
         {error && (
           <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -335,6 +361,8 @@ export default function StayRestrictionModal({ onClose, onCreated }: Props) {
           >
             {submitting
               ? 'Saving…'
+              : editing
+              ? 'Save changes'
               : form.roomIds.length > 1
               ? `Restrict ${form.roomIds.length} rooms`
               : 'Restrict'}

@@ -5,6 +5,7 @@ import {
   overrideByDay,
   parseRestrictionId,
   planRestrictionClear,
+  planRestrictionModify,
   planRestrictionWrite,
   restrictionId,
   restrictionRuns,
@@ -187,5 +188,55 @@ describe("planRestrictionClear", () => {
       { from: "2026-12-24", to: "2026-12-24" },
       { from: "2026-12-26", to: "2026-12-27" },
     ]);
+  });
+});
+
+describe("planRestrictionModify", () => {
+  const xmas = { from: "2026-12-24", to: "2026-12-26", kind: "noCheckOut" as const };
+  const xmasDays = {
+    "2026-12-24": "noCheckOut",
+    "2026-12-25": "noCheckOut",
+    "2026-12-26": "noCheckOut",
+  };
+
+  it("only touches the days that change when the range moves", () => {
+    const plan = planRestrictionModify(xmasDays, xmas, { ...xmas, from: "2026-12-25", to: "2026-12-27" });
+    expect(plan.writes).toEqual([
+      { from: "2026-12-24", to: "2026-12-24", override: "none" },
+      { from: "2026-12-27", to: "2026-12-27", override: "noCheckOut" },
+    ]);
+    expect(plan.conflicts).toEqual([]);
+  });
+
+  it("rewrites every day when only the kind changes", () => {
+    const plan = planRestrictionModify(xmasDays, xmas, { ...xmas, kind: "noCheckIn" });
+    expect(plan.writes).toEqual([{ from: "2026-12-24", to: "2026-12-26", override: "noCheckIn" }]);
+  });
+
+  it("writes nothing when nothing changed", () => {
+    expect(planRestrictionModify(xmasDays, xmas, xmas).writes).toEqual([]);
+  });
+
+  it("leaves the old restriction alone when the new range hits a blackout", () => {
+    const plan = planRestrictionModify(
+      { ...xmasDays, "2026-12-27": "blackout" },
+      xmas,
+      { ...xmas, to: "2026-12-27" },
+    );
+    expect(plan.writes).toEqual([]);
+    expect(plan.conflicts).toEqual([{ date: "2026-12-27", override: "blackout" }]);
+  });
+
+  it("combines with a neighbouring restriction it now overlaps, and never clears that one", () => {
+    const plan = planRestrictionModify(
+      { ...xmasDays, "2026-12-27": "noCheckIn" },
+      xmas,
+      { ...xmas, from: "2026-12-26", to: "2026-12-27" },
+    );
+    expect(plan.writes).toEqual([
+      { from: "2026-12-24", to: "2026-12-25", override: "none" },
+      { from: "2026-12-27", to: "2026-12-27", override: "noCheckInOrCheckOut" },
+    ]);
+    expect(plan.merged).toEqual(["2026-12-27"]);
   });
 });

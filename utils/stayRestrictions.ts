@@ -283,3 +283,48 @@ export function planRestrictionClear(
   }
   return ranges;
 }
+
+export interface RestrictionModifyPlan {
+  /** Ranges to POST, `none` included. Empty whenever there are conflicts. */
+  writes: { from: string; to: string; override: string }[];
+  /** As in planRestrictionWrite: blackout/exception days inside the new range. */
+  conflicts: { date: string; override: string }[];
+  /** New days combined with a different restriction already there. */
+  merged: string[];
+}
+
+/**
+ * Change a displayed restriction's kind and/or days in one write: clear it as
+ * planRestrictionClear would, set the new range as planRestrictionWrite would,
+ * then send only the days whose final value differs from today's. Days in both
+ * ranges are never written to `none` and back, and a conflict leaves the old
+ * restriction exactly as it was.
+ */
+export function planRestrictionModify(
+  byDay: Record<string, string>,
+  current: { from: string; to: string; kind: RestrictionKind },
+  next: { from: string; to: string; kind: RestrictionKind },
+): RestrictionModifyPlan {
+  const after: Record<string, string> = { ...byDay };
+  for (const r of planRestrictionClear(byDay, current.from, current.to, current.kind)) {
+    for (const day of eachDay(r.from, r.to)) after[day] = 'none';
+  }
+  const write = planRestrictionWrite(after, next.from, next.to, next.kind);
+  if (write.conflicts.length > 0) {
+    return { writes: [], conflicts: write.conflicts, merged: write.merged };
+  }
+  for (const w of write.writes) {
+    for (const day of eachDay(w.from, w.to)) after[day] = w.override;
+  }
+
+  const days = [...new Set([...eachDay(current.from, current.to), ...eachDay(next.from, next.to)])].sort();
+  const writes: RestrictionModifyPlan['writes'] = [];
+  for (const day of days) {
+    const target = after[day] || 'none';
+    if (target === (byDay[day] || 'none')) continue;
+    const last = writes[writes.length - 1];
+    if (last && last.override === target && addDays(last.to, 1) === day) last.to = day;
+    else writes.push({ from: day, to: day, override: target });
+  }
+  return { writes, conflicts: [], merged: write.merged };
+}

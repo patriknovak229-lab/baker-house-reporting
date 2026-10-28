@@ -312,6 +312,8 @@ export default function TransactionsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlackoutModal, setShowBlackoutModal] = useState(false);
   const [showRestrictionModal, setShowRestrictionModal] = useState(false);
+  /** Set when the No Check-in/out form is open to MODIFY a restriction. */
+  const [editingRestriction, setEditingRestriction] = useState<StayRestriction | null>(null);
   // Beds24 check-in/out restrictions. Kept apart from `reservations` because
   // they close no night, so nothing that counts stays should ever see them.
   const [restrictions, setRestrictions] = useState<StayRestriction[]>(cachedRestrictions);
@@ -1407,7 +1409,7 @@ export default function TransactionsPage() {
               Black Out
             </button>
             <button
-              onClick={() => { setShowRestrictionModal(true); focusFloatingPanel("no-checkin-out"); }}
+              onClick={() => { setEditingRestriction(null); setShowRestrictionModal(true); focusFloatingPanel("no-checkin-out"); }}
               title="Stop check-ins and/or check-outs on chosen days (e.g. cleaners off) without closing the nights"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors shadow-sm"
             >
@@ -2094,13 +2096,30 @@ export default function TransactionsPage() {
                           <td className="px-4 py-2 text-amber-700 text-xs whitespace-nowrap">{r.to}</td>
                           <td className="px-4 py-2 text-right whitespace-nowrap">
                             {role && canMutate(role, "transactions") && (
-                              <button
-                                onClick={() => removeRestriction(r)}
-                                disabled={pending || removingRestrictionId !== null}
-                                className="px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-40 transition-colors"
-                              >
-                                {pending ? 'Removing…' : 'Remove'}
-                              </button>
+                              <div className="inline-flex items-center gap-1.5">
+                                {/* A unit-only restriction does nothing, so it
+                                    gets Remove only (see the warning beside it). */}
+                                {r.effective && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingRestriction(r);
+                                      setShowRestrictionModal(true);
+                                      focusFloatingPanel("no-checkin-out");
+                                    }}
+                                    disabled={pending}
+                                    className="px-2.5 py-1 rounded-md border border-amber-300 bg-white text-amber-800 text-xs font-medium hover:bg-amber-100 disabled:opacity-40 transition-colors"
+                                  >
+                                    Modify
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => removeRestriction(r)}
+                                  disabled={pending || removingRestrictionId !== null}
+                                  className="px-2.5 py-1 rounded-md bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-40 transition-colors"
+                                >
+                                  {pending ? 'Removing…' : 'Remove'}
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -3092,12 +3111,17 @@ export default function TransactionsPage() {
         />
       )}
 
-      {/* No check-in/out modal: restrict arrivals/departures without closing nights */}
+      {/* No check-in/out modal: restrict arrivals/departures without closing
+          nights, or modify one from the Stay Restrictions panel. Keyed so
+          switching between restrictions starts from that one's values. */}
       {showRestrictionModal && (
         <StayRestrictionModal
-          onClose={() => setShowRestrictionModal(false)}
+          key={editingRestriction?.id ?? "new"}
+          editing={editingRestriction}
+          onClose={() => { setShowRestrictionModal(false); setEditingRestriction(null); }}
           onCreated={() => {
             setShowRestrictionModal(false);
+            setEditingRestriction(null);
             fetchRestrictions();
           }}
         />

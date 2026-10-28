@@ -3,6 +3,7 @@
  *
  *   GET                         → { restrictions: StayRestriction[] }, ~60 days back to a year ahead
  *   POST { roomIds, kind, from, to } → sets the restriction on the room each selection is SOLD as
+ *   PATCH { id, kind, from, to } → changes that restriction's kind and/or days on the same room
  *   DELETE ?id=RS-<roomId>-<kind>-<from>-<to> → resets those days to `none`
  *
  * These are Beds24 calendar overrides, the same field as blackouts, but they are
@@ -31,6 +32,7 @@ import {
   overrideByDay,
   parseRestrictionId,
   planRestrictionClear,
+  planRestrictionModify,
   planRestrictionWrite,
   restrictionsForRoom,
   unitForRoomId,
@@ -247,6 +249,85 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error('[restrictions] POST failed:', err);
+    return errorResponse(err);
+  }
+}
+
+/**
+ * Modify one displayed restriction: same Beds24 room, new kind and/or days.
+ * One read and one write covering both ranges, so a day in both is never reset
+ * and re-set, and a conflict changes nothing (the old restriction stays).
+ */
+export async function PATCH(req: NextRequest) {
+  const guard = await requireRole(['admin', 'super']);
+  if ('error' in guard) return guard.error;
+
+  let body: { id?: unknown; kind?: unknown; from?: unknown; to?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  const current = parseRestrictionId(typeof body.id === 'string' ? body.id : '');
+  if (!current || !RESTRICTION_ROOM_IDS.includes(current.roomId)) {
+    return NextResponse.json(
+      { error: 'id must be RS-<roomId>-<kind>-<from>-<to> for a Baker House room' },
+      { status: 400 },
+    );
+  }
+  const { kind, from, to } = body;
+  if (!isRestrictionKind(kind)) {
+    return NextResponse.json({ error: 'kind must be noCheckIn, noCheckOut or noCheckInOrCheckOut' }, { status: 400 });
+  }
+  if (!isYmd(from) || !isYmd(to)) {
+    return NextResponse.json({ error: 'from and to must be YYYY-MM-DD' }, { status: 400 });
+  }
+  if (to < from) {
+    return NextResponse.json({ error: 'The last day must be on or after the first day' }, { status: 400 });
+  }
+  const today = pragueToday();
+  // A restriction already under way keeps its start; only a moved start must be from today.
+  if (from !== current.from && from < today) {
+    return NextResponse.json({ error: 'The first day can only be moved to today or later' }, { status: 400 });
+  }
+  if (to < today) {
+    return NextResponse.json({ error: 'The last day must be today or later' }, { status: 400 });
+  }
+  if (eachDay(from, to).length > MAX_RANGE_DAYS) {
+    return NextResponse.json({ error: `Pick at most ${MAX_RANGE_DAYS} days at a time` }, { status: 400 });
+  }
+
+  try {
+    const token = await getAccessToken();
+    const start = from < current.from ? from : current.from;
+    const end = to > current.to ? to : current.to;
+    const byRoom = await readOverrides(token, [current.roomId], start, end);
+    const plan = planRestrictionModify(byRoom.get(current.roomId) ?? {}, current, { kind, from, to });
+
+    if (plan.conflicts.length > 0) {
+      const list = plan.conflicts.map((c) => `${c.date} (${c.override})`).join(', ');
+      return NextResponse.json(
+        {
+          error: `Nothing was changed. These days already carry a Beds24 override, and a day can only hold one: ${list}. Remove it first.`,
+          conflicts: plan.conflicts,
+        },
+        { status: 409 },
+      );
+    }
+
+    if (plan.writes.length > 0) {
+      await writeCalendar(token, [{ roomId: current.roomId, calendar: plan.writes }]);
+    }
+    await invalidateCache();
+    return NextResponse.json({
+      ok: true,
+      kind,
+      label: RESTRICTION_LABEL[kind],
+      merged: plan.merged,
+      unchanged: plan.writes.length === 0,
+    });
+  } catch (err) {
+    console.error('[restrictions] PATCH failed:', err);
     return errorResponse(err);
   }
 }
