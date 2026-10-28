@@ -227,9 +227,20 @@ export const ALLOC_CTE = sql`
     FROM bookings_mirror b
     LEFT JOIN stripe_fees sf ON sf.reservation_number = b.reservation_number
     CROSS JOIN LATERAL (
-      /* Package booking → one row per linked room, each carrying 1/N. */
-      SELECT u.room, 1.0::numeric / cardinality(b.linked_rooms) AS share
-      FROM unnest(b.linked_rooms) AS u(room)
+      /* Package booking → one row per linked room, each carrying 1/N — or its
+         own share when the apartments were priced separately (Booking.com
+         multi-room: O.308 + an Urban studio is not 50/50). The shares come from
+         mergeGroupedBookings via raw._linkedRoomShares, parallel to linked_rooms. */
+      SELECT u.room,
+        COALESCE(
+          CASE WHEN jsonb_typeof(b.raw -> '_linkedRoomShares') = 'array' THEN
+            CASE WHEN jsonb_array_length(b.raw -> '_linkedRoomShares') = cardinality(b.linked_rooms)
+              THEN (b.raw -> '_linkedRoomShares' ->> (u.ord - 1)::int)::numeric
+            END
+          END,
+          1.0::numeric / cardinality(b.linked_rooms)
+        ) AS share
+      FROM unnest(b.linked_rooms) WITH ORDINALITY AS u(room, ord)
       WHERE b.linked_rooms IS NOT NULL AND cardinality(b.linked_rooms) > 1
       UNION ALL
       /* Single-room booking (incl. unallocated virtual rooms) → itself. */

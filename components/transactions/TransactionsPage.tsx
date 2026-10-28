@@ -2431,6 +2431,10 @@ export default function TransactionsPage() {
                   const busy = resolveBusy === r.reservationNumber;
                   const err = resolveError[r.reservationNumber];
                   const canDo = Boolean(role && canMutate(role, "transactions"));
+                  // A multi-apartment booking's apartments that already have a unit.
+                  const placedApartments = r.unallocatedLegs
+                    ? (r.linkedRooms ?? []).filter((room) => !r.unallocatedLegs!.some((l) => l.room === room))
+                    : [];
                   return (
                     <div key={r.reservationNumber} className="px-4 py-3">
                       <div className="flex items-start justify-between gap-3">
@@ -2464,9 +2468,21 @@ export default function TransactionsPage() {
                         ) : (
                           <div className="rounded-md bg-white border border-amber-200 px-3 py-2">
                             <p className="text-xs font-medium text-emerald-800">
-                              {result.plan.placements.map((p) => `Assign to ${p.room}`).join(", ")}
+                              {result.plan.placements
+                                .map((p) => {
+                                  // A guest with several apartments: name the one being placed,
+                                  // or it reads as if the whole booking moves.
+                                  const leg = r.unallocatedLegs?.find((l) => l.reservationNumber === p.reservationNumber);
+                                  return leg ? `Assign their ${leg.room} apartment to ${p.room}` : `Assign to ${p.room}`;
+                                })
+                                .join(", ")}
                               {result.plan.moves.length === 0 && " — no other moves needed"}
                             </p>
+                            {placedApartments.length > 0 && (
+                              <p className="mt-0.5 text-[11px] text-amber-700">
+                                {placedApartments.join(" + ")} {placedApartments.length === 1 ? "stays" : "stay"} as booked.
+                              </p>
+                            )}
                             {/* Only when no plan could keep a guest's back-to-back
                                 bookings in one unit — they'd have to change rooms. */}
                             {result.plan.placements

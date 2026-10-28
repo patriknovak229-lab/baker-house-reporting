@@ -26,7 +26,7 @@ import {
 } from "@/utils/cancellationPolicy";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
 import { computeParking, getFreeSpaces, getSpareSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
-import { PHYSICAL_ROOMS } from "@/utils/roomAllocation";
+import { PHYSICAL_ROOMS, apartmentsToPlace } from "@/utils/roomAllocation";
 import { occupiersByRoom, unallocatedOverlapping } from "@/utils/moveTargets";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
 import {
@@ -6812,7 +6812,7 @@ export default function ReservationDrawer({
                       {unallocatedDuringStay.length}{" "}
                       {unallocatedDuringStay.length === 1 ? "booking" : "bookings"} overlapping this stay
                       {unallocatedDuringStay.length === 1 ? " is" : " are"} still unallocated (
-                      {unallocatedDuringStay.map((r) => r.room).join(", ")}) — a unit shown as free may be
+                      {unallocatedDuringStay.flatMap((r) => apartmentsToPlace(r).map((a) => a.room)).join(", ")}) — a unit shown as free may be
                       claimed once Beds24 assigns {unallocatedDuringStay.length === 1 ? "it" : "them"}.
                     </p>
                   )}

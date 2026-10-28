@@ -144,13 +144,13 @@ export function occupancySpans(
  * a RATIO of the row's `price` (see utils/reservationRevenue), so it follows the
  * split on its own and must NOT be scaled here too.
  */
-const PRORATED_FIELDS = ["price", "commissionAmount", "paymentChargeAmount", "amountPaid"] as const;
+export const PRORATED_FIELDS = ["price", "commissionAmount", "paymentChargeAmount", "amountPaid"] as const;
 
 /**
  * Split `total` across `shares` in whole CZK, the last piece taking the
  * remainder so the pieces always add back up to the booking exactly.
  */
-function allocate(total: number, shares: number[]): number[] {
+export function allocate(total: number, shares: number[]): number[] {
   let left = total;
   return shares.map((share, i) => {
     if (i === shares.length - 1) return left;

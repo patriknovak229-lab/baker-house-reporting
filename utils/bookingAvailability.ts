@@ -14,7 +14,7 @@
  */
 import type { Reservation } from '@/types/reservation';
 import { SELLABLE_UNITS } from './stayRequest';
-import { physicalRoomIdForName } from './roomAllocation';
+import { apartmentsToPlace, physicalRoomIdForName } from './roomAllocation';
 import { occupiersByRoom, unallocatedOverlapping } from './moveTargets';
 
 export interface UnitAvailability {
@@ -74,8 +74,10 @@ export function stayAvailability(
       sleeps: type.sleeps,
       units,
       freeUnits: units.filter((u) => u.free).length,
+      // Per apartment, not per reservation: one guest's O.308 + Urban studio is
+      // one reservation, but only its studio is waiting for an Urban unit.
       unallocated: type.group
-        ? unallocated.filter((r) => r.room === type.group!.typeLabel).length
+        ? unallocated.flatMap(apartmentsToPlace).filter((a) => a.room === type.group!.typeLabel).length
         : 0,
     };
   });

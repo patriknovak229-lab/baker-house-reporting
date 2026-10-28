@@ -259,6 +259,55 @@ describe("multi-apartment reservations (one guest, several units)", () => {
     expect(res.plan.moves).toHaveLength(0);
   });
 
+  it("places only the apartment still on the virtual room, under its own booking (BH-95377263)", () => {
+    // Real data, 28 Oct 2026: O.308 + an Urban studio in one Booking.com
+    // reservation; the studio (BH-95377264) is still on the Urban VR and no
+    // studio is free 16–18 Nov without a shuffle.
+    const all: ResRef[] = [
+      {
+        reservationNumber: "BH-95377263", room: "O.308 + 1KK Urban Studios", linkedRooms: ["O.308", "1KK Urban Studios"],
+        checkInDate: "2026-11-16", checkOutDate: "2026-11-18", isUnallocatedVR: true,
+        unallocatedLegs: [{ reservationNumber: "BH-95377264", room: "1KK Urban Studios" }],
+        firstName: "Guest", lastName: "A",
+      },
+      { reservationNumber: "BH-95082155", room: "K.102", checkInDate: "2026-11-10", checkOutDate: "2026-11-17" },
+      { reservationNumber: "BH-95165294", room: "K.103", checkInDate: "2026-11-14", checkOutDate: "2026-11-21" },
+      { reservationNumber: "BH-95167753", room: "K.106", checkInDate: "2026-11-13", checkOutDate: "2026-11-15" },
+      { reservationNumber: "BH-95199521", room: "K.106", checkInDate: "2026-11-17", checkOutDate: "2026-11-21" },
+      { reservationNumber: "BH-94864852", room: "K.102", checkInDate: "2026-11-20", checkOutDate: "2026-11-22" },
+    ];
+    expect(buildGroupInputs(all, URBAN, "2026-10-28").filter((i) => i.currentRoom === null).map((i) => i.reservationNumber))
+      .toEqual(["BH-95377264"]);
+
+    const res = planForUnallocated(all, "BH-95377263", "2026-10-28");
+    if ("error" in res) throw new Error(res.error);
+    expect(res.group.typeLabel).toBe("1KK Urban Studios");
+    expect(res.plan.feasible).toBe(true);
+    expect(res.plan.placements).toEqual([expect.objectContaining({ reservationNumber: "BH-95377264", room: "K.106" })]);
+    expect(res.plan.moves.map((m) => [m.reservationNumber, m.from, m.to])).toEqual([
+      ["BH-95199521", "K.106", "K.102"],
+      ["BH-94864852", "K.102", "K.106"],
+    ]);
+    // O.308 is no studio — nothing in the plan touches it.
+    expect(Object.keys(res.plan.assignment).some((id) => id.startsWith("BH-95377263"))).toBe(false);
+  });
+
+  it("keeps a waiting apartment out of the unit its own placed apartment holds", () => {
+    const all: ResRef[] = [
+      {
+        reservationNumber: "BH-1", room: "K.102 + 1KK Urban Studios", linkedRooms: ["K.102", "1KK Urban Studios"],
+        checkInDate: "2026-11-16", checkOutDate: "2026-11-18", isUnallocatedVR: true,
+        unallocatedLegs: [{ reservationNumber: "BH-2", room: "1KK Urban Studios" }],
+      },
+      { reservationNumber: "BH-3", room: "K.103", checkInDate: "2026-11-15", checkOutDate: "2026-11-19" },
+    ];
+    const res = planForUnallocated(all, "BH-1", "2026-10-28");
+    if ("error" in res) throw new Error(res.error);
+    expect(res.plan.feasible).toBe(true);
+    expect(res.plan.placements.map((p) => [p.reservationNumber, p.room])).toEqual([["BH-2", "K.106"]]);
+    expect(res.plan.moves).toHaveLength(0);
+  });
+
   it("leaves a blackout's units alone even when it spans several rooms", () => {
     const all: ResRef[] = [
       { reservationNumber: "ARRIVING", room: "1KK Urban Studios", checkInDate: "2026-09-25", checkOutDate: "2026-09-27", isUnallocatedVR: true },

@@ -19,7 +19,7 @@
  * `UNIT_MAP` / `VR_ROOM_LABELS` in `app/api/bookings/route.ts`.
  */
 
-import type { RoomSegment, StayLink } from "@/types/reservation";
+import type { RoomSegment, StayLink, UnallocatedLeg } from "@/types/reservation";
 import { occupancySpans } from "@/utils/roomSegments";
 import { guestKeyOf, sameStayKeys } from "@/utils/stayChains";
 
@@ -437,6 +437,8 @@ export interface ResRef {
   checkInDate: string;
   checkOutDate: string;
   isUnallocatedVR?: boolean;
+  /** A multi-apartment reservation's apartments still on a virtual room. */
+  unallocatedLegs?: UnallocatedLeg[];
   isBlackout?: boolean;
   /** Cancelled bookings hold no room — they must not count as occupancy. */
   isCancelled?: boolean;
@@ -454,6 +456,20 @@ export interface ResRef {
 function nameOf(r: ResRef): string {
   const n = `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim();
   return n || r.reservationNumber;
+}
+
+/**
+ * The apartments of `r` waiting for a unit, each with the booking number that
+ * places it. A plain unallocated booking is its own one. A multi-apartment
+ * reservation lists only the apartments still on a virtual room — under their
+ * OWN Beds24 numbers, the bookings `/api/bookings/move` moves — while its
+ * placed apartments stay ordinary occupancy (BH-95377263: the Urban studio
+ * BH-95377264 is placed, O.308 is left alone).
+ */
+export function apartmentsToPlace(r: ResRef): UnallocatedLeg[] {
+  if (!r.isUnallocatedVR) return [];
+  if (r.unallocatedLegs && r.unallocatedLegs.length > 0) return r.unallocatedLegs;
+  return [{ reservationNumber: r.reservationNumber, room: r.room }];
 }
 
 /** Add `n` days to a 'YYYY-MM-DD' date (UTC math — inputs carry no time). */
@@ -517,20 +533,21 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
     // no unit, even though they linger in the reservations array.
     if (r.isCancelled) continue;
 
-    if (r.isUnallocatedVR) {
-      if (groupForTypeLabel(r.room) === group) {
-        seeds.push({
-          reservationNumber: r.reservationNumber,
-          checkIn: r.checkInDate,
-          checkOut: r.checkOutDate,
-          currentRoom: null,
-          movable: true,
-          label: nameOf(r),
-          guestKey: stayKeys.get(r.reservationNumber),
-        });
-      }
-      continue;
+    for (const leg of apartmentsToPlace(r)) {
+      if (groupForTypeLabel(leg.room) !== group) continue;
+      seeds.push({
+        reservationNumber: leg.reservationNumber,
+        checkIn: r.checkInDate,
+        checkOut: r.checkOutDate,
+        currentRoom: null,
+        movable: true,
+        label: nameOf(r),
+        guestKey: stayKeys.get(r.reservationNumber),
+      });
     }
+    // A booking wholly on a virtual room holds no unit. A multi-apartment one
+    // still holds its placed apartments — read below like any other package.
+    if (r.isUnallocatedVR && !r.unallocatedLegs?.length) continue;
 
     const spans = occupancySpans(r).filter((s) => unitNames.has(s.room) && s.to > today);
     if (spans.length === 0) continue; // not in this group (or only in its past)
@@ -664,17 +681,17 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
   const occ: Occ[] = [];
   for (const r of all) {
     if (r.isCancelled || r.checkOutDate <= today) continue;
-    if (r.isUnallocatedVR) {
-      const unit = destination.get(r.reservationNumber);
+    for (const leg of apartmentsToPlace(r)) {
+      const unit = destination.get(leg.reservationNumber);
       if (unit) {
         occ.push({
-          id: r.reservationNumber, name: nameOf(r), unit, origUnit: null, arrival: r.checkInDate,
+          id: leg.reservationNumber, name: nameOf(r), unit, origUnit: null, arrival: r.checkInDate,
           start: r.checkInDate, from: r.checkInDate > today ? r.checkInDate : today, to: r.checkOutDate,
           key: stayKeys.get(r.reservationNumber),
         });
       }
-      continue;
     }
+    if (r.isUnallocatedVR && !r.unallocatedLegs?.length) continue;
     const isPackage = (r.linkedRooms?.length ?? 0) > 1;
     for (const s of occupancySpans(r)) {
       if (s.to <= today) continue;
@@ -734,10 +751,13 @@ export function planForUnallocated(
 ): { group: AllocationGroup; plan: ReallocPlan } | { error: string } {
   const target = all.find((r) => r.reservationNumber === targetReservationNumber);
   if (!target) return { error: "Reservation not found" };
-  if (!target.isUnallocatedVR) return { error: "Reservation is already allocated" };
+  const waiting = apartmentsToPlace(target);
+  if (waiting.length === 0) return { error: "Reservation is already allocated" };
 
-  const group = groupForTypeLabel(target.room);
-  if (!group) return { error: `No shuffleable units for room type "${target.room}"` };
+  // One plan covers one room type. A booking with apartments waiting in two
+  // types gets the first type's plan; once that's placed, the next shows up.
+  const group = groupForTypeLabel(waiting[0].room);
+  if (!group) return { error: `No shuffleable units for room type "${waiting[0].room}"` };
 
   const plan = solveTwoTier(group, buildGroupInputs(all, group, today));
   if (!plan.feasible) return { group, plan };

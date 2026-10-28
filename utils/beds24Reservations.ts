@@ -11,7 +11,7 @@
 // publish the Postgres bookings archive, or it silently falls behind - see
 // archiveReservationSet at the bottom of this file.
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, StayShortening, StayLink } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, StayShortening, StayLink, UnallocatedLeg } from "@/types/reservation";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
@@ -92,6 +92,7 @@ const UNIT_MAP: Record<number, Room> = {
   // physical sub-rooms (same pattern as 648816 → K.202/K.203), so the VR
   // itself is intentionally NOT in UNIT_MAP — sub-bookings are.
 };
+const UNIT_MAP_NAMES = new Set<string>(Object.values(UNIT_MAP));
 
 // ─── Channel mapping ───────────────────────────────────────────────────────────
 // Confirmed via debug dump of BH-86527838:
@@ -260,6 +261,94 @@ const MANUAL_GROUPS: Record<number, number[]> = {
   84883846: [84885667], // Twin Apartments — manually copied Apr 2026
 };
 
+/** Extras the merge attaches to the booking it keeps — read back in mapToReservation. */
+type MergedBooking = Beds24Booking & {
+  _linkedRooms?: string[];
+  _linkedRoomShares?: number[];
+  _unallocatedLegs?: UnallocatedLeg[];
+};
+
+/**
+ * The bookings of a master + sub-booking group that are apartments of their own.
+ * Two shapes share the masterId link:
+ *   - a CONTAINER: the master sits on a virtual room and Beds24 sub-allocated it
+ *     into physical units at price 0 (web bookings on the Deluxe VR). The
+ *     master is a wrapper, not an apartment.
+ *   - a MULTI-ROOM booking: Booking.com sells N rooms as N bookings, each with
+ *     its own price and guests. Every one of them, master included, is an
+ *     apartment — and any of them may still be on a virtual room.
+ */
+function apartmentsOf(master: Beds24Booking | null, subs: Beds24Booking[]): Beds24Booking[] {
+  if (!master) return subs;
+  const isContainer =
+    isVirtualRoomId(master.roomId) &&
+    subs.some((s) => UNIT_MAP[s.roomId] != null && !(Number(s.price ?? 0) > 0));
+  return isContainer ? subs : [master, ...subs];
+}
+
+/**
+ * Where each apartment is: its unit, or — while Beds24 hasn't placed it — its
+ * virtual room's type label, listed as unallocated under its OWN booking number
+ * (that booking is what the resolver moves into a unit). Apartments on a
+ * virtual room used to be dropped here, which hid them from the table, the
+ * calendar and the room-assignment resolver: BH-95377263 (O.308 + an Urban
+ * studio still on 679714) showed as plain "O.308".
+ */
+function placeApartments(apartments: Beds24Booking[]): {
+  rooms: string[];
+  prices: number[];
+  unallocated: UnallocatedLeg[];
+} {
+  const rooms: string[] = [];
+  const prices: number[] = [];
+  const unallocated: UnallocatedLeg[] = [];
+  for (const a of apartments) {
+    const unit = UNIT_MAP[a.roomId];
+    const room = unit ?? VR_ROOM_LABELS[a.roomId];
+    if (!room) continue; // unknown room — nothing to attribute
+    rooms.push(room);
+    prices.push(Number(a.price ?? 0));
+    if (!unit) unallocated.push({ reservationNumber: `BH-${a.id}`, room });
+  }
+  return { rooms, prices, unallocated };
+}
+
+/**
+ * Each room's share of the money, when the apartments carry their own (unequal)
+ * prices. O.308 + an Urban studio at 6 290 + 3 898 CZK is not a 50/50 split, and
+ * the two belong to different owners. Equal prices keep the plain equal split.
+ */
+function priceShares(prices: number[]): number[] | undefined {
+  if (prices.length < 2 || prices.some((p) => !(p > 0))) return undefined;
+  if (prices.every((p) => p === prices[0])) return undefined;
+  const total = prices.reduce((sum, p) => sum + p, 0);
+  return prices.map((p) => p / total);
+}
+
+/** Record the apartments on the booking the merge keeps. */
+function attachApartments(
+  target: Beds24Booking,
+  placed: ReturnType<typeof placeApartments>,
+  ownPrices: boolean,
+): void {
+  const t = target as MergedBooking;
+  t._linkedRooms = placed.rooms;
+  if (placed.unallocated.length > 0) t._unallocatedLegs = placed.unallocated;
+  const shares = ownPrices ? priceShares(placed.prices) : undefined;
+  if (shares) t._linkedRoomShares = shares;
+}
+
+/**
+ * Booking.com multi-room: each room is its own booking with its own party, so
+ * the reservation's guests are all of them (BH-95377263: 4 in O.308 + 2 in the
+ * studio). Not for Airbnb packages — their zero-price sub repeats the master's
+ * guest count.
+ */
+function sumGuests(target: Beds24Booking, apartments: Beds24Booking[]): void {
+  target.numAdult = apartments.reduce((sum, a) => sum + Number(a.numAdult ?? 0), 0);
+  target.numChild = apartments.reduce((sum, a) => sum + Number(a.numChild ?? 0), 0);
+}
+
 // ─── Merge package/virtual room bookings ─────────────────────────────────────
 // When a booking arrives on a virtual room (e.g. "Twin Apartments" = K.202+K.203),
 // Beds24 creates sub-bookings for each physical room, each referencing the original
@@ -333,7 +422,8 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     }
   }
 
-  if (subsByMaster.size === 0) return [...manualResults, ...remaining]; // fast path
+  // No early return when there are no master/sub links: the [GROUP:] merge
+  // (Case 3) below must still run.
 
   const result: Beds24Booking[] = [];
   const consumedIds = new Set<number>();
@@ -347,25 +437,21 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
 
     const subs = subsByMaster.get(b.id);
     if (subs && subs.length > 0) {
-      // Master booking with sub-bookings — merge.
-      // Include the master's own room if it maps to a known physical room
-      // (happens when Beds24 uses a physical room booking as master instead of a
-      // separate virtual-room booking). Virtual-room masters won't be in UNIT_MAP
-      // so UNIT_MAP[b.roomId] returns undefined and is filtered out — safe either way.
-      const physicalRooms = [
-        UNIT_MAP[b.roomId],
-        ...subs.map((s) => UNIT_MAP[s.roomId]),
-      ].filter((r): r is string => r != null);
+      // Master booking with sub-bookings — merge. The master is one of the
+      // apartments unless it's a virtual-room container (see apartmentsOf).
+      const apartments = apartmentsOf(b, subs);
+      // Read before the Booking.com sum below rewrites the master's price.
+      const placed = placeApartments(apartments);
 
       consumedIds.add(b.id);
       subs.forEach((s) => consumedIds.add(s.id));
 
-      if (physicalRooms.length === 0) {
-        result.push(b); // all subs are virtual/unknown — keep master as-is
+      if (placed.rooms.length === 0) {
+        result.push(b); // all rooms unknown — keep master as-is
       } else {
         // Attach merged room info as extra fields (read in mapToReservation)
-        (b as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
-        // Booking.com multi-unit: guest buys N identical rooms, each with its own price.
+        attachApartments(b, placed, b.apiSource === 'Booking.com');
+        // Booking.com multi-unit: guest buys N rooms, each with its own price.
         // Sum price/commission/deposit across master + all subs so totals are correct.
         // Airbnb twin/package: master already carries the full combined price — leave as-is.
         if (b.apiSource === 'Booking.com') {
@@ -386,6 +472,7 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
           );
           (b as Beds24Booking & { _commissionBreakdown?: { commissionAmount: number; paymentChargeAmount: number } })
             ._commissionBreakdown = commBreakdown;
+          sumGuests(b, apartments);
         }
         result.push(b);
       }
@@ -405,11 +492,9 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
   }
 
   for (const subs of orphanGroups.values()) {
-    const physicalRooms = subs
-      .map((s) => UNIT_MAP[s.roomId])
-      .filter((r): r is string => r != null);
+    const placed = placeApartments(apartmentsOf(null, subs));
 
-    if (physicalRooms.length === 0) {
+    if (placed.rooms.length === 0) {
       // All unknown rooms — add each as standalone
       subs.forEach((s) => result.push(s));
       continue;
@@ -417,7 +502,7 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
 
     // Use first sub as the base; override room with combined name
     const base = { ...subs[0] };
-    (base as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+    attachApartments(base, placed, base.apiSource === 'Booking.com');
     // Booking.com multi-unit: sum prices across all subs (same logic as Case 1)
     if (base.apiSource === 'Booking.com') {
       base.price   = subs.reduce((s, r) => s + (r.price   ?? 0), 0);
@@ -434,6 +519,7 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
       );
       (base as Beds24Booking & { _commissionBreakdown?: { commissionAmount: number; paymentChargeAmount: number } })
         ._commissionBreakdown = commBreakdown;
+      sumGuests(base, subs);
     }
     result.push(base);
   }
@@ -469,19 +555,38 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     // Stable order: by id ascending — the lowest id is the canonical "package head".
     const sorted = [...arr].sort((a, b) => a.id - b.id);
     const head = sorted[0];
-    const base: Beds24Booking = { ...head };
-    // Combine physical rooms across all rows (already resolved by Case 1/2)
+    const base: MergedBooking = { ...head };
+    // Combine rooms across all rows (already resolved by Case 1/2). A row still
+    // on a virtual room stays in as its type label + an unallocated leg, the
+    // same as in Case 1 — the New Booking modal sells the studio VRs.
     const allRooms: string[] = [];
+    const roomMoney: number[] = [];
+    const unallocated: UnallocatedLeg[] = [];
     for (const member of sorted) {
-      const linked = (member as Beds24Booking & { _linkedRooms?: string[] })._linkedRooms;
-      if (linked && linked.length > 0) {
-        allRooms.push(...linked);
-      } else {
-        const name = UNIT_MAP[member.roomId];
-        if (name) allRooms.push(name);
-      }
+      const m = member as MergedBooking;
+      const placed =
+        m._linkedRooms && m._linkedRooms.length > 0
+          ? { rooms: m._linkedRooms, unallocated: m._unallocatedLegs ?? [] }
+          : placeApartments([member]);
+      const shares = m._linkedRoomShares ?? placed.rooms.map(() => 1 / placed.rooms.length);
+      placed.rooms.forEach((room, i) => {
+        // A unit listed twice is one apartment; two rows on one virtual room are two.
+        const seen = UNIT_MAP_NAMES.has(room) ? allRooms.indexOf(room) : -1;
+        if (seen >= 0) {
+          roomMoney[seen] += (member.price ?? 0) * shares[i];
+        } else {
+          allRooms.push(room);
+          roomMoney.push((member.price ?? 0) * shares[i]);
+        }
+      });
+      unallocated.push(...placed.unallocated);
     }
-    (base as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = [...new Set(allRooms)];
+    base._linkedRooms = allRooms;
+    if (unallocated.length > 0) base._unallocatedLegs = unallocated;
+    // Each row was priced on its own, so each room keeps its own share.
+    const shares = priceShares(roomMoney);
+    if (shares) base._linkedRoomShares = shares;
+    else delete base._linkedRoomShares;
     // Sum total package price + deposit so the merged reservation shows the full amount
     base.price   = sorted.reduce((s, r) => s + (r.price   ?? 0), 0);
     base.deposit = sorted.reduce((s, r) => s + (r.deposit ?? 0), 0);
@@ -576,21 +681,29 @@ export function mapToReservation(b: Beds24Booking): Reservation {
   const { commissionAmount, paymentChargeAmount } = precomputedBreakdown
     ?? parseCommissionBreakdown(b.rateDescription ?? "", b.commission ?? 0);
 
-  const linkedRooms = (b as Beds24Booking & { _linkedRooms?: string[] })._linkedRooms;
+  const { _linkedRooms: linkedRooms, _linkedRoomShares: linkedRoomShares, _unallocatedLegs } = b as MergedBooking;
   const room = linkedRooms && linkedRooms.length > 0
     ? linkedRooms.join(" + ")
     : mapRoom(b.roomId);
+  const isMultiApartment = (linkedRooms?.length ?? 0) > 1;
 
   // Unallocated VR detection: the booking sits on a virtual roomId AND
-  // mergeGroupedBookings didn't pair it with any physical sub. That's the
+  // mergeGroupedBookings didn't pair it with any physical sub — or an
+  // apartment of a merged booking still does. That's the
   // "Beds24 couldn't auto-allocate, manual intervention needed" state.
   // Once the operator transfers the booking, roomId switches to the
   // physical and this flag drops back to false automatically.
   const isUnallocatedVR =
     !isBlackout &&
     !isCancelled &&
-    isVirtualRoomId(b.roomId) &&
-    !(linkedRooms && linkedRooms.length > 0);
+    ((_unallocatedLegs?.length ?? 0) > 0 ||
+      (isVirtualRoomId(b.roomId) && !(linkedRooms && linkedRooms.length > 0)));
+  // Name the apartments to place unless the only one is this booking itself.
+  const unallocatedLegs =
+    _unallocatedLegs &&
+    (isMultiApartment || _unallocatedLegs.some((l) => l.reservationNumber !== `BH-${b.id}`))
+      ? _unallocatedLegs
+      : null;
 
   const blackoutMeta = isBlackout ? parseBlackoutMeta(b.comments ?? '') : {};
 
@@ -621,6 +734,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     reservationNumber: `BH-${b.id}`,
     ...(isBlackout ? { isBlackout: true } : {}),
     ...(isUnallocatedVR ? { isUnallocatedVR: true } : {}),
+    ...(isUnallocatedVR && unallocatedLegs ? { unallocatedLegs } : {}),
     ...(blackoutMeta.createdBy ? { blackoutCreatedBy: blackoutMeta.createdBy } : {}),
     ...(blackoutMeta.reason ? { blackoutReason: blackoutMeta.reason } : {}),
     ...(b.modifiedTime ? { modifiedAt: b.modifiedTime } : {}),
@@ -629,6 +743,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     channel,
     room,
     ...(linkedRooms && linkedRooms.length > 1 ? { linkedRooms } : {}),
+    ...(isMultiApartment && linkedRoomShares?.length === linkedRooms!.length ? { linkedRoomShares } : {}),
     checkInDate: b.arrival ?? "",
     checkOutDate: b.departure ?? "",
     reservationDate: b.bookingTime ? b.bookingTime.slice(0, 10) : "",

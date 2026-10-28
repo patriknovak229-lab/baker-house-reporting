@@ -1,14 +1,17 @@
 import type { Reservation } from "@/types/reservation";
-import { splitBySegments } from "@/utils/roomSegments";
+import { PRORATED_FIELDS, allocate, splitBySegments } from "@/utils/roomSegments";
 import { revenueSpansOf } from "@/utils/reservationRevenue";
 
 /**
  * Expands package/virtual-room reservations for per-room performance calculations.
  *
  * A merged reservation (e.g. "K.202 + K.203") has linkedRooms = ["K.202", "K.203"].
- * For revenue/occupancy reporting each room should carry an equal share of the price
+ * For revenue/occupancy reporting each room should carry its share of the price
  * and commission. This function splits such reservations into N copies — one per room —
- * each with price / N and commissionAmount / N.
+ * each with price / N and commissionAmount / N, or — when the apartments were
+ * priced on their own (`linkedRoomShares`, Booking.com multi-room) — each with
+ * its own share: O.308 6 290 + Urban 3 898 CZK stays 6 290 / 3 898, not 5 094
+ * each. Those apartments often belong to different owners.
  *
  * A guest moved MID-STAY (`roomSegments`) is split the same way, by nights:
  * each room gets its own dates and a nights-proportional share of the money
@@ -37,9 +40,30 @@ export function expandLinkedReservations(reservations: Reservation[]): Reservati
     }
 
     const n = res.linkedRooms.length;
-    // Every room shares the same dates and an equal cut of the money, so the
-    // whole booking's spans (shares, not amounts) hold for each piece as-is.
+    // Every room shares the same dates, so the whole booking's spans (shares,
+    // not amounts) hold for each piece as-is, whatever its cut of the money.
     const revenueSpans = revenueSpansOf(res) ?? undefined;
+    const shares = res.linkedRoomShares?.length === n ? res.linkedRoomShares : null;
+    if (shares) {
+      const parts = Object.fromEntries(PRORATED_FIELDS.map((f) => [f, allocate(res[f] ?? 0, shares)])) as Record<
+        (typeof PRORATED_FIELDS)[number],
+        number[]
+      >;
+      res.linkedRooms.forEach((room, i) => {
+        result.push({
+          ...res,
+          room,
+          linkedRooms: undefined, // prevent double-expansion
+          linkedRoomShares: undefined,
+          revenueSpans,
+          price: parts.price[i],
+          commissionAmount: parts.commissionAmount[i],
+          paymentChargeAmount: parts.paymentChargeAmount[i],
+          amountPaid: parts.amountPaid[i],
+        });
+      });
+      continue;
+    }
     for (const room of res.linkedRooms) {
       result.push({
         ...res,

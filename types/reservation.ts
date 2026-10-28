@@ -340,6 +340,14 @@ export interface ParkingUse {
   updatedAt: string; // ISO
 }
 
+/** One apartment of a multi-apartment reservation that Beds24 hasn't put in a unit yet. */
+export interface UnallocatedLeg {
+  /** That apartment's own Beds24 booking, "BH-<id>" — the one the resolver moves. */
+  reservationNumber: string;
+  /** Its room-type label, e.g. "1KK Urban Studios". */
+  room: string;
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -361,8 +369,19 @@ export interface Reservation {
    * room is free for the full stay — operator must manually assign in
    * Beds24's calendar. Rendered with a "Room unassigned" badge in the
    * reservation list and surfaces as a pending task in the alert bar.
+   *
+   * A multi-apartment reservation is flagged when ANY of its apartments is
+   * still on a virtual room — `unallocatedLegs` then says which.
    */
   isUnallocatedVR?: boolean;
+  /**
+   * The apartments of a multi-apartment reservation that still sit on a
+   * virtual room, each under its OWN Beds24 booking number (that booking is
+   * what gets moved into a unit). BH-95377263: O.308 placed, its Urban studio
+   * BH-95377264 still on the Urban VR → one entry. Absent on single-apartment
+   * reservations, whose own number is the one to place.
+   */
+  unallocatedLegs?: UnallocatedLeg[];
   /**
    * ISO timestamp from Beds24's `modifiedTime` field — last time any
    * booking field changed on Beds24's side. Used to detect channel
@@ -388,8 +407,17 @@ export interface Reservation {
    */
   postStaySnapshot?: BookingSnapshot;
   // Set when this reservation spans multiple physical rooms (package/virtual room booking).
-  // Each entry is a physical room name. Used by performance views to split revenue per room.
+  // Each entry is a physical room name — or a room-type label ("1KK Urban Studios")
+  // for an apartment not placed in a unit yet (see `unallocatedLegs`). Used by
+  // performance views to split revenue per room.
   linkedRooms?: string[];
+  /**
+   * Each linked room's share of the money, parallel to `linkedRooms` (sums to
+   * 1). Set when every apartment carries its own price — Booking.com sells N
+   * rooms as N bookings, so O.308 + an Urban studio is NOT a 50/50 split.
+   * Absent = equal shares (a package whose master carries the whole price).
+   */
+  linkedRoomShares?: number[];
   firstName: string;
   lastName: string;
   channel: Channel;

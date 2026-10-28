@@ -81,6 +81,24 @@ describe('stayAvailability', () => {
     expect(byId(list, 648816).freeUnits).toBe(0);
   });
 
+  it('counts only the waiting apartment of a multi-apartment booking (BH-95377263)', () => {
+    const list = stayAvailability(
+      [
+        res({
+          room: 'O.308 + 1KK Urban Studios',
+          linkedRooms: ['O.308', '1KK Urban Studios'],
+          isUnallocatedVR: true,
+          unallocatedLegs: [{ reservationNumber: 'BH-95377264', room: '1KK Urban Studios' }],
+        }),
+      ],
+      '2026-11-08',
+      '2026-11-10',
+    );
+    expect(byId(list, 679714).unallocated).toBe(1);
+    expect(byId(list, 648816).unallocated).toBe(0);
+    expect(byId(list, 674672).freeUnits).toBe(0); // O.308 itself is held
+  });
+
   it('subtracts unallocated bookings of the same type from the usable free count', () => {
     const list = stayAvailability(
       [

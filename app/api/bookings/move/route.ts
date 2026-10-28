@@ -44,6 +44,8 @@ interface Beds24Booking {
   status: string;
   firstName?: string;
   lastName?: string;
+  /** Set on the other apartments of a multi-room booking; null on the master. */
+  masterId?: number | null;
 }
 
 interface ParsedMove {
@@ -315,8 +317,10 @@ export async function POST(req: NextRequest) {
       return {
         id: roomMoveId(String(p.bookingId), stamp),
         // The master id is what the operator sees in Transactions; a leg's own
-        // booking id would point at a reservation the app never displays.
-        reservationNumber: `BH-${p.masterId}`,
+        // booking id would point at a reservation the app never displays. An
+        // apartment placed straight off the virtual room is addressed by its
+        // own id (BH-95377264), so fall back to the master Beds24 links it to.
+        reservationNumber: `BH-${b.masterId && b.masterId !== b.id ? b.masterId : p.masterId}`,
         guestName: guestName || null,
         // Unallocated placements come off the virtual room, which has no unit name.
         fromRoom: roomIdToName.get(b.roomId) ?? group.typeLabel,

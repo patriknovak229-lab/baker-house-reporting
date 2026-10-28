@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapToReservation, mapChannel, compactInvoiceItems, APP_PHONE_MARKER, type Beds24Booking } from './beds24Reservations';
+import { mapToReservation, mapChannel, compactInvoiceItems, mergeGroupedBookings, APP_PHONE_MARKER, type Beds24Booking } from './beds24Reservations';
 
 // Regression guard for the pipeline extracted out of app/api/bookings/route.ts:
 // occupancy correctness depends on room mapping, dates and status being stable.
@@ -164,5 +164,108 @@ describe('Direct-Phone rate plan end-to-end', () => {
     const r = mapToReservation({ ...phone(), comments: '', referer: '' });
     expect(r.channel).toBe('Direct');
     expect(r.rateType).toBeUndefined();
+  });
+});
+
+describe('mergeGroupedBookings — multi-apartment bookings', () => {
+  const merged = (bookings: Beds24Booking[]) => mergeGroupedBookings(bookings).map(mapToReservation);
+
+  // BH-95377263: Booking.com sold O.308 + an Urban studio as two bookings. The
+  // studio stayed on the Urban virtual room, and the merge used to drop it —
+  // the app showed plain "O.308" at the summed price, the resolver never saw
+  // the studio, and its 2 guests vanished.
+  const o308 = booking({
+    id: 95377263, roomId: 674672, arrival: '2026-11-16', departure: '2026-11-18',
+    numAdult: 4, price: 6290.2, status: 'new',
+  });
+  const urbanOnVr = booking({
+    id: 95377264, masterId: 95377263, roomId: 679714, arrival: '2026-11-16', departure: '2026-11-18',
+    numAdult: 2, price: 3897.58, status: 'new',
+  });
+
+  it('keeps an apartment still on a virtual room, flagged by its own booking number', () => {
+    const rows = merged([{ ...o308 }, { ...urbanOnVr }]);
+    expect(rows).toHaveLength(1);
+    const r = rows[0];
+    expect(r.reservationNumber).toBe('BH-95377263');
+    expect(r.room).toBe('O.308 + 1KK Urban Studios');
+    expect(r.linkedRooms).toEqual(['O.308', '1KK Urban Studios']);
+    expect(r.isUnallocatedVR).toBe(true);
+    expect(r.unallocatedLegs).toEqual([{ reservationNumber: 'BH-95377264', room: '1KK Urban Studios' }]);
+    expect(r.price).toBeCloseTo(10187.78, 2);
+    expect(r.numberOfGuests).toBe(6);
+    expect(r.linkedRoomShares![0]).toBeCloseTo(6290.2 / 10187.78, 6);
+    expect(r.linkedRoomShares![1]).toBeCloseTo(3897.58 / 10187.78, 6);
+  });
+
+  it('clears the flag once the studio is in a unit, keeping each apartment\'s share', () => {
+    const r = merged([{ ...o308 }, { ...urbanOnVr, roomId: 679705 }])[0];
+    expect(r.room).toBe('O.308 + K.106');
+    expect(r.isUnallocatedVR).toBeFalsy();
+    expect(r.unallocatedLegs).toBeUndefined();
+    expect(r.linkedRoomShares).toHaveLength(2);
+    expect(r.numberOfGuests).toBe(6);
+  });
+
+  it('lists the master as the waiting apartment when it is the one on the virtual room', () => {
+    const r = merged([
+      { ...o308, roomId: 679714, price: 3897.58, numAdult: 2 },
+      { ...urbanOnVr, roomId: 674672, price: 6290.2, numAdult: 4 },
+    ])[0];
+    expect(r.room).toBe('1KK Urban Studios + O.308');
+    expect(r.unallocatedLegs).toEqual([{ reservationNumber: 'BH-95377263', room: '1KK Urban Studios' }]);
+  });
+
+  it('keeps both studios when two apartments wait on the same virtual room', () => {
+    const r = merged([
+      { ...o308, roomId: 679714, price: 4000 },
+      { ...urbanOnVr, price: 4000 },
+    ])[0];
+    expect(r.linkedRooms).toEqual(['1KK Urban Studios', '1KK Urban Studios']);
+    expect(r.unallocatedLegs!.map((l) => l.reservationNumber)).toEqual(['BH-95377263', 'BH-95377264']);
+    expect(r.linkedRoomShares).toBeUndefined(); // equal prices → plain equal split
+  });
+
+  it('leaves equal-price Booking.com pairs on the equal split (BH-92334430)', () => {
+    const r = merged([
+      booking({ id: 92334430, roomId: 679704, price: 5374.34 }),
+      booking({ id: 92334431, masterId: 92334430, roomId: 679703, price: 5374.34 }),
+    ])[0];
+    expect(r.room).toBe('K.103 + K.102');
+    expect(r.linkedRoomShares).toBeUndefined();
+    expect(r.numberOfGuests).toBe(4);
+  });
+
+  it('does not add up an Airbnb package\'s guests — its zero-price sub repeats them (BH-93698942)', () => {
+    const r = merged([
+      booking({ id: 93698942, roomId: 648772, price: 37548, numAdult: 4, apiSource: 'Airbnb' }),
+      booking({ id: 93698943, masterId: 93698942, roomId: 648596, price: 0, numAdult: 4, apiSource: 'Airbnb' }),
+    ])[0];
+    expect(r.room).toBe('K.203 + K.202');
+    expect(r.numberOfGuests).toBe(4);
+    expect(r.price).toBe(37548);
+    expect(r.linkedRoomShares).toBeUndefined();
+  });
+
+  it('treats a virtual-room master Beds24 sub-allocated at price 0 as a wrapper, not an apartment', () => {
+    const r = merged([
+      booking({ id: 500, roomId: 648816, price: 8000, apiSource: 'Direct', referer: 'API' }),
+      booking({ id: 501, masterId: 500, roomId: 648596, price: 0, apiSource: 'Direct', referer: 'API' }),
+    ])[0];
+    expect(r.room).toBe('K.202');
+    expect(r.isUnallocatedVR).toBeFalsy();
+    expect(r.unallocatedLegs).toBeUndefined();
+  });
+
+  it('keeps a multi-row app booking\'s row that is still on a virtual room', () => {
+    const marker = `${APP_PHONE_MARKER}\n[GROUP:pkg-test]`;
+    const r = merged([
+      booking({ id: 600, roomId: 674672, price: 6000, apiSource: 'Direct', referer: 'API', comments: marker }),
+      booking({ id: 601, roomId: 679714, price: 3000, apiSource: 'Direct', referer: 'API', comments: marker }),
+    ])[0];
+    expect(r.room).toBe('O.308 + 1KK Urban Studios');
+    expect(r.unallocatedLegs).toEqual([{ reservationNumber: 'BH-601', room: '1KK Urban Studios' }]);
+    expect(r.price).toBe(9000);
+    expect(r.linkedRoomShares).toEqual([6000 / 9000, 3000 / 9000]);
   });
 });
