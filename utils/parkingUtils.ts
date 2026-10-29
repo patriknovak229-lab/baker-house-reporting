@@ -35,8 +35,12 @@ export type ParkingSpace = (typeof PARKING_SPACES)[number];
 export type ParkingAssignment = {
   space: string;
   type: "auto" | "manual";
+  /** The apartment this space belongs to (auto) — names each space of a
+   *  multi-apartment booking ("K.102 → 15, O.308 → 152"). */
+  room?: string;
   conflict?: string; // conflict description if auto-assign space was taken
-  /** The guest said they're not coming by car (Reservation.parkingUse) — the
+  /** Nobody parks here — the guest isn't coming by car, or (several
+   *  apartments, fewer cars) this is one of `parkingUse.spareSpaces`. The
    *  space is theirs but empty, so it can be lent out. */
   spare?: boolean;
   /** Spare space currently lent to another reservation (no conflict raised). */
@@ -56,8 +60,12 @@ export type ParkingGridCell = {
 } | null;
 
 export type ParkingResult = {
-  /** reservationNumber → assignment (or null = no parking) */
+  /** reservationNumber → its first space (or null = no parking). A booking of
+   *  several apartments holds several — see `spacesByReservation`. */
   byReservation: Map<string, ParkingAssignment | null>;
+  /** reservationNumber → EVERY space it holds, one per apartment, in the
+   *  booking's apartment order. Empty/absent = no parking. */
+  spacesByReservation: Map<string, ParkingAssignment[]>;
   /** space → date → occupant */
   grid: Map<string, Map<string, ParkingGridCell>>;
 };
@@ -87,15 +95,17 @@ function getInitials(r: Reservation): string {
   return [r.firstName?.[0], r.lastName?.[0]].filter(Boolean).join("").toUpperCase();
 }
 
-function isNoCar(r: Reservation): boolean {
-  return r.parkingUse?.status === "no-car";
+/** Is nobody parking in this space of the reservation's? */
+function isSpare(r: Reservation, space: string): boolean {
+  if (r.parkingUse?.status === "no-car") return true;
+  return r.parkingUse?.status === "car" && (r.parkingUse.spareSpaces?.includes(space) ?? false);
 }
 
-function occupantCell(r: Reservation): NonNullable<ParkingGridCell> {
+function occupantCell(r: Reservation, space: string): NonNullable<ParkingGridCell> {
   return {
     reservationNumber: r.reservationNumber,
     initials: getInitials(r),
-    ...(isNoCar(r) ? { spare: true } : {}),
+    ...(isSpare(r, space) ? { spare: true } : {}),
     ...(!r.parkingUse ? { unanswered: true } : {}),
     ...(r.parkingUse?.status === "car" && r.parkingUse.plate ? { plate: r.parkingUse.plate } : {}),
   };
@@ -106,12 +116,21 @@ function reservationUsesRoom(r: Reservation, room: string): boolean {
   return r.room === room || (r.linkedRooms?.includes(room) ?? false);
 }
 
-/** Find which permanent space(s) a reservation's room maps to */
-function permanentSpacesForReservation(r: Reservation): string[] {
-  const spaces: string[] = [];
+/**
+ * The permanent space of each of the reservation's apartments, in the
+ * booking's own apartment order (K.102 + O.308 + K.103 → 15, 152, 16).
+ */
+function permanentSpacesForReservation(r: Reservation): { space: string; room: string }[] {
+  const rooms = r.linkedRooms && r.linkedRooms.length > 0 ? [r.room, ...r.linkedRooms] : [r.room];
+  const spaces: { space: string; room: string }[] = [];
+  for (const room of rooms) {
+    const ps = PARKING_SPACES.find((p) => p.permanentRoom === room);
+    if (ps && !spaces.some((s) => s.space === ps.space)) spaces.push({ space: ps.space, room });
+  }
+  // A combined label ("K.102 + K.103") as `room` matches no space above.
   for (const ps of PARKING_SPACES) {
-    if (ps.permanentRoom && reservationUsesRoom(r, ps.permanentRoom)) {
-      spaces.push(ps.space);
+    if (ps.permanentRoom && reservationUsesRoom(r, ps.permanentRoom) && !spaces.some((s) => s.space === ps.space)) {
+      spaces.push({ space: ps.space, room: ps.permanentRoom });
     }
   }
   return spaces;
@@ -121,7 +140,14 @@ function permanentSpacesForReservation(r: Reservation): string[] {
 
 export function computeParking(reservations: Reservation[]): ParkingResult {
   const byReservation = new Map<string, ParkingAssignment | null>();
+  const spacesByReservation = new Map<string, ParkingAssignment[]>();
   const grid = new Map<string, Map<string, ParkingGridCell>>();
+  const hold = (r: Reservation, a: ParkingAssignment) => {
+    const list = spacesByReservation.get(r.reservationNumber);
+    if (list) list.push(a);
+    else spacesByReservation.set(r.reservationNumber, [a]);
+    if (!byReservation.get(r.reservationNumber)) byReservation.set(r.reservationNumber, a);
+  };
 
   // Initialise grid
   for (const ps of PARKING_SPACES) {
@@ -144,12 +170,12 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     const spaceGrid = grid.get(override);
     if (!spaceGrid) continue; // invalid space — skip
 
-    byReservation.set(r.reservationNumber, {
+    hold(r, {
       space: override,
       type: "manual",
-      ...(isNoCar(r) ? { spare: true } : {}),
+      ...(isSpare(r, override) ? { spare: true } : {}),
     });
-    const cell = occupantCell(r);
+    const cell = occupantCell(r, override);
     for (const d of dates) {
       spaceGrid.set(d, cell);
     }
@@ -167,20 +193,23 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     if (permSpaces.length === 0) continue; // no permanent space — skip (hot space needs manual)
 
     const dates = dateRange(r.checkInDate, r.checkOutDate);
-    const cell = occupantCell(r);
 
-    for (const space of permSpaces) {
+    // One space per apartment — a guest with three apartments has three.
+    for (const { space, room } of permSpaces) {
       const spaceGrid = grid.get(space)!;
+      const cell = occupantCell(r, space);
+      const spare = isSpare(r, space);
       // Check if free for all dates
       const conflict = dates.find((d) => spaceGrid.get(d) != null);
       if (conflict) {
         const occupant = spaceGrid.get(conflict)!;
-        if (isNoCar(r)) {
-          // No car → the space was lent out on purpose (pass 1 put someone there).
-          // The nights it isn't lent still show as spare.
-          byReservation.set(r.reservationNumber, {
+        if (spare) {
+          // Nobody parks here → the space was lent out on purpose (pass 1 put
+          // someone there). The nights it isn't lent still show as spare.
+          hold(r, {
             space,
             type: "auto",
+            room,
             spare: true,
             lentTo: occupant.reservationNumber,
           });
@@ -189,14 +218,15 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
           }
           continue;
         }
-        byReservation.set(r.reservationNumber, {
+        hold(r, {
           space,
           type: "auto",
+          room,
           conflict: `Space ${space} occupied by reservation ${occupant.reservationNumber} on ${conflict}`,
         });
       } else {
         // Auto-assign
-        byReservation.set(r.reservationNumber, { space, type: "auto", ...(isNoCar(r) ? { spare: true } : {}) });
+        hold(r, { space, type: "auto", room, ...(spare ? { spare: true } : {}) });
         for (const d of dates) {
           spaceGrid.set(d, cell);
         }
@@ -204,7 +234,7 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     }
   }
 
-  return { byReservation, grid };
+  return { byReservation, spacesByReservation, grid };
 }
 
 // ─── Free spaces helper ──────────────────────────────────────────────────────

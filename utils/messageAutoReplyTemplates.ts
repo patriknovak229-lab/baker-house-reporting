@@ -70,7 +70,11 @@ function buildParkingTemplate(
   // space) get their own fixed denial/holding replies and don't depend on
   // the assigned space. Only 'general' falls through to the space-assignment
   // logic below.
-  if (intent !== 'general') {
+  // One space per apartment: a guest asking for a second space who booked
+  // several apartments already has one per apartment — tell them which,
+  // instead of the "one space per apartment, no second one" refusal.
+  const spaces = parking.spacesByReservation.get(reservation.reservationNumber) ?? [];
+  if (intent !== 'general' && !(intent === 'multiple' && spaces.length > 1)) {
     return buildParkingSubIntentTemplate(reservation, intent);
   }
 
@@ -101,12 +105,29 @@ function buildParkingTemplate(
 
   const ps = PARKING_SPACES.find((p) => p.space === assignment.space);
   const subLevel = ps?.subLevel ?? -1;
+  const directions =
+    'Before entering the garage, please stop at reception first to pick up your keys — they include the chip that opens the garage door. You can park briefly in front of the entrance while you collect them (1–2 minutes).\n\n' +
+    'Note that the entrance to the underground parking is NOT the first gate next to the main entrance — that is a service/emergency door. Use the gate next to it, approximately 20 metres from the reception door.';
+
+  if (spaces.length > 1) {
+    const numbers = spaces.map((a) => a.space);
+    return {
+      template:
+        '{NAME}! Your booking includes {COUNT} apartments, so you have {COUNT} parking spaces — numbers {SPACES}, on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n' +
+        directions,
+      substitutions: {
+        NAME: reservation.firstName || 'there',
+        COUNT: String(spaces.length),
+        SPACES: `${numbers.slice(0, -1).join(', ')} and ${numbers[numbers.length - 1]}`,
+        SUBLEVEL: String(subLevel),
+      },
+    };
+  }
 
   return {
     template:
       '{NAME}! Your parking space is number {SPACE} on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n' +
-      'Before entering the garage, please stop at reception first to pick up your keys — they include the chip that opens the garage door. You can park briefly in front of the entrance while you collect them (1–2 minutes).\n\n' +
-      'Note that the entrance to the underground parking is NOT the first gate next to the main entrance — that is a service/emergency door. Use the gate next to it, approximately 20 metres from the reception door.',
+      directions,
     substitutions: {
       NAME: reservation.firstName || 'there',
       SPACE: assignment.space,

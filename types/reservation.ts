@@ -336,6 +336,13 @@ export interface ParkingUse {
   status: "car" | "no-car";
   /** Licence plate as the guest wrote it, upper-cased. Several cars → comma-separated. */
   plate?: string;
+  /**
+   * A guest with several apartments coming by car with fewer cars than
+   * apartments: the reservation's spaces nobody parks in (operator's pick).
+   * They stay the guest's, but show spare — same as a no-car stay's space.
+   * BH-93698209: 3 apartments, 2 cars → 15 + 16 in use, 152 spare.
+   */
+  spareSpaces?: string[];
   source: "guest" | "operator";
   updatedAt: string; // ISO
 }

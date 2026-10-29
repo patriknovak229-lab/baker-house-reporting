@@ -141,10 +141,10 @@ function mockReservation(firstName: string, room: Room): Reservation {
 }
 
 function mockParkingResult(reservation: Reservation) {
+  const assignment = { space: '167', type: 'auto' as const };
   return {
-    byReservation: new Map([
-      [reservation.reservationNumber, { space: '167', type: 'auto' as const }],
-    ]),
+    byReservation: new Map([[reservation.reservationNumber, assignment]]),
+    spacesByReservation: new Map([[reservation.reservationNumber, [assignment]]]),
     grid: new Map(),
   };
 }

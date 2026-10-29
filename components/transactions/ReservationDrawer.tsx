@@ -25,7 +25,7 @@ import {
   bookingGraceStatus,
 } from "@/utils/cancellationPolicy";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
-import { computeParking, getFreeSpaces, getSpareSpaces, PARKING_SPACES } from "@/utils/parkingUtils";
+import { computeParking, getFreeSpaces, getSpareSpaces, PARKING_SPACES, type ParkingAssignment } from "@/utils/parkingUtils";
 import { PHYSICAL_ROOMS, apartmentsToPlace } from "@/utils/roomAllocation";
 import { occupiersByRoom, unallocatedOverlapping } from "@/utils/moveTargets";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
@@ -1700,6 +1700,67 @@ function PhoneEditField({
  * post-booking question (utils/guestContactService), or set here by hand.
  * "No car" marks the stay's space as spare in the parking grid.
  */
+/**
+ * The spaces of a multi-apartment booking — one per apartment — each with its
+ * own state. While the guest is coming by car, each space can be marked as
+ * not needed (BH-93698209: 3 apartments, 2 cars → 152 spare, 15 + 16 in use).
+ */
+function ParkingSpacesList({
+  spaces,
+  parkingUse,
+  onSave,
+}: {
+  spaces: ParkingAssignment[];
+  parkingUse: ParkingUse | null | undefined;
+  onSave: (next: ParkingUse) => void;
+}) {
+  const byCar = parkingUse?.status === "car";
+  const setSpare = (space: string, spare: boolean) => {
+    if (!parkingUse || !byCar) return;
+    const current = new Set(parkingUse.spareSpaces ?? []);
+    if (spare) current.add(space);
+    else current.delete(space);
+    const spareSpaces = spaces.map((a) => a.space).filter((sp) => current.has(sp));
+    const next: ParkingUse = { ...parkingUse, source: "operator", updatedAt: new Date().toISOString() };
+    if (spareSpaces.length > 0) next.spareSpaces = spareSpaces;
+    else delete next.spareSpaces;
+    onSave(next);
+  };
+  const inUse = spaces.filter((a) => !a.spare).length;
+
+  return (
+    <div className="space-y-1">
+      <p className="text-[11px] text-gray-400">
+        {spaces.length} spaces · one per apartment
+        {byCar && ` · ${inUse} in use`}
+      </p>
+      {spaces.map((a) => (
+        <div key={a.space} className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-gray-700">
+            Space <span className="font-semibold">{a.space}</span>
+            {a.room && <span className="text-gray-400"> · {a.room}</span>}
+          </span>
+          <Badge variant={a.type === "auto" ? "blue" : "purple"}>{a.type}</Badge>
+          {a.conflict && <Badge variant="amber">conflict</Badge>}
+          {byCar ? (
+            <select
+              value={a.spare ? "spare" : "car"}
+              onChange={(e) => setSpare(a.space, e.target.value === "spare")}
+              className="ml-auto border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="car">Car parks here</option>
+              <option value="spare">Not needed — spare</option>
+            </select>
+          ) : (
+            a.spare && <span className="ml-auto text-xs text-emerald-700">spare</span>
+          )}
+          {a.spare && a.lentTo && <span className="text-xs text-emerald-700">lent to {a.lentTo}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ParkingUseField({
   value,
   onSave,
@@ -1718,6 +1779,8 @@ function ParkingUseField({
     onSave({
       status: next,
       ...(next === "car" && cleaned ? { plate: cleaned } : {}),
+      // Which of several spaces stay empty — kept while the guest still comes by car.
+      ...(next === "car" && value?.spareSpaces?.length ? { spareSpaces: value.spareSpaces } : {}),
       source: "operator",
       updatedAt: new Date().toISOString(),
     });
@@ -3514,6 +3577,8 @@ export default function ReservationDrawer({
 
   const parkingResult = useMemo(() => computeParking(allReservations), [allReservations]);
   const myParking = reservation ? parkingResult.byReservation.get(reservation.reservationNumber) ?? null : null;
+  // Every space the booking holds — one per apartment for a multi-apartment stay.
+  const mySpaces = reservation ? parkingResult.spacesByReservation.get(reservation.reservationNumber) ?? [] : [];
   const freeSpaces = reservation
     ? getFreeSpaces(parkingResult, reservation.checkInDate, reservation.checkOutDate, reservation.reservationNumber)
     : [];
@@ -4859,7 +4924,13 @@ export default function ReservationDrawer({
             <SubTitle>Parking</SubTitle>
             <div className="space-y-2">
               {/* Current assignment */}
-              {myParking ? (
+              {mySpaces.length > 1 ? (
+                <ParkingSpacesList
+                  spaces={mySpaces}
+                  parkingUse={reservation.parkingUse}
+                  onSave={(next) => onUpdate({ ...reservation!, parkingUse: next })}
+                />
+              ) : myParking ? (
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-gray-700">
                     Space <span className="font-semibold">{myParking.space}</span>
@@ -4874,22 +4945,22 @@ export default function ReservationDrawer({
               ) : (
                 <p className="text-sm text-gray-400">No parking assigned</p>
               )}
-              {myParking?.spare && (
+              {mySpaces.length <= 1 && myParking?.spare && (
                 <p className="text-xs text-emerald-700">
                   Spare — the guest isn&apos;t bringing a car
                   {myParking.lentTo ? ` · lent to ${myParking.lentTo}` : ""}
                 </p>
               )}
 
-              {/* Conflict warning */}
-              {myParking?.conflict && (
-                <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+              {/* Conflict warning — one per space that has one */}
+              {mySpaces.filter((a) => a.conflict).map((a) => (
+                <div key={`conflict-${a.space}`} className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
                   <svg className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
                   </svg>
-                  <p className="text-xs text-amber-700">{myParking.conflict}</p>
+                  <p className="text-xs text-amber-700">{a.conflict}</p>
                 </div>
-              )}
+              ))}
 
               {/* Dropdown */}
               <select

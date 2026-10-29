@@ -22,6 +22,7 @@ import { getKnowledgeBase } from '@/utils/knowledgeBase';
 import type { ConversationMessage } from '@/utils/beds24Conversation';
 import { czechGreetingLine, repliesInCzech } from '@/utils/czechVocative';
 import { parseTvLogins, tvLoginFor } from '@/utils/sledovaniTv';
+import type { ParkingAssignment } from '@/utils/parkingUtils';
 
 const MODEL = 'claude-sonnet-4-6';
 const SIGN_OFF = '\n\n— Zuzana';
@@ -38,8 +39,8 @@ export interface ComposeInput {
   /** Enriched reservation context (name, room, dates). Null on cache miss /
    *  virtual-room booking — the composer then keeps the reply general. */
   reservation: Reservation | null;
-  /** Assigned parking space number/label, when known. */
-  parkingSpace: string | null;
+  /** The booking's parking spaces — one per apartment (empty when unknown). */
+  parkingSpaces: ParkingAssignment[];
   /** Rate-driven perks for THIS booking (resolved from the rate + operator
    *  overrides upstream). Absent → treat as no perks (standard 15:00 / 10:30). */
   perks?: { earlyCheckIn: boolean; lateCheckout: boolean };
@@ -97,7 +98,24 @@ function roomCode(room: string): string {
   return room.replace(/\./g, '');
 }
 
-function buildBookingBlock(input: ComposeInput): string {
+/**
+ * The parking facts for the booking block. One space per apartment: a guest
+ * with three apartments has three spaces, so a second car is fine — the
+ * knowledge base's "one space, decline a second car" is per apartment, and the
+ * model applied it to the whole booking (BH-93698209: "parking for 2 cars" on
+ * K.102 + O.308 + K.103 was declined).
+ */
+function parkingLines(spaces: ParkingAssignment[]): string[] {
+  if (spaces.length === 0) return [];
+  if (spaces.length === 1) return [`Assigned parking space: ${spaces[0].space}`];
+  const list = spaces.map((a) => (a.room ? `${a.room} → space ${a.space}` : `space ${a.space}`)).join(', ');
+  return [
+    `Parking: this booking has ${spaces.length} apartments and so ${spaces.length} parking spaces, one per apartment — ${list}.`,
+    `The guest may park up to ${spaces.length} cars (one per space). Do NOT decline a second${spaces.length > 2 ? ' or third' : ''} car — only a car beyond ${spaces.length} has no space.`,
+  ];
+}
+
+export function buildBookingBlock(input: ComposeInput): string {
   const r = input.reservation;
   const lines: string[] = ['# BOOKING'];
   if (r) {
@@ -106,7 +124,7 @@ function buildBookingBlock(input: ComposeInput): string {
     if (rooms.length) lines.push(`Apartment(s): ${rooms.join(', ')}`);
     if (r.checkInDate) lines.push(`Check-in date: ${r.checkInDate}`);
     if (r.checkOutDate) lines.push(`Check-out date: ${r.checkOutDate}`);
-    if (input.parkingSpace) lines.push(`Assigned parking space: ${input.parkingSpace}`);
+    lines.push(...parkingLines(input.parkingSpaces));
     const wifi = rooms
       .map((rm) => `${rm} → network "Apartment_${roomCode(rm)}", password "Bakerhouse@${roomCode(rm)}"`)
       .join('  |  ');

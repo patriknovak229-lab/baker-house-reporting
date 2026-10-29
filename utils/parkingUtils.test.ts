@@ -52,7 +52,7 @@ const nonArrival = {
 describe("computeParking", () => {
   it("auto-assigns a live booking its room's permanent space", () => {
     const { byReservation, grid } = computeParking([res()]);
-    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto" });
+    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", room: "K.102" });
     expect(grid.get("15")!.get("2026-11-10")?.reservationNumber).toBe("BH-1000");
     expect(grid.get("15")!.get("2026-11-16")?.reservationNumber).toBe("BH-1000");
     expect(grid.get("15")!.get("2026-11-17")).toBeUndefined(); // checkout day is free
@@ -85,7 +85,7 @@ describe("computeParking", () => {
     const cancelled = res({ reservationNumber: "BH-95080626", isCancelled: true });
     const live = res({ reservationNumber: "BH-2000", checkInDate: "2026-11-12", checkOutDate: "2026-11-14" });
     const { byReservation } = computeParking([cancelled, live]);
-    expect(byReservation.get("BH-2000")).toEqual({ space: "15", type: "auto" });
+    expect(byReservation.get("BH-2000")).toEqual({ space: "15", type: "auto", room: "K.102" });
   });
 
   it("still drops refunded bookings", () => {
@@ -121,7 +121,7 @@ describe("guest not bringing a car (parkingUse no-car)", () => {
 
   it("keeps the space on the stay but marks it spare", () => {
     const { byReservation, grid } = computeParking([res({ parkingUse: noCar })]);
-    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", spare: true });
+    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", room: "K.102", spare: true });
     expect(grid.get("15")!.get("2026-11-10")).toMatchObject({ reservationNumber: "BH-1000", spare: true });
   });
 
@@ -138,7 +138,7 @@ describe("guest not bringing a car (parkingUse no-car)", () => {
     const borrower = res({ reservationNumber: "BH-2000", room: "K.201", parkingOverride: "15", checkInDate: "2026-11-12", checkOutDate: "2026-11-14" });
     const { byReservation } = computeParking([owner, borrower]);
     expect(byReservation.get("BH-2000")).toEqual({ space: "15", type: "manual" });
-    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", spare: true, lentTo: "BH-2000" });
+    expect(byReservation.get("BH-1000")).toEqual({ space: "15", type: "auto", room: "K.102", spare: true, lentTo: "BH-2000" });
   });
 
   it("the nights it isn't lent still show as spare", () => {
@@ -172,5 +172,48 @@ describe("guest not bringing a car (parkingUse no-car)", () => {
   it("an unanswered stay still holds its space", () => {
     const result = computeParking([res()]);
     expect(getFreeSpaces(result, "2026-11-12", "2026-11-14", "BH-2000")).not.toContain("15");
+  });
+});
+
+describe("a guest with several apartments (BH-93698209: K.102 + O.308 + K.103)", () => {
+  // As mapToReservation emits a Booking.com multi-room reservation.
+  const trio = (over: Partial<Reservation> = {}) =>
+    res({
+      reservationNumber: "BH-93698209",
+      room: "K.102 + O.308 + K.103",
+      linkedRooms: ["K.102", "O.308", "K.103"],
+      checkInDate: "2026-10-30",
+      checkOutDate: "2026-11-06",
+      ...over,
+    });
+
+  it("holds one space per apartment, listed in the booking's apartment order", () => {
+    const { spacesByReservation, byReservation } = computeParking([trio()]);
+    expect(spacesByReservation.get("BH-93698209")!.map((a) => [a.room, a.space])).toEqual([
+      ["K.102", "15"],
+      ["O.308", "152"],
+      ["K.103", "16"],
+    ]);
+    // The single-space view is the first apartment's, not whichever came last.
+    expect(byReservation.get("BH-93698209")?.space).toBe("15");
+  });
+
+  it("two cars for three apartments: 15 + 16 in use, 152 spare and offerable", () => {
+    const twoCars = { status: "car" as const, spareSpaces: ["152"], source: "operator" as const, updatedAt: "x" };
+    const result = computeParking([trio({ parkingUse: twoCars })]);
+    expect(result.spacesByReservation.get("BH-93698209")!.map((a) => [a.space, a.spare ?? false])).toEqual([
+      ["15", false],
+      ["152", true],
+      ["16", false],
+    ]);
+    expect(result.grid.get("152")!.get("2026-11-01")).toMatchObject({ reservationNumber: "BH-93698209", spare: true });
+    expect(result.grid.get("15")!.get("2026-11-01")?.spare).toBeUndefined();
+    expect(result.grid.get("16")!.get("2026-11-01")?.spare).toBeUndefined();
+    expect(getSpareSpaces(result, "2026-11-01", "2026-11-03", "BH-2000")).toEqual(["152"]);
+  });
+
+  it("ignores spare spaces once the guest says no car — every space is spare then", () => {
+    const result = computeParking([trio({ parkingUse: { status: "no-car", spareSpaces: ["152"], source: "operator", updatedAt: "x" } })]);
+    expect(result.spacesByReservation.get("BH-93698209")!.every((a) => a.spare)).toBe(true);
   });
 });

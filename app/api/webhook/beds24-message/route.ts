@@ -37,7 +37,7 @@ import { Redis } from '@upstash/redis';
 import { readAllAutoReplyLog, writeAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
-import type { Reservation, Issue, Room, InvoiceData, InvoiceModification } from '@/types/reservation';
+import type { Reservation, Issue, Room, InvoiceData, InvoiceModification, ParkingUse } from '@/types/reservation';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { isUnfinishedCheckout } from '@/utils/unfinishedCheckout';
@@ -75,11 +75,12 @@ import {
   renderInvoiceConfirmation,
   type InvoiceMandatory,
 } from '@/utils/invoiceReplyTemplates';
-import { computeParking } from '@/utils/parkingUtils';
+import { computeParking, type ParkingAssignment, type ParkingResult } from '@/utils/parkingUtils';
 import { composeAiReply } from '@/utils/aiReplyComposer';
 import { fetchRecentConversation } from '@/utils/beds24Conversation';
 import {
   mapToReservation,
+  mergeGroupedBookings,
   reservationFromCachedBookings,
   type Beds24Booking,
 } from '@/utils/beds24Reservations';
@@ -747,13 +748,13 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
 
   const reservation = await buildReservationContext(redis, bookingId);
 
-  // Assigned parking space (best-effort) for the booking-facts block.
-  let parkingSpace: string | null = null;
+  // Assigned parking space(s) (best-effort) for the booking-facts block — one
+  // per apartment when the guest booked several.
+  let parkingSpaces: ParkingAssignment[] = [];
   if (reservation && redis) {
     try {
-      const all = await loadAllReservations(redis);
-      const parking = computeParking(all.length > 0 ? all : [reservation]);
-      parkingSpace = parking.byReservation.get(reservationNumber)?.space ?? null;
+      const parking = await computeBookingParking(redis, reservation);
+      parkingSpaces = parking.spacesByReservation.get(reservationNumber) ?? [];
     } catch (err) {
       console.warn(`[ai-review] parking compute failed for ${bookingId}:`, err);
     }
@@ -771,7 +772,7 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
     const result = await composeAiReply({
       guestMessage: messageText,
       reservation,
-      parkingSpace,
+      parkingSpaces,
       perks,
       history,
       language: detection.language,
@@ -1015,8 +1016,7 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
       });
       return;
     }
-    const reviewAll = await loadAllReservations(redis);
-    const reviewParking = computeParking(reviewAll.length > 0 ? reviewAll : [reviewReservation]);
+    const reviewParking = await computeBookingParking(redis, reviewReservation);
     const reviewBuilt = buildTemplate(
       detection.category,
       reviewReservation,
@@ -1190,8 +1190,7 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
   }
 
   // ── Step 5: build the template ─────────────────────────────────────────────
-  const allReservations = await loadAllReservations(redis);
-  const parking = computeParking(allReservations.length > 0 ? allReservations : [reservation]);
+  const parking = await computeBookingParking(redis, reservation);
   const built = buildTemplate(detection.category, reservation, parking, detection.parkingIntent);
   if (!built) {
     console.log(`[auto-reply] no template for ${detection.category} on ${reservation.room} — skipping`);
@@ -1368,19 +1367,20 @@ async function buildReservationContext(
     return null;
   }
 
-  // Discover sibling rooms in the SAME group (masterId match) — covers
-  // virtual-room sub-allocations (Twin Apartments K.202+K.203 etc.)
+  // The guest's other apartments in the SAME group. Booking.com sells several
+  // rooms as several bookings tied by masterId: the subs point at the master,
+  // the master itself carries none. Read the group from either end — guests
+  // usually write on the master, and only looking for a masterId on THIS
+  // booking showed BH-93698209 (K.102 + O.308 + K.103) as a K.102 stay.
   const linkedRooms: string[] = [];
-  if (b.masterId) {
-    const masterId = Number(b.masterId);
-    for (const other of Object.values(cached)) {
-      if (other.id === bookingId) continue;
-      if (other.masterId === masterId) {
-        const r = UNIT_MAP[Number(other.roomId)];
-        if (r && r !== primaryRoom && !linkedRooms.includes(r)) {
-          linkedRooms.push(r);
-        }
-      }
+  const groupId = b.masterId ? Number(b.masterId) : bookingId;
+  for (const other of Object.values(cached)) {
+    if (other.id === bookingId) continue;
+    if (other.status === 'cancelled' || other.status === 'canceled') continue;
+    if (other.id !== groupId && Number(other.masterId) !== groupId) continue;
+    const r = UNIT_MAP[Number(other.roomId)];
+    if (r && r !== primaryRoom && !linkedRooms.includes(r)) {
+      linkedRooms.push(r);
     }
   }
 
@@ -1456,54 +1456,42 @@ async function buildReservationContext(
 }
 
 /**
- * Load all cached bookings as minimal Reservation[] for computeParking().
- * We need every active reservation so the parking auto-assignment
- * accounts for overlapping bookings (assigned space might be occupied).
+ * Parking for every active reservation, computed on the SAME merged
+ * reservations the dashboard uses, so a reply names the spaces the drawer
+ * shows. A guest with several apartments is one reservation holding one space
+ * per apartment; computing per raw Beds24 booking made BH-93698209
+ * (K.102 + O.308 + K.103) look like a one-space stay, and Zuzana declined the
+ * guest's second car. Every other booking of a group is aliased to the
+ * group's reservation, since the guest may write on any of them.
  */
-async function loadAllReservations(redis: Redis | null): Promise<Reservation[]> {
-  if (!redis) return [];
-  const cached = (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
-  const overrides = await readAllReservationOverrides<{ parkingOverride?: string }>();
+async function computeBookingParking(redis: Redis | null, reservation: Reservation): Promise<ParkingResult> {
+  const cached = redis ? ((await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {}) : {};
+  const overrides = await readAllReservationOverrides<{ parkingOverride?: string; parkingUse?: ParkingUse | null }>();
 
-  const out: Reservation[] = [];
-  for (const b of Object.values(cached)) {
-    if (b.status === 'cancelled' || b.status === 'canceled') continue;
-    if (!b.id || !b.roomId || !b.arrival || !b.departure) continue;
-    const room = UNIT_MAP[Number(b.roomId)];
-    if (!room) continue;
-    out.push({
-      reservationNumber: `BH-${b.id}`,
-      isBlackout: false,
-      firstName: b.firstName ?? '',
-      lastName: b.lastName ?? '',
-      channel: 'Direct',
-      room,
-      checkInDate: b.arrival,
-      checkOutDate: b.departure,
-      reservationDate: '',
-      bookingTimestamp: '',
-      numberOfNights: 0,
-      numberOfGuests: 0,
-      email: '',
-      phone: '',
-      price: 0,
-      nationality: '',
-      cleaningStatus: 'Pending',
-      paymentStatus: 'Unpaid',
-      amountPaid: 0,
-      commissionAmount: 0,
-      paymentChargeAmount: 0,
-      additionalEmail: '',
-      paymentStatusOverride: null,
-      notes: '',
-      manualFlagOverrides: {},
-      ratingStatus: 'none',
-      invoiceData: null,
-      invoiceStatus: 'Not Issued',
-      parkingOverride: overrides[`BH-${b.id}`]?.parkingOverride,
-    });
+  // Copies: the merge sums prices onto the master in place.
+  const live = Object.values(cached)
+    .filter((b) => b.status !== 'cancelled' && b.status !== 'canceled' && b.id && b.roomId && b.arrival && b.departure)
+    .map((b) => ({ ...b }) as unknown as Beds24Booking);
+  const all = mergeGroupedBookings(live).map((b) => {
+    const r = mapToReservation(b);
+    const own = overrides[r.reservationNumber];
+    return {
+      ...r,
+      parkingOverride: own?.parkingOverride,
+      ...(own?.parkingUse ? { parkingUse: own.parkingUse } : {}),
+    };
+  });
+  const parking = computeParking(all.length > 0 ? all : [reservation]);
+
+  for (const b of live) {
+    if (!b.masterId || b.masterId === b.id) continue;
+    const group = `BH-${b.masterId}`;
+    const spaces = parking.spacesByReservation.get(group);
+    if (!spaces || parking.spacesByReservation.has(`BH-${b.id}`)) continue;
+    parking.spacesByReservation.set(`BH-${b.id}`, spaces);
+    parking.byReservation.set(`BH-${b.id}`, parking.byReservation.get(group) ?? null);
   }
-  return out;
+  return parking;
 }
 
 // ─── Task creation (early-checkin / late-checkout) ───────────────────────────
