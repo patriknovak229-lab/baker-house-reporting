@@ -1158,14 +1158,14 @@ export default function OccupancyCalendar({
                           ? reservations.find((r) => r.reservationNumber === cell!.reservationNumber)
                           : null;
                         const roomStr = occupantRes ? formatRoomForTooltip(occupantRes.room) : '';
-                        // Spare = held by a guest who said they're not coming by car.
+                        // Spare = held, but no car parks there (guest has no car, or fewer cars than apartments).
                         const spare = occupied && cell!.spare === true;
                         // Unanswered = the guest hasn't said yet whether they're bringing a car.
                         const unanswered = occupied && cell!.unanswered === true;
                         const title = !occupied
                           ? `P${ps.space} — free`
                           : `P${ps.space}-${cell!.initials}${roomStr ? `-${roomStr}` : ''}${
-                              spare ? ' — spare, guest has no car'
+                              spare ? ' — spare, no car parks here'
                                 : unanswered ? ' — no answer yet about a car'
                                 : cell!.plate ? ` — ${cell!.plate}` : ''
                             }`;
@@ -1201,7 +1201,7 @@ export default function OccupancyCalendar({
                 <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-wrap">
                   <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-rose-200" />Coming by car</span>
                   <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-yellow-200" />No answer yet</span>
-                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-dashed border-emerald-400" />No car (spare)</span>
+                  <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-dashed border-emerald-400" />Spare — no car parks here</span>
                   <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-100" />Free</span>
                 </div>
               </div>

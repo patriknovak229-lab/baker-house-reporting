@@ -263,7 +263,7 @@ export function getFreeSpaces(
   return free;
 }
 
-/** The free spaces (as getFreeSpaces) that are only free because their guest has no car. */
+/** The free spaces (as getFreeSpaces) that are only free because no car of their guest parks there. */
 export function getSpareSpaces(
   parkingResult: ParkingResult,
   checkIn: string,

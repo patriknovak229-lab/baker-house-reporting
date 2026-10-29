@@ -5001,7 +5001,7 @@ export default function ReservationDrawer({
                 {freeSpaces.map((space) => {
                   const ps = PARKING_SPACES.find((p) => p.space === space);
                   const label = ps?.permanentRoom
-                    ? `Space ${space} (${ps.permanentRoom}${spareSpaces.includes(space) ? " · spare, guest has no car" : ""})`
+                    ? `Space ${space} (${ps.permanentRoom}${spareSpaces.includes(space) ? " · spare, no car parks here" : ""})`
                     : `Space ${space} (hot)`;
                   return (
                     <option key={space} value={space}>{label}</option>
