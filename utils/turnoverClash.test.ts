@@ -76,6 +76,46 @@ describe("computeTurnoverClashes", () => {
     expect(c.suggestion).toBeNull();
   });
 
+  // BH-93698209 shape: one Weekly reservation across K.102 + O.308 + K.103.
+  const trio = mk({
+    reservationNumber: "BH-10",
+    room: "K.102 + O.308 + K.103",
+    linkedRooms: ["K.102", "O.308", "K.103"],
+    checkInDate: "2026-08-03",
+    checkOutDate: "2026-08-10",
+    rateType: "Weekly",
+  });
+
+  it("flags a multi-apartment stay's late checkout in each of its rooms", () => {
+    const incO308 = mk({ ...inc, reservationNumber: "BH-20", room: "O.308" });
+    const clashes = computeTurnoverClashes([trio, incO308], TODAY);
+    expect(clashes).toHaveLength(1);
+    expect(clashes[0]).toMatchObject({ date: "2026-08-10", room: "O.308" });
+    expect(clashes[0].outgoing.reservationNumber).toBe("BH-10");
+  });
+
+  it("never suggests moving the multi-apartment guest, only the other one", () => {
+    const [c] = computeTurnoverClashes([trio, inc], TODAY);
+    expect(c.room).toBe("K.102");
+    // K.103 is held by the same reservation, so K.106 is the clean target.
+    expect(c.suggestion).toMatchObject({ who: "incoming", toRoom: "K.106" });
+  });
+
+  it("counts every apartment of a multi-apartment stay as occupied when suggesting", () => {
+    const outK102 = mk({ ...out, reservationNumber: "BH-1" });
+    const incK102 = mk({ ...inc, reservationNumber: "BH-2" });
+    const holdsOthers = mk({
+      reservationNumber: "BH-30",
+      room: "K.103 + K.106",
+      linkedRooms: ["K.103", "K.106"],
+      checkInDate: "2026-08-09",
+      checkOutDate: "2026-08-14",
+      rateType: "Non-Refundable",
+    });
+    const [c] = computeTurnoverClashes([outK102, incK102, holdsOthers], TODAY);
+    expect(c.suggestion).toBeNull();
+  });
+
   it("ignores past turnovers", () => {
     const pastOut = mk({ ...out, checkInDate: "2026-07-20", checkOutDate: "2026-07-22" });
     const pastInc = mk({ ...inc, checkInDate: "2026-07-22", checkOutDate: "2026-07-24" });

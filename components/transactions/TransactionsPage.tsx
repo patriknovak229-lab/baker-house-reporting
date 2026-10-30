@@ -37,6 +37,7 @@ import { getEffectiveFlags } from "@/utils/flagUtils";
 import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { computeTurnoverClashes } from "@/utils/turnoverClash";
+import { apartmentRoom } from "@/utils/reservationApartments";
 import { planForUnallocated } from "@/utils/roomAllocation";
 import { confirmedLinks, staySuggestions } from "@/utils/stayChains";
 import { signalsText, type StayLinkAction } from "./StayLinks";
@@ -169,6 +170,7 @@ async function publishRatePerks(r: Reservation): Promise<void> {
       reservationNumber: r.reservationNumber,
       rateType: effectiveRateType(r),
       reservationDate: r.reservationDate,
+      apartments: r.apartmentReservationNumbers,
       cancelled: r.isCancelled,
     }),
   });
@@ -2623,7 +2625,12 @@ export default function TransactionsPage() {
                         <td className={`px-4 py-2 font-medium whitespace-nowrap ${textName}`}>
                           {reservation.firstName} {reservation.lastName}
                         </td>
-                        <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>{catLabels[cat]}</td>
+                        <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>
+                          {catLabels[cat]}
+                          {issue.apartment && (
+                            <> · {apartmentRoom(reservation, issue.apartment) ?? issue.apartment}</>
+                          )}
+                        </td>
                         <td className={`px-4 py-2 ${textBody}`}>{issue.text}</td>
                         <td className={`px-4 py-2 text-xs whitespace-nowrap ${textMuted}`}>
                           <div className="flex items-center gap-1.5">

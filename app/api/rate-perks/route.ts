@@ -15,10 +15,12 @@ import type { Issue, RateType } from '@/types/reservation';
  * the next Transactions load. The drawer calls this right after the override is
  * saved.
  *
- * Body: { reservationNumber, rateType, reservationDate, cancelled? }
- * `rateType` is the EFFECTIVE rate the client already resolved (override wins)
- * and `reservationDate` the booking-made date for the Standard perk date-gate —
- * both are booking facts the client legitimately holds. The perk VALUES are
+ * Body: { reservationNumber, rateType, reservationDate, apartments?, cancelled? }
+ * `rateType` is the EFFECTIVE rate the client already resolved (override wins),
+ * `reservationDate` the booking-made date for the Standard perk date-gate, and
+ * `apartments` each apartment's own booking number on a multi-apartment
+ * reservation (the cleaning app keys cleanings by those) — all booking facts
+ * the client legitimately holds. The perk VALUES are
  * recomputed here from the stored override, and the task list is read from the
  * stored issues, so no text can be spoofed by the request body. A cancelled
  * reservation is REMOVED from every map, the same as the authoritative pass,
@@ -28,17 +30,24 @@ export async function POST(req: NextRequest) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
 
-  const { reservationNumber, rateType, reservationDate, cancelled } = await req.json();
+  const { reservationNumber, rateType, reservationDate, apartments, cancelled } = await req.json();
   if (!reservationNumber) {
     return NextResponse.json({ error: 'reservationNumber required' }, { status: 400 });
   }
+  if (
+    apartments !== undefined &&
+    !(Array.isArray(apartments) && apartments.every((a) => typeof a === 'string' && /^BH-\d+$/.test(a)))
+  ) {
+    return NextResponse.json({ error: 'apartments must be BH- booking numbers' }, { status: 400 });
+  }
+  const r = {
+    reservationNumber: String(reservationNumber),
+    apartmentReservationNumbers: apartments as string[] | undefined,
+  };
 
   if (cancelled) {
-    await Promise.all([
-      removeRatePerksEntry(reservationNumber),
-      removeOpsTasksEntry(reservationNumber),
-    ]);
-    return NextResponse.json({ ok: true, perks: null, opsTasks: [] });
+    await Promise.all([removeRatePerksEntry(r), removeOpsTasksEntry(r)]);
+    return NextResponse.json({ ok: true, perks: null, opsTasks: {} });
   }
 
   const overrides = await readAllReservationOverrides<{
@@ -50,12 +59,12 @@ export async function POST(req: NextRequest) {
   // Sequential, not parallel: both patch their own whole-map key, and running
   // them together buys nothing while making a Redis hiccup harder to read.
   const perks = await publishRatePerksEntry(
-    reservationNumber,
+    r,
     (rateType ?? null) as RateType | null,
     reservationDate ?? null,
     entry?.perkOverrides,
   );
-  const opsTasks = await publishOpsTasksEntry(reservationNumber, entry?.issues);
+  const opsTasks = await publishOpsTasksEntry(r, entry?.issues);
 
   return NextResponse.json({ ok: true, perks, opsTasks });
 }

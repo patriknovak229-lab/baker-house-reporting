@@ -62,10 +62,12 @@ import type { Role } from "@/utils/roles";
 import {
   autoRatePerks,
   effectiveRatePerks,
+  hasAnyPerk,
   EARLY_CHECKIN_TIME,
   LATE_CHECKOUT_TIME,
 } from "@/utils/ratePerks";
 import type { PerkOverrides } from "@/utils/ratePerks";
+import { apartmentRoom, reservationApartments } from "@/utils/reservationApartments";
 
 /**
  * Best guest address to bill to. Mirrors `sanitizeInvoiceEmail` in
@@ -1447,11 +1449,14 @@ function PerksControl({
   reservationDate,
   override,
   onOverride,
+  rooms,
 }: {
   rate: RateType | null;
   reservationDate?: string | null;
   override: PerkOverrides | null | undefined;
   onOverride: (v: PerkOverrides) => void;
+  /** Every apartment's room, on a multi-apartment reservation. */
+  rooms?: string[];
 }) {
   const auto = autoRatePerks(rate, reservationDate);
   const eff = effectiveRatePerks(auto, override);
@@ -1515,6 +1520,11 @@ function PerksControl({
         Set by the rate. To ask a cleaner for something on this stay, add a room task under
         Reservation Management → Operations.
       </p>
+      {rooms && rooms.length > 1 && hasAnyPerk(eff) && (
+        <p className="text-[10px] text-purple-600 mb-1.5">
+          Applies to every apartment — {rooms.join(" · ")}.
+        </p>
+      )}
       <div className="space-y-1.5">
         {boolRow("earlyCheckIn", `Early check-in (from ${EARLY_CHECKIN_TIME})`, "bg-teal-500")}
         {boolRow("lateCheckout", `Late checkout (until ${LATE_CHECKOUT_TIME})`, "bg-orange-500")}
@@ -1991,6 +2001,10 @@ const KIND_CATEGORIES: Record<"admin" | "ops", IssueCategory[]> = {
   ops: (Object.keys(CATEGORY_KIND) as IssueCategory[]).filter((c) => CATEGORY_KIND[c] === "ops"),
 };
 
+/** Room tasks — the categories that can be pointed at one apartment of a
+ *  multi-apartment reservation. */
+const ROOM_TASK: ReadonlySet<IssueCategory> = new Set<IssueCategory>(["special", "facility"]);
+
 /** Categories where the note IS the task, so free text is required. */
 const TEXT_REQUIRED: ReadonlySet<IssueCategory> = new Set<IssueCategory>([
   "problem",
@@ -2025,6 +2039,10 @@ function TaskBlock({
   const [text, setText] = useState("");
   const [date, setDate] = useState(() => defaultIssueDate(categories[0], reservation));
   const [timing, setTiming] = useState<"prep" | "after">("prep");
+  // Multi-apartment reservations: which apartment a room task is for, as that
+  // apartment's booking number, or "all". null = not chosen yet — the operator
+  // has to choose, so towels for one room don't land in all of them by default.
+  const [apartment, setApartment] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
 
@@ -2036,6 +2054,10 @@ function TaskBlock({
   // only asked where it can change the answer.
   const showTiming = category === "special";
   const textRequired = TEXT_REQUIRED.has(category);
+  const apartments = reservationApartments(reservation);
+  const multiApartment = apartments.length > 1;
+  const showApartment = multiApartment && ROOM_TASK.has(category);
+  const canSubmit = !(textRequired && !text.trim()) && !(showApartment && apartment == null);
 
   /** Timing decides the date the task is anchored to, because that's the date
    *  the operator would otherwise have to work out by hand: "before arrival"
@@ -2048,7 +2070,7 @@ function TaskBlock({
   }
 
   function submit() {
-    if (textRequired && !text.trim()) return;
+    if (!canSubmit) return;
     onAdd({
       id: Date.now().toString(),
       category,
@@ -2057,11 +2079,13 @@ function TaskBlock({
       resolved: false,
       createdAt: new Date().toISOString(),
       ...(showTiming ? { timing } : {}),
+      ...(showApartment && apartment && apartment !== "all" ? { apartment } : {}),
     });
     setText("");
     setCategory(categories[0]);
     setDate(defaultIssueDate(categories[0], reservation));
     setTiming("prep");
+    setApartment(null);
     setAdding(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -2107,6 +2131,16 @@ function TaskBlock({
                       {issue.timing && !issue.resolved && (
                         <span className="inline-flex items-center rounded bg-white/70 border border-current/20 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-gray-500">
                           {issue.timing === "prep" ? "before arrival" : "during / after stay"}
+                        </span>
+                      )}
+                      {(issue.apartment || (multiApartment && ROOM_TASK.has(cat))) && (
+                        <span
+                          className="inline-flex items-center rounded bg-white/70 border border-current/20 px-1 py-px text-[9px] font-semibold tracking-wide text-gray-600"
+                          title="Which apartment of this reservation the task is for"
+                        >
+                          {issue.apartment
+                            ? apartmentRoom(reservation, issue.apartment) ?? issue.apartment
+                            : "ALL APARTMENTS"}
                         </span>
                       )}
                     </p>
@@ -2217,6 +2251,32 @@ function TaskBlock({
             className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
           />
 
+          {showApartment && (
+            <div>
+              <label className="text-[11px] text-gray-400 block mb-1">Which apartment?</label>
+              <div className="flex gap-1.5 flex-wrap">
+                {[
+                  { value: "all", label: "All apartments", hint: "Every apartment of this reservation" },
+                  ...apartments.map((a) => ({ value: a.reservationNumber, label: a.room, hint: a.reservationNumber })),
+                ].map(({ value, label, hint }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    title={hint}
+                    onClick={() => setApartment(value)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      apartment === value
+                        ? "bg-purple-600 text-white border-transparent"
+                        : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {showTiming && (
             <div>
               <label className="text-[11px] text-gray-400 block mb-1">When does it need doing?</label>
@@ -2256,13 +2316,14 @@ function TaskBlock({
             <div className="flex items-end gap-1.5">
               <button
                 onClick={submit}
-                disabled={textRequired && !text.trim()}
+                disabled={!canSubmit}
+                title={showApartment && apartment == null ? "Pick which apartment this is for" : undefined}
                 className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${CATEGORY_CONFIG[category].buttonBg}`}
               >
                 Add
               </button>
               <button
-                onClick={() => { setAdding(false); setText(""); }}
+                onClick={() => { setAdding(false); setText(""); setApartment(null); }}
                 className="px-2 py-1.5 text-gray-400 hover:text-gray-600 text-sm"
               >
                 ✕
@@ -5202,6 +5263,7 @@ export default function ReservationDrawer({
                     reservationDate={reservation.reservationDate}
                     override={reservation.perkOverrides}
                     onOverride={(v) => onUpdate({ ...reservation, perkOverrides: v })}
+                    rooms={reservationApartments(reservation).map((a) => a.room)}
                   />
                 )}
                 <p className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2.5 py-1.5">

@@ -264,6 +264,8 @@ const MANUAL_GROUPS: Record<number, number[]> = {
 /** Extras the merge attaches to the booking it keeps — read back in mapToReservation. */
 type MergedBooking = Beds24Booking & {
   _linkedRooms?: string[];
+  /** Each apartment's own Beds24 booking id, parallel to `_linkedRooms`. */
+  _linkedBookingIds?: number[];
   _linkedRoomShares?: number[];
   _unallocatedLegs?: UnallocatedLeg[];
 };
@@ -296,10 +298,12 @@ function apartmentsOf(master: Beds24Booking | null, subs: Beds24Booking[]): Beds
  */
 function placeApartments(apartments: Beds24Booking[]): {
   rooms: string[];
+  ids: number[];
   prices: number[];
   unallocated: UnallocatedLeg[];
 } {
   const rooms: string[] = [];
+  const ids: number[] = [];
   const prices: number[] = [];
   const unallocated: UnallocatedLeg[] = [];
   for (const a of apartments) {
@@ -307,10 +311,11 @@ function placeApartments(apartments: Beds24Booking[]): {
     const room = unit ?? VR_ROOM_LABELS[a.roomId];
     if (!room) continue; // unknown room — nothing to attribute
     rooms.push(room);
+    ids.push(a.id);
     prices.push(Number(a.price ?? 0));
     if (!unit) unallocated.push({ reservationNumber: `BH-${a.id}`, room });
   }
-  return { rooms, prices, unallocated };
+  return { rooms, ids, prices, unallocated };
 }
 
 /**
@@ -333,6 +338,7 @@ function attachApartments(
 ): void {
   const t = target as MergedBooking;
   t._linkedRooms = placed.rooms;
+  t._linkedBookingIds = placed.ids;
   if (placed.unallocated.length > 0) t._unallocatedLegs = placed.unallocated;
   const shares = ownPrices ? priceShares(placed.prices) : undefined;
   if (shares) t._linkedRoomShares = shares;
@@ -375,15 +381,15 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     if (!masterBooking || siblings.length === 0) continue;
 
     const allInGroup = [masterBooking, ...siblings];
-    const physicalRooms = allInGroup
-      .map((b) => UNIT_MAP[b.roomId])
-      .filter((r): r is string => r != null);
+    const physical = allInGroup.filter((b) => UNIT_MAP[b.roomId] != null);
+    const physicalRooms = physical.map((b) => UNIT_MAP[b.roomId]);
 
     allInGroup.forEach((b) => manualConsumedIds.add(b.id));
 
     if (physicalRooms.length > 0) {
-      const merged = { ...masterBooking };
-      (merged as Beds24Booking & { _linkedRooms: string[] })._linkedRooms = physicalRooms;
+      const merged: MergedBooking = { ...masterBooking };
+      merged._linkedRooms = physicalRooms;
+      merged._linkedBookingIds = physical.map((b) => b.id);
       // Booking.com multi-unit via manual group: sum prices (same logic as auto-merge)
       if (merged.apiSource === 'Booking.com') {
         merged.price   = (merged.price   ?? 0) + siblings.reduce((s, r) => s + (r.price   ?? 0), 0);
@@ -560,13 +566,18 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
     // on a virtual room stays in as its type label + an unallocated leg, the
     // same as in Case 1 — the New Booking modal sells the studio VRs.
     const allRooms: string[] = [];
+    const allIds: number[] = [];
     const roomMoney: number[] = [];
     const unallocated: UnallocatedLeg[] = [];
     for (const member of sorted) {
       const m = member as MergedBooking;
       const placed =
         m._linkedRooms && m._linkedRooms.length > 0
-          ? { rooms: m._linkedRooms, unallocated: m._unallocatedLegs ?? [] }
+          ? {
+              rooms: m._linkedRooms,
+              ids: m._linkedBookingIds ?? m._linkedRooms.map(() => member.id),
+              unallocated: m._unallocatedLegs ?? [],
+            }
           : placeApartments([member]);
       const shares = m._linkedRoomShares ?? placed.rooms.map(() => 1 / placed.rooms.length);
       placed.rooms.forEach((room, i) => {
@@ -576,12 +587,14 @@ export function mergeGroupedBookings(all: Beds24Booking[]): Beds24Booking[] {
           roomMoney[seen] += (member.price ?? 0) * shares[i];
         } else {
           allRooms.push(room);
+          allIds.push(placed.ids[i]);
           roomMoney.push((member.price ?? 0) * shares[i]);
         }
       });
       unallocated.push(...placed.unallocated);
     }
     base._linkedRooms = allRooms;
+    base._linkedBookingIds = allIds;
     if (unallocated.length > 0) base._unallocatedLegs = unallocated;
     // Each row was priced on its own, so each room keeps its own share.
     const shares = priceShares(roomMoney);
@@ -681,11 +694,23 @@ export function mapToReservation(b: Beds24Booking): Reservation {
   const { commissionAmount, paymentChargeAmount } = precomputedBreakdown
     ?? parseCommissionBreakdown(b.rateDescription ?? "", b.commission ?? 0);
 
-  const { _linkedRooms: linkedRooms, _linkedRoomShares: linkedRoomShares, _unallocatedLegs } = b as MergedBooking;
+  const {
+    _linkedRooms: linkedRooms,
+    _linkedBookingIds: linkedBookingIds,
+    _linkedRoomShares: linkedRoomShares,
+    _unallocatedLegs,
+  } = b as MergedBooking;
   const room = linkedRooms && linkedRooms.length > 0
     ? linkedRooms.join(" + ")
     : mapRoom(b.roomId);
   const isMultiApartment = (linkedRooms?.length ?? 0) > 1;
+  // The Beds24 booking behind each apartment — what the cleaning app keys a
+  // cleaning by. Only worth carrying when it isn't simply this booking.
+  const apartmentReservationNumbers =
+    linkedRooms && linkedBookingIds?.length === linkedRooms.length &&
+    (isMultiApartment || linkedBookingIds.some((id) => id !== b.id))
+      ? linkedBookingIds.map((id) => `BH-${id}`)
+      : null;
 
   // Unallocated VR detection: the booking sits on a virtual roomId AND
   // mergeGroupedBookings didn't pair it with any physical sub — or an
@@ -744,6 +769,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     room,
     ...(linkedRooms && linkedRooms.length > 1 ? { linkedRooms } : {}),
     ...(isMultiApartment && linkedRoomShares?.length === linkedRooms!.length ? { linkedRoomShares } : {}),
+    ...(apartmentReservationNumbers ? { apartmentReservationNumbers } : {}),
     checkInDate: b.arrival ?? "",
     checkOutDate: b.departure ?? "",
     reservationDate: b.bookingTime ? b.bookingTime.slice(0, 10) : "",

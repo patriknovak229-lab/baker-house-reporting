@@ -24,9 +24,17 @@
  * Two writers, same as the perk map: the bookings sync rewrites the whole map
  * (authoritative), and a drawer save patches one reservation's entry so the
  * cleaner sees it without waiting for a sync.
+ *
+ * Keyed by the booking the cleaning app sees, not by reservation: on a
+ * multi-apartment reservation each apartment is its own Beds24 booking, so a
+ * task goes under the apartment the operator picked, or under every apartment
+ * when they didn't (see utils/reservationApartments).
  */
 import { getRedis } from "@/utils/beds24Reservations";
-import type { Issue } from "@/types/reservation";
+import { cleaningFeedNumbers, taskTargets } from "@/utils/reservationApartments";
+import type { Issue, Reservation } from "@/types/reservation";
+
+type ReservationKey = Pick<Reservation, "reservationNumber" | "apartmentReservationNumbers">;
 
 export const OPS_TASKS_KEY = "baker:reservation-ops-tasks";
 
@@ -48,59 +56,94 @@ export interface OpsTask {
   date: string;
 }
 
-/** The publishable subset of one reservation's issues. */
-export function opsTasksFromIssues(issues: Issue[] | undefined): OpsTask[] {
-  if (!issues?.length) return [];
-  return issues
-    .filter((i) => !i.resolved && i.category === "special" && i.text?.trim())
-    .map((i) => ({
-      id: i.id,
-      text: i.text.trim(),
-      timing: i.timing ?? "prep",
-      date: i.actionableDate,
-    }));
+function isPublishable(i: Issue): boolean {
+  return !i.resolved && i.category === "special" && !!i.text?.trim();
 }
 
-/** Build the whole map from the override overlay — the authoritative pass. */
+function toOpsTask(i: Issue): OpsTask {
+  return {
+    id: i.id,
+    text: i.text.trim(),
+    timing: i.timing ?? "prep",
+    date: i.actionableDate,
+  };
+}
+
+/** The publishable subset of one reservation's issues. */
+export function opsTasksFromIssues(issues: Issue[] | undefined): OpsTask[] {
+  return (issues ?? []).filter(isPublishable).map(toOpsTask);
+}
+
+/**
+ * One reservation's publishable tasks, by the booking number each goes to: the
+ * reservation's own on a single apartment, else the picked apartment or all of
+ * them.
+ */
+export function opsTasksByBooking(
+  r: ReservationKey,
+  issues: Issue[] | undefined,
+): Record<string, OpsTask[]> {
+  const out: Record<string, OpsTask[]> = {};
+  for (const i of issues ?? []) {
+    if (!isPublishable(i)) continue;
+    for (const target of taskTargets(r, i)) (out[target] ??= []).push(toOpsTask(i));
+  }
+  return out;
+}
+
+/**
+ * Build the whole map — the authoritative pass. `reservations` is the set to
+ * publish for: the caller leaves out cancelled stays, so their tasks drop out.
+ */
 export function buildOpsTasksMap(
   overrides: Record<string, { issues?: Issue[] } | undefined>,
-  isPublishable: (reservationNumber: string) => boolean,
+  reservations: ReservationKey[],
 ): Record<string, OpsTask[]> {
   const map: Record<string, OpsTask[]> = {};
-  for (const [reservationNumber, entry] of Object.entries(overrides)) {
-    if (!isPublishable(reservationNumber)) continue;
-    const tasks = opsTasksFromIssues(entry?.issues);
-    if (tasks.length > 0) map[reservationNumber] = tasks;
+  const seen = new Set<string>();
+  for (const r of reservations) {
+    if (seen.has(r.reservationNumber)) continue;
+    seen.add(r.reservationNumber);
+    const byBooking = opsTasksByBooking(r, overrides[r.reservationNumber]?.issues);
+    for (const [bookingNumber, tasks] of Object.entries(byBooking)) {
+      map[bookingNumber] = [...(map[bookingNumber] ?? []), ...tasks];
+    }
   }
   return map;
 }
 
 /**
- * Patch a single reservation's entry. Called right after the drawer saves, so
- * an instruction reaches the cleaner on their next page load rather than at the
- * next bookings sync. An empty list removes the entry.
+ * Patch a single reservation's entries. Called right after the drawer saves,
+ * so an instruction reaches the cleaner on their next page load rather than at
+ * the next bookings sync. Every apartment is rewritten, so a task re-pointed
+ * from "all apartments" to one leaves the others; an empty list removes the
+ * entry.
  */
 export async function publishOpsTasksEntry(
-  reservationNumber: string,
+  r: ReservationKey,
   issues: Issue[] | undefined,
-): Promise<OpsTask[]> {
-  const tasks = opsTasksFromIssues(issues);
+): Promise<Record<string, OpsTask[]>> {
+  const byBooking = opsTasksByBooking(r, issues);
   const redis = getRedis();
-  if (!redis) return tasks;
+  if (!redis) return byBooking;
   const map = (await redis.get<Record<string, OpsTask[]>>(OPS_TASKS_KEY)) ?? {};
-  if (tasks.length > 0) map[reservationNumber] = tasks;
-  else delete map[reservationNumber];
+  for (const bookingNumber of new Set([...cleaningFeedNumbers(r), ...Object.keys(byBooking)])) {
+    const tasks = byBooking[bookingNumber];
+    if (tasks?.length) map[bookingNumber] = tasks;
+    else delete map[bookingNumber];
+  }
   await redis.set(OPS_TASKS_KEY, map);
-  return tasks;
+  return byBooking;
 }
 
 /** Drop a reservation from the map — cancellations, which the authoritative
  *  pass skips and would otherwise leave behind. */
-export async function removeOpsTasksEntry(reservationNumber: string): Promise<void> {
+export async function removeOpsTasksEntry(r: ReservationKey): Promise<void> {
   const redis = getRedis();
   if (!redis) return;
   const map = (await redis.get<Record<string, OpsTask[]>>(OPS_TASKS_KEY)) ?? {};
-  if (!(reservationNumber in map)) return;
-  delete map[reservationNumber];
+  const present = cleaningFeedNumbers(r).filter((n) => n in map);
+  if (present.length === 0) return;
+  for (const n of present) delete map[n];
   await redis.set(OPS_TASKS_KEY, map);
 }

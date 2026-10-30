@@ -17,6 +17,7 @@ import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, att
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { RATE_PERKS_KEY, RATE_TYPES_KEY } from "@/utils/ratePerksPublish";
 import { OPS_TASKS_KEY, buildOpsTasksMap } from "@/utils/opsTasksPublish";
+import { cleaningFeedNumbers } from "@/utils/reservationApartments";
 import { MOVE_CLEANINGS_KEY, buildMoveCleaningsMap } from "@/utils/moveCleaningsPublish";
 import { attachRoomSegments, occupancySpans } from "@/utils/roomSegments";
 import { listMidStayMoveHistory } from "@/data-access/roomMoves";
@@ -141,23 +142,26 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   }>();
   const rateMap: Record<string, RateType> = {};
   const perkMap: Record<string, RatePerks> = {};
-  for (const r of reservations) {
-    if (r.isCancelled) continue;
+  const live = reservations.filter((r) => !r.isCancelled);
+  for (const r of live) {
     const ov = overrides[r.reservationNumber];
     const eff = ov?.rateTypeOverride ?? r.rateType ?? null;
-    if (eff) rateMap[r.reservationNumber] = eff;
     // Effective perks = rate-derived auto value, then operator override wins.
     // Pass reservationDate so the Standard rate's perk date-gate applies.
     const perks = effectiveRatePerks(autoRatePerks(eff, r.reservationDate), ov?.perkOverrides);
-    if (perks.earlyCheckIn || perks.lateCheckout || perks.specialTreatment != null) {
-      perkMap[r.reservationNumber] = perks;
+    // Under every apartment's own booking number too — that's how the cleaning
+    // app keys each apartment's cleaning (utils/reservationApartments).
+    for (const n of cleaningFeedNumbers(r)) {
+      if (eff) rateMap[n] = eff;
+      if (perks.earlyCheckIn || perks.lateCheckout || perks.specialTreatment != null) {
+        perkMap[n] = perks;
+      }
     }
   }
   // Ad-hoc operational tasks ride the same sync. Published only for
   // reservations still in the live set and not cancelled — same rule as the
   // perks above, so a cancelled stay's tasks drop out on their own.
-  const live = new Set(reservations.filter((r) => !r.isCancelled).map((r) => r.reservationNumber));
-  const opsMap = buildOpsTasksMap(overrides, (rn) => live.has(rn));
+  const opsMap = buildOpsTasksMap(overrides, live);
 
   // Vacated-unit cleanings from mid-stay moves (utils/moveCleaningsPublish).
   const moveCleanings = buildMoveCleaningsMap(reservations);

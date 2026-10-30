@@ -267,5 +267,32 @@ describe('mergeGroupedBookings — multi-apartment bookings', () => {
     expect(r.unallocatedLegs).toEqual([{ reservationNumber: 'BH-601', room: '1KK Urban Studios' }]);
     expect(r.price).toBe(9000);
     expect(r.linkedRoomShares).toEqual([6000 / 9000, 3000 / 9000]);
+    expect(r.apartmentReservationNumbers).toEqual(['BH-600', 'BH-601']);
+  });
+
+  // BH-93698209: three Weekly-rate apartments, one booking each. The cleaning
+  // app keys each apartment's cleaning by that booking, so the wine published
+  // under the master alone only ever reached K.102.
+  it('names each apartment\'s own booking, in room order', () => {
+    const r = merged([
+      booking({ id: 93698209, roomId: 679703, price: 11652.08 }),
+      booking({ id: 93698210, masterId: 93698209, roomId: 674672, price: 17419.5 }),
+      booking({ id: 93698211, masterId: 93698209, roomId: 679704, price: 11652.08 }),
+    ])[0];
+    expect(r.linkedRooms).toEqual(['K.102', 'O.308', 'K.103']);
+    expect(r.apartmentReservationNumbers).toEqual(['BH-93698209', 'BH-93698210', 'BH-93698211']);
+  });
+
+  it('names the apartment Beds24 placed a wrapper in, not the wrapper', () => {
+    const r = merged([
+      booking({ id: 500, roomId: 648816, price: 8000, apiSource: 'Direct', referer: 'API' }),
+      booking({ id: 501, masterId: 500, roomId: 648596, price: 0, apiSource: 'Direct', referer: 'API' }),
+    ])[0];
+    expect(r.reservationNumber).toBe('BH-500');
+    expect(r.apartmentReservationNumbers).toEqual(['BH-501']);
+  });
+
+  it('leaves a plain single booking without an apartment list', () => {
+    expect(merged([booking()])[0].apartmentReservationNumbers).toBeUndefined();
   });
 });

@@ -95,6 +95,13 @@ export interface Issue {
    */
   timing?: "prep" | "after";
   /**
+   * Multi-apartment reservations only: the apartment a room task is for, as
+   * that apartment's own booking number (one of `apartmentReservationNumbers`).
+   * A booking number rather than a room name, so it follows the apartment if
+   * it is moved to another unit. Absent = every apartment.
+   */
+  apartment?: string;
+  /**
    * Invoice tasks only: set when the send-due-invoices cron must leave this
    * invoice for the operator instead of auto-sending it. The value is the
    * human-readable reason, e.g. "guest asked for 3 509,41 Kč, booking price
@@ -425,6 +432,17 @@ export interface Reservation {
    * Absent = equal shares (a package whose master carries the whole price).
    */
   linkedRoomShares?: number[];
+  /**
+   * The Beds24 booking behind each apartment, "BH-<id>", parallel to
+   * `linkedRooms` (or to `room` for a single apartment). Booking.com sells N
+   * rooms as N bookings and the merge keeps only the master's number, but the
+   * cleaning app sees each apartment's cleaning under its OWN booking — so
+   * anything meant for every apartment (rate perks, room tasks) is published
+   * under each of these. BH-93698209: K.102 is the master, O.308 is
+   * BH-93698210, K.103 is BH-93698211. Absent when the only apartment is this
+   * reservation's own booking.
+   */
+  apartmentReservationNumbers?: string[];
   firstName: string;
   lastName: string;
   channel: Channel;

@@ -11,6 +11,11 @@
  * When a like-for-like room (same interchangeable type) is free for one of the
  * two stays, we suggest moving that reservation there to dissolve the clash.
  * Suggestions are advisory only — they never move anything.
+ *
+ * A multi-apartment reservation's perks hold in every apartment, so it takes
+ * part in each of its rooms' turnovers (BH-93698209: a late checkout in K.102,
+ * O.308 AND K.103). It is never the one suggested to move — "move this guest"
+ * would not say which apartment.
  */
 import type { Reservation } from "@/types/reservation";
 import { effectiveRatePerks, autoRatePerks } from "./ratePerks";
@@ -37,6 +42,11 @@ export interface TurnoverClash {
   suggestion: { who: "incoming" | "outgoing"; guest: Reservation; toRoom: string } | null;
 }
 
+/** Every room the stay holds — each apartment of a multi-apartment booking. */
+function roomsOf(r: Reservation): string[] {
+  return r.linkedRooms && r.linkedRooms.length > 0 ? r.linkedRooms : [r.room];
+}
+
 function perksOf(r: Reservation) {
   return effectiveRatePerks(autoRatePerks(effectiveRateType(r), r.reservationDate), r.perkOverrides);
 }
@@ -44,7 +54,7 @@ function perksOf(r: Reservation) {
 /** A real guest stay (drives clashes) — excludes blackouts, cancellations, and
  *  non-arrivals (the guest never physically shows up). */
 function isRealStay(r: Reservation): boolean {
-  return !r.isBlackout && !r.isCancelled && !r.nonArrival && PHYSICAL_ROOMS.has(r.room);
+  return !r.isBlackout && !r.isCancelled && !r.nonArrival && roomsOf(r).some((room) => PHYSICAL_ROOMS.has(room));
 }
 
 /** Occupies a room for availability purposes — anything but a plain
@@ -68,7 +78,7 @@ function roomIsCleanFor(room: string, stay: Reservation, blockers: Reservation[]
   const inD = stay.checkInDate;
   const outD = stay.checkOutDate;
   for (const b of blockers) {
-    if (b.room !== room) continue;
+    if (!roomsOf(b).includes(room)) continue;
     if (b.reservationNumber === stay.reservationNumber) continue;
     // Overlap on the half-open interval [checkIn, checkOut).
     if (b.checkInDate < outD && inD < b.checkOutDate) return false;
@@ -92,9 +102,12 @@ export function computeTurnoverClashes(
 
   const byRoom = new Map<string, Reservation[]>();
   for (const r of stays) {
-    const list = byRoom.get(r.room);
-    if (list) list.push(r);
-    else byRoom.set(r.room, [r]);
+    for (const room of roomsOf(r)) {
+      if (!PHYSICAL_ROOMS.has(room)) continue;
+      const list = byRoom.get(room);
+      if (list) list.push(r);
+      else byRoom.set(room, [r]);
+    }
   }
 
   const clashes: TurnoverClash[] = [];
@@ -112,10 +125,13 @@ export function computeTurnoverClashes(
 
       // Suggestion: prefer relocating the incoming, else the outgoing.
       let suggestion: TurnoverClash["suggestion"] = null;
-      const incTarget = siblingsOf(room).find((s) => roomIsCleanFor(s, incoming, blockers));
+      const movable = (g: Reservation) => roomsOf(g).length === 1;
+      const incTarget = movable(incoming)
+        ? siblingsOf(room).find((s) => roomIsCleanFor(s, incoming, blockers))
+        : undefined;
       if (incTarget) {
         suggestion = { who: "incoming", guest: incoming, toRoom: incTarget };
-      } else {
+      } else if (movable(outgoing)) {
         const outTarget = siblingsOf(room).find((s) => roomIsCleanFor(s, outgoing, blockers));
         if (outTarget) suggestion = { who: "outgoing", guest: outgoing, toRoom: outTarget };
       }
