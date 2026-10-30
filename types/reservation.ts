@@ -95,10 +95,12 @@ export interface Issue {
    */
   timing?: "prep" | "after";
   /**
-   * Multi-apartment reservations only: the apartment a room task is for, as
-   * that apartment's own booking number (one of `apartmentReservationNumbers`).
+   * Multi-apartment reservations only: the apartment an Operations task (room
+   * task, early check-in, late checkout, mid-stay cleaning) is for, as that
+   * apartment's own booking number (one of `apartmentReservationNumbers`).
    * A booking number rather than a room name, so it follows the apartment if
-   * it is moved to another unit. Absent = every apartment.
+   * it is moved to another unit. Absent = every apartment. The cleaning app
+   * honours it for room tasks and early/late requests.
    */
   apartment?: string;
   /**

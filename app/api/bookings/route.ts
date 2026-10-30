@@ -17,7 +17,11 @@ import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, att
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { RATE_PERKS_KEY, RATE_TYPES_KEY } from "@/utils/ratePerksPublish";
 import { OPS_TASKS_KEY, buildOpsTasksMap } from "@/utils/opsTasksPublish";
-import { cleaningFeedNumbers } from "@/utils/reservationApartments";
+import {
+  RESERVATION_APARTMENTS_KEY,
+  apartmentParentMap,
+  cleaningFeedNumbers,
+} from "@/utils/reservationApartments";
 import { MOVE_CLEANINGS_KEY, buildMoveCleaningsMap } from "@/utils/moveCleaningsPublish";
 import { attachRoomSegments, occupancySpans } from "@/utils/roomSegments";
 import { listMidStayMoveHistory } from "@/data-access/roomMoves";
@@ -116,8 +120,9 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
 }
 
 /**
- * Publish each reservation's EFFECTIVE rate, EFFECTIVE perks, and its ad-hoc
- * operational tasks to shared Redis maps keyed by reservationNumber. The
+ * Publish each reservation's EFFECTIVE rate, EFFECTIVE perks, its ad-hoc
+ * operational tasks, and which reservation each apartment booking belongs to,
+ * to shared Redis maps keyed by reservationNumber. The
  * cleaning app consumes them directly — reporting owns the rate → perk mapping,
  * the operator overrides and the task list, so cleaning just reflects the
  * result.
@@ -166,11 +171,16 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   // Vacated-unit cleanings from mid-stay moves (utils/moveCleaningsPublish).
   const moveCleanings = buildMoveCleaningsMap(reservations);
 
+  // Which reservation each apartment booking belongs to, so the cleaning app
+  // can find a multi-apartment stay's early/late requests and guest flags.
+  const apartments = apartmentParentMap(live);
+
   await Promise.all([
     redis.set(RATE_TYPES_KEY, rateMap),
     redis.set(RATE_PERKS_KEY, perkMap),
     redis.set(OPS_TASKS_KEY, opsMap),
     redis.set(MOVE_CLEANINGS_KEY, moveCleanings),
+    redis.set(RESERVATION_APARTMENTS_KEY, apartments),
   ]);
 }
 

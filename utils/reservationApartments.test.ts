@@ -5,6 +5,7 @@ import {
   cleaningFeedNumbers,
   taskTargets,
   apartmentRoom,
+  apartmentParentMap,
 } from "./reservationApartments";
 
 const trio = {
@@ -58,5 +59,21 @@ describe("apartmentRoom", () => {
     expect(apartmentRoom(trio, "BH-93698211")).toBe("K.103");
     expect(apartmentRoom(trio, undefined)).toBeNull();
     expect(apartmentRoom(trio, "BH-999")).toBeNull();
+  });
+});
+
+describe("apartmentParentMap", () => {
+  it("points each other apartment's booking at its reservation", () => {
+    expect(
+      apartmentParentMap([
+        trio,
+        single,
+        { reservationNumber: "BH-500", apartmentReservationNumbers: ["BH-501"] },
+      ]),
+    ).toEqual({
+      "BH-93698210": "BH-93698209",
+      "BH-93698211": "BH-93698209",
+      "BH-501": "BH-500",
+    });
   });
 });

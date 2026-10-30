@@ -2001,10 +2001,6 @@ const KIND_CATEGORIES: Record<"admin" | "ops", IssueCategory[]> = {
   ops: (Object.keys(CATEGORY_KIND) as IssueCategory[]).filter((c) => CATEGORY_KIND[c] === "ops"),
 };
 
-/** Room tasks — the categories that can be pointed at one apartment of a
- *  multi-apartment reservation. */
-const ROOM_TASK: ReadonlySet<IssueCategory> = new Set<IssueCategory>(["special", "facility"]);
-
 /** Categories where the note IS the task, so free text is required. */
 const TEXT_REQUIRED: ReadonlySet<IssueCategory> = new Set<IssueCategory>([
   "problem",
@@ -2056,7 +2052,9 @@ function TaskBlock({
   const textRequired = TEXT_REQUIRED.has(category);
   const apartments = reservationApartments(reservation);
   const multiApartment = apartments.length > 1;
-  const showApartment = multiApartment && ROOM_TASK.has(category);
+  // Every Operations task is room-level, so on a multi-apartment reservation it
+  // can be for one apartment or all of them.
+  const showApartment = multiApartment && CATEGORY_KIND[category] === "ops";
   const canSubmit = !(textRequired && !text.trim()) && !(showApartment && apartment == null);
 
   /** Timing decides the date the task is anchored to, because that's the date
@@ -2133,7 +2131,7 @@ function TaskBlock({
                           {issue.timing === "prep" ? "before arrival" : "during / after stay"}
                         </span>
                       )}
-                      {(issue.apartment || (multiApartment && ROOM_TASK.has(cat))) && (
+                      {(issue.apartment || (multiApartment && kind === "ops")) && (
                         <span
                           className="inline-flex items-center rounded bg-white/70 border border-current/20 px-1 py-px text-[9px] font-semibold tracking-wide text-gray-600"
                           title="Which apartment of this reservation the task is for"

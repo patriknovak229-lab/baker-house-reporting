@@ -68,6 +68,28 @@ export function taskTargets(
   return numbers && numbers.length > 0 ? [...new Set(numbers)] : [r.reservationNumber];
 }
 
+/**
+ * Shared key: apartment booking → the reservation it belongs to, for every
+ * apartment whose booking isn't the reservation's own. The cleaning app reads
+ * operator-logged requests (early check-in, late checkout) and customer flags
+ * straight from the reservation-overrides table, which is keyed by
+ * reservation; this map is how it finds O.308's entry under BH-93698209.
+ */
+export const RESERVATION_APARTMENTS_KEY = "baker:reservation-apartments";
+
+/** The whole apartment → reservation map, for the reservations given. */
+export function apartmentParentMap(
+  reservations: Pick<Reservation, "reservationNumber" | "apartmentReservationNumbers">[],
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const r of reservations) {
+    for (const n of r.apartmentReservationNumbers ?? []) {
+      if (n !== r.reservationNumber) map[n] = r.reservationNumber;
+    }
+  }
+  return map;
+}
+
 /** The room a task's apartment is in right now, or null if it isn't one of them. */
 export function apartmentRoom(r: ApartmentFields, apartment: string | undefined): string | null {
   if (!apartment) return null;
