@@ -5,7 +5,7 @@
  * night hours — see docs/pricing-runner.md). Each invocation:
  *
  *   1. Asks the reporting app for a work order (GET /api/pricing/ingest):
- *      is today's grid run still due (server sends the concrete slot plan —
+ *      is the weekly grid run due (server sends the concrete slot plan —
  *      an availability-aware sweep of the next 60 days), and which custom
  *      checks are queued.
  *   2. If there is nothing to do, exits silently — most invocations do this.
@@ -19,10 +19,10 @@
  *
  * Requires in .env.local: PRICING_INGEST_SECRET, CHROME_EXECUTABLE_PATH.
  * Optional: PARITY_INGEST_URL (defaults to production), RUNNER_HEADFUL=1 to
- * watch the browser work, PARITY_GRID_AFTER=HH:MM Prague gate for the daily
- * grid run (default 08:00), PARITY_FORCE_GRID=1 to re-run today's grid,
+ * watch the browser work, PARITY_GRID_AFTER=HH:MM Prague gate for the weekly
+ * grid run (default 08:00), PARITY_FORCE_GRID=1 to run a grid now,
  * PARITY_FULL_SWEEP=1 for a one-off backfill that scrapes EVERY sellable
- * 2-night check-in in the window instead of the daily rotation (~30 min).
+ * 2-night check-in in the window (same as a normal weekly run now).
  */
 import '../_loadEnv';
 import puppeteer, { type Browser } from 'puppeteer-core';
@@ -109,8 +109,8 @@ async function main() {
     `/api/pricing/ingest${FORCE_GRID ? `?plan=1${FULL_SWEEP ? '&full=1' : ''}` : ''}`,
   );
 
-  // The daily grid waits for a civilised hour so the sample time is stable —
-  // comparing a 03:00 scrape to yesterday's 09:00 scrape adds noise for free.
+  // The weekly grid waits for a civilised hour so the sample time is stable —
+  // comparing a 03:00 scrape to last week's 09:00 scrape adds noise for free.
   const gridAfter = process.env.PARITY_GRID_AFTER ?? '08:00';
   const gridWanted = FORCE_GRID || (order.gridDue && pragueNowHHMM() >= gridAfter);
 

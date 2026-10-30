@@ -1,5 +1,6 @@
 /**
- * Daily scrape plan — which stays the runner should price today.
+ * Grid scrape plan — which stays the runner should price on a grid run
+ * (weekly since 2026-10-30).
  *
  * Planning is availability-aware so the runner never burns page loads on
  * stays nothing could sell. The availability source is the PriceLabs snapshot
@@ -7,11 +8,11 @@
  * `min_stay`), which is at most a day stale — good enough for planning; the
  * scrape itself records ground truth either way.
  *
- * Zones (see PARITY_SWEEP): 2-night stays are scraped daily inside denseDays
- * and on a rotating 1-in-farStride beyond it; 7-night stays rotate
+ * Zones (see PARITY_SWEEP): short stays are scraped on every run inside
+ * denseDays and on a rotating 1-in-farStride beyond it; 7-night stays rotate
  * 1-in-weeklyStride across the whole window. Rotation is keyed to the day of
- * year, so consecutive days sample different residues and every date gets
- * covered within one stride period.
+ * year. The weekly config sets denseDays = windowDays and both strides to 1,
+ * so one run prices every sellable date.
  */
 import { and, gte, inArray, lte } from 'drizzle-orm';
 import { db } from '@/lib/db';
@@ -151,7 +152,7 @@ export async function planSweepSlots(
   const dense: PlannedSlot[] = [];
   const far: PlannedSlot[] = [];
 
-  // 1-night stays, all units: daily, near window only, and only where a
+  // 1-night stays, all units: near window only, and only where a
   // 1-night stay actually sells (min-stay 1 gap fillers) — from TOMORROW,
   // because that is where gap-filler pricing matters most.
   for (let lead = 1; lead <= cfg.oneNightDays; lead++) {
@@ -165,7 +166,7 @@ export async function planSweepSlots(
 
     // Short stays — 2-night for the studios, 3-night for the 2BR units (their
     // seasonal min-stay 3 makes 2-night stays unsellable for whole months).
-    // Dense zone daily, far zone on rotation. A full sweep (?plan=1&full=1 —
+    // Dense zone every run, far zone on rotation. A full sweep (?plan=1&full=1 —
     // one-off backfills) scrapes every sellable check-in in the window; the
     // maxSlots cap never trims the dense list.
     const farDue = lead > cfg.denseDays && lead % cfg.farStride === rotation % cfg.farStride;

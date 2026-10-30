@@ -14,14 +14,15 @@ launchd (every 15 min, skipping 00–07 Prague — see PARITY_QUIET_HOURS)
        1. GET  /api/pricing/ingest      ── work order (secret header)
           · gridDue? → the server sends today's SLOT PLAN: an
             availability-aware sweep planned from the PriceLabs snapshot so
-            unsellable stays are never scraped. Cadence (operator spec):
-            1-night stays for all units daily over the next 14 days (only
-            where min-stay 1 actually sells); short stays — 2-night for the
-            studios, 3-night for the 2BR units (seasonal min-stay 3) — daily
-            for the next 30 days and on a 1-in-7 rotation for days 30–60;
-            7-night stays for all units on a 1-in-7 rotation. Beyond 60 days:
-            custom checks only. Once per day after 08:00 Prague. PARITY_SWEEP
-            in data/parityConfig tunes it.
+            unsellable stays are never scraped. Cadence (operator spec,
+            weekly since 2026-10-30): ONE grid run a week, Mondays after 08:00
+            Prague (catches up the next day the Mac is awake if a Monday is
+            missed). Each run covers 1-night stays for all units over the
+            next 14 days (only where min-stay 1 actually sells); every
+            short-stay check-in — 2-night for the studios, 3-night for the
+            2BR units (seasonal min-stay 3) — and every 7-night check-in in
+            the next 60 days. Beyond 60 days, or for a fresher price mid-week:
+            custom checks. PARITY_SWEEP in data/parityConfig tunes it.
           · pendingRequests → custom checks queued in the UI
        2. Scrape Booking.com (structured .hprt-table parse, all room types)
           + Airbnb (Reserve-panel logic, per configured listing, only for
@@ -44,12 +45,11 @@ launchd (every 15 min, skipping 00–07 Prague — see PARITY_QUIET_HOURS)
 
 Most invocations exit in ~1 s with "nothing to do" (or instantly during
 Prague quiet hours, without touching the API — every poll wakes the Neon
-compute, which is billed by the hour it is awake). A grid run takes
-~15–25 min. `PARITY_FORCE_GRID=1 npm run parity:run` re-runs today's grid by
-hand (also bypasses quiet hours). `PARITY_FULL_SWEEP=1 npm run parity:run` is
-the one-off backfill: it scrapes EVERY sellable short-stay check-in in the
-60-day window instead of the far-zone rotation — use it after config/identity
-changes so the calendar doesn't wait days for the rotation to refill.
+compute, which is billed by the hour it is awake). The weekly grid run takes
+~1 h (≈140 stays). `PARITY_FORCE_GRID=1 npm run parity:run` runs a grid
+by hand on any day (also bypasses quiet hours) — use it after config/identity
+changes instead of waiting for Monday. `PARITY_FULL_SWEEP=1` still exists but
+plans the same slots as a normal run now that every run covers every date.
 
 ## Setup (once per Mac)
 

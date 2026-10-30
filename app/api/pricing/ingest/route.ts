@@ -21,6 +21,7 @@ import { priceCheckRequests, priceSnapshots } from '@/lib/db/schema';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { extractPrice, fetchOffers, offersForRoom } from '@/utils/beds24Pricing';
 import { pragueToday } from '@/utils/periodUtils';
+import { isGridDue } from '@/utils/parityGridSchedule';
 import { pricingChatId, sendTelegram } from '@/utils/telegram';
 import {
   bookingMemberFloor,
@@ -116,7 +117,7 @@ export async function GET(req: NextRequest) {
     .limit(1);
 
   // Runner-local capture timestamps are UTC; a grid run counts for the Prague
-  // day it lands in. Close enough for "run once a day".
+  // day it lands in. Close enough for "run once a week".
   const lastGridDate = latestGrid
     ? new Date(latestGrid.capturedAt.getTime() + 2 * 3_600_000).toISOString().slice(0, 10)
     : null;
@@ -127,7 +128,7 @@ export async function GET(req: NextRequest) {
     .where(eq(priceCheckRequests.status, 'pending'))
     .orderBy(priceCheckRequests.requestedAt);
 
-  const gridDue = lastGridDate === null || lastGridDate < today;
+  const gridDue = isGridDue(lastGridDate, today);
 
   // The concrete scrape plan. Also sent when the caller forces a plan
   // (?plan=1) — used by manual runner invocations that re-run a day.
@@ -411,7 +412,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Full-window availability + Web sweep (grid runs only): every check-in in
-  // each board's window gets a fresh Web row daily whether or not it was
+  // each board's window gets a fresh Web row every grid run whether or not it was
   // scraped — one Beds24 offers call per date per stay length. This is what
   // keeps the occupancy boards complete while the channel scrapes rotate, and
   // it costs no page loads at all. Rows are written only for the units whose

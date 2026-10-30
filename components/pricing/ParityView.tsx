@@ -615,7 +615,7 @@ function RulesEditor({
       <h2 className="text-lg font-semibold text-gray-900 mb-1">Alert rules</h2>
       <p className="text-xs text-gray-500 mb-4 max-w-3xl">
         One rule = one price comparison with an allowed slack. <strong>Red</strong> colours the block and goes to
-        Telegram on the daily run; <strong>Yellow</strong> only colours the block. The two override fields replace the
+        Telegram on the weekly run; <strong>Yellow</strong> only colours the block. The two override fields replace the
         threshold when the Booking offer carries a <em>Booking.com pays</em> discount or an operator campaign deal
         (Getaway / Limited-time / Smart) — set 100 to effectively switch the rule off in that situation. Changes
         recolour the boards immediately (preview); <strong>Save</strong> makes them stick and the next grid run&apos;s
@@ -863,9 +863,10 @@ export default function ParityView() {
 
   return (
     <div className="space-y-10">
-      {gridAgeHours !== null && gridAgeHours > 26 && (
+      {/* Weekly grid (Mondays): a week plus a day of slack before warning. */}
+      {gridAgeHours !== null && gridAgeHours > 7 * 24 + 26 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Last grid run is {Math.round(gridAgeHours)} h old — the Mac parity runner has not reported today.
+          Last grid run is {Math.round(gridAgeHours / 24)} days old — the Mac parity runner missed its weekly run.
           Check the launchd job (docs/pricing-runner.md).
         </div>
       )}
@@ -875,14 +876,14 @@ export default function ParityView() {
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] border border-gray-200 bg-[repeating-linear-gradient(45deg,#e5e7eb_0px,#e5e7eb_3px,#ffffff_3px,#ffffff_6px)]" /> open, but min-stay blocks this length</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-emerald-100 border border-emerald-200" /> checked, fine</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-amber-300" /> minor — a yellow alert rule fired</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — a red alert rule fired (Telegram on the daily run)</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-rose-500" /> major — a red alert rule fired (Telegram on the weekly run)</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-[3px] bg-white border border-dashed border-gray-300" /> not scraped yet</span>
         <span className="text-gray-400">· click any block for details</span>
       </div>
 
       <StayCalendar
         title="1-night stays — next 14 days"
-        subtitle="All units, checked daily. Most dates are min-stay blocked by design — the interesting blocks are the gap fillers where a single night actually sells."
+        subtitle="All units, next 14 days, checked weekly (Mondays). Most dates are min-stay blocked by design — the interesting blocks are the gap fillers where a single night actually sells."
         rows={data?.board1n ?? []}
         nights={1}
         units={PARITY_UNITS}
@@ -895,7 +896,7 @@ export default function ParityView() {
 
       <StayCalendar
         title="2-night stays — studios"
-        subtitle="1KK Urban + 1KK Deluxe. Checked daily for the next 30 days, weekly for days 30–60; beyond that use a custom check."
+        subtitle="1KK Urban + 1KK Deluxe. Every check-in in the next 60 days, checked weekly (Mondays); beyond that, or for a fresher price, use a custom check."
         rows={data?.board2n ?? []}
         nights={2}
         units={UNITS_2N}
@@ -908,7 +909,7 @@ export default function ParityView() {
 
       <StayCalendar
         title="3-night stays — two-bedroom units"
-        subtitle="O.308 + K.201 sampled as 3-night stays (their seasonal min-stay 3 blocks 2-night bookings). Same cadence: daily to 30 days, weekly to 60."
+        subtitle="O.308 + K.201 sampled as 3-night stays (their seasonal min-stay 3 blocks 2-night bookings). Same cadence: every check-in to 60 days, weekly."
         rows={data?.board3n ?? []}
         nights={3}
         units={UNITS_3N}
@@ -921,7 +922,7 @@ export default function ParityView() {
 
       <StayCalendar
         title="7-night stays"
-        subtitle="All units; coverage fills over the weekly scrape rotation."
+        subtitle="All units, every check-in in the next 60 days, checked weekly (Mondays)."
         rows={data?.board7n ?? []}
         nights={7}
         units={PARITY_UNITS}

@@ -42,7 +42,7 @@ export const BOOKING_PAGE_MAIN =
  * ingest work order so it is observable which config a deployment carries —
  * and so a runner log can be read against the mapping that produced it.
  */
-export const PARITY_CONFIG_VERSION = 10;
+export const PARITY_CONFIG_VERSION = 11;
 
 /** Display order everywhere (boards, radar): Urban, 1KK Deluxe, O.308, K.201. */
 export const PARITY_UNITS: ParityUnitConfig[] = [
@@ -90,37 +90,46 @@ export const UNITS_2N = PARITY_UNITS.filter((u) => u.shortStayNights === 2);
 export const UNITS_3N = PARITY_UNITS.filter((u) => u.shortStayNights === 3);
 
 /**
- * The daily sweep — operator cadence (2026-08-30): next 30 days daily, 30–60
- * days weekly, beyond 60 days custom checks only.
+ * The weekly sweep — operator cadence (2026-10-30, was daily since
+ * 2026-08-30): ONE grid run a week, on GRID_WEEKDAY, that covers every
+ * sellable check-in in the window; beyond 60 days custom checks only. If the
+ * Mac misses that day, the run catches up as soon as GRID_MAX_GAP_DAYS have
+ * passed since the last one.
  *
  * Zones per run (the server plans concrete slots from the PriceLabs
  * availability snapshot; the runner just executes):
  *
- *  · Web + availability: EVERY check-in in each board's window, every day,
- *    straight from the Beds24 offers API at ingest time — no scraping, so it
- *    is effectively free and keeps the occupancy boards complete.
+ *  · Web + availability: EVERY check-in in each board's window, straight from
+ *    the Beds24 offers API at ingest time — no scraping, so it is effectively
+ *    free and keeps the occupancy boards complete.
  *  · Short stays (2-night for the studios, 3-night for the 2BRs): every
- *    check-in inside DENSE_DAYS daily, then a rotating 1-in-FAR_STRIDE beyond
- *    it — every far date is re-scraped once per FAR_STRIDE days.
- *  · 1-night stays, all units: daily, but only the next ONE_NIGHT_DAYS and
- *    only where a 1-night stay is actually sellable (min-stay 1 gap fillers).
- *  · 7-night stays: rotating 1-in-WEEKLY_STRIDE across the whole window.
+ *    check-in inside DENSE_DAYS, then 1-in-FAR_STRIDE beyond it. With
+ *    denseDays = windowDays and strides of 1, a weekly run prices every date
+ *    — the same weekly coverage the old daily 1-in-7 rotation gave the far
+ *    zone, at ~140 slots (~1 h with Airbnb) instead of ~52 a day.
+ *  · 1-night stays, all units: the next ONE_NIGHT_DAYS, only where a 1-night
+ *    stay is actually sellable (min-stay 1 gap fillers).
+ *  · 7-night stays: 1-in-WEEKLY_STRIDE across the whole window.
  */
 export const PARITY_SWEEP = {
   /** How far ahead the sweep looks, in days. */
   windowDays: 60,
-  /** Check-ins closer than this get scraped every single day (short stays). */
-  denseDays: 30,
-  /** Beyond denseDays, scrape every Nth date, rotating daily. */
-  farStride: 7,
-  /** 7-night check-ins: every Nth date, rotating daily. */
-  weeklyStride: 7,
-  /** 1-night stays: daily sweep of the next N days (from tomorrow). */
+  /** Check-ins closer than this are scraped on every grid run (short stays). */
+  denseDays: 60,
+  /** Beyond denseDays, scrape every Nth date, rotating by day of year. */
+  farStride: 1,
+  /** 7-night check-ins: every Nth date, rotating by day of year. */
+  weeklyStride: 1,
+  /** 1-night stays: the next N days (from tomorrow). */
   oneNightDays: 14,
   /** Earliest check-in worth sampling (tomorrow is lead 1). */
   minLeadDays: 2,
   /** Hard cap on scrape slots per run — planner degrades stride, never blows this. */
-  maxSlots: 100,
+  maxSlots: 250,
+  /** Grid day, ISO weekday in Prague (1 = Monday, alongside the radar digest). */
+  gridWeekday: 1,
+  /** Catch-up: a grid run is due anyway once this many days have passed. */
+  gridMaxGapDays: 7,
 } as const;
 
 /**

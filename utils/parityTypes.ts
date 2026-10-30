@@ -77,7 +77,7 @@ export interface ParityWorkOrder {
   gridDue: boolean;
   /** Age of the PriceLabs availability snapshot in hours (null = none stored). */
   marketAgeHours?: number | null;
-  /** The concrete scrape plan for today's grid (present when gridDue). */
+  /** The concrete scrape plan for this grid run (present when gridDue). */
   slots?: PlannedSlot[];
   pendingRequests: { id: number; checkIn: string; nights: number }[];
 }
@@ -166,7 +166,7 @@ import type { ParityRuleConfig } from './parityRules';
 export interface ParityResponse {
   /** Operator-editable alert rules, per stay length (utils/parityRules). */
   ruleConfig: ParityRuleConfig;
-  /** 1-night stays, all units, next 14 days (daily; gap-filler pricing). */
+  /** 1-night stays, all units, next 14 days (weekly grid; gap-filler pricing). */
   board1n: BoardRow[];
   /** 2-night stays — the studio units (urban + deluxe 1KK). */
   board2n: BoardRow[];

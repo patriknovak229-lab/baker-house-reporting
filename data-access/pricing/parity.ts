@@ -90,8 +90,8 @@ function rowToBoardObservation(row: PriceSnapshotRow): BoardObservation {
 
 /**
  * Freshest observation per (unit, channel, check-in) for one stay length —
- * the boards deliberately mix vintages (web refreshes daily, far-zone scrapes
- * rotate), and each cell carries its own capture time so the UI can say so.
+ * the boards can mix vintages (weekly grid runs, custom checks and re-scrapes
+ * in between), and each cell carries its own capture time so the UI can say so.
  */
 async function readBoard(nights: number, todayIso: string, maxAgeDays: number): Promise<BoardRow[]> {
   const to = addDays(todayIso, PARITY_SWEEP.windowDays);
@@ -204,10 +204,10 @@ export async function readParity(): Promise<ParityResponse> {
     .from(priceSnapshots)
     .where(eq(priceSnapshots.source, 'grid'));
 
-  // 1-night sweeps daily (allow 3 days of runner outage); short stays rotate
-  // weekly in the far zone and 7-night rotates weekly, so those allow 9.
+  // One grid run a week covers every board (see PARITY_SWEEP), so each
+  // board keeps a week of data plus 2 days of runner outage.
   const [board1n, board2n, board3n, board7n, competitors] = await Promise.all([
-    readBoard(1, today, 3),
+    readBoard(1, today, 9),
     readBoard(2, today, 9),
     readBoard(3, today, 9),
     readBoard(7, today, 9),
