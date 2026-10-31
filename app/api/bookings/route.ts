@@ -17,6 +17,7 @@ import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, att
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { RATE_PERKS_KEY, RATE_TYPES_KEY } from "@/utils/ratePerksPublish";
 import { OPS_TASKS_KEY, buildOpsTasksMap } from "@/utils/opsTasksPublish";
+import { CLEANING_REQUESTS_KEY, buildCleaningRequestsMap } from "@/utils/cleaningRequestsPublish";
 import {
   RESERVATION_APARTMENTS_KEY,
   apartmentParentMap,
@@ -167,6 +168,8 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   // reservations still in the live set and not cancelled — same rule as the
   // perks above, so a cancelled stay's tasks drop out on their own.
   const opsMap = buildOpsTasksMap(overrides, live);
+  // Requested mid-stay cleanings, which the cleaning app shows as cleanings.
+  const cleaningRequests = buildCleaningRequestsMap(overrides, live);
 
   // Vacated-unit cleanings from mid-stay moves (utils/moveCleaningsPublish).
   const moveCleanings = buildMoveCleaningsMap(reservations);
@@ -179,6 +182,7 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
     redis.set(RATE_TYPES_KEY, rateMap),
     redis.set(RATE_PERKS_KEY, perkMap),
     redis.set(OPS_TASKS_KEY, opsMap),
+    redis.set(CLEANING_REQUESTS_KEY, cleaningRequests),
     redis.set(MOVE_CLEANINGS_KEY, moveCleanings),
     redis.set(RESERVATION_APARTMENTS_KEY, apartments),
   ]);

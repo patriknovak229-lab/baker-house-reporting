@@ -158,7 +158,8 @@ async function persistOverride(reservationNumber: string, fields: LocalFields): 
 
 /**
  * Patch this reservation's entries in the maps the cleaning app reads
- * (`baker:reservation-rate-perks` and `baker:reservation-ops-tasks`). Sends only
+ * (`baker:reservation-rate-perks`, `baker:reservation-ops-tasks` and
+ * `baker:reservation-cleaning-requests`). Sends only
  * booking facts — every note and task text is read server-side from the stored
  * override, never from this body.
  */
@@ -171,6 +172,10 @@ async function publishRatePerks(r: Reservation): Promise<void> {
       rateType: effectiveRateType(r),
       reservationDate: r.reservationDate,
       apartments: r.apartmentReservationNumbers,
+      room: r.room,
+      linkedRooms: r.linkedRooms,
+      checkInDate: r.checkInDate,
+      checkOutDate: r.checkOutDate,
       cancelled: r.isCancelled,
     }),
   });

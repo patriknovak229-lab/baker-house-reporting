@@ -68,6 +68,7 @@ import {
 } from "@/utils/ratePerks";
 import type { PerkOverrides } from "@/utils/ratePerks";
 import { apartmentRoom, reservationApartments } from "@/utils/reservationApartments";
+import { defaultMidStayDate, isMidStayDate } from "@/utils/midStayCleaning";
 
 /**
  * Best guest address to bill to. Mirrors `sanitizeInvoiceEmail` in
@@ -1847,6 +1848,7 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
  *  via the date field. Falls back to today when no reservation is in scope. */
 function defaultIssueDate(category: IssueCategory, res: Reservation | null): string {
   if (!res) return new Date().toLocaleDateString("sv-SE");
+  if (category === "cleaning") return defaultMidStayDate(res);
   return category === "lateCheckout" || category === "invoice"
     ? res.checkOutDate
     : res.checkInDate;
@@ -2055,7 +2057,11 @@ function TaskBlock({
   // Every Operations task is room-level, so on a multi-apartment reservation it
   // can be for one apartment or all of them.
   const showApartment = multiApartment && CATEGORY_KIND[category] === "ops";
-  const canSubmit = !(textRequired && !text.trim()) && !(showApartment && apartment == null);
+  // A mid-stay cleaning becomes a real cleaning in the cleaning app, so its
+  // date must be a night of the stay (utils/cleaningRequestsPublish).
+  const badMidStayDate = category === "cleaning" && !isMidStayDate(reservation, date);
+  const canSubmit =
+    !(textRequired && !text.trim()) && !(showApartment && apartment == null) && !badMidStayDate;
 
   /** Timing decides the date the task is anchored to, because that's the date
    *  the operator would otherwise have to work out by hand: "before arrival"
@@ -2231,7 +2237,9 @@ function TaskBlock({
 
           {kind === "ops" && (
             <p className="text-[10px] text-gray-400">
-              {CLEANER_FACING.has(category)
+              {category === "cleaning"
+                ? "Adds this cleaning to the cleaning app on the date below — the text becomes its note. Deleting the task removes the cleaning; resolving it keeps it."
+                : CLEANER_FACING.has(category)
                 ? "The assigned cleaner reads this text as written — write it in Czech."
                 : "Stays in this app. The cleaner never sees a facility task."}
             </p>
@@ -2310,12 +2318,23 @@ function TaskBlock({
                 onChange={(e) => setDate(e.target.value)}
                 className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
+              {badMidStayDate && (
+                <p className="text-[10px] text-rose-500 mt-1">
+                  Pick a night of the stay after check-in — arrival and departure days already have a cleaning.
+                </p>
+              )}
             </div>
             <div className="flex items-end gap-1.5">
               <button
                 onClick={submit}
                 disabled={!canSubmit}
-                title={showApartment && apartment == null ? "Pick which apartment this is for" : undefined}
+                title={
+                  showApartment && apartment == null
+                    ? "Pick which apartment this is for"
+                    : badMidStayDate
+                    ? "The date must fall within the stay"
+                    : undefined
+                }
                 className={`px-4 py-1.5 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${CATEGORY_CONFIG[category].buttonBg}`}
               >
                 Add

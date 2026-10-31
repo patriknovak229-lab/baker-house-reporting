@@ -25,6 +25,11 @@ import {
   readConsumableEntriesPg,
 } from '@/utils/cleaningDataPg';
 import { readAllReservationOverrides } from '@/utils/reservationOverridesStore';
+import {
+  CLEANING_REQUESTS_KEY,
+  requestedManualCleanings,
+  type RequestedCleaning,
+} from '@/utils/cleaningRequestsPublish';
 import { stayContinuedCleaningKeys, type ScheduleTaskRef, type StayLinkOverrideRef } from '@/utils/stayLinkCleanings';
 import {
   type SubscriptionItem,
@@ -230,7 +235,7 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
   const [
     cleanersRaw,
     assignmentsRaw,
-    manualCleaningRaw,
+    storedManualCleaningRaw,
     laundryRaw,
     laundryAssignmentsRaw,
     laundrySetsRaw,
@@ -243,6 +248,7 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
     dismissedRaw,
     cleaningAdjustmentsRaw,
     overridesRaw,
+    cleaningRequestsRaw,
   ] = await Promise.all([
     redis.get(KEY_CLEANERS_CONFIG),
     fromPg ? readCleaningAssignmentsPg() : redis.get(KEY_CLEANING_ASSIGNMENTS),
@@ -261,7 +267,15 @@ export async function computeVariableCosts(): Promise<VariableCostsResponse | nu
     // Stay links (utils/stayLinkCleanings) — a failed read means "no links",
     // which only ever counts a cleaning, never hides one.
     readAllReservationOverrides<StayLinkOverrideRef>().catch(() => ({} as Record<string, StayLinkOverrideRef>)),
+    redis.get<Record<string, RequestedCleaning[]>>(CLEANING_REQUESTS_KEY).catch(() => null),
   ]);
+
+  // Mid-stay cleanings requested in reporting (utils/cleaningRequestsPublish).
+  // The cleaning app shows them as manual cleanings without storing them, so
+  // they're merged in the same way here — otherwise an assigned cleaner's fee
+  // on one would be dropped as an orphan assignment.
+  const storedManual = Array.isArray(storedManualCleaningRaw) ? storedManualCleaningRaw : [];
+  const manualCleaningRaw = [...storedManual, ...requestedManualCleanings(cleaningRequestsRaw, storedManual)];
 
   // Checkout tasks from the current Beds24 schedule snapshot — the source of
   // truth for which (date, roomId) cells had a real checkout. The cleaning app
