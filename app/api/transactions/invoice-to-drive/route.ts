@@ -20,7 +20,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import QRCodeLib from 'qrcode';
 import { Redis } from '@upstash/redis';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import { requireRole } from '@/utils/authGuard';
 import { generatePDF } from '@/utils/pdfGenerate';
 import {
@@ -78,9 +78,7 @@ export async function POST(request: Request) {
   const guard = await requireRole(['admin', 'super']);
   if ('error' in guard) return guard.error;
 
-  const session = await auth();
-  const s = session as unknown as Record<string, unknown>;
-  const refreshToken = s?.refreshToken as string | undefined;
+  const refreshToken = await getGoogleRefreshToken();
   if (!refreshToken) {
     return NextResponse.json({ error: 'No refresh token. Please sign out and sign in again.' }, { status: 401 });
   }

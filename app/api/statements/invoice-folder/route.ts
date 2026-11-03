@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { google } from 'googleapis';
 import { requireRole } from '@/utils/authGuard';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
 import { readAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
@@ -114,8 +114,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // Drive client from the signed-in admin's refresh token (same path as the XLSX export)
-    const session = await auth();
-    const refreshToken = (session as unknown as Record<string, unknown>)?.refreshToken as string | undefined;
+    const refreshToken = await getGoogleRefreshToken();
     if (!refreshToken) throw new Error('No Google refresh token in session — sign out and back in.');
 
     const oauth2 = new google.auth.OAuth2(process.env.AUTH_GOOGLE_ID, process.env.AUTH_GOOGLE_SECRET);

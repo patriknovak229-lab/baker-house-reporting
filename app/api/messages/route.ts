@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { Redis } from '@upstash/redis';
+import { triggerAutoReplyPoll } from '@/utils/autoReplyNudge';
 import { readAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { requireRole } from '@/utils/authGuard';
@@ -16,30 +17,6 @@ function getRedis(): Redis | null {
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return null;
   return new Redis({ url, token });
-}
-
-/**
- * Lazy auto-reply nudge — fire-and-forget POST to our own webhook URL.
- * The webhook handles the SYNC_ROOM payload like any other Beds24 fire,
- * including its 15s debounce, so this is cheap to call repeatedly. The
- * roomId/propId values are placeholders (the webhook doesn't use them
- * directly — it just polls Beds24 for unread messages property-wide).
- */
-async function triggerAutoReplyPoll(): Promise<void> {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_BASE_URL?.trim() ||
-    'https://reporting.bakerhouseapartments.cz';
-  await fetch(`${baseUrl}/api/webhook/beds24-message`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      roomId: '0',
-      propId: '311322',
-      ownerId: '0',
-      action: 'SYNC_ROOM',
-    }),
-    cache: 'no-store',
-  });
 }
 
 /**
@@ -186,9 +163,11 @@ export async function GET(req: NextRequest) {
   // Every drawer fetch (initial + 30s polling) fires a SYNC_ROOM POST
   // at our own webhook URL, which respects its own 15s debounce so we
   // don't hammer Beds24 even if many drawers are open simultaneously.
-  // Fire-and-forget — the drawer response doesn't wait on the poll.
-  triggerAutoReplyPoll().catch((err) =>
-    console.warn('[messages] auto-reply nudge failed:', err),
+  // Runs after the response — the drawer doesn't wait on the poll.
+  after(() =>
+    triggerAutoReplyPoll().catch((err) =>
+      console.warn('[messages] auto-reply nudge failed:', err),
+    ),
   );
 
   // Load auto-reply audit log so we can tag host messages that came from

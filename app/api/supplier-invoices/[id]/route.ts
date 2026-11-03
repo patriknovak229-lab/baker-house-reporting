@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import { requireRole } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
@@ -52,9 +52,7 @@ export async function DELETE(
   // Delete the PDF from Drive if one exists
   if (invoice.driveFileId) {
     try {
-      const session = await auth();
-      const s = session as unknown as Record<string, unknown>;
-      const refreshToken = s?.refreshToken as string | undefined;
+      const refreshToken = await getGoogleRefreshToken();
       if (refreshToken) {
         const oauth2 = new google.auth.OAuth2(
           process.env.AUTH_GOOGLE_ID,

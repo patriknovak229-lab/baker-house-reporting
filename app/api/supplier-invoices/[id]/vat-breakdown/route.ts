@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import { requireRole } from '@/utils/authGuard';
 import { readAllSupplierInvoices, setSupplierInvoiceVatBreakdown } from '@/utils/supplierInvoicesStore';
 import { readAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
@@ -67,8 +67,7 @@ async function rereadFromDrive(
   vat: number,
   save: (rows: ExtractedVatRow[], status: 'reread') => Promise<Outcome>,
 ): Promise<Outcome> {
-  const session = await auth();
-  const refreshToken = (session as unknown as Record<string, unknown>)?.refreshToken as string | undefined;
+  const refreshToken = await getGoogleRefreshToken();
   if (!refreshToken) return { status: 'manual', reason: 'No Google sign-in — sign out and back in' };
 
   let data: Buffer;

@@ -33,6 +33,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { after } from 'next/server';
+import { rejectBadWebhookSecret } from '@/utils/webhookSecret';
 import { Redis } from '@upstash/redis';
 import { readAllAutoReplyLog, writeAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
@@ -326,14 +327,8 @@ function getRedis(): Redis | null {
 }
 
 export async function POST(req: NextRequest) {
-  // Optional secret check — set WEBHOOK_SECRET in env to lock this down
-  const secret = process.env.WEBHOOK_SECRET;
-  if (secret) {
-    const provided = req.nextUrl.searchParams.get('secret');
-    if (provided !== secret) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  }
+  const denied = rejectBadWebhookSecret(req, 'beds24 webhook');
+  if (denied) return denied;
 
   let payload: Beds24InventoryWebhookPayload;
   try {
@@ -364,10 +359,14 @@ export async function POST(req: NextRequest) {
   after(async () => {
     try {
       if (redis) {
+        // SET NX — a read-then-write lets a burst of simultaneous fires all
+        // see an expired window and all poll.
         const now = Date.now();
-        const until = await redis.get<number>(NEW_BOOKING_DEBOUNCE_KEY);
-        if (until && now < until) return;
-        await redis.set(NEW_BOOKING_DEBOUNCE_KEY, now + NEW_BOOKING_DEBOUNCE_MS, { ex: 60 });
+        const acquired = await redis.set(NEW_BOOKING_DEBOUNCE_KEY, now + NEW_BOOKING_DEBOUNCE_MS, {
+          nx: true,
+          px: NEW_BOOKING_DEBOUNCE_MS,
+        });
+        if (!acquired) return;
       }
       await pollAndNotifyNewBookings(redis);
     } catch (err) {
@@ -400,12 +399,15 @@ export async function POST(req: NextRequest) {
   // into one pass per 15s avoids hammering Beds24 and Anthropic during
   // price-update storms.
   if (redis) {
+    // SET NX, same reason as the new-booking window above.
     const now = Date.now();
-    const debounceUntil = await redis.get<number>(DEBOUNCE_KEY);
-    if (debounceUntil && now < debounceUntil) {
+    const acquired = await redis.set(DEBOUNCE_KEY, now + POLL_DEBOUNCE_MS, {
+      nx: true,
+      px: POLL_DEBOUNCE_MS,
+    });
+    if (!acquired) {
       return NextResponse.json({ ok: true, reason: 'debounced-auto-reply' });
     }
-    await redis.set(DEBOUNCE_KEY, now + POLL_DEBOUNCE_MS, { ex: 60 });
     await redis.set(LAST_POLL_KEY, now); // persistent — no TTL
   }
 
@@ -498,10 +500,11 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
     // Dedupe — shared between invoice + regular auto-reply paths so a
     // message that triggers the invoice flow doesn't ALSO trigger the
     // regular auto-reply later in the same poll.
+    // SADD returns 0 when the id was already there, so check and claim are one
+    // atomic step — overlapping polls can't both take the same message.
     if (redis) {
-      const already = await redis.sismember(PROCESSED_KEY, String(m.id));
-      if (already) continue;
-      await redis.sadd(PROCESSED_KEY, String(m.id));
+      const claimed = await redis.sadd(PROCESSED_KEY, String(m.id));
+      if (!claimed) continue;
     }
 
     // Urgent? (lockout, no power / heating / water, "we can't stay here"…)
@@ -911,13 +914,12 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 
   // ── Step 1: dedupe (skipped when the caller already deduped) ───────────────
   if (redis && !skipDedupe) {
-    const already = await redis.sismember(PROCESSED_KEY, String(messageId));
-    if (already) {
+    // Claim eagerly (atomic SADD) so a retry from Beds24 doesn't double-send
+    const claimed = await redis.sadd(PROCESSED_KEY, String(messageId));
+    if (!claimed) {
       console.log(`[auto-reply] msg ${messageId} already processed — skipping`);
       return;
     }
-    // Mark as processed eagerly so a retry from Beds24 doesn't double-send
-    await redis.sadd(PROCESSED_KEY, String(messageId));
   }
 
   // ── Step 2: detect category ────────────────────────────────────────────────
@@ -2641,11 +2643,13 @@ async function maybeNotifyNewBooking(
   const bookingId = String(booking.id ?? '');
   const redis = getRedis();
   if (bookingId && redis) {
-    const redisKey = `notified:booking:${bookingId}`;
-    const already = await redis.get(redisKey);
-    if (already) return;
-    // Mark BEFORE sending so parallel webhook fires don't race
-    await redis.set(redisKey, '1', { ex: NOTIFIED_TTL_SECONDS });
+    // Claim BEFORE sending, atomically (SET NX), so parallel webhook fires
+    // can't both send
+    const fresh = await redis.set(`notified:booking:${bookingId}`, '1', {
+      nx: true,
+      ex: NOTIFIED_TTL_SECONDS,
+    });
+    if (!fresh) return;
   }
 
   const firstName = booking.firstName ?? '';
@@ -2846,10 +2850,11 @@ async function maybeNotifyCancellation(
   // Dedupe: one Telegram per cancelled booking. Set BEFORE sending so parallel
   // webhook fires can't race (same rationale as the new-booking path).
   if (redis) {
-    const redisKey = `notified:cancel:${bookingId}`;
-    const already = await redis.get(redisKey);
-    if (already) return;
-    await redis.set(redisKey, '1', { ex: NOTIFIED_TTL_SECONDS });
+    const fresh = await redis.set(`notified:cancel:${bookingId}`, '1', {
+      nx: true,
+      ex: NOTIFIED_TTL_SECONDS,
+    });
+    if (!fresh) return;
   }
 
   const firstName = booking.firstName ?? '';

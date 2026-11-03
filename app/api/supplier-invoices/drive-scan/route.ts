@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
 import { getOrCreateInvoiceFolder } from '@/utils/driveInvoice';
@@ -38,8 +38,7 @@ export async function POST() {
   const guard = await requireRole(['admin']);
   if ('error' in guard) return guard.error;
 
-  const session = await auth();
-  const refreshToken = (session as unknown as Record<string, unknown>)?.refreshToken as string | undefined;
+  const refreshToken = await getGoogleRefreshToken();
   if (!refreshToken) {
     return NextResponse.json({ error: 'No Google refresh token in session — sign out and back in.' }, { status: 401 });
   }

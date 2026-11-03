@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { PDFDocument } from 'pdf-lib';
 import sharp from 'sharp';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import { requireRole } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
 import { getOrCreateInvoiceFolder } from '@/utils/driveInvoice';
@@ -22,9 +22,7 @@ export async function POST(request: Request) {
   if ('error' in guard) return guard.error;
 
   // Use the admin's own Google OAuth tokens
-  const session = await auth();
-  const s = session as unknown as Record<string, unknown>;
-  const refreshToken = s?.refreshToken as string | undefined;
+  const refreshToken = await getGoogleRefreshToken();
 
   if (!refreshToken) {
     return NextResponse.json(

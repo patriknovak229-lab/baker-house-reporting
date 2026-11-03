@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { getAccessToken } from '@/utils/beds24Auth';
+import { triggerAutoReplyPoll } from '@/utils/autoReplyNudge';
 import { readAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import type {
   PendingDraft,
@@ -164,8 +165,10 @@ export async function GET() {
   // Lazy auto-reply nudge — only when we actually saw recent unread guest
   // messages. See route docstring for context.
   if (recentUnread.length > 0) {
-    triggerAutoReplyPoll().catch((err) =>
-      console.warn('[messages/unread] auto-reply nudge failed:', err),
+    after(() =>
+      triggerAutoReplyPoll().catch((err) =>
+        console.warn('[messages/unread] auto-reply nudge failed:', err),
+      ),
     );
   }
 
@@ -235,21 +238,4 @@ async function readAndCleanHash<T extends { createdAt: string; beds24MessageId: 
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
   return entries;
-}
-
-async function triggerAutoReplyPoll(): Promise<void> {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_BASE_URL?.trim() ||
-    'https://reporting.bakerhouseapartments.cz';
-  await fetch(`${baseUrl}/api/webhook/beds24-message`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      roomId: '0',
-      propId: '311322',
-      ownerId: '0',
-      action: 'SYNC_ROOM',
-    }),
-    cache: 'no-store',
-  });
 }

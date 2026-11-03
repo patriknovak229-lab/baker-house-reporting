@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
+import { rejectBadWebhookSecret } from "@/utils/webhookSecret";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
@@ -91,14 +92,8 @@ const ROOM_MAP: Record<string, string> = {
 };
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  // Optional secret check — set WEBHOOK_SECRET in env to lock this down
-  const secret = process.env.WEBHOOK_SECRET;
-  if (secret) {
-    const provided = req.nextUrl.searchParams.get("secret");
-    if (provided !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const denied = rejectBadWebhookSecret(req, "webhook/new-booking");
+  if (denied) return denied;
 
   let payload: Beds24WebhookPayload;
   try {
@@ -148,13 +143,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (bookingId) {
     const redis = getRedis();
     if (redis) {
-      const redisKey = `notified:booking:${bookingId}`;
-      const alreadySent = await redis.get(redisKey);
-      if (alreadySent) {
+      // Claim before sending, atomically (SET NX) — prevents race on parallel invocations
+      const fresh = await redis.set(`notified:booking:${bookingId}`, "1", {
+        nx: true,
+        ex: NOTIFIED_TTL_SECONDS,
+      });
+      if (!fresh) {
         return NextResponse.json({ ok: true, skipped: "already notified" });
       }
-      // Mark as notified before sending — prevents race on parallel invocations
-      await redis.set(redisKey, "1", { ex: NOTIFIED_TTL_SECONDS });
     }
   }
 

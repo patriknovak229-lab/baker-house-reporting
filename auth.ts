@@ -39,7 +39,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const role = getRoleForEmail(user.email);
         if (role) token.role = role;
       }
-      // Capture Google access + refresh tokens on first sign-in
+      // Capture Google access + refresh tokens on first sign-in. They stay in
+      // the encrypted JWT only — server routes read them with
+      // utils/googleSessionToken.
       if (account?.provider === 'google') {
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
@@ -50,9 +52,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (token.role) {
         (session.user as unknown as Record<string, unknown>).role = token.role;
       }
-      // Expose tokens for server-side API calls (Drive upload, etc.)
-      (session as unknown as Record<string, unknown>).accessToken = token.accessToken;
-      (session as unknown as Record<string, unknown>).refreshToken = token.refreshToken;
+      // Never copy the Google tokens onto the session: this object is also
+      // served to the browser by /api/auth/session.
       return session;
     },
   },

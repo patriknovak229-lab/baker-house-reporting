@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { Redis } from '@upstash/redis';
-import { auth } from '@/auth';
+import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import { requireRole } from '@/utils/authGuard';
 import { createInvoiceGmailClient, fetchInvoicePdfForMessage } from '@/utils/gmailInvoice';
 import { uploadInvoicePdfToDrive } from '@/utils/driveInvoice';
@@ -28,8 +28,7 @@ export async function POST() {
   if (!redis) return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });
 
   // The admin's own Google session token is used for the Drive upload
-  const session = await auth();
-  const refreshToken = (session as unknown as Record<string, unknown>)?.refreshToken as string | undefined;
+  const refreshToken = await getGoogleRefreshToken();
   if (!refreshToken) {
     return NextResponse.json(
       { error: 'No Google refresh token in session. Sign out and sign in again, then retry.' },
