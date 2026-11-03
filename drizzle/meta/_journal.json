@@ -155,6 +155,13 @@
       "when": 1793019074584,
       "tag": "0021_silky_colleen_wing",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793697726530,
+      "tag": "0022_happy_lockjaw",
+      "breakpoints": true
     }
   ]
 }

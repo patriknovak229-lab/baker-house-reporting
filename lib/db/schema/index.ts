@@ -25,3 +25,4 @@ export * from './priceSnapshots';
 export * from './roomMoves';
 export * from './corporate';
 export * from './webFunnel';
+export * from './team';

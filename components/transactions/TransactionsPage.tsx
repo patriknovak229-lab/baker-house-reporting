@@ -31,6 +31,8 @@ import PriceCheckModal from "./PriceCheckModal";
 import MassMessageModal from "./MassMessageModal";
 import StayRequestModal from "./StayRequestModal";
 import TranslateModal from "./TranslateModal";
+import { CreateNotificationModal, GeneralTaskModal } from "./TeamForms";
+import { addresseeLabel, authorLabel, daysOverdue, type GeneralTask, type TeamFeed } from "@/utils/teamItems";
 import ReservationForm, { reservationFormId, type OpenReservationForm, type ReservationFormKind } from "./ReservationForms";
 import { focusFloatingPanel } from "@/components/shared/FloatingPanel";
 import { getEffectiveFlags } from "@/utils/flagUtils";
@@ -211,6 +213,8 @@ const UNREAD_POLL_INTERVAL_MS = 30_000;
 // that refetches immediately — this poll exists purely so a SECOND operator's
 // move shows up without a reload, so it can be lazy.
 const ROOM_MOVES_POLL_INTERVAL_MS = 120_000;
+/** Operator notifications should land within a minute of being sent. */
+const TEAM_POLL_INTERVAL_MS = 60_000;
 
 /** Czech translation state for one entry in the approval panel. */
 type PanelTxState = 'loading' | 'error' | { text: string; lang: string };
@@ -330,6 +334,16 @@ export default function TransactionsPage() {
   const [showMassMessageModal, setShowMassMessageModal] = useState(false);
   const [showStayRequest, setShowStayRequest] = useState(false);
   const [showTranslate, setShowTranslate] = useState(false);
+  const [showNotificationForm, setShowNotificationForm] = useState(false);
+  const [showGeneralTaskForm, setShowGeneralTaskForm] = useState(false);
+  // Operator-to-operator notifications + general (non-reservation) tasks —
+  // server-persisted (/api/team), filtered to what this operator should see.
+  const [team, setTeam] = useState<TeamFeed | null>(null);
+  const [notificationsPanelOpen, setNotificationsPanelOpen] = useState(false);
+  const [expandedNotifications, setExpandedNotifications] = useState<Set<string>>(new Set());
+  const [readingNotifications, setReadingNotifications] = useState<Set<string>>(new Set());
+  const [expandedGeneralTask, setExpandedGeneralTask] = useState<string | null>(null);
+  const [resolvingGeneralTask, setResolvingGeneralTask] = useState<string | null>(null);
   // Floating forms opened from the drawer (email guest, payment link, voucher) —
   // mounted here so closing the drawer doesn't wipe them. See ReservationForms.tsx.
   const [reservationForms, setReservationForms] = useState<OpenReservationForm[]>([]);
@@ -554,6 +568,69 @@ export default function TransactionsPage() {
       }
     },
     [roomMoves, fetchRoomMoves],
+  );
+
+  // ── Team notifications + general tasks ──
+  const fetchTeam = useCallback(async () => {
+    try {
+      const res = await fetch('/api/team');
+      if (!res.ok) return;
+      setTeam(await res.json());
+    } catch {
+      // Same as room moves: never block the page; the next poll retries.
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTeam();
+    const id = setInterval(fetchTeam, TEAM_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [fetchTeam]);
+
+  /** Mark notifications read for me — they leave my banner, not anyone else's. */
+  const markNotificationsRead = useCallback(
+    async (ids: string[]) => {
+      if (ids.length === 0) return;
+      setReadingNotifications((prev) => new Set([...prev, ...ids]));
+      try {
+        const res = await fetch('/api/team/notifications', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setTeam((t) => (t ? { ...t, notifications: t.notifications.filter((n) => !ids.includes(n.id)) } : t));
+      } catch {
+        fetchTeam();
+      } finally {
+        setReadingNotifications((prev) => {
+          const next = new Set(prev);
+          for (const id of ids) next.delete(id);
+          return next;
+        });
+      }
+    },
+    [fetchTeam],
+  );
+
+  const resolveGeneralTask = useCallback(
+    async (id: string) => {
+      setResolvingGeneralTask(id);
+      try {
+        const res = await fetch('/api/team/tasks', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, done: true }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setTeam((t) => (t ? { ...t, tasks: t.tasks.filter((x) => x.id !== id) } : t));
+      } catch {
+        fetchTeam();
+      } finally {
+        setResolvingGeneralTask(null);
+      }
+    },
+    [fetchTeam],
   );
 
   // Poll for unread guest messages every 30s — drives both the table-level
@@ -804,9 +881,94 @@ export default function TransactionsPage() {
     [reservations],
   );
 
+  /** General tasks on the same window as reservation tasks: overdue, or due
+   *  within the next 7 days. Already filtered server-side to mine / everyone's
+   *  / ones I created. */
+  const upcomingGeneralTasks = useMemo(() => {
+    const today = pragueToday();
+    const d7 = new Date(today + "T00:00:00"); d7.setDate(d7.getDate() + 7);
+    const in7 = d7.toLocaleDateString("sv-SE");
+    return (team?.tasks ?? [])
+      .filter((t) => t.dueDate <= in7)
+      .map((task) => ({ task, overdue: task.dueDate < today }));
+  }, [team]);
+
+  const pendingTaskCount = upcomingUnresolved.length + upcomingGeneralTasks.length;
+
+  /** Reservation and general tasks in one list, by date (stable, so each
+   *  kind keeps its own order within a day). */
+  const pendingTaskRows = useMemo(
+    () =>
+      [
+        ...upcomingUnresolved.map((x) => ({ kind: "reservation" as const, date: x.issue.actionableDate, ...x })),
+        ...upcomingGeneralTasks.map((x) => ({ kind: "general" as const, date: x.task.dueDate, ...x })),
+      ].sort((a, b) => a.date.localeCompare(b.date)),
+    [upcomingUnresolved, upcomingGeneralTasks],
+  );
+
+  /** A general task's row in the Pending tasks table. Click expands the full
+   *  text and who created it; "Done" resolves it for everyone. */
+  const renderGeneralTaskRow = (task: GeneralTask, overdue: boolean) => {
+    const expanded = expandedGeneralTask === task.id;
+    const late = daysOverdue(task.dueDate, pragueToday());
+    const textName = overdue ? "text-red-900" : "text-amber-900";
+    const textMuted = overdue ? "text-red-600" : "text-amber-700";
+    const textBody = overdue ? "text-red-700" : "text-amber-800";
+    return (
+      <tr
+        key={task.id}
+        className={`cursor-pointer ${overdue ? "bg-red-100/70 hover:bg-red-200/60" : "hover:bg-amber-100"}`}
+        onClick={() => setExpandedGeneralTask(expanded ? null : task.id)}
+      >
+        <td className={`px-4 py-2 font-medium whitespace-nowrap align-top ${textName}`}>
+          <span className="inline-flex items-center gap-1">
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+            General
+          </span>
+        </td>
+        <td className={`px-4 py-2 text-xs whitespace-nowrap align-top ${textMuted}`}>
+          General task · {addresseeLabel(task.assignee, team?.users ?? [], team?.me)}
+        </td>
+        <td className={`px-4 py-2 align-top ${textBody}`}>
+          <div className={`whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-2"}`}>{task.text}</div>
+          {expanded && (
+            <div className={`mt-1 text-xs ${textMuted}`}>
+              Created by {authorLabel(task, team?.users ?? [], team?.me)} ·{" "}
+              {new Date(task.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            </div>
+          )}
+        </td>
+        <td className={`px-4 py-2 text-xs whitespace-nowrap align-top ${textMuted}`}>
+          <div className="flex items-center gap-1.5">
+            <span>{task.dueDate}</span>
+            {overdue && (
+              <span
+                className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-bold uppercase tracking-wide"
+                title={`Was due ${late} day${late === 1 ? "" : "s"} ago`}
+              >
+                {late === 0 ? "Overdue" : `${late}d overdue`}
+              </span>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); resolveGeneralTask(task.id); }}
+              disabled={resolvingGeneralTask === task.id}
+              className="ml-1 px-2 py-0.5 rounded border border-emerald-300 bg-white text-emerald-700 text-[11px] font-medium hover:bg-emerald-50 disabled:opacity-50"
+            >
+              {resolvingGeneralTask === task.id ? "Saving…" : "Done"}
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
   const overdueCount = useMemo(
-    () => upcomingUnresolved.filter((x) => x.overdue).length,
-    [upcomingUnresolved],
+    () =>
+      upcomingUnresolved.filter((x) => x.overdue).length +
+      upcomingGeneralTasks.filter((x) => x.overdue).length,
+    [upcomingUnresolved, upcomingGeneralTasks],
   );
 
   // Late-checkout ↔ early-check-in turnover clashes (same room, same day) —
@@ -1445,6 +1607,26 @@ export default function TransactionsPage() {
               </svg>
               Translate
             </button>
+            <button
+              onClick={() => { setShowNotificationForm(true); focusFloatingPanel("team-notification"); }}
+              title="Send a note to a colleague, to everyone, or to yourself — it shows in their Notifications banner"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-blue-200 text-blue-700 text-sm font-medium transition-colors hover:bg-blue-50 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+              Create Notification
+            </button>
+            <button
+              onClick={() => { setShowGeneralTaskForm(true); focusFloatingPanel("general-task"); }}
+              title="A to-do that isn't tied to a reservation — shows in Pending tasks"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-orange-200 text-orange-700 text-sm font-medium transition-colors hover:bg-orange-50 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              General Task
+            </button>
             </>
           )}
           <button
@@ -1601,7 +1783,8 @@ export default function TransactionsPage() {
           search bar so the operator's actionable surface is one glance.
           Panels expand BELOW the pill row (full width), not next to
           their pill, so the wide tables get the space they need. */}
-      {(upcomingUnresolved.length > 0
+      {(pendingTaskCount > 0
+        || (team?.notifications.length ?? 0) > 0
         || unreadBookings.length > 0
         || upcomingEarlyCheckins.length > 0
         || upcomingLateCheckouts.length > 0
@@ -1646,7 +1829,7 @@ export default function TransactionsPage() {
                 </svg>
               </button>
             )}
-            {upcomingUnresolved.length > 0 && (
+            {pendingTaskCount > 0 && (
               <button
                 onClick={() => setTaskAlertOpen((o) => !o)}
                 // Pill is RED when anything is overdue (real urgency), AMBER
@@ -1665,7 +1848,7 @@ export default function TransactionsPage() {
                     overdueCount > 0 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
                   }`}
                 >!</span>
-                {upcomingUnresolved.length} pending {upcomingUnresolved.length === 1 ? "task" : "tasks"}
+                {pendingTaskCount} pending {pendingTaskCount === 1 ? "task" : "tasks"}
                 {overdueCount > 0 && (
                   <span className="ml-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold uppercase tracking-wide">
                     {overdueCount} overdue
@@ -1683,6 +1866,27 @@ export default function TransactionsPage() {
             {/* Everything else. `contents` on mobile so these pills wrap in the
                 same row; on desktop they're the right-hand column. */}
             <div className="contents lg:col-start-3 lg:row-start-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
+            {team && team.notifications.length > 0 && (
+              <button
+                onClick={() => setNotificationsPanelOpen((o) => !o)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-300 text-blue-800 text-sm font-medium hover:bg-blue-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {team.notifications.length} {team.notifications.length === 1 ? "notification" : "notifications"}
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600" />
+                </span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${notificationsPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
             {unsentInvoiceRows.length > 0 && (
               <button
                 onClick={() => setUnsentInvoicePanelOpen((o) => !o)}
@@ -1874,6 +2078,69 @@ export default function TransactionsPage() {
             })()}
             </div>
           </div>
+
+          {/* Notifications panel — notes from colleagues addressed to me or to
+              everyone. Marking read hides it for me only. */}
+          {team && team.notifications.length > 0 && notificationsPanelOpen && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 overflow-hidden">
+              <div className="px-4 py-2 bg-blue-100/60 border-b border-blue-200 flex items-center gap-2">
+                <span className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Notifications</span>
+                <span className="text-xs text-blue-600">click a message to read it in full</span>
+                {team.notifications.length > 1 && (
+                  <button
+                    onClick={() => markNotificationsRead(team.notifications.map((n) => n.id))}
+                    disabled={readingNotifications.size > 0}
+                    className="ml-auto text-xs font-medium text-blue-700 hover:text-blue-900 disabled:opacity-50"
+                  >
+                    Mark all read
+                  </button>
+                )}
+              </div>
+              <ul className="divide-y divide-blue-100">
+                {team.notifications.map((n) => {
+                  const expanded = expandedNotifications.has(n.id);
+                  const busy = readingNotifications.has(n.id);
+                  return (
+                    <li
+                      key={n.id}
+                      className="px-4 py-2.5 flex items-start gap-3 hover:bg-blue-100/50 cursor-pointer"
+                      onClick={() =>
+                        setExpandedNotifications((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(n.id)) next.delete(n.id); else next.add(n.id);
+                          return next;
+                        })
+                      }
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-blue-700">
+                          <span className="font-semibold text-blue-900">
+                            {authorLabel(n, team.users, team.me)}
+                          </span>
+                          <span>→ {addresseeLabel(n.recipient, team.users, team.me)}</span>
+                          <span className="text-blue-500">
+                            {new Date(n.createdAt).toLocaleString("en-GB", {
+                              day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                        <p className={`mt-0.5 text-sm text-blue-950 whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-2"}`}>
+                          {n.text}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); markNotificationsRead([n.id]); }}
+                        disabled={busy}
+                        className="shrink-0 px-2.5 py-1 rounded-md border border-blue-200 bg-white text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                      >
+                        {busy ? "Saving…" : "Mark read"}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           {/* Unsent invoices panel — past stays the guest asked to be invoiced for */}
           {unsentInvoiceRows.length > 0 && unsentInvoicePanelOpen && (
@@ -2565,7 +2832,7 @@ export default function TransactionsPage() {
               amber when everything's upcoming. Individual rows are then
               further differentiated — overdue rows always render red
               regardless of overall theme, upcoming rows render amber. */}
-          {upcomingUnresolved.length > 0 && taskAlertOpen && (
+          {pendingTaskCount > 0 && taskAlertOpen && (
             <div
               className={`rounded-lg border overflow-hidden ${
                 overdueCount > 0
@@ -2593,7 +2860,9 @@ export default function TransactionsPage() {
                 <tbody
                   className={`divide-y ${overdueCount > 0 ? 'divide-red-100' : 'divide-amber-100'}`}
                 >
-                  {upcomingUnresolved.map(({ reservation, issue, overdue }) => {
+                  {pendingTaskRows.map((row) => {
+                    if (row.kind === "general") return renderGeneralTaskRow(row.task, row.overdue);
+                    const { reservation, issue, overdue } = row;
                     const cat = (issue.category ?? "problem") as IssueCategory;
                     const catLabels: Record<IssueCategory, string> = {
                       problem: "Problem",
@@ -3190,6 +3459,24 @@ export default function TransactionsPage() {
 
       {/* Stand-alone translator for WhatsApp / email messages */}
       {showTranslate && <TranslateModal onClose={() => setShowTranslate(false)} />}
+
+      {/* Operator-to-operator notification / general task */}
+      {showNotificationForm && (
+        <CreateNotificationModal
+          users={team?.users ?? []}
+          me={team?.me ?? ""}
+          onClose={() => setShowNotificationForm(false)}
+          onCreated={fetchTeam}
+        />
+      )}
+      {showGeneralTaskForm && (
+        <GeneralTaskModal
+          users={team?.users ?? []}
+          me={team?.me ?? ""}
+          onClose={() => setShowGeneralTaskForm(false)}
+          onCreated={fetchTeam}
+        />
+      )}
 
       {/* Create voucher modal */}
       {showVoucherModal && (

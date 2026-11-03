@@ -41,6 +41,7 @@ export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
   { job: 'check-reviews', label: 'Review sync (08:00)', maxAgeHours: 36 },
   { job: 'web-funnel-sync', label: 'Web funnel copy (01:15 UTC)', maxAgeHours: 36 },
   { job: 'ga-traffic-sync', label: 'GA4 traffic sync (01:30 UTC)', maxAgeHours: 36 },
+  { job: 'overdue-tasks', label: 'Overdue general tasks (07:00 UTC)', maxAgeHours: 36 },
 ];
 
 export interface CronHeartbeat {

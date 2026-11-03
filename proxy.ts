@@ -70,11 +70,16 @@ export const config = {
   //     cronAuth (manual runs need admin). Both only READ upstream (rental-site
   //     Redis with a read-only token, GA4 Data API) and upsert analytics tables.
   //
+  //   - `api/cron/overdue-tasks` (2026-11-03) — exempted in the same commit that
+  //     scheduled it, exports GET, gated by cronAuth (manual runs need
+  //     admin/super). Reads open general tasks, posts one Telegram, stamps
+  //     `overdue_notified_at` — no guest-facing side effects.
+  //
   // `api/cron/send-scheduled-payments` is DELIBERATELY still behind the
   // middleware. It charges guests and emails them, it has never run in
   // production, and switching it on is a business decision that wants its own
   // review — list it here only after that happens. This is why the exemptions
   // are per-path rather than a blanket `api/cron`: a prefix would have turned
   // it on silently.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews|api/cron/web-funnel-sync|api/cron/ga-traffic-sync).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews|api/cron/web-funnel-sync|api/cron/ga-traffic-sync|api/cron/overdue-tasks).*)'],
 };

@@ -69,6 +69,7 @@ describe("staleCronJobs", () => {
       "check-reviews",
       "web-funnel-sync",
       "ga-traffic-sync",
+      "overdue-tasks",
     ]);
   });
 });
