@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { RateClassId } from './analyticsTypes';
 import {
   buildRatesResponse,
   classOfRoom,
   MIN_MATCHED_DATES,
+  summarisePlanCounterfactual,
   type RateBookingInput,
   type RateNightInput,
   type RatesInput,
@@ -98,12 +100,17 @@ function build(
     leadBuckets: LEAD,
     losBuckets: LOS,
     farOut: { nearDays: 7, farDays: 30, premium: 0.15 },
+    ladder: LADDER,
+    planBookedFrom: '2026-05-01',
     ...extra,
   });
 }
 
+const LADDER = { 'Non-refundable': 0.93, Standard: 1, Flexible: 1.05 };
+
 const NR = (d: string) => `${d} (60681829 Non-refundable Rate-One-Bedroom Apartment-1541267401) CZK 2000 genius`;
 const STD = (d: string) => `${d} (60681828 Standard Rate) CZK 2300 genius`;
+const FLEX = (d: string) => `${d} (60681830 Flexible Rate) CZK 2400 genius`;
 
 describe('room classes', () => {
   it('puts studios in 1KK, the two-bedroom apartments in 2KK, and unallocated studio labels with the studios', () => {
@@ -311,5 +318,149 @@ describe('direct pricing', () => {
     expect(d.sameDateNetDelta).toBeCloseTo(1800 / 1660 - 1, 6);
     expect(d.breakEvenDiscount).toBeCloseTo(0.17, 6);
     expect(d.verdict).toBe('keeping-margin');
+  });
+});
+
+describe('plan counterfactual (each stay vs the same stay on Non-refundable)', () => {
+  const summary = (r: ReturnType<typeof build>, classId: RateClassId = 'all', bookedFrom: string | null = null) =>
+    summarisePlanCounterfactual(r.planCounterfactual.outcomes, { classId, bookedFrom, ladder: LADDER });
+
+  it('prices a stay that never cancelled at the ladder ratio, so it breaks even at no premium at all', () => {
+    const r = build([stay({ room: 'K.102', checkIn: '2026-06-02', nights: 2, perNight: 2300, line: STD('2026-06-02') })]);
+    const [std] = summary(r);
+    const net = 2 * 2300 * 0.83;
+    expect(std.plan).toBe('Standard');
+    expect(std.realisedGp).toBeCloseTo(net, 6);
+    expect(std.counterfactualGp).toBeCloseTo(net * 0.93, 6);
+    expect(std.uplift).toBeCloseTo(1 / 0.93 - 1, 6);
+    expect(std.breakEvenPremium).toBeCloseTo(0, 6);
+    expect(std.configuredPremium).toBeCloseTo(1 / 0.93 - 1, 6);
+  });
+
+  it('charges a cancelled stay its lost value and credits the resale, then finds the premium that breaks even', () => {
+    // O.308 is one room. Standard stays 20–22 Jun; another Standard stay (10–12 Jun)
+    // cancels 9 days out and one of its two nights is resold on Non-refundable.
+    const stayed = stay({ room: 'O.308', checkIn: '2026-06-20', nights: 2, perNight: 4000, line: STD('2026-06-20') });
+    const cancelled = stay({
+      room: 'O.308',
+      checkIn: '2026-06-10',
+      nights: 2,
+      perNight: 4000,
+      line: STD('2026-06-10'),
+      bookedAt: '2026-05-01T10:00:00Z',
+      cancelledAt: '2026-06-01T10:00:00Z',
+    });
+    const resale = stay({
+      room: 'O.308',
+      checkIn: '2026-06-10',
+      nights: 1,
+      perNight: 3600,
+      line: NR('2026-06-10'),
+      bookedAt: '2026-06-05T10:00:00Z',
+    });
+    const r = build([stayed, cancelled, resale]);
+    const std = summary(r, '2kk').find((p) => p.plan === 'Standard')!;
+
+    const stayedNet = 2 * 4000 * 0.83;
+    const resaleGp = 3600 * 0.83;
+    const cf = stayedNet * 0.93 + 2 * 4000 * 0.93 * 0.83;
+    expect(std.bookings).toBe(2);
+    expect(std.nightCancelRate).toBeCloseTo(0.5, 6);
+    expect(std.medianCancelDaysBefore).toBe(9);
+    expect(std.resaleRate).toBeCloseTo(0.5, 6);
+    expect(std.resalePriceRatio).toBeCloseTo(0.9, 6);
+    expect(std.realisedGp).toBeCloseTo(stayedNet + resaleGp, 6);
+    expect(std.counterfactualGp).toBeCloseTo(cf, 6);
+    expect(std.uplift).toBeCloseTo((stayedNet + resaleGp) / cf - 1, 6);
+    // Scale the stayed nights until they make up the shortfall; resale held fixed.
+    const scale = (cf - resaleGp) / stayedNet;
+    expect(std.breakEvenPremium).toBeCloseTo(scale / 0.93 - 1, 6);
+    expect(std.breakEvenPremium!).toBeGreaterThan(std.configuredPremium);
+
+    // Non-refundable is the base: shown, never priced against itself.
+    const nr = summary(r, '2kk').find((p) => p.plan === 'Non-refundable')!;
+    expect(nr.uplift).toBeNull();
+    expect(nr.breakEvenPremium).toBeNull();
+  });
+
+  it('uses Flexible’s own rung of the ladder', () => {
+    const r = build([stay({ room: 'K.103', checkIn: '2026-06-05', nights: 1, perNight: 2400, line: FLEX('2026-06-05') })]);
+    const [flex] = summary(r);
+    expect(flex.plan).toBe('Flexible');
+    expect(flex.uplift).toBeCloseTo(1.05 / 0.93 - 1, 6);
+    expect(flex.configuredPremium).toBeCloseTo(1.05 / 0.93 - 1, 6);
+  });
+
+  it('takes the same turnover off both sides, and costs a cancelled stay at its unit’s average', () => {
+    const live = stay({ room: 'K.102', checkIn: '2026-06-02', nights: 2, perNight: 2300, line: STD('2026-06-02') });
+    const gone = stay({
+      room: 'K.103',
+      checkIn: '2026-06-12',
+      nights: 2,
+      perNight: 2300,
+      line: STD('2026-06-12'),
+      cancelledAt: '2026-06-01T10:00:00Z',
+    });
+    const r = build([live, gone], { turnoverByCheckout: new Map([[`2026-06-04|K.102`, 800]]) });
+    const std = summary(r, '1kk').find((p) => p.plan === 'Standard')!;
+    const net = 2 * 2300 * 0.83;
+    expect(std.realisedGp).toBeCloseTo(net - 800, 6);
+    expect(std.counterfactualGp).toBeCloseTo(net * 0.93 - 800 + (2 * 2300 * 0.93 * 0.83 - 800), 6);
+  });
+
+  it('counts only finished Booking.com stays wholly inside the window, without abandoned checkouts', () => {
+    const counted = stay({ room: 'K.102', checkIn: '2026-06-02', nights: 2, perNight: 2300, line: STD('2026-06-02') });
+    const straddles = stay({ room: 'K.103', checkIn: '2026-05-30', nights: 3, perNight: 2300, line: STD('2026-05-30') });
+    const notOver = stay({ room: 'K.106', checkIn: '2026-07-14', nights: 3, perNight: 2300, line: STD('2026-07-14') });
+    const airbnb = stay({ room: 'K.202', checkIn: '2026-06-02', nights: 2, perNight: 2300, channel: 'Airbnb', rateType: 'Standard' });
+    const abandoned = stay({
+      room: 'K.203',
+      checkIn: '2026-06-08',
+      nights: 2,
+      perNight: 2300,
+      line: STD('2026-06-08'),
+      cancelledAt: '2026-05-25T10:00:00Z',
+    });
+    abandoned.booking.cancelClass = 'abandoned';
+    const r = build([counted, straddles, notOver, airbnb, abandoned], { to: '2026-07-31' });
+    expect(r.planCounterfactual.outcomes).toHaveLength(1);
+    expect(summary(r)[0].bookings).toBe(1);
+    expect(build([counted], { channels: ['Airbnb'] }).planCounterfactual.outcomes).toHaveLength(0);
+  });
+
+  it('filters by booked-from date and by class', () => {
+    const early = stay({
+      room: 'K.102',
+      checkIn: '2026-06-02',
+      nights: 2,
+      perNight: 2300,
+      line: STD('2026-06-02'),
+      bookedAt: '2026-03-01T10:00:00Z',
+    });
+    const late = stay({ room: 'K.201', checkIn: '2026-06-20', nights: 2, perNight: 4000, line: STD('2026-06-20') });
+    const r = build([early, late]);
+    expect(r.planCounterfactual.defaultBookedFrom).toBe('2026-05-01');
+    expect(summary(r, 'all')[0].bookings).toBe(2);
+    expect(summary(r, 'all', '2026-05-01')[0].bookings).toBe(1);
+    expect(summary(r, '1kk', '2026-05-01')).toEqual([]);
+    expect(summary(r, '2kk')[0].nights).toBe(2);
+  });
+
+  it('leaves a cancelled stay with no readable price out of the comparison, and counts it', () => {
+    const live = stay({ room: 'K.102', checkIn: '2026-06-02', nights: 2, perNight: 2300, line: STD('2026-06-02') });
+    const unknown = stay({
+      room: 'K.103',
+      checkIn: '2026-06-12',
+      nights: 2,
+      perNight: 2300,
+      line: STD('2026-06-12'),
+      cancelledAt: '2026-06-01T10:00:00Z',
+    });
+    unknown.booking.originalNightly = null;
+    const [std] = summary(build([live, unknown]));
+    expect(std.bookings).toBe(2);
+    expect(std.unpriced).toBe(1);
+    expect(std.nightCancelRate).toBeCloseTo(0.5, 6);
+    expect(std.uplift).toBeCloseTo(1 / 0.93 - 1, 6);
   });
 });

@@ -6,7 +6,7 @@
  * imported by both server and client code, so it must stay free of server-only
  * imports (see the note at the top of `utils/analyticsTypes.ts`).
  */
-import type { DemandEvent } from '@/utils/analyticsTypes';
+import type { DemandEvent, RatePlanLadder } from '@/utils/analyticsTypes';
 
 /**
  * When each room genuinely became sellable, if that differs from its first
@@ -257,6 +257,27 @@ export const CONFIGURED_FAR_OUT_PREMIUM = {
   farDays: 90,
   /** Intended price uplift of far over near. */
   premium: 0.15,
+};
+
+/**
+ * The Booking.com rate-plan ladder as configured in Beds24 Daily Price Rules,
+ * each plan as a multiple of the Standard (base) price: Non-refundable −7 %,
+ * Flexible +5 %. So Standard is set to sell 7.5 % above Non-refundable and
+ * Flexible 12.9 % above it, on the same stay booked at the same moment.
+ *
+ * The Rates tab's plan verdict prices every Standard and Flexible stay as if it
+ * had been sold on Non-refundable by these ratios, and reports the premium each
+ * plan would need to break even against the premium configured here. Weekly
+ * (−15 %) and the one-night supplement are left out: they are not alternatives
+ * a guest picks between for the same stay.
+ *
+ * Like `CONFIGURED_FAR_OUT_PREMIUM`, this goes stale silently — update it
+ * whenever the Beds24 Daily Price Rules change.
+ */
+export const RATE_PLAN_LADDER: RatePlanLadder = {
+  'Non-refundable': 0.93,
+  Standard: 1,
+  Flexible: 1.05,
 };
 
 // ── Room classes (1KK / 2KK) ─────────────────────────────────────────────────

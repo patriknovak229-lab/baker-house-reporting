@@ -20,10 +20,11 @@
  * from the other tabs.
  */
 import { sql } from 'drizzle-orm';
-import { CONFIGURED_FAR_OUT_PREMIUM, TURNOVER_COST_KEYS } from '@/data/analyticsConfig';
+import { CONFIGURED_FAR_OUT_PREMIUM, RATE_PLAN_LADDER, TURNOVER_COST_KEYS } from '@/data/analyticsConfig';
 import type { RatesResponse } from '@/utils/analyticsTypes';
 import { buildRatesResponse, type RateBookingInput, type RateNightInput } from '@/utils/ratesAnalysis';
 import { originalNightly } from '@/utils/rateDescription';
+import { RATE_TYPE_LAUNCH_DATE } from '@/utils/rateType';
 import { ROOM_TO_BEDS24_ID } from '@/utils/variableCostsShared';
 import { computeVariableCosts } from '@/utils/variableCostsEngine';
 import {
@@ -238,5 +239,7 @@ export async function readRates(scope: AnalyticsScope, todayIso: string): Promis
     leadBuckets: LEAD_BUCKETS,
     losBuckets: LOS_BUCKETS,
     farOut: CONFIGURED_FAR_OUT_PREMIUM,
+    ladder: RATE_PLAN_LADDER,
+    planBookedFrom: RATE_TYPE_LAUNCH_DATE,
   });
 }

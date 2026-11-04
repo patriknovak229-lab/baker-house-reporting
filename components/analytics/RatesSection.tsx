@@ -14,9 +14,11 @@
  * class at a time (the blend is available, but not the default).
  *
  * The comparisons to believe are the SAME-NIGHT ones: the same unit on the same
- * date sold two ways, which takes the season out. Averages are context.
+ * date sold two ways, which takes the season out. Averages are context. The one
+ * exception is the rate-plan verdict: the plans sell at different distances from
+ * arrival, so it sets each stay against the same stay sold on Non-refundable.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Area,
   Bar,
@@ -34,6 +36,7 @@ import type {
   ChannelRow,
   DirectPricingCheck,
   MarketResponse,
+  PlanCounterfactualRow,
   PromoRow,
   RateClassId,
   RatePlanRow,
@@ -42,6 +45,7 @@ import type {
   ResaleRow,
   SameDateComparison,
 } from '@/utils/analyticsTypes';
+import { MIN_COUNTERFACTUAL_BOOKINGS, summarisePlanCounterfactual } from '@/utils/ratesAnalysis';
 import {
   AXIS_TICK,
   AXIS_TICK_DARK,
@@ -111,7 +115,7 @@ export default function RatesSection({
         </Card>
       ) : (
         <>
-          <RatePlans view={view} minMatched={data.minMatchedDates} />
+          <RatePlans view={view} data={data} minMatched={data.minMatchedDates} />
           <Promotions view={view} />
           <Resale view={view} />
           <Channels view={view} />
@@ -245,111 +249,253 @@ function SameNight({
 
 // ── Q1: rate plans ───────────────────────────────────────────────────────────
 
+/** "2026-06-20" → "20 Jun 2026". */
+function dayLabel(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return `${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${y}`;
+}
+
 /**
- * The plan question in one number: what each plan earns per night it BOOKED,
- * after the nights it lost to cancellation and the gross profit recovered by
- * reselling them. A flexible rate's price premium is only real if it survives
- * that; the non-refundable discount is only worth giving if it is smaller than
- * the cancellation cost it removes.
+ * Is each refundable plan's premium over Non-refundable worth its cancellations?
+ *
+ * The verdict sets every finished Booking.com Standard / Flexible stay against
+ * the same stay sold on Non-refundable at the same moment (see
+ * `summarisePlanCounterfactual`), because the same-night gap mostly measures
+ * WHEN each plan sells — Standard far out on Early Booker, Non-refundable last
+ * minute — not the plan. It is summarised here, not on the server, so the
+ * booked-from date can move without a refetch; it defaults to the day today's
+ * plans and perks launched. The plan-by-channel table below stays as context.
  */
-function RatePlans({ view, minMatched }: { view: RatesClassView; minMatched: number }) {
+function RatePlans({ view, data, minMatched }: { view: RatesClassView; data: RatesResponse; minMatched: number }) {
+  const { ladder, defaultBookedFrom, outcomes } = data.planCounterfactual;
+  const [bookedFrom, setBookedFrom] = useState(defaultBookedFrom);
+  const verdicts = useMemo(
+    () => summarisePlanCounterfactual(outcomes, { classId: view.classId, bookedFrom: bookedFrom || null, ladder }),
+    [outcomes, view.classId, bookedFrom, ladder],
+  );
   const rows = view.plans.filter((r) => r.nights > 0);
-  if (rows.length === 0) return null;
-  const bcom = rows.filter((r) => r.channel === 'Booking.com');
-  const nonRef = bcom.find((r) => r.plan === 'Non-refundable');
-  const refundable = bcom.filter((r) => r.plan === 'Standard' || r.plan === 'Flexible');
+  if (rows.length === 0 && verdicts.length === 0) return null;
+  const refundable = verdicts.filter((r) => r.plan !== 'Non-refundable');
 
   return (
     <Card
       title={`1 · Do the rate plans make sense? — ${view.label}`}
-      subtitle="Each plan's price, what is left after commission and turnover, how often it cancels, and what it earns per night it booked once cancellations and resales are counted. “Same night vs Non-ref” pairs the same unit on the same date sold on both plans — the season taken out."
+      subtitle="Is each refundable plan's premium over Non-refundable worth the cancellations it invites? Every finished Booking.com Standard and Flexible stay is set against the same stay sold on Non-refundable at the same moment — same unit, nights, booking date and promotions — and credited with the gross profit of whoever resold its cancelled nights."
     >
-      {nonRef && refundable.length > 0 && (
+      <BookedFrom value={bookedFrom} launch={defaultBookedFrom} onChange={setBookedFrom} />
+      {refundable.length > 0 ? (
         <div className="mb-5 space-y-3">
           {refundable.map((r) => (
-            <PlanVerdict key={r.plan} plan={r} nonRef={nonRef} />
+            <PlanVerdict key={r.plan} row={r} />
           ))}
         </div>
+      ) : (
+        <p className="mb-5 text-xs text-gray-400">
+          No finished Booking.com Standard or Flexible stays booked
+          {bookedFrom ? ` from ${dayLabel(bookedFrom)}` : ''} in this window.
+        </p>
       )}
 
-      <Table
-        columns={[
-          'Plan',
-          'Channel',
-          'Nights',
-          'Share',
-          'ADR',
-          'Same night vs Non-ref',
-          'GP / night',
-          'Cancels',
-          'Cancelled nights resold',
-          'GP / booked night',
-          'LOS',
-          'Lead',
-        ]}
-      >
-        {rows.map((r) => (
-          <PlanRow key={`${r.channel}|${r.plan}`} r={r} minMatched={minMatched} />
-        ))}
-      </Table>
-      <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
-        GP / booked night = (gross profit of the nights that stayed + gross profit of the replacement
-        bookings that resold its cancelled nights) ÷ (stayed + cancelled nights). Cancels are guest
-        cancellations as a share of bookings; abandoned checkouts are excluded. Hover a same-night value
-        for how many matched nights it rests on; “n/a” means fewer than {minMatched}, or fewer than five
-        separate bookings behind them. “wk” = matched on
-        the same unit and week, because K.201 and O.308 are single rooms and two bookings never share a
-        night there.
-      </p>
+      {verdicts.length > 0 && (
+        <>
+          <p className="text-xs font-semibold text-gray-700 mb-2">
+            Like for like — Booking.com stays{bookedFrom ? ` booked from ${dayLabel(bookedFrom)}` : ''}, checked out
+          </p>
+          <Table
+            columns={[
+              'Plan',
+              'Bookings',
+              'Cancelled',
+              'Days out',
+              'Resold',
+              'Resale price',
+              'GP made',
+              'Same on Non-ref',
+              'vs Non-ref',
+              'Break-even',
+              'Configured',
+            ]}
+          >
+            {verdicts.map((r) => (
+              <CounterfactualRow key={r.plan} r={r} />
+            ))}
+          </Table>
+          <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
+            Cancelled = share of booked nights; days out = median days before arrival the cancellations came; resold =
+            cancelled nights a later booking took (capacity-aware, same unit), at the resale price ÷ the price the
+            cancelled booking had agreed. GP made = gross profit of the nights that stayed (price − commission − fees −
+            turnover) + gross profit of the bookings that resold its cancelled nights. Same on Non-ref = each stay’s
+            per-night price × the Beds24 ladder (Non-ref {num(ladder['Non-refundable'], 2)} · Standard{' '}
+            {num(ladder.Standard, 2)} · Flexible {num(ladder.Flexible, 2)} of the base, from{' '}
+            <code>RATE_PLAN_LADDER</code> — it goes stale silently when the Daily Price Rules change), less its take
+            rate (Booking.com’s average for a cancelled stay, priced from the value it had agreed) and its turnover.
+            Break-even = the premium over Non-ref at which the stayed nights would earn exactly that, resale held fixed;
+            configured = what the ladder charges. <strong className="font-medium text-gray-500">Perks are not costed</strong>: Flexible includes early
+            check-in and late checkout, Standard early check-in, so the true break-even is a little higher. Only stays
+            wholly inside the window count; fewer than {MIN_COUNTERFACTUAL_BOOKINGS} bookings is a hint, not a verdict.
+          </p>
+        </>
+      )}
+
+      {rows.length > 0 && (
+        <>
+          <p className="text-xs font-semibold text-gray-700 mb-2 mt-6">Every plan and channel, nights in the window</p>
+          <Table
+            columns={[
+              'Plan',
+              'Channel',
+              'Nights',
+              'Share',
+              'ADR',
+              'Same-night gap*',
+              'GP / night',
+              'Cancels',
+              'Cancelled nights resold',
+              'GP / booked night',
+              'LOS',
+              'Lead',
+            ]}
+          >
+            {rows.map((r) => (
+              <PlanRow key={`${r.channel}|${r.plan}`} r={r} minMatched={minMatched} />
+            ))}
+          </Table>
+          <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
+            * Same-night gap = the plan’s price against Booking.com Non-ref on the same unit and night. It is context,
+            not the plan’s premium: Standard and Flexible are mostly booked weeks ahead on Early Booker deals and
+            Non-ref mostly in the last week, so the gap mixes in when each sold. Hover a value for how many matched
+            nights it rests on; “n/a” means fewer than {minMatched}, or fewer than five separate bookings behind them.
+            “wk” = matched on the same unit and week, because K.201 and O.308 are single rooms and two bookings never
+            share a night there. GP / booked night = (gross profit of the nights that stayed + gross profit of the
+            replacement bookings that resold its cancelled nights) ÷ (stayed + cancelled nights). Cancels are guest
+            cancellations as a share of bookings; abandoned checkouts are excluded.
+          </p>
+        </>
+      )}
       {view.genius && <GeniusNote genius={view.genius} />}
     </Card>
   );
 }
 
-function PlanVerdict({ plan, nonRef }: { plan: RatePlanRow; nonRef: RatePlanRow }) {
-  const cmp = plan.vsNonRefundable;
-  // Share of the plan's GP lost to cancellations after resale — the value of the
-  // insurance a non-refundable booking buys.
-  const lostToCancels = plan.gpPerNight > 0 ? 1 - plan.gpPerBookedNight / plan.gpPerNight : null;
-  const beats = plan.gpPerBookedNight > nonRef.gpPerBookedNight;
-  const premium = cmp?.comparable ? cmp.adrDelta : null;
-  const thin = plan.nights < 20;
+/** Which bookings the verdict reads: from a date (default: the plans' launch), or all of them. */
+function BookedFrom({
+  value,
+  launch,
+  onChange,
+}: {
+  value: string;
+  launch: string;
+  onChange: (value: string) => void;
+}) {
+  const chip = (active: boolean) =>
+    `px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${
+      active ? 'bg-white shadow-sm text-indigo-700' : 'text-gray-500 hover:text-gray-700'
+    }`;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <span className="text-xs font-medium text-gray-500">Bookings made from</span>
+      <div className="flex items-center gap-2">
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+          <button type="button" className={chip(value === launch)} onClick={() => onChange(launch)}>
+            Plans launch
+          </button>
+          <button type="button" className={chip(value === '')} onClick={() => onChange('')}>
+            All
+          </button>
+        </div>
+        <input
+          type="date"
+          aria-label="Booked from"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="px-2 py-1.5 rounded-md border border-gray-200 text-xs text-gray-700"
+        />
+      </div>
+      <span className="text-[11px] text-gray-400">
+        {value === launch
+          ? 'when today’s plans and perks launched'
+          : value
+            ? `launch was ${dayLabel(launch)}`
+            : 'every booking in the window'}
+      </span>
+    </div>
+  );
+}
+
+function PlanVerdict({ row }: { row: PlanCounterfactualRow }) {
+  const thin = row.bookings < MIN_COUNTERFACTUAL_BOOKINGS;
+  const u = row.uplift;
+  const be = row.breakEvenPremium;
+  const sample = thin ? `${num(row.bookings)} bookings — read as a hint` : `${num(row.bookings)} bookings`;
+  const earns =
+    u === null
+      ? null
+      : Math.abs(u) < 0.0005
+        ? 'earns the same as the same stays on Non-ref'
+        : `earns ${pct(Math.abs(u), 1)} ${u > 0 ? 'more' : 'less'} than the same stays on Non-ref`;
+  const title =
+    be === null
+      ? `${row.plan}: every stay cancelled, so there is no break-even to read (${sample})`
+      : `${row.plan}: needs ${pct(be, 1)} over Non-ref to break even, configured ${pct(row.configuredPremium, 1)}` +
+        (earns ? ` — ${earns}` : '') +
+        ` (${sample})`;
+  const margin = be === null ? null : row.configuredPremium - be;
 
   return (
-    <Callout
-      tone={thin ? 'slate' : beats ? 'amber' : 'sky'}
-      title={
-        `${plan.plan}: ${czk(plan.gpPerBookedNight)} per booked night vs Non-refundable ${czk(nonRef.gpPerBookedNight)}` +
-        (thin ? ` — only ${num(plan.nights)} nights, read as a hint` : '')
-      }
-    >
-      {premium !== null ? (
+    <Callout tone={thin ? 'slate' : u !== null && u < -0.01 ? 'amber' : 'sky'} title={title}>
+      Sold on Non-refundable at the same moment, these stays would have made {czk(row.counterfactualGp)} of gross
+      profit; on {row.plan} they made {czk(row.realisedGp)}. {pct(row.nightCancelRate, 0)} of their{' '}
+      {num(row.nights)} nights cancelled
+      {row.medianCancelDaysBefore !== null && <>, a median {num(row.medianCancelDaysBefore, 0)} days before arrival</>}
+      {row.resaleRate !== null && (
         <>
-          On {matchedOn(cmp)}, {plan.plan} sells <strong>{signed(premium)}</strong> above
-          Non-refundable ({signed(cmp?.gpDelta ?? null)} gross profit).{' '}
-        </>
-      ) : (
-        <>Too few shared nights to price {plan.plan} against Non-refundable directly. </>
-      )}
-      It cancels {pct(plan.cancellationRate, 0)} of bookings
-      {plan.cancelledNights > 0 && (
-        <>
-          , and {pct(plan.resoldNights / Math.max(plan.cancelledNights, 1), 0)} of the {num(plan.cancelledNights)}{' '}
-          cancelled nights were resold
+          , and {pct(row.resaleRate, 0)} of those nights were resold
+          {row.resalePriceRatio !== null && <> at {pct(row.resalePriceRatio, 0)} of the original price</>}
         </>
       )}
-      {lostToCancels !== null && <> — after resale it loses {pct(Math.max(0, lostToCancels), 0)} of its gross profit to cancellations</>}.{' '}
-      {beats ? (
-        <>
-          So even after paying for its cancellations it out-earns Non-refundable per booked night: the
-          non-refundable discount is larger than the cancellation risk it removes. That does not prove
-          non-refundable guests would book {plan.plan} at full price — it says the discount could be
-          smaller{lostToCancels !== null && lostToCancels > 0 ? <> (the risk it insures is worth about {pct(lostToCancels, 0)})</> : null}.
-        </>
-      ) : (
-        <>Non-refundable earns more per booked night — its discount is paid for by the cancellations it avoids.</>
+      .{' '}
+      {margin !== null &&
+        (margin >= 0 ? (
+          <>
+            The configured premium clears break-even by {num(margin * 100, 1)} points, so the plan pays for its
+            cancellations.
+          </>
+        ) : (
+          <>
+            The configured premium falls {num(-margin * 100, 1)} points short of break-even: its cancellations cost more
+            than the premium brings in.
+          </>
+        ))}
+      {row.unpriced > 0 && (
+        <> {num(row.unpriced)} cancelled stays carry no readable price and are left out of the comparison.</>
       )}
     </Callout>
+  );
+}
+
+function CounterfactualRow({ r }: { r: PlanCounterfactualRow }) {
+  const base = r.plan === 'Non-refundable';
+  return (
+    <tr className="hover:bg-gray-50">
+      <Td align="left">
+        <span className="font-medium text-gray-800">{r.plan}</span>
+      </Td>
+      <Td className={r.bookings < MIN_COUNTERFACTUAL_BOOKINGS ? '!text-gray-400' : ''}>{num(r.bookings)}</Td>
+      <Td className={r.nightCancelRate > 0.3 ? '!text-rose-600 font-semibold' : ''}>
+        {pct(r.nightCancelRate, 0)}
+      </Td>
+      <Td muted>{r.medianCancelDaysBefore !== null ? `${num(r.medianCancelDaysBefore, 0)} d` : '—'}</Td>
+      <Td muted>{r.cancelledNights > 0 ? `${num(r.resoldNights)} / ${num(r.cancelledNights)}` : '—'}</Td>
+      <Td muted>{r.resalePriceRatio !== null ? pct(r.resalePriceRatio, 0) : '—'}</Td>
+      <Td>{czk(r.realisedGp)}</Td>
+      <Td muted>{base ? '—' : czk(r.counterfactualGp)}</Td>
+      <Td bold className={toneOf(r.uplift, 0.01)}>
+        {base ? '—' : signed(r.uplift, 1)}
+      </Td>
+      <Td bold>{r.breakEvenPremium !== null ? pct(r.breakEvenPremium, 1) : '—'}</Td>
+      <Td muted>{base ? 'base' : pct(r.configuredPremium, 1)}</Td>
+    </tr>
   );
 }
 

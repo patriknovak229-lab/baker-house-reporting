@@ -1127,6 +1127,11 @@ export interface SameDateComparison {
 export interface RatePlanRow extends RateEconomics {
   channel: string;
   plan: string;
+  /**
+   * Context only, not the plan premium: the plans sell at different distances
+   * from arrival, so this gap mixes in booking timing. The plan verdict is
+   * `RatesResponse.planCounterfactual`.
+   */
   vsNonRefundable: SameDateComparison | null;
   /** Guest-cancelled room-nights in the window that are already in the past. */
   cancelledNights: number;
@@ -1293,6 +1298,85 @@ export interface RatesClassView {
   losMix: { label: string; bookings: number; nights: number; adr: number; gpPerNight: number; nightShare: number }[];
 }
 
+/** The three Booking.com plans priced off one base in Beds24 (see RATE_PLAN_LADDER). */
+export type LadderPlan = 'Non-refundable' | 'Standard' | 'Flexible';
+
+/** Each plan's price as a multiple of the Standard (base) price. */
+export type RatePlanLadder = Record<LadderPlan, number>;
+
+/**
+ * One finished Booking.com stay on a ladder plan, set against the same stay sold
+ * on Non-refundable at the same moment — the like-for-like plan test.
+ *
+ * Why not the same-night gap: Standard and Flexible are mostly bought weeks
+ * ahead on Early Booker deals and Non-refundable mostly in the last week, so two
+ * nights of the same unit and date sold on the two plans differ in WHEN they
+ * sold as much as in the plan. The counterfactual keeps everything about the
+ * booking (unit, nights, booking moment, promotions) and changes only the plan,
+ * by the ladder ratio Beds24 is configured with.
+ */
+export interface PlanStayOutcome {
+  classId: Exclude<RateClassId, 'all'>;
+  plan: LadderPlan;
+  /** Date the booking was made. */
+  bookedOn: string | null;
+  nights: number;
+  cancelled: boolean;
+  /** Cancelled stays: days from the cancellation to the planned arrival. */
+  cancelDaysBeforeArrival: number | null;
+  /** Cancelled nights a later booking took (capacity-aware, per sellable unit). */
+  resoldNights: number;
+  /** What the cancelled booking had agreed for the nights that were resold. */
+  resoldOriginalValue: number;
+  /** What the replacement bookings paid for those nights. */
+  resaleValue: number;
+  /** Gross − commission − fees of the nights that stayed. 0 when cancelled. */
+  stayedNet: number;
+  stayedTurnover: number;
+  /** Gross profit of the replacement nights that resold its cancelled nights. */
+  resaleGp: number;
+  /**
+   * Gross profit of the same stay on Non-refundable: its per-night price ×
+   * ladder[NR] ÷ ladder[plan], less its take rate (the channel average for a
+   * cancelled booking) and its turnover. Null when a cancelled booking's price
+   * cannot be read back — the stay is then left out of both sides.
+   */
+  counterfactualGp: number | null;
+}
+
+/** One plan's like-for-like verdict, summarised from PlanStayOutcome rows. */
+export interface PlanCounterfactualRow {
+  plan: LadderPlan;
+  bookings: number;
+  /** Cancelled stays whose price could not be read back — counted, but not in the GP comparison. */
+  unpriced: number;
+  nights: number;
+  cancelledNights: number;
+  /** Cancelled ÷ booked nights. */
+  nightCancelRate: number;
+  medianCancelDaysBefore: number | null;
+  resoldNights: number;
+  /** Resold ÷ cancelled nights. Null with no cancellations. */
+  resaleRate: number | null;
+  /** What the replacements paid ÷ what the cancelled bookings had agreed, over resold nights. */
+  resalePriceRatio: number | null;
+  /** Stayed GP + the GP of the bookings that resold its cancelled nights. */
+  realisedGp: number;
+  /** The same stays on Non-refundable at the same moment. */
+  counterfactualGp: number;
+  /** realised ÷ counterfactual − 1. Null for Non-refundable itself. */
+  uplift: number | null;
+  /**
+   * The premium over Non-refundable at which the plan earns exactly what the
+   * same stays would have on Non-refundable: stayed-night net prices scaled until
+   * realised = counterfactual, resale GP held fixed. Null for Non-refundable and
+   * when every stay cancelled.
+   */
+  breakEvenPremium: number | null;
+  /** ladder[plan] ÷ ladder[NR] − 1 — what Beds24 is set to charge. */
+  configuredPremium: number;
+}
+
 export interface RatesResponse {
   basis: 'stay';
   query: OverviewResponse['query'];
@@ -1312,6 +1396,18 @@ export interface RatesResponse {
     /** Booking-rooms costed at their unit's average turnover (future, legacy or unlogged). */
     estimated: number;
     perCheckoutByUnit: { unitId: string; label: string; perCheckout: number; samples: number }[];
+  };
+  /**
+   * Card 1's like-for-like plan test. Rows, not a summary: the card summarises
+   * them per class with `summarisePlanCounterfactual`, so the booked-from date
+   * can move without a refetch. Booking.com stays wholly inside the window that
+   * have checked out; abandoned checkouts excluded.
+   */
+  planCounterfactual: {
+    ladder: RatePlanLadder;
+    /** When today's plans and perks launched — the default booked-from date. */
+    defaultBookedFrom: string;
+    outcomes: PlanStayOutcome[];
   };
   notes: string[];
 }

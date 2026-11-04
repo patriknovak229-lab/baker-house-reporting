@@ -30,17 +30,35 @@
  * same sellable unit on the same date removes the season, the weekday and the
  * event calendar, leaving the plan or channel itself. It is the number to
  * believe whenever it has enough matched dates; the averages are context.
+ *
+ * …EXCEPT FOR THE RATE PLANS
+ * --------------------------
+ * The same night does not take out WHEN a night was bought, and the plans sell
+ * at different times: Standard and Flexible mostly weeks ahead on Early Booker
+ * deals, Non-refundable mostly in the last week on last-minute ones. So the
+ * same-night gap between them is largely booking timing, not the plan. The plan
+ * verdict instead takes each finished Booking.com Standard / Flexible stay and
+ * prices the SAME stay — same unit, nights, booking moment and promotions — on
+ * Non-refundable by the ladder ratio Beds24 is configured with
+ * (`RATE_PLAN_LADDER`). What it actually earned (stayed nights, plus the resale
+ * of its cancelled nights) against that counterfactual is the plan's worth, and
+ * scaling its stayed prices until the two meet gives the premium over
+ * Non-refundable it needs to break even.
  */
 import { SELLABLE_UNITS } from '@/data/analyticsConfig';
 import type {
   ChannelRow,
   DirectPricingCheck,
+  LadderPlan,
   LeadAdrRow,
+  PlanCounterfactualRow,
+  PlanStayOutcome,
   PromoCampaignRow,
   PromoRow,
   RateClassId,
   RateEconomics,
   RateMixMonthPoint,
+  RatePlanLadder,
   RatePlanRow,
   RatesClassView,
   RatesResponse,
@@ -112,6 +130,15 @@ export const MIN_MATCHED_BOOKINGS = 5;
 /** Genius vs non-Genius ADR needs this many bookings either side. */
 const MIN_GENIUS_BOOKINGS = 15;
 
+/**
+ * Below this many bookings a plan's like-for-like verdict is shown as a hint:
+ * one cancelled stay that never resold moves a ten-booking plan by several points.
+ */
+export const MIN_COUNTERFACTUAL_BOOKINGS = 15;
+
+/** The plans on the Booking.com ladder, cheapest first. */
+export const LADDER_PLANS: LadderPlan[] = ['Non-refundable', 'Standard', 'Flexible'];
+
 /** 'Direct' is the pre-split label for direct bookings, still on older rows. */
 const DIRECT_CHANNELS = ['Direct-Web', 'Direct-Phone', 'Direct'];
 const BOOKING_COM = 'Booking.com';
@@ -173,6 +200,10 @@ export interface RatesInput {
   leadBuckets: { label: string; min: number; max: number | null }[];
   losBuckets: { label: string; min: number; max: number | null }[];
   farOut: { nearDays: number; farDays: number; premium: number };
+  /** Booking.com plan prices relative to Standard, as configured in Beds24. */
+  ladder: RatePlanLadder;
+  /** Default booked-from date for the plan verdict (when today's plans launched). */
+  planBookedFrom: string;
   notes?: string[];
 }
 
@@ -429,6 +460,78 @@ function resaleRow(label: string, channel: string | null, rows: CancelledNight[]
   };
 }
 
+// ── Plan counterfactual ──────────────────────────────────────────────────────
+
+const isLadderPlan = (plan: string): plan is LadderPlan => (LADDER_PLANS as string[]).includes(plan);
+
+/**
+ * Card 1's verdict: each plan's finished stays against the same stays sold on
+ * Non-refundable, for one class and booked-from date.
+ *
+ * Exported (and pure) because the card calls it with the booked-from date the
+ * user picks; the engine only ships the per-stay rows.
+ *
+ * Break-even: scale the plan's stayed-night net prices by s until
+ *   s × stayedNet − stayedTurnover + resaleGp = counterfactual,
+ * holding the resale fixed (what a later guest paid for a cancelled night does
+ * not depend on this plan's price). The plan's price at break-even is s × its
+ * price today, so its premium over Non-refundable is s × ladder[plan] ÷
+ * ladder[NR] − 1. Stays whose cancelled price cannot be read back are left out
+ * of both sides of the GP comparison, and counted.
+ */
+export function summarisePlanCounterfactual(
+  outcomes: PlanStayOutcome[],
+  opts: { classId: RateClassId; bookedFrom: string | null; ladder: RatePlanLadder },
+): PlanCounterfactualRow[] {
+  const { ladder } = opts;
+  const inScope = outcomes.filter(
+    (o) =>
+      (opts.classId === 'all' || o.classId === opts.classId) &&
+      (!opts.bookedFrom || (o.bookedOn !== null && o.bookedOn >= opts.bookedFrom)),
+  );
+  const sum = (rows: PlanStayOutcome[], f: (o: PlanStayOutcome) => number) => rows.reduce((a, o) => a + f(o), 0);
+
+  return LADDER_PLANS.map((plan): PlanCounterfactualRow | null => {
+    const rows = inScope.filter((o) => o.plan === plan);
+    if (rows.length === 0) return null;
+    const priced = rows.filter((o) => o.counterfactualGp !== null);
+    const cancelled = rows.filter((o) => o.cancelled);
+    const cancelledNights = sum(cancelled, (o) => o.nights);
+    const resoldNights = sum(cancelled, (o) => o.resoldNights);
+    const pricedCancels = priced.filter((o) => o.cancelled);
+    const resoldOriginal = sum(pricedCancels, (o) => o.resoldOriginalValue);
+
+    const stayedNet = sum(priced, (o) => o.stayedNet);
+    const stayedTurnover = sum(priced, (o) => o.stayedTurnover);
+    const resaleGp = sum(priced, (o) => o.resaleGp);
+    const realisedGp = stayedNet - stayedTurnover + resaleGp;
+    const counterfactualGp = sum(priced, (o) => o.counterfactualGp!);
+    const isBase = plan === 'Non-refundable';
+    const scale = stayedNet > 0 ? (counterfactualGp - resaleGp + stayedTurnover) / stayedNet : null;
+    const daysBefore = cancelled
+      .filter((o) => o.cancelDaysBeforeArrival !== null)
+      .map((o) => o.cancelDaysBeforeArrival!);
+
+    return {
+      plan,
+      bookings: rows.length,
+      unpriced: rows.length - priced.length,
+      nights: sum(rows, (o) => o.nights),
+      cancelledNights,
+      nightCancelRate: ratio(cancelledNights, sum(rows, (o) => o.nights)),
+      medianCancelDaysBefore: median(daysBefore),
+      resoldNights,
+      resaleRate: cancelledNights > 0 ? resoldNights / cancelledNights : null,
+      resalePriceRatio: resoldOriginal > 0 ? sum(pricedCancels, (o) => o.resaleValue) / resoldOriginal : null,
+      realisedGp,
+      counterfactualGp,
+      uplift: isBase || counterfactualGp <= 0 ? null : realisedGp / counterfactualGp - 1,
+      breakEvenPremium: isBase || scale === null ? null : (scale * ladder[plan]) / ladder['Non-refundable'] - 1,
+      configuredPremium: ladder[plan] / ladder['Non-refundable'] - 1,
+    };
+  }).filter((r): r is PlanCounterfactualRow => r !== null);
+}
+
 // ── The build ────────────────────────────────────────────────────────────────
 
 export function buildRatesResponse(input: RatesInput): RatesResponse {
@@ -613,6 +716,74 @@ export function buildRatesResponse(input: RatesInput): RatesResponse {
         cancelMs !== null && r.bookedAtMs !== null
           ? Math.max(0, Math.round((r.bookedAtMs - cancelMs) / 86_400_000))
           : null;
+    }
+  }
+
+  // ── Plan counterfactual: each finished Booking.com stay vs the same stay on Non-refundable ──
+  //
+  // Whole stays only — inside the window and checked out — so the stay's
+  // turnover and every one of its nights (or its cancelled nights' resale) are
+  // on the realised side. A live stay's counterfactual is its own net scaled by
+  // the ladder ratio (commission and payment fees are a share of the price); a
+  // cancelled one is priced from the value read back out of its description, at
+  // the channel's average take rate and its unit's average turnover — the same
+  // basis as a cancelled night's `originalGp`.
+  const planOutcomes: PlanStayOutcome[] = [];
+  if (channelOk(BOOKING_COM)) {
+    const nightsByBooking = new Map<BookingRec, NightRec[]>();
+    for (const n of allNights) {
+      if (!n.booking) continue;
+      const list = nightsByBooking.get(n.booking);
+      if (list) list.push(n);
+      else nightsByBooking.set(n.booking, [n]);
+    }
+    const cancelsByBooking = groupBy(cancelledNights, (c) => `${c.booking.reservationNumber}|${c.booking.room}`);
+    const bcomTake = takeByChannel.get(BOOKING_COM) ?? 0;
+    const windowEnd = addDays(to, 1);
+    for (const b of bookings) {
+      if (b.channel !== BOOKING_COM || !b.classId || !isLadderPlan(b.plan) || !roomOk(b.room)) continue;
+      if (b.isCancelled && b.cancelClass !== 'guest') continue;
+      if (b.spanNights <= 0 || b.checkIn < from || b.checkOut > windowEnd || b.checkOut > today) continue;
+      const toNonRef = input.ladder['Non-refundable'] / input.ladder[b.plan];
+      const base = { classId: b.classId, plan: b.plan, bookedOn: b.reservationDate, nights: b.spanNights };
+      if (b.isCancelled) {
+        const resold = (cancelsByBooking.get(`${b.reservationNumber}|${b.room}`) ?? [])
+          .filter((c) => c.resold && c.replacement)
+          .map((c) => c.replacement!);
+        const turnover = costs ? ((b.unitId ? estimateByUnit.get(b.unitId) : undefined) ?? 0) : 0;
+        planOutcomes.push({
+          ...base,
+          cancelled: true,
+          cancelDaysBeforeArrival: b.cancelledAt ? daysBetween(b.cancelledAt.slice(0, 10), b.checkIn) : null,
+          resoldNights: resold.length,
+          resoldOriginalValue: (b.originalNightly ?? 0) * resold.length,
+          resaleValue: resold.reduce((a, r) => a + r.price, 0),
+          stayedNet: 0,
+          stayedTurnover: 0,
+          resaleGp: resold.reduce((a, r) => a + r.gp, 0),
+          counterfactualGp:
+            b.originalNightly === null
+              ? null
+              : b.spanNights * b.originalNightly * toNonRef * (1 - bcomTake) - turnover,
+        });
+      } else {
+        const stayed = nightsByBooking.get(b) ?? [];
+        if (stayed.length === 0) continue;
+        const stayedNet = stayed.reduce((a, n) => a + n.net, 0);
+        const stayedTurnover = stayed.reduce((a, n) => a + n.turnover, 0);
+        planOutcomes.push({
+          ...base,
+          cancelled: false,
+          cancelDaysBeforeArrival: null,
+          resoldNights: 0,
+          resoldOriginalValue: 0,
+          resaleValue: 0,
+          stayedNet,
+          stayedTurnover,
+          resaleGp: 0,
+          counterfactualGp: stayedNet * toNonRef - stayedTurnover,
+        });
+      }
     }
   }
 
@@ -915,6 +1086,11 @@ export function buildRatesResponse(input: RatesInput): RatesResponse {
     minMatchedDates: MIN_MATCHED_DATES,
     minMatchedBookings: MIN_MATCHED_BOOKINGS,
     costCoverage,
+    planCounterfactual: {
+      ladder: input.ladder,
+      defaultBookedFrom: input.planBookedFrom,
+      outcomes: planOutcomes,
+    },
     notes,
   };
 }

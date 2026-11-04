@@ -482,6 +482,7 @@ Everything below is a one-line edit in `data/analyticsConfig.ts`:
 | `SELLABLE_UNITS` | which physical rooms make up each sold product, and its PriceLabs listing |
 | `TRANSIENT_LOS_MAX` | the stay length above which a booking stops being transient demand |
 | `CONFIGURED_FAR_OUT_PREMIUM` | the premium PriceLabs is set to charge, so the Rates tab can test it |
+| `RATE_PLAN_LADDER` | the Booking.com plan prices in Beds24 Daily Price Rules (NR 0.93 · Standard 1 · Flexible 1.05), so the Rates tab can price each stay on Non-refundable |
 | `ROOM_ONLINE_OVERRIDES` | fix a room whose real listing date precedes its first booking |
 | `ROOM_CLASSES` | the 1KK / 2KK split every Occupancy view uses |
 | `LONG_STAY_MIN_NIGHTS` | the weekly-stay threshold for the length-of-stay comparison |
@@ -492,9 +493,10 @@ Everything below is a one-line edit in `data/analyticsConfig.ts`:
 | `TURNOVER_COST_KEYS` | which costs are per-checkout rather than per-night |
 | `PACE_MONTHS_AHEAD` | forward-book horizon |
 
-`CONFIGURED_FAR_OUT_PREMIUM` is the one that goes stale silently — update it
-whenever the PriceLabs far-out settings change, or the comparison drifts without
-saying so.
+`CONFIGURED_FAR_OUT_PREMIUM` and `RATE_PLAN_LADDER` are the two that go stale
+silently — update the first whenever the PriceLabs far-out settings change and
+the second whenever the Beds24 Daily Price Rules change, or the comparisons drift
+without saying so.
 
 ## 9. Operational notes
 
@@ -671,9 +673,33 @@ Urban 823 Kč, Deluxe 866 Kč, K.201 1 351 Kč, O.308 1 367 Kč per checkout.
   stays, so sum ÷ nights would understate), or Airbnb's whole-stay Base Price ÷
   nights — divided by the group size, because Airbnb repeats a two-room group's
   total on every room. Direct cancellations carry no price.
+- **The plan verdict is like for like, not same night.** The same-night gap
+  between plans mostly measures WHEN each sells: Standard is bought weeks out on
+  Early Booker deals (lead ~5 weeks), Non-refundable mostly on Last / Super Last
+  Minute (lead ~6 days). So card 1 takes every Booking.com Non-ref / Standard /
+  Flexible stay that has checked out (wholly inside the window, abandoned
+  checkouts out) and compares two numbers:
+  - **made** = GP of its stayed nights (price − commission − fees − turnover) +
+    GP of the replacement bookings that resold its cancelled nights (the
+    capacity-aware resale above);
+  - **the same stay on Non-ref at the same moment** = its per-night price ×
+    `RATE_PLAN_LADDER`[NR] ÷ ladder[plan] (a cancelled stay's price read back
+    from its description), less its take rate (Booking.com's average for a
+    cancelled stay) and its turnover.
+
+  **Break-even premium** = scale the stayed-night net prices until made = the
+  Non-ref figure, resale held fixed, expressed over Non-ref; set against the
+  **configured** premium (ladder[plan] ÷ ladder[NR] − 1: Standard 7.5 %,
+  Flexible 12.9 %). The engine ships one row per stay; the card summarises them
+  (`summarisePlanCounterfactual`) for its **booked-from** date — default
+  `RATE_TYPE_LAUNCH_DATE` (20 Jun 2026, when today's plans and perks launched),
+  "All" for every booking. Under 15 bookings is shown as a hint. Perks are not
+  costed (Flexible early check-in + late checkout, Standard early check-in), so
+  the true break-even is a little higher. The same-night column stays in the
+  plan table as context, marked as such.
 - **GP per booked night** = (GP of the nights that stayed + GP of the replacement
-  bookings that resold its cancelled nights) ÷ (stayed + cancelled nights). The
-  fair way to compare a cheap plan that sticks with a dearer one that cancels.
+  bookings that resold its cancelled nights) ÷ (stayed + cancelled nights). Shown
+  per plan and channel; for the plan verdict use the like-for-like card instead.
 - **Rest of class full** (date strength) = how full the class's OTHER rooms ended
   on the nights a promotion sold. A deal that lands on nights the class filled
   anyway gave its discount away.
@@ -690,14 +716,11 @@ Urban 823 Kč, Deluxe 866 Kč, K.201 1 351 Kč, O.308 1 367 Kč per checkout.
 | Guest cancellations | 14 % | 10 % |
 | Cancelled nights resold | 79 % of 266, at 95 % of the rate | 78 % of 37, at 99 % |
 
-1. **Plans (1KK, Booking.com).** On the same nights Standard sells **+14 %**
-   above Non-refundable (+20 % GP) and Flexible **+20 %** (+29 % GP). Standard
-   cancels 36 %, Flexible 43 %, but ~85 % of those nights are resold, so after
-   cancellations they keep 87–88 % of their GP: **GP per booked night 1 609 Kč
-   Standard, 1 796 Kč Flexible, 1 424 Kč Non-refundable**. The non-refundable
-   discount (~14–20 %) is larger than the cancellation risk it removes (~12–13 %).
-   Caveat stated on the card: this does not prove NR guests would book Standard at
-   full price. 2KK has too few shared weeks to compare plans directly.
+1. ~~**Plans (1KK, Booking.com).** Standard +14 %, Flexible +20 % over
+   Non-refundable on the same nights, so "the non-refundable discount is larger
+   than the cancellation risk it removes".~~ **Walked back 2026-11-04** — that gap
+   was mostly booking timing (see *Plan verdict, like for like* below), and the
+   card now uses the like-for-like comparison.
 2. **Time-limited deals.** 1KK: 56 nights (5.9 %), GP 1 513 vs 1 607 Kč/night,
    and they land on nights the rest of the class ended **93 % full vs 91 %** on an
    average night — discounting nights that were filling anyway. 2KK: 24 nights on
@@ -713,4 +736,28 @@ Urban 823 Kč, Deluxe 866 Kč, K.201 1 351 Kč, O.308 1 367 Kč per checkout.
    too few shared nights to say. **BH-92586229** (Direct-Web, K.103, 27 Sep–3 Oct,
    6 nights at 8 123 Kč/night, no Stripe payment linked) inflates Direct-Web's
    average ADR; the median comparison is immune, but the booking is worth a look.
+
+### Plan verdict, like for like (2026-11-04, Booking.com, stays checked out by 4 Nov)
+
+| Booked | Class · plan | Bookings | Nights cancelled | Resold | Needs over NR | Configured | vs same stays on NR |
+|---|---|---|---|---|---|---|---|
+| since 20 Jun | 1KK Standard | 20 | 30 % | 17 / 19 at 96 % | 6.0 % | 7.5 % | **+1.2 %** |
+| since 20 Jun | 1KK Flexible | 10 | 30 % | 8 / 9 at 82 % | 9.2 % | 12.9 % | **+2.8 %** (hint) |
+| since 20 Jun | 2KK Standard | 8 | 46 % | 7 / 11 at 96 % | 39.6 % | 7.5 % | **−17.9 %** (hint) |
+| since 20 Jun | 2KK Flexible | 3 | 44 % | 2 / 4 at 78 % | 43.3 % | 12.9 % | **−19.2 %** (hint) |
+| all (since Jan) | 1KK Standard | 69 | 35 % | 61 / 74 at 95 % | 7.9 % | 7.5 % | **−0.3 %** |
+| all (since Jan) | 1KK Flexible | 15 | 35 % | 15 / 17 at 82 % | 9.6 % | 12.9 % | **+2.4 %** |
+| all (since Jan) | 2KK Standard | 18 | 44 % | 20 / 25 at 97 % | 16.3 % | 7.5 % | **−5.2 %** |
+
+- **1KK Standard is at break-even** (needs 6–8 %, has 7.5 %). Its 7-day free
+  cancellation almost never binds: cancellations come a median 24–27 days out,
+  and ~82–90 % of the nights resell at ~95 % of the rate.
+- **1KK Flexible is 2–3 % ahead** (needs ~9–10 %, has 12.9 %) — a cushion of
+  about one unsold night. It resells at only ~82 % of its rate (since 20 Jun it
+  cancels a median 8 days out, against Standard's 27).
+- **2KK Standard loses ~5 %** over the year (needs ~16 %): it cancels nearly
+  half its nights and a fifth of those never resell. Since
+  20 Jun it is 8 bookings, too few for more than a hint. 2KK Flexible: 3
+  bookings, no verdict.
+- Perks are not costed in any of these.
 
