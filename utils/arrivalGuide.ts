@@ -23,6 +23,7 @@
 
 import { PARKING_SPACES } from '@/utils/parkingUtils';
 import { czechGreetingLine } from '@/utils/czechVocative';
+import { EARLY_CHECKIN_TIME } from '@/utils/ratePerks';
 
 export type GuideLang = 'cs' | 'en';
 
@@ -128,8 +129,8 @@ export function buildArrivalGuide(args: {
       // Early check-in is rate-dependent and the composer can't see the rate,
       // so the entitlement is stated conditionally rather than promised.
       cs
-        ? '🔑 Klíče na recepci (24/7, stačí zazvonit). Check-in od 15:00 — od 13:00, pokud Vaše sazba zahrnuje early check-in.'
-        : '🔑 Keys at reception (24/7, just ring the bell). Check-in from 15:00 — from 13:00 if your rate includes early check-in.',
+        ? `🔑 Klíče na recepci (24/7, stačí zazvonit). Check-in od 15:00 — od ${EARLY_CHECKIN_TIME}, pokud Vaše sazba zahrnuje early check-in.`
+        : `🔑 Keys at reception (24/7, just ring the bell). Check-in from 15:00 — from ${EARLY_CHECKIN_TIME} if your rate includes early check-in.`,
       parkingLine,
       wifiLine,
     ],

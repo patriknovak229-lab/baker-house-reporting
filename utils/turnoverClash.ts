@@ -1,7 +1,7 @@
 /**
  * Turnover clash detection — a same-room, same-day turnover where the outgoing
  * guest has a LATE CHECKOUT (stays until 12:00) and the incoming guest has an
- * EARLY CHECK-IN (arrives 13:00). That collapses the cleaning window to ~1h,
+ * EARLY CHECK-IN (arrives 13:30). That collapses the cleaning window to ~1.5h,
  * so the operator needs to see it and coordinate with cleaners (e.g. two
  * back-to-back Flexi-rate stays in the same room).
  *

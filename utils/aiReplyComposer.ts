@@ -21,6 +21,7 @@ import type { Reservation } from '@/types/reservation';
 import { getKnowledgeBase } from '@/utils/knowledgeBase';
 import type { ConversationMessage } from '@/utils/beds24Conversation';
 import { czechGreetingLine, repliesInCzech } from '@/utils/czechVocative';
+import { EARLY_CHECKIN_TIME, LATE_CHECKOUT_TIME } from '@/utils/ratePerks';
 import { parseTvLogins, tvLoginFor } from '@/utils/sledovaniTv';
 import type { ParkingAssignment } from '@/utils/parkingUtils';
 
@@ -153,12 +154,12 @@ export function buildBookingBlock(input: ComposeInput): string {
   } else {
     lines.push(
       input.perks.earlyCheckIn
-        ? 'Early check-in: INCLUDED in this booking’s rate — guest may arrive from 13:00.'
+        ? `Early check-in: INCLUDED in this booking’s rate — guest may arrive from ${EARLY_CHECKIN_TIME}.`
         : 'Early check-in: NOT included in this booking’s rate — standard check-in is 15:00.',
     );
     lines.push(
       input.perks.lateCheckout
-        ? 'Late checkout: INCLUDED in this booking’s rate — guest may stay until 12:00.'
+        ? `Late checkout: INCLUDED in this booking’s rate — guest may stay until ${LATE_CHECKOUT_TIME}.`
         : 'Late checkout: NOT included in this booking’s rate — standard checkout is 10:30.',
     );
   }

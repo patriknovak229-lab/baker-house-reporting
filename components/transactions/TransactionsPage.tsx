@@ -6,6 +6,7 @@ import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
 import type { InvoiceRequest } from "@/types/invoiceRequest";
 import { unsentInvoices } from "@/utils/invoiceUtils";
+import { EARLY_CHECKIN_TIME, LATE_CHECKOUT_TIME } from "@/utils/ratePerks";
 import {
   invoiceAutoSendBlocker,
   invoiceNeedsOperator,
@@ -2471,13 +2472,13 @@ export default function TransactionsPage() {
                     Turnover clashes
                   </span>
                   <span className="text-[11px] text-rose-700">
-                    Same room, same day: a late checkout (until 12:00) meets an early check-in (from 13:00) — the cleaning window is ~1&nbsp;hour. Coordinate with cleaners, or use the suggested like-for-like move.
+                    Same room, same day: a late checkout (until {LATE_CHECKOUT_TIME}) meets an early check-in (from {EARLY_CHECKIN_TIME}) — the cleaning window is ~1.5&nbsp;hours. Coordinate with cleaners, or use the suggested like-for-like move.
                   </span>
                 </div>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-rose-200">
-                      {["Room", "Turnover", "Leaving · late 12:00", "Arriving · early 13:00", "Suggestion"].map((h) => (
+                      {["Room", "Turnover", `Leaving · late ${LATE_CHECKOUT_TIME}`, `Arriving · early ${EARLY_CHECKIN_TIME}`, "Suggestion"].map((h) => (
                         <th key={h} className="px-4 py-2 text-xs font-medium text-rose-700 uppercase tracking-wide text-left">
                           {h}
                         </th>

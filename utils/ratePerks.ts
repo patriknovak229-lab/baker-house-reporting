@@ -14,7 +14,7 @@
 import type { RateType } from "@/types/reservation";
 
 /** Fixed policy times, shared with the cleaning app's messaging. */
-export const EARLY_CHECKIN_TIME = "13:00";
+export const EARLY_CHECKIN_TIME = "13:30";
 export const LATE_CHECKOUT_TIME = "12:00";
 
 /** Default note for the Weekly-stay welcome gift. */

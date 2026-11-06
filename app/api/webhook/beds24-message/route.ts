@@ -765,7 +765,7 @@ async function aiReviewDraft(args: AiReviewArgs): Promise<void> {
 
   // Rate-driven perks (early check-in / late checkout) for THIS booking, so the
   // AI grants a late checkout to a Flexi guest but not to a Non-Refundable one.
-  const perks = await resolveRatePerks(redis, reservationNumber, reservation);
+  const perks = await resolveRatePerks(redis, bookingId, reservation);
 
   const history = await fetchRecentConversation(bookingId, 12);
 
@@ -1288,6 +1288,56 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
 // ─── Reservation context helpers ─────────────────────────────────────────────
 
 /**
+ * The bookings cache only refreshes when the dashboard syncs, so a guest who
+ * writes minutes after booking ("can we check in early?" — common) isn't in it
+ * yet. The reply then had no name, rate or perks: BH-95788868 was told 15:00
+ * although its Standard rate includes early check-in. On a cache miss we read
+ * the booking and its group straight from Beds24 (read-only GETs), memoised
+ * per booking for a few minutes so one message's several lookups cost one call.
+ *
+ * `masterId=X` returns X plus its sub-bookings; asked about a sub it returns
+ * only the sub, so a sub costs a second call for the whole group.
+ */
+const LIVE_BOOKING_TTL_MS = 5 * 60 * 1000;
+const liveBookingMemo = new Map<number, { at: number; rows: CachedBooking[] }>();
+
+async function fetchLiveBookingGroup(bookingId: number): Promise<CachedBooking[]> {
+  const hit = liveBookingMemo.get(bookingId);
+  if (hit && Date.now() - hit.at < LIVE_BOOKING_TTL_MS) return hit.rows;
+
+  const byMaster = async (token: string, masterId: number): Promise<CachedBooking[]> => {
+    const params = new URLSearchParams({ masterId: String(masterId), includeInfoItems: 'true' });
+    const res = await fetch(`${BEDS24_API_BASE}/bookings?${params}`, { headers: { token }, cache: 'no-store' });
+    if (!res.ok) throw new Error(`Beds24 ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+    const json = await res.json();
+    return Array.isArray(json) ? json : (json.data ?? []);
+  };
+
+  try {
+    const token = await getAccessToken();
+    let rows = await byMaster(token, bookingId);
+    const self = rows.find((r) => r.id === bookingId);
+    if (self?.masterId && self.masterId !== bookingId) rows = await byMaster(token, Number(self.masterId));
+    if (!rows.some((r) => r.id === bookingId)) return []; // not found — don't memoise, a retry may see it
+    liveBookingMemo.set(bookingId, { at: Date.now(), rows });
+    console.log(`[auto-reply] booking ${bookingId} not cached yet — read live from Beds24 (${rows.length} in group)`);
+    return rows;
+  } catch (err) {
+    console.warn(`[auto-reply] live booking fetch failed for ${bookingId}:`, err);
+    return [];
+  }
+}
+
+/** The raw booking from the cache, else live from Beds24 (see above). */
+async function findRawBooking(redis: Redis | null, bookingId: number): Promise<CachedBooking | undefined> {
+  if (redis) {
+    const cached = (await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {};
+    if (cached[String(bookingId)]) return cached[String(bookingId)];
+  }
+  return (await fetchLiveBookingGroup(bookingId)).find((r) => r.id === bookingId);
+}
+
+/**
  * Effective early check-in / late checkout for one booking.
  *
  *   1. The perk map the bookings sync publishes is authoritative — it carries
@@ -1296,16 +1346,19 @@ async function processGuestMessage(args: ProcessArgs): Promise<void> {
  *      perk entry genuinely has no perks (Non-Refundable, One-Night, …).
  *   3. A booking the sync hasn't seen yet (made minutes ago — the maps only
  *      refresh when the dashboard syncs) is derived on the spot with the same
- *      formula, instead of being told "not included" just for being new.
+ *      formula, instead of being told "not included" just for being new —
+ *      from the raw booking (cache or live Beds24) when no Reservation could
+ *      be built, e.g. it still sits on a virtual room.
  *
  * Returns undefined only when nothing at all is known, which the composer
  * treats as "don't promise either way".
  */
 async function resolveRatePerks(
   redis: Redis | null,
-  reservationNumber: string,
+  bookingId: number,
   reservation: Reservation | null,
 ): Promise<{ earlyCheckIn: boolean; lateCheckout: boolean } | undefined> {
+  const reservationNumber = `BH-${bookingId}`;
   if (redis) {
     try {
       const [perkMap, rateMap] = await Promise.all([
@@ -1325,6 +1378,24 @@ async function resolveRatePerks(
       reservation.perkOverrides,
     );
     return { earlyCheckIn: eff.earlyCheckIn, lateCheckout: eff.lateCheckout };
+  }
+  if (!reservation) {
+    try {
+      const raw = await findRawBooking(redis, bookingId);
+      if (raw) {
+        const mapped = mapToReservation(raw as unknown as Beds24Booking);
+        const own = (
+          await readAllReservationOverrides<{ rateTypeOverride?: RateType; perkOverrides?: PerkOverrides }>()
+        )[reservationNumber];
+        const rateType = own?.rateTypeOverride ?? mapped.rateType;
+        if (rateType) {
+          const eff = effectiveRatePerks(autoRatePerks(rateType, mapped.reservationDate), own?.perkOverrides);
+          return { earlyCheckIn: eff.earlyCheckIn, lateCheckout: eff.lateCheckout };
+        }
+      }
+    } catch (err) {
+      console.warn(`[ai-review] raw-booking perk derivation failed for ${reservationNumber}:`, err);
+    }
   }
   return undefined;
 }
@@ -1354,11 +1425,18 @@ async function buildReservationContext(
   }
 
   // Prefer cached booking (it has fields the webhook payload might omit) —
-  // fall back to webhook payload data if the cache hasn't ingested this booking yet.
+  // fall back to webhook payload data, then to a live Beds24 read, if the cache
+  // hasn't ingested this booking yet.
   const cachedThis = cached[String(bookingId)];
-  const b: CachedBooking | undefined = cachedThis ?? webhookBooking;
+  let b: CachedBooking | undefined = cachedThis ?? webhookBooking;
   if (!b) {
-    // Pull-style trigger AND cache miss → can't render templates safely
+    const live = await fetchLiveBookingGroup(bookingId);
+    b = live.find((r) => r.id === bookingId);
+    // Its group siblings are just as new — make them visible to linkedRooms below.
+    for (const r of live) if (r.id && !cached[String(r.id)]) cached[String(r.id)] = r;
+  }
+  if (!b) {
+    // Not in the cache and not readable from Beds24 → can't render templates safely
     return null;
   }
 
@@ -1468,6 +1546,13 @@ async function buildReservationContext(
  */
 async function computeBookingParking(redis: Redis | null, reservation: Reservation): Promise<ParkingResult> {
   const cached = redis ? ((await redis.get<Record<string, CachedBooking>>(BOOKINGS_CACHE_KEY)) ?? {}) : {};
+  // A booking too new for the cache (read live in buildReservationContext)
+  // still needs its space — add it and its group so it's assigned as the
+  // dashboard will once it syncs.
+  const ownId = Number(reservation.reservationNumber.replace(/^BH-/, ''));
+  if (ownId && !cached[String(ownId)]) {
+    for (const r of await fetchLiveBookingGroup(ownId)) if (r.id && !cached[String(r.id)]) cached[String(r.id)] = r;
+  }
   const overrides = await readAllReservationOverrides<{ parkingOverride?: string; parkingUse?: ParkingUse | null }>();
 
   // Copies: the merge sums prices onto the master in place.
