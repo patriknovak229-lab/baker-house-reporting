@@ -11,6 +11,7 @@ export {
   fetchListingPrices,
   fetchListings,
   fetchNeighborhoodData,
+  listingPricesProblem,
   monthLabelToIso,
   plNumber,
   plPercentString,

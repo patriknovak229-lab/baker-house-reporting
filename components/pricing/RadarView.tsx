@@ -63,6 +63,13 @@ function fmtDateShort(iso: string): string {
   return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
+function fmtCapture(ts: number): string {
+  return new Date(ts).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** How far ahead the "blank, not quiet" check looks — the dates people act on. */
+const COVERAGE_DAYS = 60;
+
 // ── City-level day merge ──────────────────────────────────────────────────────
 
 interface CityDay {
@@ -247,6 +254,8 @@ export default function RadarView() {
   const [error, setError] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<60 | 120 | 365>(60);
   const [highOnly, setHighOnly] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -268,14 +277,56 @@ export default function RadarView() {
 
   const cityDays = useMemo(() => (radar ? mergeCityDays(radar.units) : new Map<string, CityDay>()), [radar]);
 
-  const staleHours = useMemo(() => {
+  const oldestCapture = useMemo(() => {
     if (!radar) return null;
     const oldest = radar.units
       .map((u) => (u.capturedAt ? new Date(u.capturedAt).getTime() : null))
       .filter((t): t is number => t !== null);
-    if (oldest.length === 0) return null;
-    return (Date.now() - Math.min(...oldest)) / 3_600_000;
+    return oldest.length === 0 ? null : Math.min(...oldest);
   }, [radar]);
+  const staleHours = oldestCapture === null ? null : (Date.now() - oldestCapture) / 3_600_000;
+
+  // Units whose next COVERAGE_DAYS carry none of PriceLabs' per-listing data
+  // (demand, live price, min-stay). Market percentiles come from a different
+  // call, so a snapshot can be fresh and still be blank here — on 7 Nov 2026
+  // the calendar went grey with nothing on screen saying why.
+  const blankUnits = useMemo(() => {
+    if (!radar) return [];
+    const until = new Date(`${radar.from}T00:00:00Z`);
+    until.setUTCDate(until.getUTCDate() + COVERAGE_DAYS);
+    const untilIso = until.toISOString().slice(0, 10);
+    return radar.units
+      .filter((u) => {
+        const near = u.days.filter((d) => d.date <= untilIso);
+        return (
+          near.length > 0 &&
+          !near.some((d) => d.demand !== null || d.unavailable || d.livePrice !== null || d.minStay !== null)
+        );
+      })
+      .map((u) => u.label);
+  }, [radar]);
+
+  /** Same pull as the 06:30 cron (admin/super — it spends PriceLabs credit). */
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      const res = await fetch('/api/analytics/market/refresh', { method: 'POST' });
+      const body = await res.json().catch(() => null);
+      if (!res.ok && !body?.listings) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      const failed = (body?.listings ?? []).filter((l: { error: string | null }) => l.error);
+      setRefreshNote(
+        failed.length > 0
+          ? `PriceLabs still failing for ${failed.length} of ${body.listings.length} listings: ${failed[0].error}`
+          : 'Snapshot refreshed.',
+      );
+      await load();
+    } catch (err) {
+      setRefreshNote(err instanceof Error ? `Refresh failed: ${err.message}` : 'Refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [load]);
 
   const flagRows = useMemo(() => {
     const out: Record<RadarFlagKind, { unit: string; day: RadarDay }[]> = {
@@ -343,6 +394,32 @@ export default function RadarView() {
 
   return (
     <div className="space-y-8">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+        <span>
+          PriceLabs snapshot from {oldestCapture === null ? '—' : fmtCapture(oldestCapture)} · refreshes daily around
+          06:30
+        </span>
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={refreshing}
+          className="rounded-md border border-gray-200 bg-white px-2 py-0.5 font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {refreshing ? 'Refreshing…' : 'Refresh now'}
+        </button>
+        {refreshNote && <span className="text-gray-700">{refreshNote}</span>}
+      </div>
+
+      {blankUnits.length > 0 && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          <strong>No demand or live prices from PriceLabs</strong> for{' '}
+          {blankUnits.length === radar.units.length ? `all ${blankUnits.length} units` : blankUnits.join(', ')} on the
+          last refresh. The demand calendar, the flags and our live prices below are blank because the data is missing —
+          not because nothing is happening. Market percentiles are unaffected. Press Refresh now; a failed pull is also
+          retried automatically at 12:00 UTC.
+        </div>
+      )}
+
       {staleHours !== null && staleHours > 48 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           Market snapshot is {Math.round(staleHours)} h old — the 06:30 refresh may be failing. Data below reflects the last successful pull.

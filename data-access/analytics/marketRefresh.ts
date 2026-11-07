@@ -23,6 +23,7 @@ import {
   fetchListingMetrics,
   fetchListingPrices,
   fetchNeighborhoodData,
+  listingPricesProblem,
   monthLabelToIso,
   plNumber,
   plRatio,
@@ -32,14 +33,22 @@ import {
 } from './marketTypes';
 
 /**
- * Age of the newest market_daily row, in hours (null when the table is empty).
+ * Age of the last pull that brought PriceLabs' per-listing data, in hours (null
+ * when there has never been one). Only rows carrying a demand reading count —
+ * every good pull writes one for each night (booked ones say 'Unavailable'),
+ * while a pull whose listing_prices answer was unusable writes none and keeps
+ * the old capture time. Counting every row instead made a failed pull look
+ * fresh (each refresh inserts a new far-end date), so the cron's "fresh, skip"
+ * guard swallowed the retry.
  * The snapshot is the availability source the parity sweep planner reads, so a
  * stale one silently degrades the scrape plan — callers use this to refresh on
  * demand instead of trusting a cron they cannot see.
  */
 export async function marketSnapshotAgeHours(): Promise<number | null> {
   const [row] = await db
-    .select({ newest: sql<Date | null>`max(${marketDaily.capturedAt})` })
+    .select({
+      newest: sql<Date | null>`max(${marketDaily.capturedAt}) filter (where ${marketDaily.demandDesc} is not null)`,
+    })
     .from(marketDaily);
   if (!row?.newest) return null;
   return (Date.now() - new Date(row.newest).getTime()) / 3_600_000;
@@ -223,7 +232,11 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
         });
       }
 
-      for (const day of prices?.data ?? []) {
+      // PriceLabs reports "no data" inside a 200, so check before trusting it:
+      // an unusable answer must not overwrite the last good live price,
+      // demand and min-stay (2026-11-07: it blanked the whole year).
+      const pricesProblem = listingPricesProblem(prices);
+      for (const day of pricesProblem ? [] : (prices?.data ?? [])) {
         const row = put(day.date);
         row.recommendedPrice = plNumber(day.price);
         // user_price is -1 when the night is already sold or closed, which is not
@@ -279,16 +292,31 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
               p75: sql`excluded.p75`,
               p90: sql`excluded.p90`,
               medianBookedPrice: sql`excluded.median_booked_price`,
-              recommendedPrice: sql`excluded.recommended_price`,
-              livePrice: sql`excluded.live_price`,
-              demandDesc: sql`excluded.demand_desc`,
-              demandColor: sql`excluded.demand_color`,
-              minStay: sql`excluded.min_stay`,
               nBookings: sql`excluded.n_bookings`,
-              capturedAt: sql`excluded.captured_at`,
+              // captured_at = when the row was last FULLY refreshed. Left alone
+              // when the price half was kept, so the snapshot reads as stale:
+              // the cron's "fresh, skip" guard then lets the 12:00 UTC catch-up
+              // and the parity work order pull again, and the radar's age
+              // banner tells the truth.
+              ...(pricesProblem
+                ? {}
+                : {
+                    recommendedPrice: sql`excluded.recommended_price`,
+                    livePrice: sql`excluded.live_price`,
+                    demandDesc: sql`excluded.demand_desc`,
+                    demandColor: sql`excluded.demand_color`,
+                    minStay: sql`excluded.min_stay`,
+                    capturedAt: sql`excluded.captured_at`,
+                  }),
             },
           }),
       );
+      // Reported as a listing failure: when every listing fails, the route's
+      // heartbeat says "failed" and the 12:00 UTC cron catch-up pulls again.
+      if (pricesProblem) {
+        entry.error = `PriceLabs listing_prices unusable (${pricesProblem}) — kept the previous live prices, demand and min-stay`;
+        console.error('[market-refresh]', listingId, entry.error);
+      }
 
       // ── Monthly market KPIs ────────────────────────────────────────────────
       const kpiCat = kpiBlock?.Category?.[cat];

@@ -266,7 +266,34 @@ export interface ListingPrices {
   pms: string;
   currency: string;
   last_refreshed_at: string | null;
-  data: ListingPriceDay[];
+  /** Absent when PriceLabs has nothing for the listing — see `error`. */
+  data?: ListingPriceDay[];
+  /** Set (with HTTP 200!) when there is no data, e.g. "Listing does not exist in PriceLabs". */
+  error?: string;
+  /** e.g. LISTING_NO_DATA (seen mid-recalculation), LISTING_NOT_PRESENT. */
+  error_status?: string;
+}
+
+/**
+ * Why a listing_prices answer is unusable, or null when it is fine.
+ *
+ * PriceLabs reports "no data" inside a 200 response, so a failed pull looks
+ * like a successful one with no nights. On 2026-11-07 06:00 UTC all four
+ * listings came back like that and the refresh wrote empty live price,
+ * demand and min-stay over the whole year — the radar went blank with no
+ * warning. Callers must keep their previous price data when this is non-null.
+ */
+export function listingPricesProblem(prices: ListingPrices | null | undefined): string | null {
+  if (!prices) return 'no entry for the listing';
+  if (prices.error || prices.error_status) {
+    return [prices.error_status, prices.error].filter(Boolean).join(': ');
+  }
+  const days = prices.data ?? [];
+  if (days.length === 0) return 'no nights returned';
+  const anyPrice = days.some(
+    (d) => plNumber(d.price) !== null || plNumber(d.user_price) !== null || Boolean(d.demand_desc),
+  );
+  return anyPrice ? null : `${days.length} nights returned, none with a price or demand`;
 }
 
 /**

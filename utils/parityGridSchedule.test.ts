@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isGridDue, isoWeekday } from './parityGridSchedule';
+import { isGridDue, isoWeekday, nextGridDate } from './parityGridSchedule';
 
 const MONDAY = { gridWeekday: 1, gridMaxGapDays: 7 };
 
@@ -40,5 +40,16 @@ describe('isGridDue (weekly, Monday)', () => {
     // Last daily run was Fri 30 Oct 2026.
     expect(isGridDue('2026-10-30', '2026-10-31', MONDAY)).toBe(false);
     expect(isGridDue('2026-10-30', '2026-11-02', MONDAY)).toBe(true);
+  });
+});
+
+describe('nextGridDate', () => {
+  it('is the following Monday after a Monday run', () => {
+    expect(nextGridDate('2026-11-02', MONDAY)).toBe('2026-11-09');
+  });
+
+  it('is the coming Monday after a catch-up run', () => {
+    expect(nextGridDate('2026-11-03', MONDAY)).toBe('2026-11-09');
+    expect(nextGridDate('2026-11-08', MONDAY)).toBe('2026-11-09');
   });
 });

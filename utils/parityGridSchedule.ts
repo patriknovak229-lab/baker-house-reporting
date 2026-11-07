@@ -34,3 +34,15 @@ export function isGridDue(
   if (lastGridDate >= today) return false;
   return isoWeekday(today) === cfg.gridWeekday || daysBetween(lastGridDate, today) >= cfg.gridMaxGapDays;
 }
+
+/** The first grid day after `lastGridDate` — when the next scheduled run is due. */
+export function nextGridDate(
+  lastGridDate: string,
+  cfg: { gridWeekday: number } = PARITY_SWEEP,
+): string {
+  const d = new Date(`${lastGridDate}T12:00:00Z`);
+  do {
+    d.setUTCDate(d.getUTCDate() + 1);
+  } while (isoWeekday(d.toISOString().slice(0, 10)) !== cfg.gridWeekday);
+  return d.toISOString().slice(0, 10);
+}

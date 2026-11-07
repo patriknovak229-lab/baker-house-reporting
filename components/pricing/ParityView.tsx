@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PARITY_UNITS, UNITS_2N, UNITS_3N, type ParityUnitConfig } from '@/data/parityConfig';
 import { assessStay, type StayAssessment } from '@/utils/paritySeverity';
+import { nextGridDate } from '@/utils/parityGridSchedule';
 import {
   defaultParityRules,
   PRICE_LABEL,
@@ -860,9 +861,27 @@ export default function ParityView() {
   }
 
   const gridAgeHours = data?.latestGridAt ? (Date.now() - new Date(data.latestGridAt).getTime()) / 3_600_000 : null;
+  // Prague calendar date of the last grid run, then the Monday after it.
+  const lastGridDay = data?.latestGridAt
+    ? new Date(data.latestGridAt).toLocaleDateString('en-CA', { timeZone: 'Europe/Prague' })
+    : null;
+  const nextGridDay = lastGridDay ? nextGridDate(lastGridDay) : null;
 
   return (
     <div className="space-y-10">
+      <p className="text-xs text-gray-500">
+        {data?.latestGridAt ? (
+          <>
+            Last grid run {formatTs(data.latestGridAt)} ({Math.floor((gridAgeHours ?? 0) / 24)} days ago) · next{' '}
+            {nextGridDay ? `${weekday(nextGridDay)} ${fmtDay(nextGridDay)} after 08:00` : '—'}
+            {' · runs weekly; for a fresher price use Re-scrape in a '}
+            stay&apos;s details or a custom check below.
+          </>
+        ) : (
+          'No grid run recorded yet — the boards fill after the Mac runner\'s first Monday run.'
+        )}
+      </p>
+
       {/* Weekly grid (Mondays): a week plus a day of slack before warning. */}
       {gridAgeHours !== null && gridAgeHours > 7 * 24 + 26 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
