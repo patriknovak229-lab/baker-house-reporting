@@ -21,6 +21,8 @@ import { marketSnapshotAgeHours, refreshMarketSnapshot } from '@/data-access/ana
 import { buildRadarDigest } from '@/data-access/pricing/radar';
 import { pricingChatId, sendTelegram } from '@/utils/telegram';
 import { cronAuth } from '@/utils/cronAuth';
+import { withCronLock } from '@/utils/cronLock';
+import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 
 // Four listings × three calls each, one of which returns ~540 KB. Comfortably
 // inside Vercel Pro's ceiling, nowhere near a default 10s budget.
@@ -30,15 +32,28 @@ export const dynamic = 'force-dynamic';
 /** A cron pull is a no-op while the snapshot is younger than this. */
 const CRON_MIN_AGE_HOURS = 6;
 
+/** Heartbeat / lock name — matches the cronAuth log tag and WATCHED_CRON_JOBS. */
+const JOB = 'market-refresh';
+
 async function run(req: NextRequest) {
   // cronAuth logs which signal matched, so a silent failure stays diagnosable
   // from the Vercel logs alone: a line naming the signal, or no line at all
   // = never invoked.
-  const { isCron } = cronAuth(req, 'market-refresh');
+  const { isCron } = cronAuth(req, JOB);
   if (!isCron) {
     const guard = await requireRole(['admin', 'super']);
     if ('error' in guard) return guard.error;
   }
+
+  // One pull at a time: a duplicate delivery, the daily catch-up and the
+  // Refresh button could otherwise bill PriceLabs twice (utils/cronLock).
+  return withCronLock(JOB, maxDuration + 30, () => runLocked(req, isCron));
+}
+
+async function runLocked(req: NextRequest, isCron: boolean): Promise<Response> {
+  // Heartbeat on every outcome, like the other scheduled jobs: until
+  // 2026-11-07 this one wrote none, so a missed 06:30 run went unnoticed.
+  await beat({ phase: 'started' });
 
   // Cron invocations are cheap to ignore when the data is already fresh: the
   // parity work-order path also refreshes this snapshot, so a duplicate pull
@@ -50,6 +65,7 @@ async function run(req: NextRequest) {
     const age = await marketSnapshotAgeHours();
     if (age !== null && age < CRON_MIN_AGE_HOURS) {
       console.log(`[market-refresh] skipped — snapshot is only ${age.toFixed(1)} h old`);
+      await beat({ phase: 'completed', skipped: 'snapshot fresh' });
       return NextResponse.json({ skipped: true, ageHours: Math.round(age * 10) / 10 });
     }
   }
@@ -57,6 +73,7 @@ async function run(req: NextRequest) {
   try {
     const result = await refreshMarketSnapshot(pragueToday());
     if (!result.configured) {
+      await beat({ phase: 'completed', skipped: 'PRICELABS_API_KEY not set' });
       return NextResponse.json(
         { error: 'PRICELABS_API_KEY is not set — no market data to refresh.' },
         { status: 503 },
@@ -79,12 +96,26 @@ async function run(req: NextRequest) {
       }
     }
 
-    return NextResponse.json(result, { status: failed.length === result.listings.length ? 502 : 200 });
+    const allFailed = failed.length === result.listings.length;
+    await beat(
+      allFailed
+        ? { phase: 'failed', error: `all ${failed.length} listings failed` }
+        : { phase: 'completed', listings: result.listings.length, failedListings: failed.length },
+    );
+    return NextResponse.json(result, { status: allFailed ? 502 : 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[market-refresh]', err);
+    await beat({ phase: 'failed', error: message });
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** Liveness — see utils/cronHeartbeat.ts. Swallowed so it can never fail the run. */
+function beat(summary: Record<string, unknown>): Promise<void> {
+  return writeCronHeartbeat(JOB, { ranAt: new Date().toISOString(), summary }).catch((err) =>
+    console.error(`[${JOB}] heartbeat write failed:`, err),
+  );
 }
 
 export const POST = run;

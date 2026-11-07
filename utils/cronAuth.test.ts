@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateCronAuth } from "./cronAuth";
+import { evaluateCronAuth, cronDispatchHeaders } from './cronAuth';
 
 // This gate has failed silently twice. Both directions matter: too narrow and
 // the job 401s and quietly stops; too loose and a guest-facing job is exposed
@@ -62,5 +62,18 @@ describe("evaluateCronAuth — CRON_SECRET set", () => {
   it("never reports unverified when a secret is in play", () => {
     expect(evaluateCronAuth({ authorization: `Bearer ${SECRET}` }, SECRET).unverified).toBe(false);
     expect(evaluateCronAuth({ xVercelCron: "1" }, SECRET).unverified).toBe(false);
+  });
+});
+
+describe('cronDispatchHeaders (catch-up calling our own cron routes)', () => {
+  it('sends the CRON_SECRET bearer, which cronAuth accepts', () => {
+    const h = cronDispatchHeaders('s3cret-value-123456');
+    expect(h).toEqual({ authorization: 'Bearer s3cret-value-123456' });
+    expect(evaluateCronAuth({ authorization: h.authorization }, 's3cret-value-123456').isCron).toBe(true);
+  });
+
+  it('without a secret, falls back to the header cronAuth accepts in that mode', () => {
+    const h = cronDispatchHeaders(undefined);
+    expect(evaluateCronAuth({ xVercelCron: h['x-vercel-cron'] }, undefined).isCron).toBe(true);
   });
 });

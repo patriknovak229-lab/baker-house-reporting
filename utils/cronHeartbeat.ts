@@ -23,6 +23,19 @@
  * takes the crons down.
  */
 
+/**
+ * What the daily catch-up (app/api/cron/catch-up) may do when a job's window
+ * closed without a completed run:
+ *   'missed-or-failed' → re-run it whether it never ran or ran and failed. For
+ *                        jobs whose work is safe to repeat (syncs, upserts).
+ *   'missed-only'      → re-run only when it was never invoked. A run that
+ *                        started and didn't finish may have done part of its
+ *                        side effects (emails sent but not yet marked), so a
+ *                        blind re-run could duplicate them: report instead.
+ *   'never'            → watched, never re-run (the catch-up job itself).
+ */
+export type CatchUpPolicy = 'missed-or-failed' | 'missed-only' | 'never';
+
 /** A cron job we expect to hear from, and how long silence is tolerable. */
 export interface WatchedCronJob {
   job: string;
@@ -30,18 +43,81 @@ export interface WatchedCronJob {
   label: string;
   /** Alert once silence passes this. Generous enough to absorb one missed run. */
   maxAgeHours: number;
+  /** The route Vercel calls — must match vercel.json and be exempt in proxy.ts. */
+  path?: string;
+  /** vercel.json schedule, UTC, daily form "M H * * *". */
+  schedule?: string;
+  catchUp?: CatchUpPolicy;
 }
 
 /**
- * Daily jobs get 36h: a full day plus most of another, so a single skipped or
- * late run is not an alert, but two in a row is.
+ * Every scheduled job, with its vercel.json path + schedule (a test pins the
+ * two against each other and against the proxy.ts exemptions).
+ *
+ * Daily jobs get 36h before the watchdog alerts: a full day plus most of
+ * another. Since 2026-11-07 a missed run no longer waits for that: the 12:00 UTC
+ * catch-up re-runs it the same day and reports. The 36h alert is the backstop
+ * for when the catch-up itself can't help.
  */
 export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
-  { job: 'send-due-invoices', label: 'Invoice auto-send (09:00)', maxAgeHours: 36 },
-  { job: 'check-reviews', label: 'Review sync (08:00)', maxAgeHours: 36 },
-  { job: 'web-funnel-sync', label: 'Web funnel copy (01:15 UTC)', maxAgeHours: 36 },
-  { job: 'ga-traffic-sync', label: 'GA4 traffic sync (01:30 UTC)', maxAgeHours: 36 },
-  { job: 'overdue-tasks', label: 'Overdue general tasks (07:00 UTC)', maxAgeHours: 36 },
+  {
+    job: 'send-due-invoices',
+    label: 'Invoice auto-send (09:00 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/send-due-invoices',
+    schedule: '0 9 * * *',
+    // Emails go out before "Sent" is saved, so a half-finished run is a human call.
+    catchUp: 'missed-only',
+  },
+  {
+    job: 'check-reviews',
+    label: 'Review sync (08:00 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/check-reviews',
+    schedule: '0 8 * * *',
+    catchUp: 'missed-or-failed',
+  },
+  {
+    job: 'web-funnel-sync',
+    label: 'Web funnel copy (01:15 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/web-funnel-sync',
+    schedule: '15 1 * * *',
+    catchUp: 'missed-or-failed',
+  },
+  {
+    job: 'ga-traffic-sync',
+    label: 'GA4 traffic sync (01:30 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/ga-traffic-sync',
+    schedule: '30 1 * * *',
+    catchUp: 'missed-or-failed',
+  },
+  {
+    job: 'overdue-tasks',
+    label: 'Overdue general tasks (07:00 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/overdue-tasks',
+    schedule: '0 7 * * *',
+    // A failed run stamped nothing (Telegram failed), so retrying is the intent.
+    catchUp: 'missed-or-failed',
+  },
+  {
+    job: 'market-refresh',
+    label: 'PriceLabs market refresh (06:30 UTC)',
+    maxAgeHours: 36,
+    path: '/api/analytics/market/refresh',
+    schedule: '30 6 * * *',
+    catchUp: 'missed-or-failed',
+  },
+  {
+    job: 'catch-up',
+    label: 'Missed-run catch-up (12:00 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/catch-up',
+    schedule: '0 12 * * *',
+    catchUp: 'never',
+  },
 ];
 
 export interface CronHeartbeat {

@@ -46,6 +46,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import { cronAuth } from '@/utils/cronAuth';
+import { withCronLock } from '@/utils/cronLock';
 import type { InvoiceData, Issue, InvoiceStatus, InvoiceSplit, Reservation } from '@/types/reservation';
 import { buildReservationSet } from '@/utils/beds24Reservations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
@@ -106,6 +107,13 @@ async function run(req: NextRequest) {
     if ('error' in auth) return auth.error;
   }
 
+  // One run at a time: a duplicate delivery or the daily catch-up overlapping a
+  // late scheduled run could otherwise email the same invoice twice, because
+  // "Sent" is only saved after the whole batch (utils/cronLock).
+  return withCronLock('send-due-invoices', maxDuration + 30, () => runLocked());
+}
+
+async function runLocked(): Promise<Response> {
   // Claim the invocation up front, before any work that could throw. Overwritten
   // with the real summary on success; replaced with the error on failure.
   await beat({ phase: 'started' });

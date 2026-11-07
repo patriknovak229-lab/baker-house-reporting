@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/utils/authGuard';
 import { cronAuth } from '@/utils/cronAuth';
+import { withCronLock } from '@/utils/cronLock';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { listTeamUsers, listUnannouncedOverdueTasks, markOverdueAnnounced } from '@/data-access/team';
 import { escapeHtml, sendTelegram } from '@/utils/telegram';
@@ -33,6 +34,11 @@ async function run(req: NextRequest) {
     if ('error' in guard) return guard.error;
   }
 
+  // One run at a time (duplicate delivery / daily catch-up) — utils/cronLock.
+  return withCronLock(JOB, maxDuration + 30, () => runLocked());
+}
+
+async function runLocked(): Promise<Response> {
   await beat({ phase: 'started' });
   try {
     const today = pragueToday();

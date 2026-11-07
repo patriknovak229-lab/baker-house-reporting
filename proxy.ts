@@ -75,11 +75,17 @@ export const config = {
   //     admin/super). Reads open general tasks, posts one Telegram, stamps
   //     `overdue_notified_at` — no guest-facing side effects.
   //
+  //   - `api/cron/catch-up` (2026-11-07) — exempted in the same commit that
+  //     scheduled it, exports GET, gated by cronAuth (manual runs need
+  //     admin/super). Re-runs a missed job by calling that job's own route with
+  //     the CRON_SECRET bearer, so it can only reach routes already listed here.
+  //     utils/cronCatchUp.test.ts fails if a scheduled job's path is missing.
+  //
   // `api/cron/send-scheduled-payments` is DELIBERATELY still behind the
   // middleware. It charges guests and emails them, it has never run in
   // production, and switching it on is a business decision that wants its own
   // review — list it here only after that happens. This is why the exemptions
   // are per-path rather than a blanket `api/cron`: a prefix would have turned
   // it on silently.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews|api/cron/web-funnel-sync|api/cron/ga-traffic-sync|api/cron/overdue-tasks).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth|api/webhook|api/stripe/webhook|api/vouchers/validate|api/vouchers/redeem|payment-success|share|api/public|api/pricing/ingest|api/analytics/market/refresh|api/cron/send-due-invoices|api/cron/check-reviews|api/cron/web-funnel-sync|api/cron/ga-traffic-sync|api/cron/overdue-tasks|api/cron/catch-up).*)'],
 };

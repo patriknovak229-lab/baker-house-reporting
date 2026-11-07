@@ -71,6 +71,8 @@ import {
   unseededCronJobs,
   staleCronAlert,
 } from '@/utils/cronHeartbeat';
+import { catchUpBackupDue } from '@/utils/cronCatchUp';
+import { cronBaseUrl, cronDispatchHeaders } from '@/utils/cronAuth';
 import {
   renderMissingFieldsReply,
   renderInvoiceConfirmation,
@@ -1784,6 +1786,8 @@ async function checkCronLiveness(redis: Redis): Promise<void> {
     console.log(`[cron watchdog] seeded baseline for ${job}`);
   }
 
+  await fireCatchUpBackupIfDue(redis, heartbeats['catch-up']);
+
   const stale = staleCronJobs(heartbeats, new Date());
   if (stale.length === 0) return;
 
@@ -1801,6 +1805,37 @@ async function checkCronLiveness(redis: Redis): Promise<void> {
     await sendTelegram(body).catch(() => {});
     console.warn(`[cron watchdog] ${fresh.map((s) => s.job).join(', ')} silent`);
   }
+}
+
+/**
+ * Backup trigger for the daily catch-up (app/api/cron/catch-up). That route is
+ * a Vercel cron too, so its own delivery can be dropped, the one failure it
+ * exists to absorb. This watchdog runs on the cron-job.org 5-minute ping,
+ * outside Vercel's scheduler, so from 14:00 UTC it fires the catch-up if it
+ * hasn't run today. Once a day at most (Redis NX).
+ *
+ * Fire-and-forget on purpose: the catch-up can take minutes (it re-runs jobs
+ * with 300s budgets) and this route has 60s. The short timeout only drops OUR
+ * wait; Vercel keeps the called function running after the caller disconnects
+ * unless `supportsCancellation` is configured, which this project doesn't do.
+ */
+async function fireCatchUpBackupIfDue(
+  redis: Redis,
+  hb: Parameters<typeof catchUpBackupDue>[0],
+): Promise<void> {
+  const now = new Date();
+  if (!catchUpBackupDue(hb, now)) return;
+  const key = `baker:cron-catchup:backup-fired:${now.toISOString().slice(0, 10)}`;
+  const first = await redis.set(key, 1, { nx: true, ex: 26 * 60 * 60 });
+  if (first === null) return;
+  console.warn('[cron watchdog] catch-up has not run today — firing it as a backup');
+  await fetch(`${cronBaseUrl()}/api/cron/catch-up`, {
+    headers: cronDispatchHeaders(),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(5_000),
+  }).catch(() => {
+    // Expected: we stop waiting after 5s while the catch-up keeps running.
+  });
 }
 
 // ─── Multi-turn invoice request flow ─────────────────────────────────────────

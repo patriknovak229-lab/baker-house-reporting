@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { requireRole } from "@/utils/authGuard";
 import { cronAuth } from "@/utils/cronAuth";
+import { withCronLock } from "@/utils/cronLock";
 import { writeCronHeartbeat } from "@/data-access/cronHeartbeat";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { fetchReviews, reviewsFromDate, mergeReviews } from "@/utils/beds24Reviews";
@@ -44,6 +45,11 @@ async function run(req: NextRequest) {
     if ("error" in authResult) return authResult.error;
   }
 
+  // One run at a time (duplicate delivery / daily catch-up) — utils/cronLock.
+  return withCronLock("check-reviews", maxDuration + 30, () => runLocked());
+}
+
+async function runLocked(): Promise<Response> {
   const redis = getRedis();
   const token = await getAccessToken();
 

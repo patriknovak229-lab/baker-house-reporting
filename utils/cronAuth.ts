@@ -86,3 +86,20 @@ export function cronAuth(req: NextRequest, job: string): CronAuthResult {
   }
   return result;
 }
+
+/**
+ * Headers for calling one of our own cron routes from server code (the daily
+ * catch-up re-running a missed job, the watchdog's backup trigger). With
+ * CRON_SECRET set — it is, in Vercel — this is the same Bearer token Vercel
+ * sends, so cronAuth accepts it. Without one, the `x-vercel-cron` signal cronAuth
+ * accepts in that mode.
+ */
+export function cronDispatchHeaders(secret: string | undefined = process.env.CRON_SECRET): Record<string, string> {
+  return secret ? { authorization: `Bearer ${secret}` } : { 'x-vercel-cron': '1' };
+}
+
+/** Public origin to call our own routes on. The production domain, never a
+ *  per-deployment *.vercel.app URL (those can sit behind deployment protection). */
+export function cronBaseUrl(): string {
+  return (process.env.NEXT_PUBLIC_BASE_URL ?? 'https://reporting.bakerhouseapartments.cz').replace(/\/+$/, '');
+}
