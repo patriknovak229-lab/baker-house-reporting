@@ -64,6 +64,31 @@ export function restoredInvoiceRequestStatus(
   return missingInvoiceFields(fields).length === 0 ? "auto-completed" : "awaiting-info";
 }
 
+/**
+ * The reservation already has what the chat agent is still chasing the guest
+ * for: the invoice has been issued or sent, or the invoice details stored on
+ * the reservation (typed in the drawer, or set when the booking was made) fill
+ * every gap the request has. The 24h reminder must not go out then — it used to
+ * re-ask guests for an email the operator had already put on the invoice.
+ * Callers pass invoiceData with the billing email already cleaned
+ * of channel-conduit aliases.
+ */
+export function invoiceRequestSettledOnReservation(
+  fields: InvoiceIdentityFields,
+  reservation: { invoiceData?: Partial<InvoiceData> | null; invoiceStatus?: string } | null | undefined,
+): boolean {
+  if (!reservation) return false;
+  if (reservation.invoiceStatus === "Issued" || reservation.invoiceStatus === "Sent") return true;
+  const stored = reservation.invoiceData;
+  if (!stored) return false;
+  return missingInvoiceFields({
+    companyName: fields.companyName || stored.companyName?.trim() || null,
+    ico: fields.ico || stored.ico?.trim() || null,
+    dic: fields.dic || stored.vatNumber?.trim() || null,
+    email: fields.email || stored.billingEmail?.trim() || null,
+  }).length === 0;
+}
+
 /** A past stay whose invoice still hasn't gone out. */
 export interface UnsentInvoice {
   reservation: Reservation;

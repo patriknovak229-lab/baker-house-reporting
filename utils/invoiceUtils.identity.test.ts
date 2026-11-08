@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { deriveIcoFromDic, missingInvoiceFields, restoredInvoiceRequestStatus } from "./invoiceUtils";
+import {
+  deriveIcoFromDic,
+  invoiceRequestSettledOnReservation,
+  missingInvoiceFields,
+  restoredInvoiceRequestStatus,
+} from "./invoiceUtils";
 
 // The billing-identity rule decides when the chat agent stops asking the guest,
 // writes the details onto the reservation and lets the 09:00 cron mail the
@@ -115,5 +120,48 @@ describe("restoredInvoiceRequestStatus", () => {
         email: "fakturace@acme.cz",
       }),
     ).toBe("awaiting-info");
+  });
+});
+
+describe("invoiceRequestSettledOnReservation", () => {
+  // The request still chasing the guest for an email.
+  const chasingEmail = { companyName: "Acme s.r.o.", ico: null, dic: "CZ12345678", email: null };
+  const drawer = {
+    companyName: "Acme s.r.o.",
+    companyAddress: "",
+    ico: "12345678",
+    vatNumber: "CZ12345678",
+    billingEmail: "",
+  };
+
+  it("is settled once the operator has put the missing email on the reservation", () => {
+    expect(
+      invoiceRequestSettledOnReservation(chasingEmail, {
+        invoiceData: { ...drawer, billingEmail: "jan.novak@example.cz" },
+        invoiceStatus: "Not Issued",
+      }),
+    ).toBe(true);
+  });
+
+  it("is settled once the invoice has been issued or sent, whatever is still blank", () => {
+    expect(invoiceRequestSettledOnReservation(chasingEmail, { invoiceStatus: "Issued" })).toBe(true);
+    expect(invoiceRequestSettledOnReservation(chasingEmail, { invoiceStatus: "Sent" })).toBe(true);
+  });
+
+  it("keeps chasing while the reservation doesn't fill every gap", () => {
+    expect(
+      invoiceRequestSettledOnReservation(chasingEmail, { invoiceData: drawer, invoiceStatus: "Not Issued" }),
+    ).toBe(false);
+    expect(
+      invoiceRequestSettledOnReservation(
+        { companyName: null, ico: null, dic: null, email: null },
+        { invoiceData: { ...drawer, companyName: "  ", billingEmail: "jan.novak@example.cz" } },
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps chasing when there is nothing stored on the reservation", () => {
+    expect(invoiceRequestSettledOnReservation(chasingEmail, undefined)).toBe(false);
+    expect(invoiceRequestSettledOnReservation(chasingEmail, {})).toBe(false);
   });
 });

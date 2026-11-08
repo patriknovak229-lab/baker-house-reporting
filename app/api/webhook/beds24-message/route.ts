@@ -64,7 +64,7 @@ import {
   sanitizeInvoiceEmail,
   type ExtractedInvoiceFields,
 } from '@/utils/invoiceFieldExtractor';
-import { deriveIcoFromDic } from '@/utils/invoiceUtils';
+import { deriveIcoFromDic, invoiceRequestSettledOnReservation } from '@/utils/invoiceUtils';
 import {
   WATCHED_CRON_JOBS,
   staleCronJobs,
@@ -2604,7 +2604,10 @@ function requestFields(r: InvoiceRequest): ExtractedInvoiceFields {
  *      went out more than 24 hours ago and have only been asked once, get the
  *      single reminder and a bumped asksCount. After that the request stays at
  *      awaiting-info indefinitely — operator handles it in the drawer. Per
- *      operator policy: no further nudges.
+ *      operator policy: no further nudges. A request the reservation has
+ *      already settled (invoice issued/sent, or the drawer's invoice details
+ *      fill the gaps) gets no reminder: it's marked `accepted`, the same
+ *      take-over the drawer's "issue with partial details" records.
  */
 async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
   const all = await readAllInvoiceRequests();
@@ -2649,8 +2652,50 @@ async function sendDueInvoiceReminders(redis: Redis): Promise<void> {
     return;
   }
 
+  const overrides = await readAllReservationOverrides<{
+    invoiceData?: InvoiceData;
+    invoiceStatus?: string;
+  }>();
+
   for (const r of due) {
     const bookingId = Number(r.reservationNumber.replace(/^BH-/, ''));
+
+    // Operator already has it on the reservation → no reminder, close it out.
+    const stored = overrides[r.reservationNumber];
+    const settled = invoiceRequestSettledOnReservation(requestFields(r), stored && {
+      invoiceStatus: stored.invoiceStatus,
+      invoiceData: stored.invoiceData && {
+        ...stored.invoiceData,
+        billingEmail: sanitizeInvoiceEmail(stored.invoiceData.billingEmail) ?? '',
+      },
+    });
+    if (settled) {
+      const idx = updated.findIndex((x) => x.id === r.id);
+      if (idx >= 0) {
+        updated[idx] = {
+          ...updated[idx],
+          status: 'accepted',
+          processedAt: new Date().toISOString(),
+        };
+      }
+      await appendLog(redis, {
+        id: makeLogId(),
+        beds24MessageId: r.beds24MessageId,
+        beds24SentMessageId: null,
+        bookingId,
+        reservationNumber: r.reservationNumber,
+        category: 'invoice-request',
+        confidence: 1,
+        language: '',
+        action: 'task-only',
+        sentText: null,
+        detail: `24h reminder skipped — reservation already settled (invoice ${stored?.invoiceStatus ?? 'Not Issued'}, details on the reservation); request marked accepted`,
+        decidedAt: new Date().toISOString(),
+      });
+      console.log(`[invoice flow] ${r.reservationNumber}: settled on the reservation — no reminder`);
+      continue;
+    }
+
     const reservation = await buildReservationContext(redis, bookingId);
     const firstName = reservation?.firstName ?? '';
     const missing = missingMandatoryFields(requestFields(r));

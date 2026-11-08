@@ -66,12 +66,17 @@ function getClient(): Anthropic {
 /**
  * Extract invoice fields from the message. Returns all-nulls when the API key
  * is missing or the call fails — caller treats that as "nothing extracted"
- * rather than failing the whole flow.
+ * rather than failing the whole flow. The email is backstopped by a plain
+ * pattern match either way (see `backfillEmailFromText`).
  */
 export async function extractInvoiceFields(
   guestMessage: string,
 ): Promise<ExtractedInvoiceFields> {
   if (!guestMessage.trim()) return { ...EMPTY };
+  return backfillEmailFromText(await extractWithModel(guestMessage), guestMessage);
+}
+
+async function extractWithModel(guestMessage: string): Promise<ExtractedInvoiceFields> {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.warn('[invoiceFieldExtractor] ANTHROPIC_API_KEY not set — returning empty');
     return { ...EMPTY };
@@ -93,6 +98,30 @@ export async function extractInvoiceFields(
     console.error('[invoiceFieldExtractor] failed:', err instanceof Error ? err.message : err);
     return { ...EMPTY };
   }
+}
+
+const EMAIL_IN_TEXT = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+
+/**
+ * Fill a missing email from the message text itself. The model is the only
+ * reader of the guest's reply, and a reply that was nothing but an address
+ * came back without one (Nov 2026) — whether the model judged a context-free
+ * address not to be billing data or the call failed (both look identical:
+ * all-null fields). An email is the one field a pattern reads reliably, so it
+ * never depends on the model. Only fills a gap — an address the model did pick
+ * out wins — and the same channel-conduit filter applies, so
+ * @guest.booking.com etc. are still skipped.
+ */
+export function backfillEmailFromText(
+  fields: ExtractedInvoiceFields,
+  text: string,
+): ExtractedInvoiceFields {
+  if (fields.email) return fields;
+  for (const match of text.match(EMAIL_IN_TEXT) ?? []) {
+    const email = cleanEmail(match);
+    if (email) return { ...fields, email };
+  }
+  return fields;
 }
 
 /**
