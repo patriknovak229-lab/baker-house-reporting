@@ -152,6 +152,8 @@ export interface StaleCronJob {
   reason: 'silent' | 'not-completing';
   /** Error text from the job, when it reported one. */
   error?: string;
+  /** 'not-completing' because the run finished with phase 'failed' (vs stuck at 'started'). */
+  failed?: boolean;
 }
 
 /**
@@ -191,6 +193,7 @@ export function staleCronJobs(
       out.push({
         ...base,
         reason: 'not-completing',
+        ...(phase === 'failed' ? { failed: true } : {}),
         ...(typeof error === 'string' ? { error } : {}),
       });
     }
@@ -209,21 +212,31 @@ export function unseededCronJobs(
 /** Telegram body for a set of unhealthy jobs. Null when there is nothing to say. */
 export function staleCronAlert(stale: StaleCronJob[]): string | null {
   if (stale.length === 0) return null;
+  // Job errors are free text (often an upstream response body) and Telegram
+  // sends with parse_mode HTML: one stray '<' and the whole alert is rejected.
+  const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const lines = [
     '⚠️ A scheduled job is not doing its work:',
     ...stale.map((s) => {
       const when = `${s.lastRanAt?.slice(0, 16).replace('T', ' ')} UTC`;
-      return s.reason === 'silent'
-        ? `• ${s.label} — not invoked for ${s.hoursSilent}h (last ${when})`
-        : `• ${s.label} — invoked ${s.hoursSilent}h ago but never finished${s.error ? `: ${s.error}` : ''} (${when})`;
+      const error = s.error ? `: ${esc(s.error)}` : '';
+      if (s.reason === 'silent') return `• ${s.label} — not invoked for ${s.hoursSilent}h (last ${when})`;
+      return s.failed
+        ? `• ${s.label} — ran ${s.hoursSilent}h ago and failed${error} (${when})`
+        : `• ${s.label} — invoked ${s.hoursSilent}h ago but never finished${error} (${when})`;
     }),
-    '',
-    // The diagnosis that took two days and three separate causes to find.
-    'If it is not being invoked, probe the path with a plain GET:',
-    '  401 = healthy · 405 = route is POST-only, Vercel cron sends GET',
-    '  307 = the auth middleware is eating it again (see proxy.ts)',
-    'Note this project is on Vercel Hobby: cron timing is ±59 min, so allow the',
-    'full hour past the schedule before calling a run missing.',
   ];
+  // The diagnosis that took two days and three separate causes to find — only
+  // relevant when a job is not being invoked at all.
+  if (stale.some((s) => s.reason === 'silent')) {
+    lines.push(
+      '',
+      'If it is not being invoked, probe the path with a plain GET:',
+      '  401 = healthy · 405 = route is POST-only, Vercel cron sends GET',
+      '  307 = the auth middleware is eating it again (see proxy.ts)',
+      'Note this project is on Vercel Hobby: cron timing is ±59 min, so allow the',
+      'full hour past the schedule before calling a run missing.',
+    );
+  }
   return lines.join('\n');
 }

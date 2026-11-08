@@ -92,7 +92,7 @@ import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
 import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
 import { runContactPass, tryCaptureContactReply } from '@/utils/guestContactService';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
-import { escapeHtml, invoiceAlertChatId, sendTelegram as sendTelegramTo } from '@/utils/telegram';
+import { escapeHtml, invoiceAlertChatId, sendTechnicalAlert, sendTelegram as sendTelegramTo } from '@/utils/telegram';
 import {
   amountHoldReason,
   amountTaskNote,
@@ -1802,7 +1802,8 @@ async function checkCronLiveness(redis: Redis): Promise<void> {
 
   const body = staleCronAlert(fresh);
   if (body) {
-    await sendTelegram(body).catch(() => {});
+    // Technical chat, not the ops group (operator request 2026-11-08).
+    await sendTechnicalAlert(body);
     console.warn(`[cron watchdog] ${fresh.map((s) => s.job).join(', ')} silent`);
   }
 }

@@ -31,7 +31,7 @@ import { readCronHeartbeats, readCronHistory, writeCronHeartbeat } from '@/data-
 import { WATCHED_CRON_JOBS } from '@/utils/cronHeartbeat';
 import { catchUpReport, isRerun, planCatchUp, type CatchUpOutcome } from '@/utils/cronCatchUp';
 import { withCronLock } from '@/utils/cronLock';
-import { escapeHtml, sendTelegram } from '@/utils/telegram';
+import { escapeHtml, sendTechnicalAlert } from '@/utils/telegram';
 
 // Re-runs happen in parallel; the slowest jobs (reviews, market refresh) allow
 // 300s, so this waits up to just under that for each.
@@ -86,7 +86,7 @@ async function catchUp(): Promise<Response> {
     });
 
     const report = catchUpReport(outcomes, escapeHtml);
-    if (report) await sendTelegram(report);
+    if (report) await sendTechnicalAlert(report);
 
     const pick = (pred: (o: CatchUpOutcome) => boolean) => outcomes.filter(pred).map((o) => o.job);
     const summary = {
@@ -103,7 +103,7 @@ async function catchUp(): Promise<Response> {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[cron/${JOB}]`, err);
     await beat({ phase: 'failed', error: message });
-    await sendTelegram(`⚠️ Daily cron catch-up crashed: ${escapeHtml(message)}`).catch(() => {});
+    await sendTechnicalAlert(`⚠️ Daily cron catch-up crashed: ${escapeHtml(message)}`).catch(() => {});
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

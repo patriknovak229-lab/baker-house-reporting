@@ -96,11 +96,21 @@ async function runLocked(req: NextRequest, isCron: boolean): Promise<Response> {
       }
     }
 
+    // ANY failed listing is a failed run: its radar rows are stale (kept, not
+    // blanked — see refreshMarketSnapshot), so the 12:00 UTC catch-up should
+    // pull again and the watchdog should say so in the technical chat. Until
+    // 2026-11-08 only "all failed" counted, and the error named no unit or
+    // cause ("all 4 listings failed").
     const allFailed = failed.length === result.listings.length;
     await beat(
-      allFailed
-        ? { phase: 'failed', error: `all ${failed.length} listings failed` }
-        : { phase: 'completed', listings: result.listings.length, failedListings: failed.length },
+      failed.length > 0
+        ? {
+            phase: 'failed',
+            listings: result.listings.length,
+            failedListings: failed.length,
+            error: refreshFailureSummary(result.listings.length, failed),
+          }
+        : { phase: 'completed', listings: result.listings.length, failedListings: 0 },
     );
     return NextResponse.json(result, { status: allFailed ? 502 : 200 });
   } catch (err) {
@@ -109,6 +119,13 @@ async function runLocked(req: NextRequest, isCron: boolean): Promise<Response> {
     await beat({ phase: 'failed', error: message });
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** "3 of 4 listings failed — deluxe-1kk, k201, o308: <distinct errors>". */
+function refreshFailureSummary(total: number, failed: { unitId: string; error: string | null }[]): string {
+  const errors = [...new Set(failed.map((l) => l.error ?? 'unknown error'))].join('; ');
+  const text = `${failed.length} of ${total} listings failed — ${failed.map((l) => l.unitId).join(', ')}: ${errors}`;
+  return text.length > 400 ? `${text.slice(0, 397)}…` : text;
 }
 
 /** Liveness — see utils/cronHeartbeat.ts. Swallowed so it can never fail the run. */

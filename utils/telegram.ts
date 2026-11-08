@@ -64,3 +64,20 @@ export function pricingChatId(): string | undefined {
 export function invoiceAlertChatId(): string | undefined {
   return pricingChatId();
 }
+
+/**
+ * Destination for TECHNICAL alerts — the system reporting on itself: the cron
+ * watchdog and daily catch-up, scheduled jobs that crashed or failed, health
+ * checks. Operator request (2026-11-08): these go to the technical chat where
+ * price parity lands, not the Baker House Operations group, which is for
+ * things someone has to do about a guest or a booking. Same chat as pricing
+ * on purpose: move one, the others follow.
+ */
+export function technicalChatId(): string | undefined {
+  return pricingChatId();
+}
+
+/** `sendTelegram` to the technical chat (see technicalChatId). Never throws. */
+export function sendTechnicalAlert(message: string): Promise<boolean> {
+  return sendTelegram(message, { chatId: technicalChatId() });
+}

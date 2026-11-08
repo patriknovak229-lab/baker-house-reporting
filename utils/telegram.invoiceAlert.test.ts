@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { invoiceAlertChatId, pricingChatId } from './telegram';
+import { invoiceAlertChatId, pricingChatId, technicalChatId } from './telegram';
 
 const saved = {
   pricing: process.env.TELEGRAM_PRICING_CHAT_ID,
@@ -19,5 +19,19 @@ describe('invoice manual-send alert destination', () => {
     process.env.TELEGRAM_CHAT_ID = '222';
     expect(invoiceAlertChatId()).toBe('111');
     expect(invoiceAlertChatId()).toBe(pricingChatId());
+  });
+});
+
+describe('technical alert destination', () => {
+  it('goes to the price-parity chat, not the ops group', () => {
+    process.env.TELEGRAM_PRICING_CHAT_ID = '111';
+    process.env.TELEGRAM_CHAT_ID = '222';
+    expect(technicalChatId()).toBe('111');
+  });
+
+  it('falls back to the ops group while no technical chat is configured', () => {
+    delete process.env.TELEGRAM_PRICING_CHAT_ID;
+    process.env.TELEGRAM_CHAT_ID = '222';
+    expect(technicalChatId()).toBe('222');
   });
 });

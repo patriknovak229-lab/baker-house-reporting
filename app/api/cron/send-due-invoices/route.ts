@@ -51,7 +51,7 @@ import type { InvoiceData, Issue, InvoiceStatus, InvoiceSplit, Reservation } fro
 import { buildReservationSet } from '@/utils/beds24Reservations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { sendInvoiceEmail } from '@/utils/invoiceSend';
-import { sendTelegram, escapeHtml } from '@/utils/telegram';
+import { sendTechnicalAlert, escapeHtml } from '@/utils/telegram';
 import {
   checkBookingsMirrorHealth,
   bookingsMirrorAlert,
@@ -127,7 +127,7 @@ async function runLocked(): Promise<Response> {
     const reason = err instanceof Error ? err.message : String(err);
     console.error('[cron/send-due-invoices] run failed:', err);
     await beat({ phase: 'failed', error: reason });
-    await sendTelegram(
+    await sendTechnicalAlert(
       `⚠️ Invoice auto-send crashed before completing: ${reason}\nNo invoices were sent by this run.`,
     ).catch(() => {});
     return NextResponse.json({ error: reason }, { status: 500 });
@@ -152,7 +152,7 @@ async function sendDueInvoices() {
     const reason = err instanceof Error ? err.message : String(err);
     console.error('[cron/send-due-invoices] buildReservationSet failed:', reason);
     await beat({ phase: 'failed', step: 'buildReservationSet', error: reason });
-    await sendTelegram(
+    await sendTechnicalAlert(
       `⚠️ Invoice auto-send could not load bookings: ${reason}\nNo invoices were sent by this run.`,
     ).catch(() => {});
     return NextResponse.json({ error: `Load failed: ${reason}` }, { status: 502 });
@@ -272,7 +272,7 @@ async function sendDueInvoices() {
       console.error('[cron/send-due-invoices] overrides write failed:', reason);
       // We may have emailed invoices but couldn't persist "Sent" → alert loudly
       // so a re-run doesn't double-send before someone checks.
-      await sendTelegram(
+      await sendTechnicalAlert(
         `⚠️ Invoice cron sent ${sent} invoice(s) but FAILED to save status (re-send risk): ${reason}`,
       ).catch(() => {});
       return NextResponse.json({ error: `Persist failed after sending ${sent}: ${reason}`, sent }, { status: 500 });
@@ -301,21 +301,21 @@ async function sendDueInvoices() {
     }
   }
   if (revenueFailures.length > 0) {
-    await sendTelegram(
+    await sendTechnicalAlert(
       `⚠️ Invoice auto-send: sent with payment details, but the revenue record failed (bank matching won't find it):\n` +
         revenueFailures.map((f) => `• ${f}`).join('\n'),
     ).catch(() => {});
   }
 
   if (deferred > 0) {
-    await sendTelegram(
+    await sendTechnicalAlert(
       `ℹ️ Invoice auto-send: ${deferred} invoice(s) deferred by the mail server (handed over, delivery unconfirmed — check the Sent folder):\n` +
         deferrals.map((d) => `• ${d.reservation}: ${d.reason}`).join('\n'),
     ).catch(() => {});
   }
 
   if (failed > 0) {
-    await sendTelegram(
+    await sendTechnicalAlert(
       `⚠️ Invoice auto-send: ${failed} failed, ${sent} sent.\n` +
         errors.map((e) => `• ${e.reservation}: ${e.reason}`).join('\n'),
     ).catch(() => {});
@@ -332,12 +332,12 @@ async function sendDueInvoices() {
   try {
     mirrorHealth = await checkBookingsMirrorHealth({ persist: true });
     const alert = bookingsMirrorAlert(mirrorHealth);
-    if (alert) await sendTelegram(alert).catch(() => {});
+    if (alert) await sendTechnicalAlert(alert).catch(() => {});
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'unknown error';
     console.error('[cron] bookings archive health check failed:', err);
     mirrorHealth = { error: reason };
-    await sendTelegram(`⚠️ Bookings archive health check could not run: ${reason}`).catch(() => {});
+    await sendTechnicalAlert(`⚠️ Bookings archive health check could not run: ${reason}`).catch(() => {});
   }
 
   const result = {

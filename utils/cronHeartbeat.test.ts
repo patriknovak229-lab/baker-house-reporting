@@ -165,4 +165,20 @@ describe("staleCronJobs — invoked but not completing", () => {
     expect(silent).toContain("not invoked");
     expect(unfinished).toContain("never finished");
   });
+
+  it("says a run that finished with phase 'failed' failed, rather than 'never finished'", () => {
+    const failed = { ...hoursAgo(3), summary: { phase: "failed", error: "all 4 listings failed" } };
+    const body = staleCronAlert(staleCronJobs({ daily: failed }, NOW, JOBS))!;
+    expect(body).toContain("ran 3h ago and failed: all 4 listings failed");
+    expect(body).not.toContain("never finished");
+    // The GET-probe hint is about jobs that are not invoked at all.
+    expect(body).not.toContain("proxy.ts");
+  });
+
+  it("escapes the job's error text", () => {
+    const failed = { ...hoursAgo(3), summary: { phase: "failed", error: "HTTP 502: <html>Bad & gone</html>" } };
+    const body = staleCronAlert(staleCronJobs({ daily: failed }, NOW, JOBS))!;
+    expect(body).toContain("HTTP 502: &lt;html&gt;Bad &amp; gone&lt;/html&gt;");
+    expect(body).not.toMatch(/<html>/);
+  });
 });
