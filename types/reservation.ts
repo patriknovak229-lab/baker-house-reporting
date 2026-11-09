@@ -604,6 +604,10 @@ export interface Reservation {
   /** Is the guest actually bringing a car? From their reply to the post-booking
    *  question (utils/guestContact) or set by the operator. undefined/null = not answered. */
   parkingUse?: ParkingUse | null;
+  /** Spaces held ON TOP of the room's own, for the whole stay — an extra car the
+   *  operator agreed with the guest (BH-95910924: O.308 keeps 152, adds 17).
+   *  The room's own space still follows `parkingOverride` / the auto rules. */
+  extraParkingSpaces?: string[];
   invoiceModifications?: InvoiceModification[]; // display-only invoice variants; never touches Beds24
   /**
    * Split invoices — one booking billed to several parties (see InvoiceSplit).

@@ -1475,6 +1475,7 @@ async function buildReservationContext(
   let additionalEmail = '';
   const overrides = await readAllReservationOverrides<{
     parkingOverride?: string;
+    extraParkingSpaces?: string[];
     additionalEmail?: string;
     rateTypeOverride?: RateType;
     perkOverrides?: PerkOverrides;
@@ -1534,6 +1535,7 @@ async function buildReservationContext(
     invoiceData: null,
     invoiceStatus: 'Not Issued',
     parkingOverride,
+    ...(own?.extraParkingSpaces?.length ? { extraParkingSpaces: own.extraParkingSpaces } : {}),
   };
 }
 
@@ -1555,7 +1557,11 @@ async function computeBookingParking(redis: Redis | null, reservation: Reservati
   if (ownId && !cached[String(ownId)]) {
     for (const r of await fetchLiveBookingGroup(ownId)) if (r.id && !cached[String(r.id)]) cached[String(r.id)] = r;
   }
-  const overrides = await readAllReservationOverrides<{ parkingOverride?: string; parkingUse?: ParkingUse | null }>();
+  const overrides = await readAllReservationOverrides<{
+    parkingOverride?: string;
+    parkingUse?: ParkingUse | null;
+    extraParkingSpaces?: string[];
+  }>();
 
   // Copies: the merge sums prices onto the master in place.
   const live = Object.values(cached)
@@ -1568,6 +1574,7 @@ async function computeBookingParking(redis: Redis | null, reservation: Reservati
       ...r,
       parkingOverride: own?.parkingOverride,
       ...(own?.parkingUse ? { parkingUse: own.parkingUse } : {}),
+      ...(own?.extraParkingSpaces?.length ? { extraParkingSpaces: own.extraParkingSpaces } : {}),
     };
   });
   const parking = computeParking(all.length > 0 ? all : [reservation]);

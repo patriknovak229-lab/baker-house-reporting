@@ -25,7 +25,7 @@ import {
   bookingGraceStatus,
 } from "@/utils/cancellationPolicy";
 import { computeAutoFlags, toggleFlagOverride, getEffectiveFlags } from "@/utils/flagUtils";
-import { computeParking, getFreeSpaces, getSpareSpaces, PARKING_SPACES, type ParkingAssignment } from "@/utils/parkingUtils";
+import { computeParking, getFreeSpaces, getSpareSpaces, getSpaceOccupants, PARKING_SPACES, type ParkingAssignment, type ParkingResult } from "@/utils/parkingUtils";
 import { PHYSICAL_ROOMS, apartmentsToPlace } from "@/utils/roomAllocation";
 import { occupiersByRoom, unallocatedOverlapping } from "@/utils/moveTargets";
 import { countryCodeToFlag, countryCodeToName } from "@/utils/nationalityUtils";
@@ -1717,18 +1717,21 @@ function PhoneEditField({
  * "No car" marks the stay's space as spare in the parking grid.
  */
 /**
- * The spaces of a multi-apartment booking — one per apartment — each with its
- * own state. While the guest is coming by car, each space can be marked as
- * not needed (BH-93698209: 3 apartments, 2 cars → 152 spare, 15 + 16 in use).
+ * The spaces of a booking that holds several — one per apartment, plus any
+ * extra the operator added — each with its own state. While the guest is
+ * coming by car, each space can be marked as not needed (BH-93698209:
+ * 3 apartments, 2 cars → 152 spare, 15 + 16 in use).
  */
 function ParkingSpacesList({
   spaces,
   parkingUse,
   onSave,
+  onRemoveExtra,
 }: {
   spaces: ParkingAssignment[];
   parkingUse: ParkingUse | null | undefined;
   onSave: (next: ParkingUse) => void;
+  onRemoveExtra: (space: string) => void;
 }) {
   const byCar = parkingUse?.status === "car";
   const setSpare = (space: string, spare: boolean) => {
@@ -1743,11 +1746,12 @@ function ParkingSpacesList({
     onSave(next);
   };
   const inUse = spaces.filter((a) => !a.spare).length;
+  const extras = spaces.filter((a) => a.extra).length;
 
   return (
     <div className="space-y-1">
       <p className="text-[11px] text-gray-400">
-        {spaces.length} spaces · one per apartment
+        {spaces.length} spaces · {extras > 0 ? `${extras} extra` : "one per apartment"}
         {byCar && ` · ${inUse} in use`}
       </p>
       {spaces.map((a) => (
@@ -1756,8 +1760,18 @@ function ParkingSpacesList({
             Space <span className="font-semibold">{a.space}</span>
             {a.room && <span className="text-gray-400"> · {a.room}</span>}
           </span>
-          <Badge variant={a.type === "auto" ? "blue" : "purple"}>{a.type}</Badge>
+          <Badge variant={a.extra ? "green-light" : a.type === "auto" ? "blue" : "purple"}>{a.extra ? "extra" : a.type}</Badge>
           {a.conflict && <Badge variant="amber">conflict</Badge>}
+          {a.extra && (
+            <button
+              type="button"
+              onClick={() => onRemoveExtra(a.space)}
+              title={`Remove extra space ${a.space}`}
+              className="text-gray-400 hover:text-red-600 text-sm leading-none px-1"
+            >
+              ×
+            </button>
+          )}
           {byCar ? (
             <select
               value={a.spare ? "spare" : "car"}
@@ -1773,6 +1787,65 @@ function ParkingSpacesList({
           {a.spare && a.lentTo && <span className="text-xs text-emerald-700">lent to {a.lentTo}</span>}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Add a space on top of the booking's own — an extra car agreed with the guest.
+ * Lists free spaces (spare ones labelled); "Show occupied" opens the rest,
+ * named by who holds them, for cases the free list can't cover.
+ */
+function ExtraParkingField({
+  parking,
+  reservation,
+  held,
+  freeSpaces,
+  spareSpaces,
+  onAdd,
+}: {
+  parking: ParkingResult;
+  reservation: Reservation;
+  held: string[];
+  freeSpaces: string[];
+  spareSpaces: string[];
+  onAdd: (space: string) => void;
+}) {
+  const [showOccupied, setShowOccupied] = useState(false);
+  const options = PARKING_SPACES.map((p) => p.space)
+    .filter((space) => !held.includes(space))
+    .flatMap((space) => {
+      const room = PARKING_SPACES.find((p) => p.space === space)?.permanentRoom;
+      if (freeSpaces.includes(space)) {
+        return [{ space, label: `Space ${space}${room ? ` (${room}${spareSpaces.includes(space) ? " · spare, no car parks here" : ""})` : ""}` }];
+      }
+      if (!showOccupied) return [];
+      const who = getSpaceOccupants(parking, space, reservation.checkInDate, reservation.checkOutDate, reservation.reservationNumber);
+      return [{ space, label: `Space ${space} — occupied by ${who.join(", ")}` }];
+    });
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-gray-400">Additional space</span>
+        <label className="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+          <input type="checkbox" checked={showOccupied} onChange={(e) => setShowOccupied(e.target.checked)} />
+          Show occupied
+        </label>
+      </div>
+      <select
+        value=""
+        onChange={(e) => {
+          if (e.target.value) onAdd(e.target.value);
+        }}
+        disabled={options.length === 0}
+        className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:text-gray-400"
+      >
+        <option value="">{options.length === 0 ? "No free space for the whole stay" : "+ Add a space…"}</option>
+        {options.map((o) => (
+          <option key={o.space} value={o.space}>{o.label}</option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -3734,6 +3807,8 @@ export default function ReservationDrawer({
   const myParking = reservation ? parkingResult.byReservation.get(reservation.reservationNumber) ?? null : null;
   // Every space the booking holds — one per apartment for a multi-apartment stay.
   const mySpaces = reservation ? parkingResult.spacesByReservation.get(reservation.reservationNumber) ?? [] : [];
+  // Several spaces, or an extra one (it needs its × even when it's the only one).
+  const listSpaces = mySpaces.length > 1 || mySpaces.some((a) => a.extra);
   const freeSpaces = reservation
     ? getFreeSpaces(parkingResult, reservation.checkInDate, reservation.checkOutDate, reservation.reservationNumber)
     : [];
@@ -5140,11 +5215,17 @@ export default function ReservationDrawer({
             <SubTitle>Parking</SubTitle>
             <div className="space-y-2">
               {/* Current assignment */}
-              {mySpaces.length > 1 ? (
+              {listSpaces ? (
                 <ParkingSpacesList
                   spaces={mySpaces}
                   parkingUse={reservation.parkingUse}
                   onSave={(next) => onUpdate({ ...reservation!, parkingUse: next })}
+                  onRemoveExtra={(space) =>
+                    onUpdate({
+                      ...reservation!,
+                      extraParkingSpaces: (reservation!.extraParkingSpaces ?? []).filter((sp) => sp !== space),
+                    })
+                  }
                 />
               ) : myParking ? (
                 <div className="flex items-center gap-2">
@@ -5161,7 +5242,7 @@ export default function ReservationDrawer({
               ) : (
                 <p className="text-sm text-gray-400">No parking assigned</p>
               )}
-              {mySpaces.length <= 1 && myParking?.spare && (
+              {!listSpaces && myParking?.spare && (
                 <p className="text-xs text-emerald-700">
                   Spare — the guest isn&apos;t bringing a car
                   {myParking.lentTo ? ` · lent to ${myParking.lentTo}` : ""}
@@ -5224,6 +5305,21 @@ export default function ReservationDrawer({
                   );
                 })}
               </select>
+
+              <ExtraParkingField
+                key={reservation.reservationNumber}
+                parking={parkingResult}
+                reservation={reservation}
+                held={mySpaces.map((a) => a.space)}
+                freeSpaces={freeSpaces}
+                spareSpaces={spareSpaces}
+                onAdd={(space) =>
+                  onUpdate({
+                    ...reservation!,
+                    extraParkingSpaces: [...(reservation!.extraParkingSpaces ?? []), space],
+                  })
+                }
+              />
 
               <ParkingUseField
                 key={`${reservation.reservationNumber}:${reservation.parkingUse?.plate ?? ""}`}

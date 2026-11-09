@@ -30,6 +30,13 @@ describe("parking auto-reply template", () => {
     expect(built.substitutions.SPACES).toBe("15, 152 and 16");
   });
 
+  it("lists an agreed extra space without calling it another apartment (BH-95910924)", () => {
+    const o308 = res({ reservationNumber: "BH-95910924", room: "O.308", checkInDate: "2026-11-10", checkOutDate: "2026-11-11", extraParkingSpaces: ["17"] });
+    const built = buildTemplate("parking", o308, computeParking([o308]), "general")!;
+    expect(built.substitutions).toMatchObject({ COUNT: "2", SPACES: "152 and 17" });
+    expect(built.template).not.toContain("{COUNT} apartments");
+  });
+
   it("still refuses a second space for a single apartment", () => {
     const single = res({});
     const built = buildTemplate("parking", single, computeParking([single]), "multiple")!;

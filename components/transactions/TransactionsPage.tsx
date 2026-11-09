@@ -70,6 +70,7 @@ type LocalFields = {
   issues?: Issue[];
   parkingOverride?: string;
   parkingUse?: import('@/types/reservation').ParkingUse | null;
+  extraParkingSpaces?: string[];
   invoiceModifications?: import('@/types/reservation').InvoiceModification[];
   invoiceSplits?: import('@/types/reservation').InvoiceSplit[];
   postStayAcknowledgedAt?: string;
@@ -100,6 +101,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   // null is sent on purpose (operator cleared the answer): /api/local-state keeps
   // a stored answer when the key is ABSENT, so a stale tab can't wipe a guest's reply.
   if (r.parkingUse !== undefined) local.parkingUse = r.parkingUse;
+  if (r.extraParkingSpaces && r.extraParkingSpaces.length > 0) local.extraParkingSpaces = r.extraParkingSpaces;
   if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
   if (r.invoiceSplits && r.invoiceSplits.length > 0) local.invoiceSplits = r.invoiceSplits;
   if (r.postStayAcknowledgedAt) local.postStayAcknowledgedAt = r.postStayAcknowledgedAt;

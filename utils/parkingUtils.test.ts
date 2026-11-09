@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeParking, getFreeSpaces, getSpareSpaces } from "./parkingUtils";
+import { computeParking, getFreeSpaces, getSpareSpaces, getSpaceOccupants } from "./parkingUtils";
 import type { Reservation } from "@/types/reservation";
 
 /**
@@ -215,5 +215,62 @@ describe("a guest with several apartments (BH-93698209: K.102 + O.308 + K.103)",
   it("ignores spare spaces once the guest says no car — every space is spare then", () => {
     const result = computeParking([trio({ parkingUse: { status: "no-car", spareSpaces: ["152"], source: "operator", updatedAt: "x" } })]);
     expect(result.spacesByReservation.get("BH-93698209")!.every((a) => a.spare)).toBe(true);
+  });
+});
+
+describe("an extra space (BH-95910924: O.308 keeps 152, adds K.106's 17)", () => {
+  const noCar = { status: "no-car" as const, source: "guest" as const, updatedAt: "x" };
+  const byCar = { status: "car" as const, source: "operator" as const, updatedAt: "x" };
+  const o308 = (over: Partial<Reservation> = {}) =>
+    res({
+      reservationNumber: "BH-95910924",
+      room: "O.308",
+      checkInDate: "2026-11-10",
+      checkOutDate: "2026-11-11",
+      parkingUse: byCar,
+      extraParkingSpaces: ["17"],
+      ...over,
+    });
+  const k106 = (over: Partial<Reservation> = {}) =>
+    res({ reservationNumber: "BH-95124824", room: "K.106", checkInDate: "2026-11-10", checkOutDate: "2026-11-12", ...over });
+
+  it("holds the extra on top of the room's own auto space", () => {
+    const { spacesByReservation, byReservation, grid } = computeParking([o308(), k106({ parkingUse: noCar })]);
+    expect(spacesByReservation.get("BH-95910924")!.map((a) => [a.space, a.type, a.extra ?? false])).toEqual([
+      ["152", "auto", false],
+      ["17", "manual", true],
+    ]);
+    expect(byReservation.get("BH-95910924")?.space).toBe("152");
+    expect(grid.get("17")!.get("2026-11-10")?.reservationNumber).toBe("BH-95910924");
+  });
+
+  it("borrows a no-car guest's space: lent, not a conflict, spare again afterwards", () => {
+    const { byReservation, grid } = computeParking([o308(), k106({ parkingUse: noCar })]);
+    expect(byReservation.get("BH-95124824")).toMatchObject({ space: "17", spare: true, lentTo: "BH-95910924" });
+    expect(byReservation.get("BH-95124824")?.conflict).toBeUndefined();
+    expect(grid.get("17")!.get("2026-11-11")).toMatchObject({ reservationNumber: "BH-95124824", spare: true });
+  });
+
+  it("takes a car guest's space only by force: their own space shows the conflict", () => {
+    const { byReservation } = computeParking([o308(), k106({ parkingUse: byCar })]);
+    expect(byReservation.get("BH-95124824")?.conflict).toContain("BH-95910924");
+  });
+
+  it("ignores an extra that is the room's own space", () => {
+    const { spacesByReservation } = computeParking([o308({ extraParkingSpaces: ["152"] })]);
+    expect(spacesByReservation.get("BH-95910924")!.map((a) => a.space)).toEqual(["152"]);
+  });
+
+  it("flags an extra on a space someone holds manually, and leaves theirs alone", () => {
+    const manual = res({ reservationNumber: "BH-3000", room: "K.202", parkingOverride: "17", checkInDate: "2026-11-09", checkOutDate: "2026-11-12" });
+    const { spacesByReservation, grid } = computeParking([o308(), manual]);
+    expect(spacesByReservation.get("BH-95910924")!.find((a) => a.extra)?.conflict).toContain("BH-3000");
+    expect(grid.get("17")!.get("2026-11-10")?.reservationNumber).toBe("BH-3000");
+  });
+
+  it("names who holds a space during the stay", () => {
+    const result = computeParking([o308(), k106({ parkingUse: byCar })]);
+    expect(getSpaceOccupants(result, "17", "2026-11-10", "2026-11-11", "BH-95124824")).toEqual(["BH-95910924"]);
+    expect(getSpaceOccupants(result, "16", "2026-11-10", "2026-11-11")).toEqual([]);
   });
 });

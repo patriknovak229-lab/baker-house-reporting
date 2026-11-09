@@ -41,4 +41,19 @@ describe("buildBookingBlock — parking", () => {
     expect(block).toContain("Assigned parking space: 15");
     expect(block).not.toContain("one per apartment");
   });
+
+  it("counts an agreed extra space as an extra, not another apartment (BH-95910924)", () => {
+    const block = buildBookingBlock({
+      guestMessage: "Where do we park both cars?",
+      reservation: { ...reservation, room: "O.308", linkedRooms: undefined },
+      parkingSpaces: [
+        { space: "152", type: "auto", room: "O.308" },
+        { space: "17", type: "manual", extra: true },
+      ],
+      history: [],
+    });
+    expect(block).toContain("2 parking spaces — 1 for the apartment(s) plus 1 extra agreed with the guest — O.308 → space 152, space 17 (extra)");
+    expect(block).toContain("up to 2 cars");
+    expect(block).not.toContain("2 apartments");
+  });
 });

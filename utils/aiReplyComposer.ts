@@ -109,9 +109,16 @@ function roomCode(room: string): string {
 function parkingLines(spaces: ParkingAssignment[]): string[] {
   if (spaces.length === 0) return [];
   if (spaces.length === 1) return [`Assigned parking space: ${spaces[0].space}`];
-  const list = spaces.map((a) => (a.room ? `${a.room} → space ${a.space}` : `space ${a.space}`)).join(', ');
+  const list = spaces
+    .map((a) => (a.extra ? `space ${a.space} (extra)` : a.room ? `${a.room} → space ${a.space}` : `space ${a.space}`))
+    .join(', ');
+  const extras = spaces.filter((a) => a.extra).length;
+  // An extra space was agreed with the guest on top of the apartment's own (extraParkingSpaces).
+  const why = extras === 0
+    ? `this booking has ${spaces.length} apartments and so ${spaces.length} parking spaces, one per apartment`
+    : `this booking has ${spaces.length} parking spaces — ${spaces.length - extras} for the apartment(s) plus ${extras} extra agreed with the guest`;
   return [
-    `Parking: this booking has ${spaces.length} apartments and so ${spaces.length} parking spaces, one per apartment — ${list}.`,
+    `Parking: ${why} — ${list}.`,
     `The guest may park up to ${spaces.length} cars (one per space). Do NOT decline a second${spaces.length > 2 ? ' or third' : ''} car — only a car beyond ${spaces.length} has no space.`,
   ];
 }

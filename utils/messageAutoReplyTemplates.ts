@@ -111,9 +111,13 @@ function buildParkingTemplate(
 
   if (spaces.length > 1) {
     const numbers = spaces.map((a) => a.space);
+    // An extra space (agreed with the guest) isn't another apartment.
+    const why = spaces.some((a) => a.extra)
+      ? 'You have {COUNT} parking spaces'
+      : 'Your booking includes {COUNT} apartments, so you have {COUNT} parking spaces';
     return {
       template:
-        '{NAME}! Your booking includes {COUNT} apartments, so you have {COUNT} parking spaces — numbers {SPACES}, on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n' +
+        `{NAME}! ${why} — numbers {SPACES}, on sub-level {SUBLEVEL} of the underground garage at Bratislavská 82, close to the elevators up to the apartments.\n\n` +
         directions,
       substitutions: {
         NAME: reservation.firstName || 'there',

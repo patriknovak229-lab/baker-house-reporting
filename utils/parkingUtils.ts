@@ -45,6 +45,8 @@ export type ParkingAssignment = {
   spare?: boolean;
   /** Spare space currently lent to another reservation (no conflict raised). */
   lentTo?: string;
+  /** Held on top of the room's own space (`Reservation.extraParkingSpaces`). */
+  extra?: true;
 };
 
 /** space → date → occupant info (or null if free) */
@@ -181,6 +183,39 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     }
   }
 
+  // ── Pass 1b: Extra spaces (an agreed extra car) ───────────────────────────
+  // Claimed before pass 2 so the space's own room finds it taken: a guest there
+  // without a car shows it "lent to", one with a car gets the usual conflict.
+  // Listed on the reservation only after pass 2, so its own space is still
+  // auto-assigned exactly as before.
+  const extras: { r: Reservation; a: ParkingAssignment }[] = [];
+  for (const r of active) {
+    if (!r.extraParkingSpaces?.length) continue;
+    // A space the room holds anyway isn't an extra.
+    const own =
+      r.parkingOverride === undefined
+        ? permanentSpacesForReservation(r).map((s) => s.space)
+        : [r.parkingOverride];
+    const dates = dateRange(r.checkInDate, r.checkOutDate);
+    for (const space of new Set(r.extraParkingSpaces)) {
+      const spaceGrid = grid.get(space);
+      if (!spaceGrid || own.includes(space)) continue;
+      const a: ParkingAssignment = { space, type: "manual", extra: true, ...(isSpare(r, space) ? { spare: true } : {}) };
+      // Only a manual space from pass 1 can be there already.
+      const taken = dates.find((d) => {
+        const cell = spaceGrid.get(d);
+        return cell != null && !cell.spare;
+      });
+      if (taken) {
+        a.conflict = `Space ${space} occupied by reservation ${spaceGrid.get(taken)!.reservationNumber} on ${taken}`;
+      } else {
+        const cell = occupantCell(r, space);
+        for (const d of dates) spaceGrid.set(d, cell);
+      }
+      extras.push({ r, a });
+    }
+  }
+
   // ── Pass 2: Auto-assign permanents ────────────────────────────────────────
   for (const r of active) {
     if (byReservation.has(r.reservationNumber)) continue; // already handled
@@ -234,7 +269,28 @@ export function computeParking(reservations: Reservation[]): ParkingResult {
     }
   }
 
+  // Extras go after the room's own space(s).
+  for (const { r, a } of extras) hold(r, a);
+
   return { byReservation, spacesByReservation, grid };
+}
+
+/** Who holds `space` on any night of [checkIn, checkOut), other than `excludeReservation`. */
+export function getSpaceOccupants(
+  parkingResult: ParkingResult,
+  space: string,
+  checkIn: string,
+  checkOut: string,
+  excludeReservation?: string,
+): string[] {
+  const spaceGrid = parkingResult.grid.get(space);
+  if (!spaceGrid) return [];
+  const who = new Set<string>();
+  for (const d of dateRange(checkIn, checkOut)) {
+    const cell = spaceGrid.get(d);
+    if (cell && cell.reservationNumber !== excludeReservation) who.add(cell.reservationNumber);
+  }
+  return [...who];
 }
 
 // ─── Free spaces helper ──────────────────────────────────────────────────────
