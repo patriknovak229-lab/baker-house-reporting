@@ -3,6 +3,7 @@ import {
   amountHoldReason,
   amountTaskNote,
   autoSendWindowStart,
+  canQueueInvoiceAutoSend,
   formatAmount,
   invoiceConfirmationKind,
   isBeyondAutoSendWindow,
@@ -188,5 +189,45 @@ describe('invoiceConfirmationKind', () => {
   it('invoice already sent by hand → no "we will send it" message', () => {
     expect(kind('2026-10-12', true)).toBeNull();
     expect(kind('2026-09-30', true)).toBeNull();
+  });
+});
+
+describe('canQueueInvoiceAutoSend', () => {
+  // BH-95799979: guest asked twice, operator added the email in the drawer,
+  // no Send-invoice task — the cron could never see it.
+  const ready = {
+    requestStatus: 'awaiting-info' as const,
+    hasOpenInvoiceTask: false,
+    stillMissing: [],
+    blocker: null,
+  };
+
+  it('offers approval once the invoice fields complete a stalled request', () => {
+    expect(canQueueInvoiceAutoSend(ready)).toBe(true);
+  });
+
+  it('also for a request the reminder pass accepted without creating a task', () => {
+    expect(canQueueInvoiceAutoSend({ ...ready, requestStatus: 'accepted' })).toBe(true);
+  });
+
+  it('never duplicates an open invoice task', () => {
+    expect(canQueueInvoiceAutoSend({ ...ready, hasOpenInvoiceTask: true })).toBe(false);
+  });
+
+  it('ignores requests that are finished, dismissed or on the legacy banner', () => {
+    for (const requestStatus of ['auto-completed', 'rejected', 'pending'] as const) {
+      expect(canQueueInvoiceAutoSend({ ...ready, requestStatus })).toBe(false);
+    }
+  });
+
+  it('needs every mandatory field, company name included', () => {
+    expect(canQueueInvoiceAutoSend({ ...ready, stillMissing: ['companyName'] })).toBe(false);
+    expect(canQueueInvoiceAutoSend({ ...ready, stillMissing: ['email'] })).toBe(false);
+  });
+
+  it('is not offered when the run would skip the invoice anyway', () => {
+    for (const blocker of ['issued', 'split', 'too-old', 'not-live', 'incomplete'] as const) {
+      expect(canQueueInvoiceAutoSend({ ...ready, blocker })).toBe(false);
+    }
   });
 });

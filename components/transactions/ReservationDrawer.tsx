@@ -54,6 +54,11 @@ import {
   PAYMENT_ACCOUNT_DISPLAY,
 } from "@/utils/invoiceUtils";
 import type { PaymentQRInfo, InvoiceMandatoryField } from "@/utils/invoiceUtils";
+import {
+  canQueueInvoiceAutoSend,
+  invoiceAutoSendBlocker,
+  isBeyondAutoSendWindow,
+} from "@/utils/invoiceAutoSendRules";
 import { formatPhoneDisplay } from "@/utils/stringUtils";
 import { useSession } from "next-auth/react";
 import { canMutate } from "@/utils/roles";
@@ -2385,17 +2390,25 @@ const PRINT_CONTENT_WIDTH_PX = 658;
  */
 function InvoiceCollectionPanel({
   reservation,
+  formDetails,
   onUseDetails,
   onIssueAnyway,
+  onQueueAutoSend,
   onDismiss,
   onRestore,
 }: {
   reservation: Reservation;
+  /** The drawer's invoice fields as they stand (saved details, or the guest's
+   *  own email pre-filled) — what an approval would commit. */
+  formDetails?: InvoiceData;
   /** Copy the collected details into the (still empty) invoice form fields. */
   onUseDetails?: (patch: Partial<InvoiceData>) => void;
   /** Commit the collected details and issue the invoice even though something
    *  mandatory is still missing — the operator's override of the agent. */
   onIssueAnyway?: (patch: Partial<InvoiceData>, requestId: string) => void;
+  /** The details are complete between the chat and the invoice fields: stop
+   *  the agent and hand the invoice to the daily automatic send. */
+  onQueueAutoSend?: (patch: Partial<InvoiceData>, requestId: string) => void;
   /** Settled outside the app, or no longer wanted — close it off. */
   onDismiss?: (requestId: string) => void;
   /** Undo a dismissal. */
@@ -2451,10 +2464,8 @@ function InvoiceCollectionPanel({
   const dic = req.dic || "";
   const address = req.companyAddress ?? "";
 
-  // "Still missing" has to match what the pipeline is actually still asking the
-  // guest for, and the pipeline only counts an email the guest gave IN CHAT.
-  // The reservation's own address is a fallback applied later, when the details
-  // are written — shown here, but it doesn't stop the agent asking.
+  // What the GUEST still owes us in chat: the agent only counts an email the
+  // guest gave there. Drives "Issue anyway", which is about the agent's view.
   const missing = missingInvoiceFields({
     companyName: company || null,
     ico: ico || null,
@@ -2464,6 +2475,44 @@ function InvoiceCollectionPanel({
 
   const fallbackEmail = req.email ? "" : guestBillingEmail(reservation);
   const email = req.email || fallbackEmail;
+
+  // What the INVOICE still lacks once the drawer's fields are counted too — the
+  // operator often fills the gap by hand (an email from the reservation, an IČO
+  // looked up). The "Still missing" chips show this, so a field the operator
+  // already supplied doesn't keep reading as outstanding.
+  const onInvoice = {
+    companyName: formDetails?.companyName.trim() || company,
+    ico: formDetails?.ico.trim() || ico,
+    vatNumber: formDetails?.vatNumber.trim() || dic,
+    billingEmail: formDetails?.billingEmail.trim() || email,
+  };
+  const stillMissing = missingInvoiceFields({
+    companyName: onInvoice.companyName || null,
+    ico: onInvoice.ico || null,
+    dic: onInvoice.vatNumber || null,
+    email: onInvoice.billingEmail || null,
+  });
+
+  const canQueue =
+    !!onQueueAutoSend &&
+    canQueueInvoiceAutoSend({
+      requestStatus: req.status,
+      hasOpenInvoiceTask: (reservation.issues ?? []).some((i) => i.category === "invoice" && !i.resolved),
+      stillMissing,
+      // As if the task were due today: the age window and every other cron
+      // gate apply to the checkout the task will carry.
+      blocker: invoiceAutoSendBlocker({
+        invoiceStatus: reservation.invoiceStatus,
+        splitCount: reservation.invoiceSplits?.length ?? 0,
+        taskDate: reservation.checkOutDate,
+        todayYmd: pragueToday(),
+        isCancelled: reservation.isCancelled,
+        isBlackout: reservation.isBlackout,
+        ico: onInvoice.ico,
+        vatNumber: onInvoice.vatNumber,
+        billingEmail: onInvoice.billingEmail,
+      }),
+    });
 
   const collected: Array<[string, string]> = [
     ["Company", company],
@@ -2505,8 +2554,11 @@ function InvoiceCollectionPanel({
   // delivered — either it's still chasing the guest, or something mandatory is
   // missing. Once it has handed over a full set, the ordinary Generate button
   // below already does the job and a second one would just be noise.
+  // Not alongside the approval: issuing flips the invoice to Issued, which the
+  // automatic run leaves alone — the opposite of what approving is for.
   const canIssueAnyway =
     !!onIssueAnyway &&
+    !canQueue &&
     reservation.invoiceStatus === "Not Issued" &&
     (collecting || missing.length > 0);
 
@@ -2527,14 +2579,18 @@ function InvoiceCollectionPanel({
         <div className="flex-1 min-w-0">
           <p className={`text-xs font-semibold uppercase tracking-wide ${tone.heading}`}>
             {collecting
-              ? "Collecting details from guest"
+              ? canQueue
+                ? "Details complete — waiting for your approval"
+                : "Collecting details from guest"
               : req.status === "accepted"
                 ? "Details taken from guest request"
                 : "Details collected automatically"}
           </p>
           <p className={`text-[10px] mt-0.5 ${tone.sub}`}>
             {collecting
-              ? `Agent asked the guest in chat${asks > 1 ? ` (${asks}×)` : ""} — waiting on a reply`
+              ? `Agent asked the guest in chat${asks > 1 ? ` (${asks}×)` : ""} — ${
+                  canQueue ? "the rest was filled in here" : "waiting on a reply"
+                }`
               : "Agent asked the guest in chat and got everything it needed"}
             {req.detectedAt ? ` · requested ${formatDate(req.detectedAt.slice(0, 10))}` : ""}
           </p>
@@ -2558,10 +2614,10 @@ function InvoiceCollectionPanel({
         </div>
       )}
 
-      {collecting && missing.length > 0 && (
+      {collecting && stillMissing.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-amber-600">Still missing</span>
-          {missing.map((f) => (
+          {stillMissing.map((f) => (
             <span
               key={f}
               className="px-1.5 py-0.5 rounded bg-amber-200/70 text-amber-900 text-[10px] font-medium"
@@ -2576,6 +2632,7 @@ function InvoiceCollectionPanel({
         <NextStepLine
           reservation={reservation}
           collecting={collecting}
+          canQueue={canQueue}
           asks={asks}
           // The saved address is what the send actually uses; the collected one
           // is only a preview of what would be saved.
@@ -2585,6 +2642,16 @@ function InvoiceCollectionPanel({
 
       {(collected.length > 0 || onDismiss) && (
         <div className="flex flex-wrap items-center gap-3 pt-0.5">
+          {canQueue && (
+            <button
+              type="button"
+              onClick={() => onQueueAutoSend?.(patch, req.id)}
+              className="px-2.5 py-1 rounded text-[11px] font-semibold bg-gray-900 text-white hover:bg-gray-700 transition-colors"
+              title="Save these details, stop the agent chasing the guest, and let the daily run email the invoice"
+            >
+              Approve &amp; queue for auto-send
+            </button>
+          )}
           {canIssueAnyway && collected.length > 0 && (
             <button
               type="button"
@@ -2653,27 +2720,39 @@ const MISSING_FIELD_LABEL: Record<InvoiceMandatoryField, string> = {
   email: "Billing email",
 };
 
-/** How many days past checkout the send cron still catches up — mirrors
- *  CATCHUP_DAYS in app/api/cron/send-due-invoices/route.ts. */
-const INVOICE_CATCHUP_DAYS = 3;
-
 /**
  * The "and then what?" sentence. The automatic send is real but conditional —
  * it needs an open invoice task, complete details, and a checkout inside the
- * cron's catch-up window — so each condition that would silently stop it is
+ * cron's ~6-month window — so each condition that would silently stop it is
  * spelled out rather than left for the operator to discover on the day.
  */
 function NextStepLine({
   reservation,
   collecting,
+  canQueue,
   asks,
   email,
 }: {
   reservation: Reservation;
   collecting: boolean;
+  /** "Approve & queue for auto-send" is on offer. */
+  canQueue: boolean;
   asks: number;
   email: string;
 }) {
+  if (canQueue) {
+    const when =
+      reservation.checkOutDate > pragueToday()
+        ? `on ${formatDate(reservation.checkOutDate)}`
+        : "in the next automatic run (daily, 09:00)";
+    return (
+      <>
+        Everything the invoice needs is in the fields below. Approve and it goes out {when}
+        {email ? ` to ${email}` : ""}{collecting ? " — the agent stops chasing the guest" : ""}.
+      </>
+    );
+  }
+
   if (collecting) {
     return (
       <>
@@ -2723,9 +2802,7 @@ function NextStepLine({
     );
   }
 
-  const cutoff = new Date(`${today}T00:00:00Z`);
-  cutoff.setUTCDate(cutoff.getUTCDate() - INVOICE_CATCHUP_DAYS);
-  if (due < cutoff.toISOString().slice(0, 10)) {
+  if (isBeyondAutoSendWindow(due, today)) {
     return (
       <>
         Due since <strong className="font-semibold">{formatDate(due)}</strong> — too old for the automatic run, so it
@@ -3936,6 +4013,67 @@ export default function ReservationDrawer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "accept" }),
       }).catch((err) => console.error("[invoice-request] take-over failed", err));
+    }
+  }
+
+  /**
+   * Operator approval: between what the guest gave in chat and what's in the
+   * invoice fields, nothing is missing — so save it, stop the agent, and create
+   * the Send-invoice task the chat flow's auto-complete would have created
+   * (actionableDate = checkout). The daily run then emails it like any other;
+   * the invoice stays Not Issued, which is what the run looks for.
+   *
+   * The request is marked `accepted`, the same take-over "Issue anyway" and
+   * the reminder pass record. An open invoice task is never duplicated.
+   */
+  function queueInvoiceAutoSend(patch: Partial<InvoiceData>, requestId: string) {
+    const merged = mergeCollected(invoiceForm, patch);
+    setInvoiceForm(merged);
+
+    const request = (reservation!.invoiceRequests ?? []).find((r) => r.id === requestId);
+    const takeOver = request?.status === "awaiting-info";
+    const now = new Date().toISOString();
+    const issues = reservation!.issues ?? [];
+    const hasOpenTask = issues.some((i) => i.category === "invoice" && !i.resolved);
+    const company = merged.companyName.trim();
+    const vat = merged.vatNumber.trim();
+
+    const updated: Reservation = {
+      ...reservation!,
+      invoiceData: merged,
+      ...(takeOver
+        ? {
+            invoiceRequests: (reservation!.invoiceRequests ?? []).map((r) =>
+              r.id === requestId ? { ...r, status: "accepted" as const, processedAt: now } : r,
+            ),
+          }
+        : {}),
+      issues: hasOpenTask
+        ? issues
+        : [
+            ...issues,
+            {
+              id: Date.now().toString(),
+              category: "invoice" as const,
+              text: company
+                ? `Send invoice — ${company}${vat ? ` (DIČ ${vat})` : ""}`
+                : "Send invoice — guest requested",
+              actionableDate: reservation!.checkOutDate,
+              resolved: false,
+              createdAt: now,
+            },
+          ],
+    };
+    onUpdate(updated);
+
+    if (takeOver) {
+      // Best-effort, as for "Issue anyway": the task and details are already
+      // saved, so a failed flip only means the agent keeps the request listed.
+      fetch(`/api/invoice-requests/${encodeURIComponent(requestId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accept" }),
+      }).catch((err) => console.error("[invoice-request] approve failed", err));
     }
   }
 
@@ -6056,10 +6194,12 @@ export default function ReservationDrawer({
             <div className="mb-3">
               <InvoiceCollectionPanel
                 reservation={reservation}
+                formDetails={invoiceForm}
                 onUseDetails={
                   reservation.invoiceStatus === "Not Issued" && !splitMode ? applyCollectedDetails : undefined
                 }
                 onIssueAnyway={splitMode ? undefined : issueWithPartialDetails}
+                onQueueAutoSend={splitMode ? undefined : queueInvoiceAutoSend}
                 onDismiss={dismissInvoiceRequest}
                 onRestore={restoreInvoiceRequest}
               />

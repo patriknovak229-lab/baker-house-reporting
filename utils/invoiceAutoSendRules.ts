@@ -21,6 +21,9 @@
  * Everything here is pure (no I/O) so it can be pinned by unit tests.
  */
 
+import type { InvoiceRequestStatus } from '@/types/invoiceRequest';
+import type { InvoiceMandatoryField } from '@/utils/invoiceUtils';
+
 /** ~6 months. Checkouts older than this are never auto-invoiced. */
 export const INVOICE_AUTO_SEND_MAX_AGE_DAYS = 183;
 
@@ -115,6 +118,45 @@ export const INVOICE_BLOCKER_LABEL: Record<InvoiceAutoSendBlocker, string> = {
  */
 export function invoiceNeedsOperator(blocker: InvoiceAutoSendBlocker | null): boolean {
   return blocker !== null && blocker !== 'sent';
+}
+
+// ─── Operator approval: hand a request to the daily send ────────────────────
+
+export interface QueueAutoSendInput {
+  /** The guest's chat request this would approve. */
+  requestStatus: InvoiceRequestStatus;
+  /** An unresolved invoice task already exists, so the cron will pick it up anyway. */
+  hasOpenInvoiceTask: boolean;
+  /**
+   * Mandatory fields missing from BOTH what the guest gave in chat and the
+   * drawer's invoice fields — i.e. what the invoice itself would still lack.
+   */
+  stillMissing: InvoiceMandatoryField[];
+  /** What the cron would decide if the task were due today (null = it sends). */
+  blocker: InvoiceAutoSendBlocker | null;
+}
+
+/**
+ * Should the drawer offer "Approve & queue for auto-send"?
+ *
+ * The chat agent only counts details the guest typed in chat, so a request can
+ * sit at awaiting-info forever after the operator has filled the gap by hand
+ * (BH-95799979, Nov 2026: email added in the drawer, guest asked twice, no
+ * further reminders, no Send-invoice task — so the cron never saw it). The
+ * same gap opens when the 24h reminder pass closes a request as `accepted`
+ * because the reservation already had the details: accepted, but no task.
+ * Approving creates the task the auto-complete path would have created.
+ */
+export function canQueueInvoiceAutoSend(input: QueueAutoSendInput): boolean {
+  // Already queued — approving would only duplicate the task.
+  if (input.hasOpenInvoiceTask) return false;
+  // auto-completed made its own task; rejected was dismissed; pending has the
+  // Accept/Reject banner.
+  if (input.requestStatus !== 'awaiting-info' && input.requestStatus !== 'accepted') return false;
+  // Complete by the chat flow's own definition (company name included), and
+  // nothing that would make the run skip it — queueing it would be a promise
+  // the cron then doesn't keep.
+  return input.stillMissing.length === 0 && input.blocker === null;
 }
 
 // ─── Guest confirmation ──────────────────────────────────────────────────────
