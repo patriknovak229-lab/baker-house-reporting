@@ -74,6 +74,7 @@ type LocalFields = {
   invoiceModifications?: import('@/types/reservation').InvoiceModification[];
   invoiceSplits?: import('@/types/reservation').InvoiceSplit[];
   postStayAcknowledgedAt?: string;
+  guestNoteDismissed?: import('@/types/reservation').GuestNoteDismissal | null;
   postStaySnapshot?: import('@/types/reservation').BookingSnapshot;
   nonArrival?: import('@/types/reservation').NonArrival | null;
   nonArrivalNetPriceCzk?: number | null;
@@ -105,6 +106,8 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.invoiceModifications && r.invoiceModifications.length > 0) local.invoiceModifications = r.invoiceModifications;
   if (r.invoiceSplits && r.invoiceSplits.length > 0) local.invoiceSplits = r.invoiceSplits;
   if (r.postStayAcknowledgedAt) local.postStayAcknowledgedAt = r.postStayAcknowledgedAt;
+  // Absent when restored: the POST replaces the reservation's whole entry.
+  if (r.guestNoteDismissed) local.guestNoteDismissed = r.guestNoteDismissed;
   if (r.postStaySnapshot) local.postStaySnapshot = r.postStaySnapshot;
   if (r.nonArrival) local.nonArrival = r.nonArrival;
   if (r.nonArrivalNetPriceCzk != null) local.nonArrivalNetPriceCzk = r.nonArrivalNetPriceCzk;

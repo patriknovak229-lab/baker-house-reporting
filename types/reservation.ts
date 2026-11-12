@@ -364,6 +364,16 @@ export interface UnallocatedLeg {
   room: string;
 }
 
+/** Operator's "handled" mark on a web-booking guest note (Reservation.guestNoteDismissed). */
+export interface GuestNoteDismissal {
+  /** The note text it was dismissed for — a different note shows again. */
+  text: string;
+  /** ISO timestamp. */
+  at: string;
+  /** Operator email, when the session has one. */
+  by?: string;
+}
+
 export interface Reservation {
   // From Beds24 (read-only)
   reservationNumber: string;
@@ -513,6 +523,21 @@ export interface Reservation {
    * utils/additionalGuests.ts.
    */
   additionalGuests?: string[];
+  /**
+   * The note the guest typed on the web booking form, read from the Beds24
+   * `notes` field with the WEB-GROUP marker and Beds24's own log lines
+   * stripped. Direct-Web bookings only. Server-derived on each sync, never
+   * stored in the overrides map; unrelated to the operator's `notes` below.
+   * See utils/guestNote.ts.
+   */
+  guestNote?: string;
+  /**
+   * The operator marked the guest note handled in the drawer, so the
+   * Transactions tag goes away. Keeps the text it was dismissed for: if the
+   * note later changes in Beds24, the tag comes back. Stored in the overrides
+   * map (local-state); null/absent = not dismissed.
+   */
+  guestNoteDismissed?: GuestNoteDismissal | null;
 
   // Locally managed (editable)
   additionalEmail: string; // guest-provided email (Beds24 email is usually OTA conduit)

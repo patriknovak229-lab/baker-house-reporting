@@ -19,6 +19,7 @@ import { deriveNationality, countryFromCodeOrLang } from "@/utils/nationalityUti
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { parseCorporateMarker } from "@/utils/corporateShared";
 import { parseAdditionalGuests } from "@/utils/additionalGuests";
+import { parseGuestNote } from "@/utils/guestNote";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 import { listMidStayMoveHistory } from "@/data-access/roomMoves";
 import { attachRoomSegments } from "@/utils/roomSegments";
@@ -234,6 +235,7 @@ export interface Beds24Booking {
   modifiedTime?: string;  // ISO timestamp — when Beds24 last changed any field
   status: string;         // "new" | "confirmed" | "cancelled"
   comments: string;       // contains "PRE-PAID" for prepaid reservations
+  notes?: string;         // Beds24 "Notes": the web-booking guest note, plus Beds24's own log lines (see utils/guestNote.ts)
 }
 
 // ─── Channel fee breakdown ───────────────────────────────────────────────────
@@ -735,6 +737,9 @@ export function mapToReservation(b: Beds24Booking): Reservation {
   const corporateAgreementId = parseCorporateMarker(b.comments);
   const additionalGuests = parseAdditionalGuests(b.comments);
   const channel = mapChannel(b.apiSource, b.referer, b.comments ?? "");
+  // What the guest typed on the web booking form. Web bookings only: on OTA
+  // bookings `notes` holds Beds24 log lines and operator scribbles.
+  const guestNote = channel === "Direct-Web" && !isBlackout ? parseGuestNote(b.notes) : null;
   // Rate plan — only for current+future OTA stays (no backfill). Blackouts skip.
   const rateType = isBlackout ? undefined : deriveRateType(b, channel);
 
@@ -802,6 +807,7 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     ...(isCancelled ? { isCancelled: true } : {}),
     ...(corporateAgreementId ? { corporateAgreementId } : {}),
     ...(additionalGuests.length > 0 ? { additionalGuests } : {}),
+    ...(guestNote ? { guestNote } : {}),
     // Locally managed — Redis will layer these in Phase 3
     additionalEmail: "",
     paymentStatusOverride: null,

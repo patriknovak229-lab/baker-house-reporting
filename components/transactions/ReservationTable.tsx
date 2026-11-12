@@ -1,5 +1,6 @@
 'use client';
-import { useState, useMemo, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { Reservation, Channel, PaymentStatus, IssueCategory } from "@/types/reservation";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import Badge, { GoogleWordmark } from "@/components/shared/Badge";
@@ -21,6 +22,7 @@ import {
 import { pragueToday } from "@/utils/periodUtils";
 import { autoRatePerks, effectiveRatePerks, hasAnyPerk, EARLY_CHECKIN_TIME, LATE_CHECKOUT_TIME } from "@/utils/ratePerks";
 import { ratingSmiley, effectiveRating, formatRating } from "@/utils/rating";
+import { shouldBlinkGuestNote, isGuestNoteDismissed } from "@/utils/guestNote";
 
 type SortField =
   | keyof Pick<
@@ -269,6 +271,130 @@ function NoteBadge({ text }: { text: string }) {
         </span>
         <span className="self-center border-4 border-transparent border-t-gray-900 w-0 h-0" />
       </span>
+    </span>
+  );
+}
+
+/**
+ * What the guest typed on the web booking form (Reservation.guestNote).
+ * Deliberately louder than NoteBadge: it's a request someone has to act on
+ * (a cot, parking, an early arrival). Hover shows the note; a click pins it
+ * open so it can be read on touch screens and selected to copy. The click
+ * doesn't reach the row, so it never opens the drawer.
+ *
+ * The note renders in a portal with fixed positioning: the desktop table sits
+ * in an overflow-x-auto box that would clip a normal absolute tooltip, and the
+ * Status column is the right-most one.
+ */
+const GUEST_NOTE_WIDTH = 300;
+
+function GuestNoteBadge({ res }: { res: Reservation }) {
+  const [hover, setHover] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; above: boolean; width: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const open = hover || pinned;
+
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const width = Math.min(GUEST_NOTE_WIDTH, window.innerWidth - 16);
+      const left = Math.min(Math.max(8, r.left + r.width / 2 - width / 2), window.innerWidth - width - 8);
+      const above = r.top > window.innerHeight / 2; // open towards the roomier side
+      setPos({ left, top: above ? r.top - 6 : r.bottom + 6, above, width });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!pinned) return;
+    const close = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!btnRef.current?.contains(t) && !popRef.current?.contains(t)) setPinned(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [pinned]);
+
+  const text = res.guestNote?.trim();
+  // Marked handled in the drawer → the tag goes away entirely.
+  if (!text || isGuestNoteDismissed(res)) return null;
+  const blink = shouldBlinkGuestNote(res, pragueToday());
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setPinned((p) => !p);
+        }}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        aria-expanded={pinned}
+        aria-label="Guest note from the web booking"
+        className={`relative inline-flex items-center gap-1 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm hover:bg-rose-700 ${
+          blink ? "motion-safe:animate-pulse" : ""
+        }`}
+      >
+        {blink && (
+          <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75 motion-safe:animate-ping" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-300" />
+          </span>
+        )}
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+            d="M8 10h8M8 14h5m-7 6l-3 1 1-3.5A8.5 8.5 0 1112 20.5a8.6 8.6 0 01-4-1z" />
+        </svg>
+        Guest note
+      </button>
+      {open && pos &&
+        createPortal(
+          <div
+            ref={popRef}
+            role="dialog"
+            aria-label="Guest note"
+            // Portals still bubble React events to the row — keep clicks here.
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed",
+              left: pos.left,
+              top: pos.top,
+              width: pos.width,
+              transform: pos.above ? "translateY(-100%)" : undefined,
+            }}
+            className={`z-[60] rounded-md bg-gray-900 px-3 py-2 text-left text-[12px] leading-snug text-white shadow-xl ring-1 ring-black/10 whitespace-pre-wrap break-words ${
+              pinned ? "select-text cursor-text" : "pointer-events-none"
+            }`}
+          >
+            <span className="flex items-center justify-between gap-2 font-semibold text-rose-300">
+              Guest note · web booking
+              {pinned && (
+                <button
+                  type="button"
+                  onClick={() => setPinned(false)}
+                  aria-label="Close guest note"
+                  className="text-gray-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+            <span className="mt-1 block text-gray-100">{text}</span>
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }
@@ -535,6 +661,7 @@ function ReservationCard({
                   .map((i) => i.text)}
               />
             ))}
+          <GuestNoteBadge res={res} />
           {res.notes?.trim() && <NoteBadge text={res.notes.trim()} />}
           {hasUnread && (
             <span
@@ -1017,6 +1144,7 @@ export default function ReservationTable({
                             />
                           );
                         })}
+                        <GuestNoteBadge res={res} />
                         {res.notes?.trim() && <NoteBadge text={res.notes.trim()} />}
                         {stayStatuses.map((status) => {
                           if (status === "checking-in") return (
