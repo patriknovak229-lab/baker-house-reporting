@@ -11,6 +11,7 @@ import { countryCodeToFlag } from "@/utils/nationalityUtils";
 import { roomChipClasses } from "@/utils/roomVisuals";
 import { stayChainIndex, type StayChain } from "@/utils/stayChains";
 import { StayLinkBadge } from "./StayLinks";
+import { usePayLaterBadge } from "./payLaterStatus";
 import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
 import {
   freeCancelDaysLeft,
@@ -84,6 +85,20 @@ function paymentBadgeVariant(status: PaymentStatus) {
   if (status === "Partially Paid") return "amber";
   if (status === "Paid") return "green";
   return "gray";
+}
+
+/** The payment badge — "Pay later" / "Pay failed" instead of "Unpaid" for a pay-later booking. */
+function PaymentBadge({ res }: { res: Reservation }) {
+  const effective = res.paymentStatusOverride ?? res.paymentStatus;
+  const payLater = usePayLaterBadge(res.reservationNumber, effective);
+  if (payLater) {
+    return (
+      <span title={payLater.title}>
+        <Badge variant={payLater.variant} size="xs">{payLater.label}</Badge>
+      </span>
+    );
+  }
+  return <Badge variant={paymentBadgeVariant(effective)} size="xs">{effective}</Badge>;
 }
 
 type SortDir = "asc" | "desc";
@@ -611,7 +626,6 @@ function ReservationCard({
     res.bookingTimestamp &&
     Date.now() - new Date(res.bookingTimestamp).getTime() < 24 * 60 * 60 * 1000;
   const hasUnresolvedIssues = (res.issues ?? []).some((i) => !i.resolved);
-  const effectivePayment = res.paymentStatusOverride ?? res.paymentStatus;
 
   return (
     <div
@@ -718,7 +732,7 @@ function ReservationCard({
       <div className="flex items-center gap-2 flex-wrap">
         <span className="font-medium text-gray-900 text-sm">{formatCurrency(res.price)}</span>
         <div className="flex items-center gap-1">
-          <Badge variant={paymentBadgeVariant(effectivePayment)} size="xs">{effectivePayment}</Badge>
+          <PaymentBadge res={res} />
           {res.paymentStatusOverride && (
             <span className="text-[10px] text-amber-500">M</span>
           )}
@@ -1091,9 +1105,7 @@ export default function ReservationTable({
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-1">
-                        <Badge variant={paymentBadgeVariant(res.paymentStatusOverride ?? res.paymentStatus)} size="xs">
-                          {res.paymentStatusOverride ?? res.paymentStatus}
-                        </Badge>
+                        <PaymentBadge res={res} />
                         {res.paymentStatusOverride && (
                           <span className="text-[10px] text-amber-500" title="Manually overridden">M</span>
                         )}

@@ -288,6 +288,8 @@ interface CachedBooking {
   /** ISO timestamp Beds24 sets when a booking is cancelled — freshness signal
    *  for the cancellation notification (analogous to bookingTime for new). */
   cancelTime?: string;
+  /** 'nonPayment' = cancelled by the pay-later engine, not by the guest. */
+  subStatus?: string;
 }
 
 interface AutoReplyLogEntry {
@@ -477,6 +479,14 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
       await checkCronLiveness(redis);
     } catch (err) {
       console.error('[auto-reply] cron liveness check failed:', err);
+    }
+    // Pay later: a payment step 2 h overdue means the charge job's runs were
+    // lost — fire it from here (utils/webPayments/watchdog.ts).
+    try {
+      const { payLaterWatchdog } = await import('@/utils/webPayments/watchdog');
+      await payLaterWatchdog(redis);
+    } catch (err) {
+      console.error('[auto-reply] pay-later watchdog failed:', err);
     }
   }
 
@@ -3019,6 +3029,10 @@ async function maybeNotifyCancellation(
   // Operator "non-arrival": we cancelled in Beds24 to resell the nights, but the
   // guest is still booked on the OTA — NOT a guest cancellation, so don't alert.
   if (overrides[`BH-${bookingId}`]?.nonArrival) return;
+
+  // Pay later cancelled it for non-payment (utils/webPayments) — the technical
+  // chat already has its own message; it is not a guest cancellation.
+  if (booking.subStatus === 'nonPayment') return;
 
   // Dedupe: one Telegram per cancelled booking. Set BEFORE sending so parallel
   // webhook fires can't race (same rationale as the new-booking path).

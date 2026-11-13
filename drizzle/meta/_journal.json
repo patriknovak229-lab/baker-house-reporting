@@ -162,6 +162,20 @@
       "when": 1793697726530,
       "tag": "0022_happy_lockjaw",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794569624303,
+      "tag": "0023_web_payments",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794573064127,
+      "tag": "0024_web_payment_retry",
+      "breakpoints": true
     }
   ]
 }

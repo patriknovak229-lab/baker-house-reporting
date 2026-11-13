@@ -137,7 +137,7 @@ describe('WATCHED_CRON_JOBS matches vercel.json, proxy.ts and the routes', () =>
     for (const c of vercel.crons.filter((c) => !DISABLED.has(c.path))) {
       const job = WATCHED_CRON_JOBS.find((j) => j.path === c.path);
       expect(job, `${c.path} is in vercel.json but not in WATCHED_CRON_JOBS`).toBeDefined();
-      expect(job!.schedule, c.path).toBe(c.schedule);
+      expect([job!.schedule, ...(job!.extraSchedules ?? [])], c.path).toContain(c.schedule);
     }
   });
 

@@ -26,3 +26,4 @@ export * from './roomMoves';
 export * from './corporate';
 export * from './webFunnel';
 export * from './team';
+export * from './webPayments';

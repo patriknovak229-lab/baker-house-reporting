@@ -72,6 +72,8 @@ describe("staleCronJobs", () => {
       "overdue-tasks",
       // Unwatched until 2026-11-07: a missed 06:30 PriceLabs pull went unnoticed.
       "market-refresh",
+      // Pay later (NOT the dormant split-payment job above): four runs a day.
+      "web-payments",
       // The daily catch-up is a Vercel cron too; the watchdog backs it up.
       "catch-up",
     ]);

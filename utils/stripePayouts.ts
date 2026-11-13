@@ -37,6 +37,12 @@ async function sessionForPaymentIntent(stripe: Stripe, paymentIntentId: string |
   return res.data[0];
 }
 
+async function paymentIntentMetadata(stripe: Stripe, paymentIntentId: string | undefined): Promise<Record<string, string>> {
+  if (!paymentIntentId) return {};
+  const pi = await stripe.paymentIntents.retrieve(paymentIntentId).catch(() => null);
+  return (pi?.metadata ?? {}) as Record<string, string>;
+}
+
 function idOf(x: string | { id: string } | null | undefined): string | undefined {
   return typeof x === 'string' ? x : x?.id;
 }
@@ -57,10 +63,14 @@ export async function loadPayoutContents(stripe: Stripe, payout: Stripe.Payout):
         ? (bt.source as Stripe.Charge)
         : await stripe.charges.retrieve(idOf(bt.source as string)!);
       const session = await sessionForPaymentIntent(stripe, idOf(charge.payment_intent));
+      // Pay-later charges have no Checkout session: their stay dates sit on the
+      // PaymentIntent (metadata isn't copied to the charge). They never carry a
+      // `reservationNumber`, so they plan as web bookings like a pay-now checkout.
+      const piMeta = !session && charge.payment_intent ? await paymentIntentMetadata(stripe, idOf(charge.payment_intent)) : {};
       lines.push({
         ...base, kind: 'charge',
         sessionId: session?.id,
-        metadata: { ...(charge.metadata ?? {}), ...(session?.metadata ?? {}) },
+        metadata: { ...piMeta, ...(charge.metadata ?? {}), ...(session?.metadata ?? {}) },
         customerName: session?.customer_details?.name ?? charge.billing_details?.name ?? undefined,
         description: base.description ?? charge.description ?? undefined,
       });

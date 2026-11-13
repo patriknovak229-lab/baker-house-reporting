@@ -47,6 +47,8 @@ export interface WatchedCronJob {
   path?: string;
   /** vercel.json schedule, UTC, daily form "M H * * *". */
   schedule?: string;
+  /** Further vercel.json entries on the same path (Hobby: one run per entry per day). */
+  extraSchedules?: string[];
   catchUp?: CatchUpPolicy;
 }
 
@@ -108,6 +110,18 @@ export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
     maxAgeHours: 36,
     path: '/api/analytics/market/refresh',
     schedule: '30 6 * * *',
+    catchUp: 'missed-or-failed',
+  },
+  {
+    // Pay later: four runs a day; each catches up on everything due, so a
+    // dropped delivery costs hours. 14 h = the night gap plus Hobby's jitter.
+    job: 'web-payments',
+    label: 'Pay-later charges (07/09/15/19 UTC)',
+    maxAgeHours: 14,
+    path: '/api/cron/web-payments',
+    schedule: '0 7 * * *',
+    extraSchedules: ['0 9 * * *', '0 15 * * *', '0 19 * * *'],
+    // Idempotent and reconciliation-based (utils/webPayments/engine.ts).
     catchUp: 'missed-or-failed',
   },
   {

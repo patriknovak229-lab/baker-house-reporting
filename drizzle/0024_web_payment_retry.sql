@@ -1,0 +1,2 @@
+ALTER TABLE "web_payment_schedules" ADD COLUMN "retry_not_before" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "web_payment_schedules" ADD COLUMN "retry_count" integer DEFAULT 0 NOT NULL;

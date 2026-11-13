@@ -31,6 +31,22 @@
     {
       "path": "/api/cron/catch-up",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/web-payments",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/web-payments",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/web-payments",
+      "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/web-payments",
+      "schedule": "0 19 * * *"
     }
   ]
 }

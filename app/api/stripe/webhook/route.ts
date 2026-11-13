@@ -11,6 +11,8 @@ import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import { readAllStripePayments, writeAllStripePayments } from '@/utils/stripePaymentsStore';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
+import { webPaymentsIo } from '@/utils/webPayments/deps';
+import { settleLinkSession, settlePaymentIntent } from '@/utils/webPayments/engine';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -81,6 +83,17 @@ export async function POST(req: NextRequest) {
     await handleChargeFeeSync(event.data.object as Stripe.Charge).catch((err) =>
       console.error('[stripe/webhook] charge fee sync failed:', err),
     );
+    // Pay later: a safety net next to the charge job's own record. Settling is
+    // idempotent, and a second payment for the same booking is refunded. A
+    // failure answers 500 so Stripe redelivers (the fee sync above is idempotent).
+    if (event.type === 'charge.succeeded') {
+      try {
+        await settlePayLaterCharge(event.data.object as Stripe.Charge);
+      } catch (err) {
+        console.error('[stripe/webhook] pay-later settle failed:', err);
+        return NextResponse.json({ error: 'pay-later settle failed — Stripe will retry' }, { status: 500 });
+      }
+    }
     return NextResponse.json({ ok: true });
   }
   if (event.type === 'charge.refunded') {
@@ -96,6 +109,18 @@ export async function POST(req: NextRequest) {
 
   const session = event.data.object as Stripe.Checkout.Session;
   const meta    = session.metadata ?? {};
+
+  // Pay later, card saving: 0 Kč, NOT a payment — never log it or announce it.
+  // The rental site creates the booking from it; the charge comes weeks later.
+  if (session.mode === 'setup') {
+    return NextResponse.json({ ok: true, skipped: 'setup session (pay later card saving)' });
+  }
+  // Pay later, the guest's pay link: settled by the engine, which writes the
+  // payment log (web-booking shaped, for VAT) and tells the technical chat.
+  if (meta.kind === 'paylater_link') {
+    const outcome = await settleLinkSession(webPaymentsIo(), session.id, 'stripe-webhook');
+    return NextResponse.json({ ok: true, payLater: outcome });
+  }
 
   // Two metadata schemas hit this webhook:
   //   1. Reporting-app payment links — set { description, amountCzk, guestEmail/Phone/Name, reservationNumber }
@@ -419,6 +444,15 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
     ].filter(Boolean).join('\n');
     await sendTelegram(lines);
   }
+}
+
+// ─── Pay later ───
+
+async function settlePayLaterCharge(charge: Stripe.Charge): Promise<void> {
+  const piId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
+  if (!piId) return;
+  const outcome = await settlePaymentIntent(webPaymentsIo(), piId, 'stripe-webhook');
+  if (outcome !== 'ignored') console.log(`[stripe/webhook] pay-later ${piId}: ${outcome}`);
 }
 
 // ─── Shared helpers ───

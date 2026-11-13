@@ -65,3 +65,8 @@ export async function replaceAllStripePaymentsPg(items: StripePaymentRecord[]): 
   }
   await db.batch([db.delete(stripePaymentLog), db.insert(stripePaymentLog).values(rows)]);
 }
+
+/** Append one row unless its sessionId exists — a single statement, never a table rewrite. */
+export async function appendStripePaymentPg(item: StripePaymentRecord): Promise<void> {
+  await db.insert(stripePaymentLog).values(toRow(item)).onConflictDoNothing();
+}

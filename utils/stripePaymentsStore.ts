@@ -47,3 +47,18 @@ export async function writeAllStripePayments(items: StripePaymentRecord[]): Prom
     await (await pg()).replaceAllStripePaymentsPg(items);
   }
 }
+
+/**
+ * Add one payment unless its sessionId is already logged (pay later). In
+ * Postgres a single insert — no whole-table rewrite that a concurrent webhook
+ * could race; on Redis the array append the webhook itself uses.
+ */
+export async function appendStripePayment(item: StripePaymentRecord): Promise<void> {
+  if (writesToPostgres(DOMAIN)) await (await pg()).appendStripePaymentPg(item);
+  if (writesToRedis(DOMAIN)) {
+    const redis = getRedis();
+    if (!redis) throw new Error('Redis not configured');
+    const items = (await redis.get<StripePaymentRecord[]>(KEY)) ?? [];
+    if (!items.some((r) => r.sessionId === item.sessionId)) await redis.set(KEY, [...items, item]);
+  }
+}

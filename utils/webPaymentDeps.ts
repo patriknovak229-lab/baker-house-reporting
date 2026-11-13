@@ -30,6 +30,20 @@ function refundLite(r: Stripe.Refund): StripeRefundLite {
 function stripeDeps(stripe: Stripe): WebPaymentStripe {
   return {
     async retrieveSession(sessionId) {
+      // Pay later: the log row is `paylater_<live|test>_<PaymentIntent id>` — no Checkout session.
+      const payLater = /^paylater_(?:live|test)_(pi_\w+)$/.exec(sessionId);
+      if (payLater) {
+        const pi = await stripe.paymentIntents.retrieve(payLater[1], { expand: ["latest_charge"] });
+        const charge = pi.latest_charge;
+        return {
+          id: sessionId,
+          paymentStatus: pi.status === "succeeded" ? "paid" : "unpaid",
+          currency: pi.currency,
+          charge: charge && typeof charge !== "string"
+            ? { id: charge.id, amountHal: charge.amount, amountRefundedHal: charge.amount_refunded, currency: charge.currency }
+            : null,
+        };
+      }
       const s = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["payment_intent.latest_charge"] });
       const pi = s.payment_intent;
       const charge = pi && typeof pi !== "string" ? pi.latest_charge : null;

@@ -32,6 +32,8 @@ import PriceCheckModal from "./PriceCheckModal";
 import MassMessageModal from "./MassMessageModal";
 import StayRequestModal from "./StayRequestModal";
 import TranslateModal from "./TranslateModal";
+import PayLaterOverview from "./PayLaterOverview";
+import { PayLaterStatusContext, usePayLaterStatuses } from "./payLaterStatus";
 import { CreateNotificationModal, GeneralTaskModal } from "./TeamForms";
 import { addresseeLabel, authorLabel, daysOverdue, type GeneralTask, type TeamFeed } from "@/utils/teamItems";
 import ReservationForm, { reservationFormId, type OpenReservationForm, type ReservationFormKind } from "./ReservationForms";
@@ -340,6 +342,9 @@ export default function TransactionsPage() {
   const [showMassMessageModal, setShowMassMessageModal] = useState(false);
   const [showStayRequest, setShowStayRequest] = useState(false);
   const [showTranslate, setShowTranslate] = useState(false);
+  const [showPayLater, setShowPayLater] = useState(false);
+  // Pay-later status per booking, refreshed with every bookings sync (list badge).
+  const payLaterStatuses = usePayLaterStatuses(lastSynced?.getTime() ?? 0);
   const [showNotificationForm, setShowNotificationForm] = useState(false);
   const [showGeneralTaskForm, setShowGeneralTaskForm] = useState(false);
   // Operator-to-operator notifications + general (non-reservation) tasks —
@@ -1613,6 +1618,18 @@ export default function TransactionsPage() {
               </svg>
               Translate
             </button>
+            {role === "admin" && (
+              <button
+                onClick={() => { setShowPayLater(true); focusFloatingPanel("pay-later"); }}
+                title="Website bookings paid later: the mode switch and every scheduled card charge"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-white border border-sky-200 text-sky-700 text-sm font-medium transition-colors hover:bg-sky-50 shadow-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>
+                Pay later
+              </button>
+            )}
             <button
               onClick={() => { setShowNotificationForm(true); focusFloatingPanel("team-notification"); }}
               title="Send a note to a colleague, to everyone, or to yourself — it shows in their Notifications banner"
@@ -3357,12 +3374,14 @@ export default function TransactionsPage() {
           ))}
         </div>
       ) : (
-        <ReservationTable
-          reservations={filtered}
-          allReservations={reservations}
-          unreadBookingIds={unreadBookingIds}
-          onRowClick={setSelectedReservation}
-        />
+        <PayLaterStatusContext.Provider value={payLaterStatuses}>
+          <ReservationTable
+            reservations={filtered}
+            allReservations={reservations}
+            unreadBookingIds={unreadBookingIds}
+            onRowClick={setSelectedReservation}
+          />
+        </PayLaterStatusContext.Provider>
       )}
 
       {/* Drawer */}
@@ -3465,6 +3484,17 @@ export default function TransactionsPage() {
 
       {/* Stand-alone translator for WhatsApp / email messages */}
       {showTranslate && <TranslateModal onClose={() => setShowTranslate(false)} />}
+
+      {/* Pay later: mode switch + every scheduled card charge */}
+      {showPayLater && (
+        <PayLaterOverview
+          onClose={() => setShowPayLater(false)}
+          onOpen={(rn) => {
+            const r = reservations.find((x) => x.reservationNumber === rn);
+            if (r) setSelectedReservation(r);
+          }}
+        />
+      )}
 
       {/* Operator-to-operator notification / general task */}
       {showNotificationForm && (

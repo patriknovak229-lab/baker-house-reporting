@@ -123,7 +123,9 @@ export async function loadVatData(): Promise<VatData> {
       amountHal: toHal(p.amountCzk),
       reservationNumber: p.reservationNumber && /^BH-\d+$/.test(p.reservationNumber) ? p.reservationNumber : null,
       paidDate: pragueDate(p.paidAt),
-      live: p.sessionId.startsWith('cs_live_'),
+      // Pay-later charges have no Checkout session; the engine keys them
+      // `paylater_live_<pi>` / `paylater_test_<pi>` (utils/webPayments/engine).
+      live: p.sessionId.startsWith('cs_live_') || p.sessionId.startsWith('paylater_live_'),
       stayFrom: stay?.[1] ?? null,
       stayTo: stay?.[2] ?? null,
     };

@@ -12,6 +12,7 @@ import type { ReservationFormKind } from "./ReservationForms";
 import Badge from "@/components/shared/Badge";
 import { StayLinkSection, type StayLinkAction } from "@/components/transactions/StayLinks";
 import { WebPaymentRefund } from "@/components/transactions/WebPaymentRefund";
+import { PayLaterPanel } from "@/components/transactions/PayLaterPanel";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
 import { platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
@@ -5628,6 +5629,14 @@ export default function ReservationDrawer({
                 for non-arrivals, whose net-retained price already nets one off. */}
             {/* Website booking → its Stripe checkout can be refunded from here,
                 recorded as the platform refund below in the same step. */}
+            {/* Pay later: the saved-card schedule, and Charge now etc. for admins. */}
+            {reservation.channel === "Direct-Web" && canEditNonArrival && (
+              <PayLaterPanel
+                key={`pay-later-${reservation.reservationNumber}`}
+                reservationNumber={reservation.reservationNumber}
+                canAct={naUserRole === "admin"}
+              />
+            )}
             {reservation.channel === "Direct-Web" && !reservation.nonArrival && canEditNonArrival && (
               <WebPaymentRefund
                 key={reservation.reservationNumber}
