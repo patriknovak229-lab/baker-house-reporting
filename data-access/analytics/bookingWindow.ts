@@ -33,7 +33,7 @@
  * trading history with no snapshot table. Its one blind spot: a booking that was
  * later MODIFIED is replayed in its final shape.
  */
-import { sql, type SQL } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { ROOM_CLASSES, SELLABLE_UNITS, TURNOVER_COST_KEYS } from '@/data/analyticsConfig';
 import { computeVariableCosts } from '@/utils/variableCostsEngine';
 import { ROOM_TO_BEDS24_ID } from '@/utils/variableCostsShared';
@@ -56,6 +56,7 @@ import {
   ratio,
   roomFilter,
   unitIdOf,
+  unitIdOfLabel,
   unitsInScope,
   type AnalyticsScope,
 } from './shared';
@@ -151,19 +152,6 @@ function mean(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((a, v) => a + v, 0) / values.length;
 }
 
-/**
- * Unit of a room label, including the virtual-room labels legacy and unallocated
- * bookings carry. A "1KK Deluxe Studios" night took one of K.202/K.203, so for
- * capacity and resale it belongs to the Deluxe unit even though no physical room
- * is named.
- */
-function unitOfLabel(room: SQL): SQL {
-  return sql`CASE ${room}
-    WHEN '1KK Deluxe Studios' THEN 'deluxe-1kk'
-    WHEN '1KK Urban Studios'  THEN 'urban-1kk'
-    ELSE ${unitIdOf(room)} END`;
-}
-
 const RATE_LINE_REGEX = '(\\d{4}-\\d{2}-\\d{2}) \\([^)]*\\) CZK ([0-9.]+)';
 
 /**
@@ -189,7 +177,7 @@ const BW_ROWS_CTE = sql`
       a.reservation_number,
       a.room,
       ${classIdOf(sql`a.room`)}                         AS class_id,
-      ${unitOfLabel(sql`a.room`)}                      AS unit_id,
+      ${unitIdOfLabel(sql`a.room`)}                      AS unit_id,
       a.channel,
       a.source,
       a.check_in_date,
@@ -544,7 +532,7 @@ async function readResale(scope: AnalyticsScope): Promise<ResaleDb[]> {
       GROUP BY 1, 2
     ),
     sold AS (
-      SELECT ${unitOfLabel(sql`nights.room`)} AS unit_id, nights.stay_date,
+      SELECT ${unitIdOfLabel(sql`nights.room`)} AS unit_id, nights.stay_date,
              nights.night_price, nights.reservation_date
       FROM nights
       WHERE nights.stay_date BETWEEN ${scope.from}::date AND ${scope.to}::date

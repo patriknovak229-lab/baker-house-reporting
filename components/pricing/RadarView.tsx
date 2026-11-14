@@ -22,6 +22,7 @@ import type {
   RadarUnit,
 } from '@/utils/radarTypes';
 import { PARITY_UNITS } from '@/data/parityConfig';
+import BoosterCandidates from '@/components/pricing/BoosterCandidates';
 
 // ── Demand styling ────────────────────────────────────────────────────────────
 
@@ -458,6 +459,8 @@ export default function RadarView() {
           );
         })}
       </section>
+
+      <BoosterCandidates />
 
       {/* Demand calendar */}
       <Card

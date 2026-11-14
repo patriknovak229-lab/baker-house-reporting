@@ -620,6 +620,19 @@ export function unitIdOf(roomColumn: SQL): SQL {
   return sql`CASE ${sql.join(branches, sql` `)} ELSE 'other' END`;
 }
 
+/**
+ * Unit of a room label, including the virtual-room labels legacy and unallocated
+ * bookings carry. A "1KK Deluxe Studios" night took one of K.202/K.203, so for
+ * capacity and resale it belongs to the Deluxe unit even though no physical room
+ * is named.
+ */
+export function unitIdOfLabel(room: SQL): SQL {
+  return sql`CASE ${room}
+    WHEN '1KK Deluxe Studios' THEN 'deluxe-1kk'
+    WHEN '1KK Urban Studios'  THEN 'urban-1kk'
+    ELSE ${unitIdOf(room)} END`;
+}
+
 const UNIT_BY_ID = new Map(SELLABLE_UNITS.map((u) => [u.id, u]));
 const UNIT_BY_ROOM = new Map(SELLABLE_UNITS.flatMap((u) => u.rooms.map((r) => [r, u] as const)));
 
