@@ -15,7 +15,7 @@ import { WebPaymentRefund } from "@/components/transactions/WebPaymentRefund";
 import { PayLaterPanel } from "@/components/transactions/PayLaterPanel";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
-import { platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
+import { isFullyRefunded, platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
 import { planShortening, describeShortening, nightsLabel } from "@/utils/stayShorten";
 import {
   freeCancelDaysLeft,
@@ -1241,10 +1241,13 @@ function PaymentStatusControl({
   derived,
   override,
   onOverride,
+  fullyRefunded = false,
 }: {
   derived: Reservation["paymentStatus"];
   override: Reservation["paymentStatus"] | null;
   onOverride: (v: Reservation["paymentStatus"] | null) => void;
+  /** The whole price went back to the guest: shown as "Refunded" unless overridden. */
+  fullyRefunded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const effective = override ?? derived;
@@ -1252,7 +1255,11 @@ function PaymentStatusControl({
     <div>
       <p className="text-[11px] text-gray-400 mb-1">Status</p>
       <div className="flex items-center gap-1.5 flex-wrap">
-        <Badge variant={paymentBadgeVariant(effective)}>{effective}</Badge>
+        {fullyRefunded && !override ? (
+          <Badge variant="coral">Refunded</Badge>
+        ) : (
+          <Badge variant={paymentBadgeVariant(effective)}>{effective}</Badge>
+        )}
         {override && (
           <span className="text-[10px] text-amber-500 font-medium">manual</span>
         )}
@@ -5545,7 +5552,10 @@ export default function ReservationDrawer({
             summary={(() => {
               // Money collected is good news, so the folded summary says so in
               // green; anything short of Paid stays amber so it reads as open.
-              const st = reservation.paymentStatusOverride ?? reservation.paymentStatus;
+              const st =
+                !reservation.paymentStatusOverride && isFullyRefunded(reservation)
+                  ? "Refunded"
+                  : (reservation.paymentStatusOverride ?? reservation.paymentStatus);
               const good = st === "Paid";
               return (
                 <span
@@ -5565,6 +5575,7 @@ export default function ReservationDrawer({
                     derived={reservation.paymentStatus}
                     override={reservation.paymentStatusOverride}
                     onOverride={(v) => onUpdate({ ...reservation, paymentStatusOverride: v })}
+                    fullyRefunded={isFullyRefunded(reservation)}
                   />
                   <div>
                     <p className="text-[11px] text-gray-400 mb-1">Total</p>
@@ -5598,6 +5609,7 @@ export default function ReservationDrawer({
                     derived={reservation.paymentStatus}
                     override={reservation.paymentStatusOverride}
                     onOverride={(v) => onUpdate({ ...reservation, paymentStatusOverride: v })}
+                    fullyRefunded={isFullyRefunded(reservation)}
                   />
                   <div>
                     <p className="text-[11px] text-gray-400 mb-0.5">Total Price</p>
@@ -5653,7 +5665,7 @@ export default function ReservationDrawer({
                   <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <span className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800">
-                        ↩︎ Partially refunded
+                        ↩︎ {isFullyRefunded(reservation) ? "Fully refunded" : "Partially refunded"}
                       </span>
                       {canEditNonArrival && (
                         <button

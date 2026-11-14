@@ -60,6 +60,18 @@ export function platformRefundShare(r: Reservation): number {
   return Math.min(r.price, pr.amountCzk * ratio);
 }
 
+/**
+ * The guest got the whole price back (e.g. cancelled inside free cancellation
+ * after paying), so the booking reads "Refunded", not "Paid" / "Partially
+ * refunded". Compared with the price the refund was recorded against, to the
+ * haléř, so a later price change doesn't flip it.
+ */
+export function isFullyRefunded(r: Pick<Reservation, "platformRefund">): boolean {
+  const pr = r.platformRefund;
+  if (!pr || pr.amountCzk <= 0 || !(pr.originalPriceCzk > 0)) return false;
+  return pr.amountCzk >= pr.originalPriceCzk - 0.005;
+}
+
 // ─── Spreading a reservation's money over time ─────────────────────────────
 
 function nightsBetween(from: string, to: string): number {

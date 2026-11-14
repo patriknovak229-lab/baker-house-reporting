@@ -286,6 +286,15 @@ export function WebPaymentRefund({
                     className="block w-36 mt-0.5 border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
                 </label>
+                {/* Fills the field only — "Review refund" still asks before any money moves. */}
+                <button
+                  type="button"
+                  onClick={() => setAmount(String(stripe.refundableCzk))}
+                  className="px-2.5 py-1 text-[11px] font-medium text-indigo-700 border border-indigo-200 rounded hover:bg-indigo-50"
+                  title="Fill in everything that can still be refunded"
+                >
+                  Full amount ({czk(stripe.refundableCzk)})
+                </button>
                 <label className="text-[11px] text-gray-600 flex-1 min-w-[10rem]">
                   Reason (for our records, optional)
                   <input

@@ -12,6 +12,7 @@ import { roomChipClasses } from "@/utils/roomVisuals";
 import { stayChainIndex, type StayChain } from "@/utils/stayChains";
 import { StayLinkBadge } from "./StayLinks";
 import { usePayLaterBadge } from "./payLaterStatus";
+import { isFullyRefunded } from "@/utils/reservationRevenue";
 import { effectiveRateType, rateChipClasses, RATE_TYPE_SHORT } from "@/utils/rateType";
 import {
   freeCancelDaysLeft,
@@ -87,10 +88,25 @@ function paymentBadgeVariant(status: PaymentStatus) {
   return "gray";
 }
 
+/** The refund flag's text: "Fully refunded" once the whole price went back, otherwise the amount. */
+function refundChipLabel(res: Reservation): string {
+  return isFullyRefunded(res)
+    ? "Fully refunded"
+    : `Refunded ${Math.round(res.platformRefund?.amountCzk ?? 0).toLocaleString("cs-CZ")} Kč`;
+}
+
 /** The payment badge — "Pay later" / "Pay failed" instead of "Unpaid" for a pay-later booking. */
 function PaymentBadge({ res }: { res: Reservation }) {
   const effective = res.paymentStatusOverride ?? res.paymentStatus;
   const payLater = usePayLaterBadge(res.reservationNumber, effective);
+  // The guest got everything back: "Paid" would mislead. A manual override still wins.
+  if (!res.paymentStatusOverride && isFullyRefunded(res)) {
+    return (
+      <span title={`Fully refunded: ${refundChipLabel(res)}`}>
+        <Badge variant="coral" size="xs">Refunded</Badge>
+      </span>
+    );
+  }
   if (payLater) {
     return (
       <span title={payLater.title}>
@@ -758,7 +774,7 @@ function ReservationCard({
           ) : null}
           {res.platformRefund && res.platformRefund.amountCzk > 0 && (
             <Badge variant="amber" size="xs">
-              ↩︎ Refunded {Math.round(res.platformRefund.amountCzk).toLocaleString("cs-CZ")} Kč
+              ↩︎ {refundChipLabel(res)}
             </Badge>
           )}
           {stayStatuses.map((status) => {
@@ -1198,7 +1214,7 @@ export default function ReservationTable({
                         ) : null}
                         {res.platformRefund && res.platformRefund.amountCzk > 0 && (
                           <Badge variant="amber" size="xs">
-                            ↩︎ Refunded {Math.round(res.platformRefund.amountCzk).toLocaleString("cs-CZ")} Kč
+                            ↩︎ {refundChipLabel(res)}
                           </Badge>
                         )}
                         {effectiveFlags.map((flag) => (

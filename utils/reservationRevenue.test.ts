@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reservationRevenue, platformRefundShare } from "./reservationRevenue";
+import { reservationRevenue, platformRefundShare, isFullyRefunded } from "./reservationRevenue";
 import type { Reservation, PlatformRefund } from "@/types/reservation";
 
 // Modelled on the booking that prompted the feature: BH-90387422, a
@@ -102,5 +102,32 @@ describe("reservationRevenue — non-arrival wins over a stale refund", () => {
     expect(rev.gbv).toBeCloseTo(6243.68, 2);
     expect(rev.commission).toBe(0);
     expect(rev.fee).toBe(0);
+  });
+});
+
+describe("isFullyRefunded", () => {
+  it("is true when the whole recorded price went back (BH-96141089: 2 117,25 of 2 117,25)", () => {
+    expect(isFullyRefunded(mk({ platformRefund: refund({ amountCzk: 2117.25, originalPriceCzk: 2117.25 }) }))).toBe(true);
+  });
+
+  it("is false for a partial refund, even one haléř short", () => {
+    expect(isFullyRefunded(mk({ platformRefund: refund() }))).toBe(false);
+    expect(isFullyRefunded(mk({ platformRefund: refund({ amountCzk: 8743.67 }) }))).toBe(false);
+  });
+
+  it("ignores float noise and a mistyped amount above the price", () => {
+    expect(isFullyRefunded(mk({ platformRefund: refund({ amountCzk: 8743.679999 }) }))).toBe(true);
+    expect(isFullyRefunded(mk({ platformRefund: refund({ amountCzk: 9000 }) }))).toBe(true);
+  });
+
+  it("stays true when the price changes after the refund (cancellation zeroes it in Beds24)", () => {
+    expect(isFullyRefunded(mk({ price: 0, platformRefund: refund({ amountCzk: 8743.68 }) }))).toBe(true);
+  });
+
+  it("is false with no refund, a zero refund, or no recorded price", () => {
+    expect(isFullyRefunded(mk({}))).toBe(false);
+    expect(isFullyRefunded(mk({ platformRefund: null }))).toBe(false);
+    expect(isFullyRefunded(mk({ platformRefund: refund({ amountCzk: 0 }) }))).toBe(false);
+    expect(isFullyRefunded(mk({ platformRefund: refund({ originalPriceCzk: 0 }) }))).toBe(false);
   });
 });
