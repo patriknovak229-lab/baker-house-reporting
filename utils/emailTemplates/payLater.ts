@@ -1,7 +1,7 @@
 /**
  * Pay-later guest emails (sent from reservations@ by the charge engine).
  * Czech is the source; English translates it line for line, nothing added.
- * DRAFT wording — Patrik approves before launch. Pure: same input, same HTML.
+ * Wording approved by Patrik (13 Nov 2026). Pure: same input, same HTML.
  */
 import type { WebPaymentEmailKind, WebPaymentLang } from '@/types/webPayment';
 import { czechGreetingLine } from '@/utils/czechVocative';
@@ -85,13 +85,13 @@ const COPY = {
       `Prosíme, zaplaťte ji do ${formatPragueDateTime(v.payBy ?? v.chargeAt, 'cs')} přes tento odkaz (kartou, Apple Pay nebo Google Pay):`,
     failedPayCta: 'Zaplatit',
     failedNext:
-      'Pokud do té doby platba neproběhne, zkusíme kartu strhnout ještě jednou. Pokud se to nepodaří, bude rezervace zrušena bez poplatku.',
+      'Pokud do té doby platba neproběhne, zkusíme platbu strhnout ještě jednou. Pokud se to nepodaří, bude rezervace zrušena bez poplatku.',
     helpLine: 'S čímkoli Vám rádi pomůžeme – stačí odpovědět na tento e-mail.',
     receiptSubject: (v: PayLaterEmailVars) => `Platba přijata – rezervace ${v.reservationNumber}`,
     receiptIntro: (v: PayLaterEmailVars) =>
       `děkujeme, platbu ${formatCzk(v.amountMinor)} za rezervaci ${v.reservationNumber} (${stay(v)}) jsme přijali dne ${formatDateLong(dateOf(v.paidAt ?? v.chargeAt), 'cs')}.`,
-    receiptFreeCancel: (v: PayLaterEmailVars) =>
-      `Rezervaci můžete i nadále zrušit zdarma do 23:59 dne ${formatDateLong(v.deadlineDate, 'cs')}; platbu Vám pak vrátíme.`,
+    // After payment we don't advertise cancellation (Patrik, 14 Nov) — just how to reach us.
+    receiptContact: 'Pokud budete cokoli potřebovat, napište nám na {email} nebo přes WhatsApp na {whatsapp}.',
     receiptOutro: 'Těšíme se na Vás v Baker House Apartments.',
     cancelledSubject: (v: PayLaterEmailVars) => `Rezervace ${v.reservationNumber} byla zrušena – platba neproběhla`,
     cancelledIntro: (v: PayLaterEmailVars) =>
@@ -137,8 +137,7 @@ const COPY = {
     receiptSubject: (v: PayLaterEmailVars) => `Payment received – booking ${v.reservationNumber}`,
     receiptIntro: (v: PayLaterEmailVars) =>
       `thank you, we received your payment of ${formatCzk(v.amountMinor)} for booking ${v.reservationNumber} (${stay(v)}) on ${formatDateLong(dateOf(v.paidAt ?? v.chargeAt), 'en')}.`,
-    receiptFreeCancel: (v: PayLaterEmailVars) =>
-      `You can still cancel the booking free of charge until 23:59 on ${formatDateLong(v.deadlineDate, 'en')}; we will then refund the payment.`,
+    receiptContact: 'If you need anything, write to us at {email} or via WhatsApp at {whatsapp}.',
     receiptOutro: 'We look forward to welcoming you at Baker House Apartments.',
     cancelledSubject: (v: PayLaterEmailVars) => `Booking ${v.reservationNumber} has been cancelled – the payment did not go through`,
     cancelledIntro: (v: PayLaterEmailVars) =>
@@ -157,6 +156,27 @@ const COPY = {
 
 
 const p = (text: string) => `<p style="margin:0 0 14px">${esc(text)}</p>`;
+
+const CONTACT_EMAIL = 'reservations@bakerhouseapartments.cz';
+/** The website's WhatsApp contact (rental-site corporate-content.ts). */
+const WHATSAPP_DISPLAY = '+420 735 230 711';
+const WHATSAPP_URL = 'https://wa.me/420735230711';
+
+/** A paragraph whose {email} / {whatsapp} placeholders become links; everything else is escaped text. */
+function contactParagraph(template: string): string {
+  const link = (href: string, label: string) => `<a href="${esc(href)}" style="color:${GOLD}">${esc(label)}</a>`;
+  const html = template
+    .split(/(\{email\}|\{whatsapp\})/)
+    .map((part) =>
+      part === '{email}'
+        ? link(`mailto:${CONTACT_EMAIL}`, CONTACT_EMAIL)
+        : part === '{whatsapp}'
+          ? link(WHATSAPP_URL, WHATSAPP_DISPLAY)
+          : esc(part),
+    )
+    .join('');
+  return `<p style="margin:0 0 14px">${html}</p>`;
+}
 
 function button(href: string, label: string): string {
   return `<p style="margin:6px 0 20px;text-align:center"><a href="${esc(href)}" style="display:inline-block;padding:12px 26px;background:${GOLD};color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;font-size:15px">${esc(label)}</a></p>`;
@@ -241,7 +261,7 @@ export function renderPayLaterEmail(kind: WebPaymentEmailKind, v: PayLaterEmailV
       break;
     case 'receipt':
       subject = t.receiptSubject(v);
-      body = [hello, p(t.receiptIntro(v)), p(t.receiptFreeCancel(v)), p(t.receiptOutro)].join('\n');
+      body = [hello, p(t.receiptIntro(v)), contactParagraph(t.receiptContact), p(t.receiptOutro)].join('\n');
       break;
     case 'cancelled':
       subject = t.cancelledSubject(v);
