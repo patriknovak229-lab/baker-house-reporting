@@ -84,6 +84,23 @@ import { defaultMidStayDate, isMidStayDate } from "@/utils/midStayCleaning";
  * are not real addresses, so they never belong on an invoice.
  * Returns "" when there's nothing usable, leaving the field blank as before.
  */
+/**
+ * Every apartment's Beds24 booking of a multi-apartment reservation, paired
+ * with its room, so the message thread reads all their threads (Beds24 auto
+ * actions post to each sub-booking separately). `room` is "O.308 + K.106" in
+ * the same order as `apartmentReservationNumbers`. Undefined for a single
+ * apartment — the thread then reads just this booking.
+ */
+function groupMessageBookings(res: Reservation): { bookingId: number; room: string }[] | undefined {
+  const numbers = res.apartmentReservationNumbers;
+  if (!numbers || numbers.length < 2) return undefined;
+  const rooms = res.room.split(' + ');
+  return numbers.map((n, i) => ({
+    bookingId: Number(n.replace(/^BH-/, '')),
+    room: rooms.length === numbers.length ? rooms[i] : n,
+  }));
+}
+
 function guestBillingEmail(res: Reservation): string {
   const usable = (v: string | undefined | null): string => {
     const e = (v ?? "").trim().toLowerCase();
@@ -5525,10 +5542,14 @@ export default function ReservationDrawer({
             {isOTAChannel ? (
               <MessageThread
                 beds24Id={parseInt(reservation.reservationNumber.slice(3))}
-                hasUnread={unreadBookingIds.has(parseInt(reservation.reservationNumber.slice(3)))}
+                hasUnread={
+                  unreadBookingIds.has(parseInt(reservation.reservationNumber.slice(3))) ||
+                  (groupMessageBookings(reservation) ?? []).some((g) => unreadBookingIds.has(g.bookingId))
+                }
                 guestName={`${reservation.firstName} ${reservation.lastName}`}
                 room={reservation.room}
                 guestFirstName={reservation.firstName}
+                groupBookings={groupMessageBookings(reservation)}
               />
             ) : (
               <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded px-3 py-2.5">

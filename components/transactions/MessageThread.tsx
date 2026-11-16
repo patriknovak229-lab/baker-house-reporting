@@ -3,9 +3,14 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ThreadMessage } from '@/app/api/messages/route';
 import { buildArrivalGuide, arrivalGuideToText } from '@/utils/arrivalGuide';
 import { czechGreetingLine } from '@/utils/czechVocative';
+import FloatingPanel from '@/components/shared/FloatingPanel';
+import { collapseGroupDuplicates, type DisplayMessage } from '@/utils/groupThread';
 
 const ACTIVE_WINDOW_MS = 120 * 60 * 1000; // 120 minutes
 const POLL_INTERVAL_MS = 30_000;
+/** Most recent messages shown inline in the drawer vs. in the full-chat window. */
+const DRAWER_LIMIT = 30;
+const FULL_LIMIT = 300;
 
 interface MessageThreadProps {
   beds24Id: number;       // raw Beds24 booking ID (not "BH-" prefixed)
@@ -16,6 +21,10 @@ interface MessageThreadProps {
   room?: string;
   /** Guest first name — used by templates for personalised greetings. */
   guestFirstName?: string;
+  /** Multi-apartment reservation: every apartment's Beds24 booking with its
+   *  room. Each one has its own Beds24 message thread; they're read together
+   *  and every bubble gets a room chip. Replies still go to `beds24Id`. */
+  groupBookings?: { bookingId: number; room: string }[];
 }
 
 // Parking spaces per physical room — kept in sync with utils/parkingUtils.ts.
@@ -180,8 +189,9 @@ function isConversationActive(messages: ThreadMessage[]): boolean {
   return last.source === 'guest';
 }
 
-export default function MessageThread({ beds24Id, hasUnread, guestName, room, guestFirstName }: MessageThreadProps) {
+export default function MessageThread({ beds24Id, hasUnread, guestName, room, guestFirstName, groupBookings }: MessageThreadProps) {
   const [open, setOpen] = useState(false);
+  const [fullOpen, setFullOpen] = useState(false);
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -193,22 +203,38 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
   const [refreshing, setRefreshing] = useState(false);
   const [refreshFeedback, setRefreshFeedback] = useState<'idle' | 'done'>('idle');
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const fullContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fullTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Primary booking first (the server files invoice requests under it), then
+  // the other apartments. Joined to a string so the fetch callback only
+  // changes when the actual set of bookings does.
+  const bookingIdsKey = [
+    beds24Id,
+    ...(groupBookings ?? []).map((g) => g.bookingId).filter((id) => id !== beds24Id),
+  ].join(',');
+  const roomByBookingId = new Map((groupBookings ?? []).map((g) => [g.bookingId, g.room]));
+  const isGroup = bookingIdsKey.includes(',');
+  const limit = fullOpen ? FULL_LIMIT : DRAWER_LIMIT;
 
   // Auto-resize the textarea as content changes — min 2 rows, max 8 rows.
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
     // text-sm line-height ≈ 20px; py-1.5 adds ~12px total vertical padding
     const maxHeight = 20 * 8 + 12;
-    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
-  }, [draft]);
+    for (const el of [textareaRef.current, fullTextareaRef.current]) {
+      if (!el) continue;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+    }
+  }, [draft, fullOpen]);
 
   const fetchMessages = useCallback(async () => {
     try {
       // cache:"no-store" defeats any HTTP cache layer between us and Beds24
-      const res = await fetch(`/api/messages?bookingId=${beds24Id}`, { cache: 'no-store' });
+      const qs = new URLSearchParams({ limit: String(limit) });
+      for (const id of bookingIdsKey.split(',')) qs.append('bookingId', id);
+      const res = await fetch(`/api/messages?${qs}`, { cache: 'no-store' });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -238,7 +264,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Failed to load messages');
     }
-  }, [beds24Id]);
+  }, [bookingIdsKey, limit]);
 
   // Manual refresh — operator-triggered re-fetch. Same call as the polling
   // tick, but with visible loading state and a brief "done" confirmation so
@@ -259,6 +285,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
   // Derived visibility — must be declared before effects that reference it
   const active = isConversationActive(messages);
   const showThread = open || hasUnread || active;
+  const polling = showThread || fullOpen;
 
   // Auto-open when a new unread message arrives
   useEffect(() => {
@@ -267,18 +294,18 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
 
   // Fetch + poll whenever thread is visible (open OR active OR unread)
   useEffect(() => {
-    if (!showThread) return;
+    if (!polling) return;
     fetchMessages();
     const id = setInterval(fetchMessages, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [showThread, fetchMessages]);
+  }, [polling, fetchMessages]);
 
   // Scroll to bottom of message container (not the whole page) when messages change
   useEffect(() => {
-    if (open && messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    for (const el of [messagesContainerRef.current, fullContainerRef.current]) {
+      if (el) el.scrollTop = el.scrollHeight;
     }
-  }, [messages, open]);
+  }, [messages, open, fullOpen]);
 
   async function handleSend() {
     if (!draft.trim() || sending) return;
@@ -300,6 +327,7 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
         ...prev,
         {
           id: Date.now(), // temporary; overwritten when server re-fetch resolves
+          bookingId: beds24Id,
           source: 'host' as const,
           text: draft.trim(),
           time: new Date().toISOString(),
@@ -335,6 +363,156 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
         return next;
       });
     }
+  }
+
+  // The messages list + send box, shared by the inline drawer thread and the
+  // full-chat window — one state, so a reply sent in either shows in both.
+  const displayMessages: DisplayMessage[] = collapseGroupDuplicates(messages);
+  function renderBody(variant: 'drawer' | 'full') {
+    const inputRef = variant === 'full' ? fullTextareaRef : textareaRef;
+    return (
+      <>
+            {/* Messages */}
+            <div
+              ref={variant === 'full' ? fullContainerRef : messagesContainerRef}
+              className={`overflow-y-auto px-3 py-3 space-y-2 bg-white ${
+                variant === 'full' ? 'flex-1 min-h-[45vh]' : 'max-h-64'
+              }`}
+            >
+              {loadError && (
+                <p className="text-xs text-red-500 text-center">{loadError}</p>
+              )}
+              {!loadError && messages.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-4">No messages yet.</p>
+              )}
+              {displayMessages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex flex-col ${msg.source === 'host' ? 'items-end' : 'items-start'}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-snug ${
+                      msg.source === 'host'
+                        ? 'bg-indigo-600 text-white rounded-br-none'
+                        : msg.source === 'system'
+                          ? 'bg-gray-100 text-gray-500 italic text-xs'
+                          : 'bg-gray-100 text-gray-800 rounded-bl-none'
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
+                  {/* Translate button / result */}
+                  <>
+                    {translations[msg.id] === 'loading' ? (
+                        <span className="text-[10px] text-gray-400 mt-0.5 px-1 italic">Translating…</span>
+                      ) : translations[msg.id] && typeof translations[msg.id] === 'object' ? (
+                        <div className="max-w-[85%] mt-1 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-sm text-gray-700 leading-snug">
+                          {(translations[msg.id] as { text: string; lang: string }).text}
+                          <span className="block text-[10px] text-gray-400 mt-0.5">
+                            Translated from {(translations[msg.id] as { text: string; lang: string }).lang?.toUpperCase()}
+                          </span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleTranslate(msg.id, msg.text)}
+                          className="text-[10px] text-indigo-500 hover:text-indigo-700 mt-0.5 px-1 flex items-center gap-0.5"
+                          title="Translate to Czech"
+                        >
+                          🌐 Translate
+                        </button>
+                    )}
+                  </>
+                  <span className="text-[10px] text-gray-400 mt-0.5 px-1 flex items-center gap-1">
+                    <span>
+                      {msg.source === 'host' ? 'You' : msg.source === 'guest' ? guestName : 'System'} · {formatTime(msg.time)}
+                    </span>
+                    {isGroup && (
+                      <span
+                        className="inline-flex items-center px-1.5 py-px rounded text-[9px] font-semibold bg-gray-100 text-gray-600 ring-1 ring-gray-200"
+                        title="Apartment booking this message belongs to"
+                      >
+                        {msg.bookingIds.map((id) => roomByBookingId.get(id) ?? `BH-${id}`).join(' + ')}
+                      </span>
+                    )}
+                    {msg.isAutoReply && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[9px] font-semibold bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200"
+                        title="Sent automatically by the auto-reply pipeline"
+                      >
+                        ⚡ Auto
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Send box */}
+            <div className="shrink-0 border-t border-gray-200 p-3 bg-white space-y-2">
+              {sendError && (
+                <p className="text-xs text-red-500">{sendError}</p>
+              )}
+
+              {/* Template inserts — operator picks language; text drops into the
+                  draft (replaces empty draft, otherwise prepends with a blank line). */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-gray-400">Templates:</span>
+                {buildTemplates({ room, guestFirstName }).map((tpl) => (
+                  <div key={tpl.id} className="inline-flex items-stretch border border-gray-200 rounded-md overflow-hidden">
+                    <span className="px-2 py-1 text-[10px] font-medium text-gray-600 bg-gray-50">{tpl.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraft((prev) => (prev.trim() ? `${tpl.textCs}\n\n${prev}` : tpl.textCs));
+                        inputRef.current?.focus();
+                      }}
+                      className="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-200"
+                      title="Insert Czech version"
+                    >
+                      CZ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraft((prev) => (prev.trim() ? `${tpl.textEn}\n\n${prev}` : tpl.textEn));
+                        inputRef.current?.focus();
+                      }}
+                      className="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-200"
+                      title="Insert English version"
+                    >
+                      EN
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                <textarea
+                  ref={inputRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+                  rows={2}
+                  style={{ minHeight: '52px', maxHeight: '172px', overflowY: 'auto' }}
+                  className="flex-1 text-sm border border-gray-200 rounded-md px-2.5 py-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-300"
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={!draft.trim() || sending}
+                  className="self-end px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  {sending ? '…' : 'Send'}
+                </button>
+              </div>
+            </div>
+      </>
+    );
   }
 
   // Header button — always visible
@@ -378,6 +556,16 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
             </span>
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setFullOpen(true)}
+                title="Open the full conversation in a bigger window you can move and resize"
+                className="flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4" />
+                </svg>
+                Open full chat
+              </button>
+              <button
                 onClick={handleManualRefresh}
                 disabled={refreshing}
                 title="Refresh conversation — pull latest messages from Beds24"
@@ -414,133 +602,37 @@ export default function MessageThread({ beds24Id, hasUnread, guestName, room, gu
             </div>
           </div>
 
-          {/* Messages */}
-          <div ref={messagesContainerRef} className="max-h-64 overflow-y-auto px-3 py-3 space-y-2 bg-white">
-            {loadError && (
-              <p className="text-xs text-red-500 text-center">{loadError}</p>
-            )}
-            {!loadError && messages.length === 0 && (
-              <p className="text-xs text-gray-400 text-center py-4">No messages yet.</p>
-            )}
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex flex-col ${msg.source === 'host' ? 'items-end' : 'items-start'}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-snug ${
-                    msg.source === 'host'
-                      ? 'bg-indigo-600 text-white rounded-br-none'
-                      : msg.source === 'system'
-                        ? 'bg-gray-100 text-gray-500 italic text-xs'
-                        : 'bg-gray-100 text-gray-800 rounded-bl-none'
-                  }`}
-                >
-                  {msg.text}
-                </div>
-                {/* Translate button / result */}
-                <>
-                  {translations[msg.id] === 'loading' ? (
-                      <span className="text-[10px] text-gray-400 mt-0.5 px-1 italic">Translating…</span>
-                    ) : translations[msg.id] && typeof translations[msg.id] === 'object' ? (
-                      <div className="max-w-[85%] mt-1 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-sm text-gray-700 leading-snug">
-                        {(translations[msg.id] as { text: string; lang: string }).text}
-                        <span className="block text-[10px] text-gray-400 mt-0.5">
-                          Translated from {(translations[msg.id] as { text: string; lang: string }).lang?.toUpperCase()}
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => handleTranslate(msg.id, msg.text)}
-                        className="text-[10px] text-indigo-500 hover:text-indigo-700 mt-0.5 px-1 flex items-center gap-0.5"
-                        title="Translate to Czech"
-                      >
-                        🌐 Translate
-                      </button>
-                  )}
-                </>
-                <span className="text-[10px] text-gray-400 mt-0.5 px-1 flex items-center gap-1">
-                  <span>
-                    {msg.source === 'host' ? 'You' : msg.source === 'guest' ? guestName : 'System'} · {formatTime(msg.time)}
-                  </span>
-                  {msg.isAutoReply && (
-                    <span
-                      className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[9px] font-semibold bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200"
-                      title="Sent automatically by the auto-reply pipeline"
-                    >
-                      ⚡ Auto
-                    </span>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Send box */}
-          <div className="border-t border-gray-200 p-3 bg-white space-y-2">
-            {sendError && (
-              <p className="text-xs text-red-500">{sendError}</p>
-            )}
-
-            {/* Template inserts — operator picks language; text drops into the
-                draft (replaces empty draft, otherwise prepends with a blank line). */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-medium uppercase tracking-wide text-gray-400">Templates:</span>
-              {buildTemplates({ room, guestFirstName }).map((tpl) => (
-                <div key={tpl.id} className="inline-flex items-stretch border border-gray-200 rounded-md overflow-hidden">
-                  <span className="px-2 py-1 text-[10px] font-medium text-gray-600 bg-gray-50">{tpl.label}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDraft((prev) => (prev.trim() ? `${tpl.textCs}\n\n${prev}` : tpl.textCs));
-                      textareaRef.current?.focus();
-                    }}
-                    className="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-200"
-                    title="Insert Czech version"
-                  >
-                    CZ
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDraft((prev) => (prev.trim() ? `${tpl.textEn}\n\n${prev}` : tpl.textEn));
-                      textareaRef.current?.focus();
-                    }}
-                    className="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-200"
-                    title="Insert English version"
-                  >
-                    EN
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex gap-2">
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
-                rows={2}
-                style={{ minHeight: '52px', maxHeight: '172px', overflowY: 'auto' }}
-                className="flex-1 text-sm border border-gray-200 rounded-md px-2.5 py-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-300"
-              />
-              <button
-                onClick={handleSend}
-                disabled={!draft.trim() || sending}
-                className="self-end px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-              >
-                {sending ? '…' : 'Send'}
-              </button>
-            </div>
-          </div>
+          {renderBody('drawer')}
         </div>
+      )}
+
+      {fullOpen && (
+        <FloatingPanel
+          id={`chat:${beds24Id}`}
+          title={`Chat · ${guestName}`}
+          subtitle={
+            <span className="flex items-center gap-2">
+              <span>
+                BH-{beds24Id}
+                {isGroup && ` · ${[...roomByBookingId.values()].join(' + ')}`}
+                {` · last ${FULL_LIMIT} messages`}
+              </span>
+              <button
+                type="button"
+                onClick={handleManualRefresh}
+                disabled={refreshing}
+                className="text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+              >
+                {refreshing ? 'Refreshing…' : refreshFeedback === 'done' ? 'Updated ✓' : 'Refresh'}
+              </button>
+            </span>
+          }
+          chipLabel={`Chat · ${guestName}`}
+          width={640}
+          onClose={() => setFullOpen(false)}
+        >
+          {renderBody('full')}
+        </FloatingPanel>
       )}
     </div>
   );

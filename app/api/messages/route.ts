@@ -88,6 +88,10 @@ interface Beds24Message {
 
 export interface ThreadMessage {
   id: number;
+  /** The Beds24 booking this message belongs to. For a multi-apartment
+   *  (group) reservation each apartment is its own Beds24 booking with its
+   *  own thread — Beds24 auto actions (arrival guide) post to each one. */
+  bookingId: number;
   source: 'host' | 'guest' | 'system';
   text: string;
   time: string;
@@ -103,18 +107,55 @@ interface AutoReplyLogEntry {
   bookingId: number;
 }
 
-// ── GET /api/messages?bookingId=123 — fetch thread for one booking ─────────────
+// ── GET /api/messages?bookingId=123[&bookingId=456…][&limit=200] ─────────────
+//
+// Several `bookingId`s = one merged thread for a multi-apartment reservation.
+// The FIRST id is the primary (master) booking: invoice detection is filed
+// under it and the drawer sends replies to it. Sub-bookings of a Beds24 group
+// carry their own message threads, so reading only the master missed e.g.
+// the arrival guide Beds24 posted to K.106 of BH-95377263.
+//
+// `limit` caps how many of the most recent messages come back (default 30 for
+// the drawer; the "full chat" window asks for more history, max 500).
 //
 // Supports `&raw=true` debug mode that returns the unmodified Beds24
-// response BEFORE any filtering/sorting/source-mapping happens. Useful
-// when a message is missing from the thread and we need to confirm
-// whether Beds24 returned it at all.
+// response(s) BEFORE any filtering/sorting/source-mapping happens.
+const DEFAULT_THREAD_LIMIT = 30;
+const MAX_THREAD_LIMIT = 500;
+const MAX_GROUP_BOOKINGS = 10;
+
+async function fetchBookingMessages(token: string, bookingId: number): Promise<unknown> {
+  const params = new URLSearchParams({ bookingId: String(bookingId) });
+  const res = await fetch(`${BEDS24_API_BASE}/bookings/messages?${params}`, {
+    headers: { token },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw Object.assign(new Error(`Beds24 ${res.status}: ${text}`), { status: res.status });
+  }
+  return res.json();
+}
+
 export async function GET(req: NextRequest) {
-  const bookingId = req.nextUrl.searchParams.get('bookingId');
+  const bookingIds = [
+    ...new Set(
+      req.nextUrl.searchParams
+        .getAll('bookingId')
+        .flatMap((v) => v.split(','))
+        .map((v) => Number(v.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0),
+    ),
+  ].slice(0, MAX_GROUP_BOOKINGS);
   const debugRaw = req.nextUrl.searchParams.get('raw') === 'true';
-  if (!bookingId) {
+  const limitParam = Number(req.nextUrl.searchParams.get('limit'));
+  const limit = Number.isInteger(limitParam) && limitParam > 0
+    ? Math.min(limitParam, MAX_THREAD_LIMIT)
+    : DEFAULT_THREAD_LIMIT;
+  if (bookingIds.length === 0) {
     return NextResponse.json({ error: 'bookingId required' }, { status: 400 });
   }
+  const primaryId = bookingIds[0];
 
   let token: string;
   try {
@@ -123,36 +164,52 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Auth error' }, { status: 500 });
   }
 
-  const params = new URLSearchParams();
-  params.append('bookingId', bookingId);
-
-  const res = await fetch(`${BEDS24_API_BASE}/bookings/messages?${params}`, {
-    headers: { token },
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    return NextResponse.json({ error: `Beds24 ${res.status}: ${text}` }, { status: res.status });
+  // The primary thread must load; a sub-booking that fails (e.g. deleted in
+  // Beds24) only loses its own messages instead of blanking the chat.
+  const settled = await Promise.allSettled(bookingIds.map((id) => fetchBookingMessages(token, id)));
+  const primary = settled[0];
+  if (primary.status === 'rejected') {
+    const err = primary.reason as Error & { status?: number };
+    return NextResponse.json({ error: err.message }, { status: err.status ?? 502 });
   }
-
-  const json = await res.json();
+  settled.slice(1).forEach((r, i) => {
+    if (r.status === 'rejected') {
+      console.warn(`[messages] sub-booking ${bookingIds[i + 1]} fetch failed:`, r.reason);
+    }
+  });
 
   // Debug short-circuit: return everything Beds24 sent us, completely
   // unfiltered. Operator-only diagnostic path.
   if (debugRaw) {
     return NextResponse.json({
-      bookingId,
+      bookingIds,
       fetchedAt: new Date().toISOString(),
-      beds24Response: json,
+      beds24Response: bookingIds.length === 1
+        ? primary.value
+        : Object.fromEntries(bookingIds.map((id, i) => {
+            const r = settled[i];
+            return [id, r.status === 'fulfilled' ? r.value : { error: String(r.reason) }];
+          })),
     });
   }
 
-  const raw: Beds24Message[] = Array.isArray(json) ? json : (json.data ?? []);
+  const asList = (json: unknown): Beds24Message[] =>
+    Array.isArray(json) ? json : ((json as { data?: Beds24Message[] })?.data ?? []);
+  // Dedup by message id — in case Beds24 ever echoes a group's messages
+  // under more than one of its bookings.
+  const byId = new Map<number, Beds24Message>();
+  settled.forEach((r, i) => {
+    if (r.status !== 'fulfilled') return;
+    for (const m of asList(r.value)) {
+      if (!byId.has(m.id)) byId.set(m.id, { ...m, bookingId: m.bookingId ?? bookingIds[i] });
+    }
+  });
+  const raw = [...byId.values()];
 
   // Side effect: detect invoice-request templates from Booking.com.
-  // Fire-and-forget — don't block the messages response on Redis writes.
-  detectAndStoreInvoiceRequests(Number(bookingId), raw).catch((err) =>
+  // Filed under the primary booking — that's the reservation the operator
+  // sees. Fire-and-forget — don't block the messages response on Redis writes.
+  detectAndStoreInvoiceRequests(primaryId, raw).catch((err) =>
     console.error('[messages] invoice-request detection failed', err),
   );
 
@@ -173,11 +230,12 @@ export async function GET(req: NextRequest) {
   // Load auto-reply audit log so we can tag host messages that came from
   // the bot. Best-effort — if Redis is unreachable, messages render
   // without the ⚡ Auto chip rather than the whole thread failing.
+  const idSet = new Set(bookingIds);
   const autoReplyMessageIds = new Set<number>();
   try {
     const log = await readAllAutoReplyLog<AutoReplyLogEntry>();
     for (const entry of log) {
-      if (entry.bookingId !== Number(bookingId)) continue;
+      if (!idSet.has(entry.bookingId)) continue;
       if (entry.beds24SentMessageId != null) {
         autoReplyMessageIds.add(entry.beds24SentMessageId);
       }
@@ -188,15 +246,14 @@ export async function GET(req: NextRequest) {
 
   // Sort by time ascending so order is deterministic regardless of how
   // Beds24 returns the page. Drop internal notes. Cap at the most recent
-  // 30 messages — enough context without dragging months of history onto
-  // every poll. Returned oldest-first so the client can render top→bottom.
-  const MAX_THREAD_MESSAGES = 30;
-  const messages: ThreadMessage[] = [...raw]
+  // `limit` messages. Returned oldest-first so the client renders top→bottom.
+  const messages: ThreadMessage[] = raw
     .filter((m) => m.source !== 'internalNote')
     .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
-    .slice(-MAX_THREAD_MESSAGES)
+    .slice(-limit)
     .map((m) => ({
       id: m.id,
+      bookingId: m.bookingId,
       source: m.source === 'host' ? 'host' : m.source === 'guest' ? 'guest' : 'system',
       text: m.message,
       time: m.time,
