@@ -5,18 +5,19 @@
  * booking for a chosen check-in date, including the bookings that would have
  * come anyway. Which upcoming dates are worth boosting?
  *
- * THE MODEL, in three steps:
+ * THE MODEL (Patrik's assumptions, 2026-11-17):
  *   1. `sellChance` — the chance an open room-night this many days out still
  *      sells on its own, learned from our own history (`sellChanceCurve`).
- *   2. Demand behaves like a Poisson stream: an open night sells if at least one
- *      booker arrives, P = 1 − e^(−λ). The booster multiplies λ by (1 + uplift),
- *      so the boosted chance is 1 − (1 − p)^(1 + uplift). A night that would sell
- *      anyway barely moves (it was going to sell); a quiet night gains almost the
- *      full uplift. That saturation is the whole reason to boost quiet dates only.
- *   3. Boosting pays when boosted chance × boosted margin > plain chance × plain
- *      margin. With today's commission that needs about 11 % more bookings, which
- *      the saturation curve turns into a "sells anyway" threshold
- *      (`breakEvenSellChance`) — above it, boosting loses money.
+ *   2. Boosting at the recommended level (25 %) lifts that chance to
+ *      `fillAtBoost` (85 %) — boosted dates reach page 1 of a Brno search.
+ *      Intermediate levels are not modelled: with a fill chance that rises in a
+ *      straight line from 18 % to 25 %, the gain is a hump whose top sits past
+ *      25 %, so the best level is 25 % or nothing (a 19–24 % level wins only in a
+ *      ~1.5-point band of sell chance, for a few Kč). Above 25 % there is no fill
+ *      left to buy.
+ *   3. Boosting pays when fill × boosted margin > plain chance × plain margin,
+ *      i.e. below a sell chance of fill × (boosted ÷ plain margin) ≈ 0.9 × fill
+ *      (`breakEvenSellChance`, ≈ 77 % at an 85 % fill).
  *
  * Margins are per Kč of Booking.com guest price; variable costs are a fixed share
  * of the UNBOOSTED net, because cleaning a room does not get dearer when Booking
@@ -27,19 +28,24 @@ import type { DemandLevel, PricePosition } from '@/utils/radarTypes';
 export interface BoosterEconomics {
   baseCommission: number;
   boostedCommission: number;
+  /** Recommended booster slider level, nominal commission points (e.g. 25). */
+  boostLevel: number;
   variableCostShareOfNet: number;
-  assumedDemandUplift: number;
+  /** Chance a still-open room sells once its check-in date is boosted. */
+  fillAtBoost: number;
   bookingPriceFactor: number;
 }
 
 export type BoosterVerdict =
-  /** Likely to stay empty and nothing else blocks it — boost the check-in date. */
+  /** Likely to stay empty, first night of its gap, nothing blocks it — boost. */
   | 'boost'
+  /** Worth boosting, but it sits inside a gap — boost the gap's first night instead. */
+  | 'boost-gap-start'
   /** Likely to sell on its own — boosting mostly pays extra on bookings you'd get anyway. */
   | 'sells-anyway'
   /** The open gap is shorter than the minimum stay: no booking can start here. */
   | 'fix-min-stay'
-  /** We sit far above the market — fix the price before paying for visibility. */
+  /** We sit far above the market on a normal/low date — fix the price first. */
   | 'check-price'
   /** In between — keep an eye on it. */
   | 'watch';
@@ -52,18 +58,28 @@ export interface BoosterUnitNight {
   capacity: number;
   /** Chance an open room-night this far out still sells with no help; null = no history. */
   sellChance: number | null;
-  /** The same chance if the check-in date is boosted (Poisson uplift model). */
+  /** The same chance if the check-in date is boosted (never below sellChance). */
   boostedSellChance: number | null;
   /** Consecutive nights from this date with at least one room open. */
   openRunNights: number;
   /** Length of the whole open stretch this night sits in (before + after). */
   openGapNights: number;
+  /** True when the night before is sold (or is in the past) — a stay can take the whole gap from here. */
+  gapStart: boolean;
   minStay: number | null;
   livePrice: number | null;
   position: PricePosition | null;
   /** Expected Kč from boosting this unit's open rooms for this night; null = unknown. */
   expectedGain: number | null;
   verdict: BoosterVerdict;
+}
+
+/** A check-in date the operator ticked as boosted in the card. */
+export interface BoostedFlag {
+  /** Nominal booster slider level, e.g. 22 or 25. */
+  commission: number;
+  markedAt: string;
+  markedBy: string | null;
 }
 
 export interface BoosterDate {
@@ -77,15 +93,38 @@ export interface BoosterDate {
   /** Sum of the units' expected gains (unknown units count as 0). */
   expectedGain: number;
   verdict: BoosterVerdict;
+  /** Ticked as boosted in the card; null = not ticked. */
+  flag: BoostedFlag | null;
+  /** Highest all-in commission seen on a Booking.com booking for this check-in date, when it looks boosted. */
+  detectedCommission: number | null;
+}
+
+/** How the boosted dates of the last N days actually did. */
+export interface BoosterTrackRecord {
+  from: string;
+  to: string;
+  /** Distinct boosted check-in dates (ticked or detected from commission). */
+  boostedDates: number;
+  /** …of which only known because a boosted booking came in (not ticked). */
+  detectedOnly: number;
+  /** Rooms still open on those nights that a boosted check-in filled. */
+  filledByBoost: number;
+  /** Rooms left empty on those nights. */
+  leftEmpty: number;
 }
 
 export interface BoosterResponse {
   dates: BoosterDate[];
   economics: BoosterEconomics;
-  /** Extra bookings a boosted date needs to break even, e.g. 0.11 = +11 %. */
+  /** Extra sales a boosted date needs to break even, e.g. 0.11 = +11 %. */
   breakEvenLift: number;
-  /** Above this chance of selling anyway, boosting loses money (under the assumed uplift). */
+  /** Above this chance of selling anyway, boosting loses money. */
   breakEvenSellChance: number;
+  /** Half-width of the watch band around the break-even, absolute points. */
+  watchBand: number;
+  /** Strong-demand dates stop being trusted to PriceLabs this many days out. */
+  closeInDays: number;
+  trackRecord: BoosterTrackRecord;
   /** Stay window the sell-chance curve learned from. */
   historyFrom: string;
   historyTo: string;
@@ -103,40 +142,27 @@ export function marginsPerKc(econ: BoosterEconomics): { plain: number; boosted: 
   return { plain: plainNet - variable, boosted: 1 - econ.boostedCommission - variable };
 }
 
-/** How many more bookings a boosted date needs just to stand still (0.11 = +11 %). */
+/** How many more sales a boosted date needs just to stand still (0.11 = +11 %). */
 export function breakEvenLift(econ: BoosterEconomics): number {
   const m = marginsPerKc(econ);
   return m.boosted > 0 ? m.plain / m.boosted - 1 : Infinity;
 }
 
-// ── Demand model ─────────────────────────────────────────────────────────────
+// ── Fill model ───────────────────────────────────────────────────────────────
 
-/** Chance an open night sells once its demand is multiplied by (1 + uplift). */
-export function boostedSellChance(sellChance: number, uplift: number): number {
-  const p = Math.min(1, Math.max(0, sellChance));
-  return 1 - Math.pow(1 - p, 1 + uplift);
+/** Chance an open night sells once its check-in date is boosted. A boost never makes it less likely. */
+export function boostedSellChance(sellChance: number, fillAtBoost: number): number {
+  return Math.max(Math.min(1, Math.max(0, sellChance)), fillAtBoost);
 }
 
 /**
- * The "sells anyway" chance above which boosting stops paying.
- *
- * The relative gain boosted(p)/p falls from (1 + uplift) at p → 0 to 1 at p = 1,
- * so there is exactly one crossing with the break-even ratio; bisection finds it.
- * Returns 0 when even a hopeless night cannot gain enough (uplift ≤ break-even
- * lift): no date is worth boosting.
+ * The "sells anyway" chance above which boosting stops paying: where
+ * plain chance × plain margin = fill × boosted margin.
  */
 export function breakEvenSellChance(econ: BoosterEconomics): number {
-  const ratio = 1 + breakEvenLift(econ);
-  if (!Number.isFinite(ratio) || 1 + econ.assumedDemandUplift <= ratio) return 0;
-  const gainRatio = (p: number) => boostedSellChance(p, econ.assumedDemandUplift) / p;
-  let lo = 1e-9;
-  let hi = 1;
-  for (let i = 0; i < 60; i += 1) {
-    const mid = (lo + hi) / 2;
-    if (gainRatio(mid) > ratio) lo = mid;
-    else hi = mid;
-  }
-  return (lo + hi) / 2;
+  const m = marginsPerKc(econ);
+  if (m.plain <= 0 || m.boosted <= 0) return 0;
+  return Math.min(1, (econ.fillAtBoost * m.boosted) / m.plain);
 }
 
 /**
@@ -152,7 +178,7 @@ export function expectedBoostGain(
 ): number {
   const guestPrice = livePrice * econ.bookingPriceFactor;
   const m = marginsPerKc(econ);
-  const boosted = boostedSellChance(sellChance, econ.assumedDemandUplift);
+  const boosted = boostedSellChance(sellChance, econ.fillAtBoost);
   return openRooms * guestPrice * (boosted * m.boosted - sellChance * m.plain);
 }
 
@@ -194,6 +220,8 @@ export interface VerdictInput {
   cityDemand: DemandLevel | null;
   /** Length of the whole open stretch this night sits in — what decides an orphan. */
   openGapNights: number;
+  /** The night before is sold (or past) — a stay starting here can take the whole gap. */
+  gapStart: boolean;
   minStay: number | null;
   /** Our live price inside the market's asking-price percentiles. */
   position: PricePosition | null;
@@ -201,42 +229,57 @@ export interface VerdictInput {
 
 /**
  * Half-width of the "watch" band around the break-even sell chance, in absolute
- * points: with break-even at ~60 % this boosts below 50 %, watches 50–70 % and
- * calls 70 %+ "sells anyway". Relative to the break-even (not fixed at 50/70) so
- * the band moves with the commission and uplift assumptions.
+ * points: with break-even at ~77 % this boosts below ~67 %, watches ~67–87 % and
+ * calls ~87 %+ "sells anyway". Relative to the break-even (not fixed numbers) so
+ * the band moves with the commission and fill assumptions.
  */
 export const WATCH_BAND = 0.1;
 
 /**
- * The operator's call for one unit on one night (Patrik's rules, 2026-11-14).
- * First match wins:
+ * PriceLabs' Good/High-demand reading is trusted (no boost) until the night is
+ * still open this close to the date. PriceLabs has no last-minute logic, so from
+ * here on the night's own sell chance decides.
+ */
+export const CLOSE_IN_DAYS = 3;
+
+/**
+ * The operator's call for one unit on one night (Patrik's rules, 2026-11-14,
+ * revised 2026-11-17). First match wins:
  *   1. The whole open gap is shorter than the minimum stay → nobody can book it;
- *      PriceLabs' orphan rule should have caught it, so this is a PriceLabs
- *      setting to check. (The whole gap, not the nights from this date on: the
- *      last night of a 3-night gap is bookable from the gap's first night.)
- *   2. Good/High demand → trust PriceLabs; it is pricing the strong date already.
- *   3. Above the market's p90 on a normal/low date → we are not competitive;
- *      fix the price before paying for visibility. (On strong dates step 2 has
- *      already returned — sitting high there is PriceLabs doing its job.)
+ *      PriceLabs' orphan rule should have caught it — check that setting.
+ *   2. Good/High demand more than CLOSE_IN_DAYS out → trust PriceLabs.
+ *   3. Above the market's p90 on a normal/low date → not competitive; fix the
+ *      price first. (On strong dates PriceLabs prices high on purpose.)
  *   4. No history → can't judge, keep watching.
- *   5. The break-even band: below it boost, inside it watch, above it sells anyway.
+ *   5. Below break-even − band → boost — but only on the gap's FIRST night, so a
+ *      2+ night stay can take the whole gap (single nights carry the one-night
+ *      premium on purpose; a stay starting mid-gap can strand the nights before).
+ *   6. Inside the band → watch; above it → sells anyway.
  */
 export function boosterVerdict(input: VerdictInput): BoosterVerdict {
-  const { sellChance, breakEvenSellChance, cityDemand, openGapNights, minStay, position } = input;
+  const { daysOut, sellChance, breakEvenSellChance, cityDemand, openGapNights, gapStart, minStay, position } =
+    input;
   if (minStay !== null && openGapNights < minStay) return 'fix-min-stay';
-  if (cityDemand === 'good' || cityDemand === 'high') return 'sells-anyway';
-  if (position === 'above-p90') return 'check-price';
+  const strongDemand = cityDemand === 'good' || cityDemand === 'high';
+  if (strongDemand && daysOut > CLOSE_IN_DAYS) return 'sells-anyway';
+  if (!strongDemand && position === 'above-p90') return 'check-price';
   if (sellChance === null) return 'watch';
-  if (sellChance < breakEvenSellChance - WATCH_BAND) return 'boost';
+  if (sellChance < breakEvenSellChance - WATCH_BAND) return gapStart ? 'boost' : 'boost-gap-start';
   if (sellChance <= breakEvenSellChance + WATCH_BAND) return 'watch';
   return 'sells-anyway';
 }
 
 /** Which non-boost verdict to show for a date — the most actionable one first. */
-const DATE_VERDICT_PRIORITY: BoosterVerdict[] = ['fix-min-stay', 'check-price', 'watch', 'sells-anyway'];
+const DATE_VERDICT_PRIORITY: BoosterVerdict[] = [
+  'fix-min-stay',
+  'check-price',
+  'boost-gap-start',
+  'watch',
+  'sells-anyway',
+];
 
 /**
- * The booster works per check-in DATE, not per apartment, so a date is worth
+ * The booster works per check-in DATE across all apartments, so a date is worth
  * boosting only when the units that say "boost" outweigh the deadweight on the
  * open units that would sell anyway. Otherwise the most actionable other verdict.
  */
@@ -275,4 +318,14 @@ export function openGaps(openRooms: number[]): number[] {
     gaps[i] = openRooms[i] > 0 ? back + forward[i] - 1 : 0;
   }
   return gaps;
+}
+
+/** Valid booster slider levels to tick, above the 18 % Preferred base. */
+export const BOOST_LEVELS = [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30];
+
+/** YYYY-MM-DD with a real calendar date behind it. */
+export function isIsoDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }

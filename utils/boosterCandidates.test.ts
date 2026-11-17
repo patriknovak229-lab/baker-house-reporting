@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CLOSE_IN_DAYS,
   WATCH_BAND,
   boostedSellChance,
   boosterVerdict,
   breakEvenLift,
   breakEvenSellChance,
   expectedBoostGain,
+  isIsoDate,
   marginsPerKc,
   openGaps,
   openRuns,
@@ -16,12 +18,13 @@ import {
   type VerdictInput,
 } from './boosterCandidates';
 
-// The measured economics from the 2026-11-13 analysis.
+// The measured economics (2026-11-13) with Patrik's fill assumption (2026-11-17).
 const ECON: BoosterEconomics = {
   baseCommission: 0.193,
   boostedCommission: 0.2615,
+  boostLevel: 25,
   variableCostShareOfNet: 0.15,
-  assumedDemandUplift: 0.2,
+  fillAtBoost: 0.85,
   bookingPriceFactor: 0.9,
 };
 
@@ -32,42 +35,27 @@ describe('margins and break-even lift', () => {
     expect(m.boosted).toBeCloseTo(0.7385 - 0.15 * 0.807, 6);
   });
 
-  it('needs about 11 % more bookings at 19.3 % → 26.15 %', () => {
+  it('needs about 11 % more sales at 19.3 % → 26.15 %', () => {
     expect(breakEvenLift(ECON)).toBeCloseTo(0.111, 3);
   });
-
-  it('needs nothing when the boost costs nothing', () => {
-    expect(breakEvenLift({ ...ECON, boostedCommission: ECON.baseCommission })).toBeCloseTo(0, 9);
-  });
 });
 
-describe('boostedSellChance (Poisson uplift)', () => {
-  it('leaves certain and hopeless nights alone', () => {
-    expect(boostedSellChance(1, 0.2)).toBe(1);
-    expect(boostedSellChance(0, 0.2)).toBe(0);
+describe('fill model', () => {
+  it('lifts an open night to the boosted fill chance, never lowers it', () => {
+    expect(boostedSellChance(0.3, 0.85)).toBe(0.85);
+    expect(boostedSellChance(0.9, 0.85)).toBe(0.9);
   });
 
-  it('lifts a quiet night by almost the full uplift and a busy one barely', () => {
-    expect(boostedSellChance(0.05, 0.2) / 0.05).toBeGreaterThan(1.19);
-    // 1 − 0.1^1.2 = 0.937 → +4 %, well under the +11 % a boosted date needs.
-    expect(boostedSellChance(0.9, 0.2) / 0.9).toBeLessThan(1.05);
-  });
-});
-
-describe('breakEvenSellChance', () => {
-  it('is where the boosted gain ratio meets the break-even ratio', () => {
+  it('breaks even at fill × boosted/plain margin — about 77 % for an 85 % fill', () => {
     const q = breakEvenSellChance(ECON);
-    expect(q).toBeGreaterThan(0.55);
-    expect(q).toBeLessThan(0.65);
-    expect(boostedSellChance(q, ECON.assumedDemandUplift) / q).toBeCloseTo(1 + breakEvenLift(ECON), 6);
+    const m = marginsPerKc(ECON);
+    expect(q).toBeCloseTo((0.85 * m.boosted) / m.plain, 9);
+    expect(q).toBeCloseTo(0.765, 2);
   });
 
-  it('rises when the booster is assumed to work harder', () => {
-    expect(breakEvenSellChance({ ...ECON, assumedDemandUplift: 0.5 })).toBeGreaterThan(breakEvenSellChance(ECON));
-  });
-
-  it('is 0 when the uplift cannot even cover the extra commission', () => {
-    expect(breakEvenSellChance({ ...ECON, assumedDemandUplift: 0.1 })).toBe(0);
+  it('moves with the fill assumption (0.9 × fill)', () => {
+    expect(breakEvenSellChance({ ...ECON, fillAtBoost: 1 })).toBeCloseTo(0.9, 2);
+    expect(breakEvenSellChance({ ...ECON, fillAtBoost: 0.7 })).toBeCloseTo(0.63, 2);
   });
 });
 
@@ -75,8 +63,14 @@ describe('expectedBoostGain', () => {
   it('is about zero at the break-even chance, positive below, negative above', () => {
     const q = breakEvenSellChance(ECON);
     expect(Math.abs(expectedBoostGain(1, 3000, q, ECON))).toBeLessThan(0.01);
-    expect(expectedBoostGain(1, 3000, 0.3, ECON)).toBeGreaterThan(0);
+    expect(expectedBoostGain(1, 3000, 0.5, ECON)).toBeGreaterThan(0);
     expect(expectedBoostGain(1, 3000, 0.9, ECON)).toBeLessThan(0);
+  });
+
+  it('prices K.201 on 20 Nov (61 %, live 6 912) at roughly +700 Kč a night', () => {
+    // 6 912 × 0.9 × (0.85 × 0.6175 − 0.61 × 0.686) ≈ 662
+    expect(expectedBoostGain(1, 6912, 0.61, ECON)).toBeGreaterThan(600);
+    expect(expectedBoostGain(1, 6912, 0.61, ECON)).toBeLessThan(720);
   });
 
   it('scales with open rooms', () => {
@@ -95,20 +89,70 @@ describe('sellChanceCurve', () => {
   });
 });
 
-describe('openRuns', () => {
+describe('openRuns / openGaps', () => {
   it('counts consecutive open nights from each date', () => {
     expect(openRuns([1, 2, 0, 1, 1])).toEqual([2, 1, 0, 2, 1]);
   });
-});
 
-describe('openGaps', () => {
   it('gives every night the length of the whole open stretch it sits in', () => {
     expect(openGaps([1, 2, 0, 1, 0, 1, 1, 1])).toEqual([2, 2, 0, 1, 0, 3, 3, 3]);
+    expect(openGaps([0, 0])).toEqual([0, 0]);
+  });
+});
+
+describe('boosterVerdict (operator rules, revised 2026-11-17)', () => {
+  // A quiet, bookable, fairly priced first night of a gap, 2 days out.
+  const base: VerdictInput = {
+    daysOut: 2,
+    sellChance: 0.5,
+    breakEvenSellChance: 0.765,
+    cityDemand: 'normal',
+    openGapNights: 3,
+    gapStart: true,
+    minStay: 2,
+    position: 'p50-75',
+  };
+  const verdict = (patch: Partial<VerdictInput>) => boosterVerdict({ ...base, ...patch });
+
+  it('boosts a quiet first night', () => {
+    expect(verdict({})).toBe('boost');
   });
 
-  it('is 0 for sold-out nights and handles an all-open series', () => {
-    expect(openGaps([0, 0])).toEqual([0, 0]);
-    expect(openGaps([1, 1, 1])).toEqual([3, 3, 3]);
+  it('asks to fix the min stay first — no booking fits a gap shorter than it', () => {
+    expect(verdict({ openGapNights: 1, minStay: 2, cityDemand: 'high', position: 'above-p90' })).toBe('fix-min-stay');
+    expect(verdict({ openGapNights: 2, minStay: 2 })).toBe('boost');
+  });
+
+  it('trusts PriceLabs on good/high demand until the night is still open 3 days out', () => {
+    expect(CLOSE_IN_DAYS).toBe(3);
+    expect(verdict({ cityDemand: 'high', daysOut: 4 })).toBe('sells-anyway');
+    expect(verdict({ cityDemand: 'good', daysOut: 10, sellChance: 0.2 })).toBe('sells-anyway');
+    expect(verdict({ cityDemand: 'high', daysOut: 3 })).toBe('boost');
+    expect(verdict({ cityDemand: 'good', daysOut: 0, sellChance: 0.9 })).toBe('sells-anyway');
+  });
+
+  it('flags the price only on normal/low dates — strong dates are priced high on purpose', () => {
+    expect(verdict({ position: 'above-p90' })).toBe('check-price');
+    expect(verdict({ position: 'above-p90', cityDemand: 'low', daysOut: 9 })).toBe('check-price');
+    // K.201 20 Nov: Good demand, 3 days out, above p90, 61 % → boost.
+    expect(verdict({ position: 'above-p90', cityDemand: 'good', daysOut: 3, sellChance: 0.61 })).toBe('boost');
+  });
+
+  it('watches when there is no history', () => {
+    expect(verdict({ sellChance: null })).toBe('watch');
+  });
+
+  it('uses a ±10-point band around break-even: boost < ~67 %, watch to ~87 %, then sells anyway', () => {
+    expect(WATCH_BAND).toBe(0.1);
+    expect(verdict({ sellChance: 0.66 })).toBe('boost');
+    expect(verdict({ sellChance: 0.67 })).toBe('watch');
+    expect(verdict({ sellChance: 0.86 })).toBe('watch');
+    expect(verdict({ sellChance: 0.87 })).toBe('sells-anyway');
+  });
+
+  it('sends a mid-gap night to the gap start, so a 2+ night stay can take the whole gap', () => {
+    expect(verdict({ gapStart: false })).toBe('boost-gap-start');
+    expect(verdict({ gapStart: false, sellChance: 0.8 })).toBe('watch');
   });
 });
 
@@ -119,9 +163,10 @@ describe('rollUpDateVerdict', () => {
     openRooms: 1,
     capacity: 1,
     sellChance: 0.5,
-    boostedSellChance: 0.56,
+    boostedSellChance: 0.85,
     openRunNights: 2,
     openGapNights: 2,
+    gapStart: true,
     minStay: 1,
     livePrice: 3000,
     position: 'p50-75',
@@ -136,58 +181,16 @@ describe('rollUpDateVerdict', () => {
 
   it('otherwise shows the most actionable verdict', () => {
     expect(rollUpDateVerdict([unit('watch'), unit('fix-min-stay')], 0)).toBe('fix-min-stay');
+    expect(rollUpDateVerdict([unit('sells-anyway'), unit('boost-gap-start')], 0)).toBe('boost-gap-start');
     expect(rollUpDateVerdict([unit('sells-anyway'), unit('check-price')], 0)).toBe('check-price');
   });
 });
 
-describe('boosterVerdict (operator rules, 2026-11-14)', () => {
-  // A quiet, bookable, fairly priced night — the textbook boost.
-  const base: VerdictInput = {
-    daysOut: 3,
-    sellChance: 0.3,
-    breakEvenSellChance: 0.6,
-    cityDemand: 'normal',
-    openGapNights: 3,
-    minStay: 2,
-    position: 'p50-75',
-  };
-  const verdict = (patch: Partial<VerdictInput>) => boosterVerdict({ ...base, ...patch });
-
-  it('boosts a quiet night', () => {
-    expect(verdict({})).toBe('boost');
-  });
-
-  it('asks to fix the min stay first — no booking fits a gap shorter than it', () => {
-    expect(verdict({ openGapNights: 1, minStay: 2, cityDemand: 'high', position: 'above-p90' })).toBe('fix-min-stay');
-    expect(verdict({ openGapNights: 2, minStay: 2 })).toBe('boost');
-    expect(verdict({ openGapNights: 1, minStay: null })).toBe('boost');
-  });
-
-  it('trusts PriceLabs on good/high-demand dates, even when history says quiet', () => {
-    expect(verdict({ cityDemand: 'good' })).toBe('sells-anyway');
-    expect(verdict({ cityDemand: 'high', position: 'above-p90' })).toBe('sells-anyway');
-  });
-
-  it('flags the price on normal/low dates above the market p90', () => {
-    expect(verdict({ position: 'above-p90' })).toBe('check-price');
-    expect(verdict({ position: 'above-p90', cityDemand: 'low' })).toBe('check-price');
-    expect(verdict({ position: 'p75-90' })).toBe('boost');
-  });
-
-  it('watches when there is no history', () => {
-    expect(verdict({ sellChance: null })).toBe('watch');
-  });
-
-  it('uses a ±10-point band around break-even: boost < 50 %, watch 50–70 %, sells anyway > 70 %', () => {
-    expect(WATCH_BAND).toBe(0.1);
-    expect(verdict({ sellChance: 0.49 })).toBe('boost');
-    expect(verdict({ sellChance: 0.5 })).toBe('watch');
-    expect(verdict({ sellChance: 0.6 })).toBe('watch');
-    expect(verdict({ sellChance: 0.7 })).toBe('watch');
-    expect(verdict({ sellChance: 0.71 })).toBe('sells-anyway');
-  });
-
-  it('moves the band with the break-even chance', () => {
-    expect(verdict({ sellChance: 0.55, breakEvenSellChance: 0.7 })).toBe('boost');
+describe('isIsoDate', () => {
+  it('accepts real calendar dates only', () => {
+    expect(isIsoDate('2026-11-20')).toBe(true);
+    expect(isIsoDate('2026-02-30')).toBe(false);
+    expect(isIsoDate('20-11-2026')).toBe(false);
+    expect(isIsoDate(20261120)).toBe(false);
   });
 });
