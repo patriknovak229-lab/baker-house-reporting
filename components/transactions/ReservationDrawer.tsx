@@ -12,6 +12,8 @@ import type { ReservationFormKind } from "./ReservationForms";
 import Badge from "@/components/shared/Badge";
 import { StayLinkSection, type StayLinkAction } from "@/components/transactions/StayLinks";
 import { WebPaymentRefund } from "@/components/transactions/WebPaymentRefund";
+import { GuestCancellation } from "@/components/transactions/GuestCancellation";
+import { isDirectChannel } from "@/utils/guestCancellation";
 import { PayLaterPanel } from "@/components/transactions/PayLaterPanel";
 import { formatDate, formatCurrency } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
@@ -5989,6 +5991,21 @@ export default function ReservationDrawer({
             })()}
           >
             <CancellationPolicyPanel reservation={reservation} />
+            {/* Direct guests cancel with us (phone / WhatsApp / email): refund,
+                Beds24 cancel and the guest email in one step. */}
+            {isDirectChannel(reservation.channel) &&
+              !reservation.isCancelled &&
+              !reservation.nonArrival &&
+              naUserRole === "admin" &&
+              reservation.checkOutDate >= pragueToday() && (
+                <GuestCancellation
+                  key={`guest-cancel-${reservation.reservationNumber}`}
+                  reservation={reservation}
+                  onCancelled={(patch) =>
+                    onUpdate({ ...reservation, ...patch, isCancelled: true, status: "cancelled" })
+                  }
+                />
+              )}
           </DrawerSection>
 
           <hr className="border-gray-100" />
