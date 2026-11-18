@@ -11,9 +11,9 @@
  *      BOOSTER_HISTORY_DAYS of past nights.
  *   3. Demand, minimum stay, live price and market position — `readRadar`, so the
  *      list and the radar above it can never disagree about a date.
- *   4. Boosted check-in dates: the operator's ticks (app_settings) plus any date
- *      a Booking.com booking paid the boosted commission for.
- *   5. The track record — what the boosted dates of the last 30 days filled.
+ *   4. Boosted nights: the operator's ticks (app_settings) plus any night a
+ *      Booking.com booking provably paid the boosted rate on.
+ *   5. The track record — what the boosted nights of the last 30 days filled.
  */
 import { sql } from 'drizzle-orm';
 import {
@@ -31,11 +31,13 @@ import { pragueToday } from '@/utils/periodUtils';
 import {
   CLOSE_IN_DAYS,
   WATCH_BAND,
+  attributeBoostedNights,
   boostedSellChance,
   boosterVerdict,
   breakEvenLift,
   breakEvenSellChance,
   expectedBoostGain,
+  nightlyValues,
   openGaps,
   openRuns,
   rollUpDateVerdict,
@@ -175,43 +177,70 @@ async function readMirrorSyncedAt(): Promise<string | null> {
   return rows[0]?.last_synced_at ?? null;
 }
 
-// ── Read 4: check-in dates a Booking.com booking paid the boosted commission for ──
+// ── Read 4: nights a Booking.com booking paid the boosted rate on ────────────
 
+/**
+ * Night → all-in commission charged on it, for every night a Booking.com booking
+ * provably paid the boosted rate on. Booking.com charges per boosted NIGHT, so a
+ * stay that only crosses a boosted night pays a blended share; `attributeBoostedNights`
+ * works out which of its nights that was (or gives up when it cannot tell).
+ */
 async function readDetectedBoosts(from: string, to: string): Promise<Map<string, number>> {
-  const rows = await query<{ check_in: string; ratio: string }>(sql`
-    SELECT to_char(check_in_date, 'YYYY-MM-DD') AS check_in,
-           MAX(commission_amount::numeric / NULLIF(price::numeric, 0)) AS ratio
+  const rows = await query<{ check_in: string; check_out: string; ratio: string; rate_description: string | null }>(sql`
+    SELECT to_char(check_in_date, 'YYYY-MM-DD')                  AS check_in,
+           to_char(check_out_date, 'YYYY-MM-DD')                 AS check_out,
+           commission_amount::numeric / NULLIF(price::numeric, 0) AS ratio,
+           raw ->> 'rateDescription'                             AS rate_description
     FROM bookings_mirror
     WHERE source = 'beds24-booking'
       AND channel = 'Booking.com'
       AND is_cancelled = false
       AND is_blackout = false
       AND price::numeric > 0
-      AND check_in_date BETWEEN ${from}::date AND ${to}::date
-    GROUP BY 1
-    HAVING MAX(commission_amount::numeric / NULLIF(price::numeric, 0)) > ${BOOSTED_COMMISSION_DETECT}
+      AND check_in_date <= ${to}::date
+      AND check_out_date > ${from}::date
+      AND commission_amount::numeric / NULLIF(price::numeric, 0) > ${BOOSTED_COMMISSION_DETECT}
   `);
-  return new Map(rows.map((r) => [r.check_in, n(r.ratio)]));
+  const nights = new Map<string, number>();
+  for (const r of rows) {
+    const values = nightlyValues(r.rate_description);
+    // A fully boosted stay needs no rate lines: every night of the span was boosted.
+    const stay =
+      values.length > 0
+        ? values
+        : Array.from({ length: Math.max(0, daysBetween(r.check_in, r.check_out)) }, (_, i) => ({
+            date: addDays(r.check_in, i),
+            value: 1,
+          }));
+    const boosted = attributeBoostedNights(stay, n(r.ratio), BOOSTER_ECONOMICS) ?? [];
+    for (const date of boosted) {
+      if (date < from || date > to) continue;
+      nights.set(date, Math.max(nights.get(date) ?? 0, BOOSTER_ECONOMICS.boostedCommission));
+    }
+  }
+  return nights;
 }
 
-// ── Read 5: what the past boosted dates filled ───────────────────────────────
+// ── Read 5: what the past boosted nights filled ──────────────────────────────
 
 interface TrackDb {
   unit_id: string;
   stay_date: string;
   capacity: number;
   sold: number;
-  boosted_check_ins: number;
+  sold_boosted: number;
 }
 
 /**
- * Per boosted check-in date and unit: rooms a boosted Booking.com check-in took
- * that night versus rooms left empty. The booster was switched on for all
- * apartments at once, so an empty room on a boosted date counts as "boosted,
- * not sold" — Patrik's attribution rule (2026-11-17).
+ * Per boosted night and unit: room-nights sold to a booking that paid the
+ * boosted rate (it was made while the night was boosted — any stay crossing it,
+ * not just check-ins) versus room-nights left empty. Room-nights sold at the
+ * normal rate were gone before the boost and are left out of both. The booster
+ * covers all apartments at once, so an empty room on a boosted night counts as
+ * "boosted, not sold" — Patrik's attribution rule (2026-11-17).
  */
-async function readTrack(dates: string[], from: string, to: string): Promise<TrackDb[]> {
-  if (dates.length === 0) return [];
+async function readTrack(nightsList: string[], from: string, to: string): Promise<TrackDb[]> {
+  if (nightsList.length === 0) return [];
   const scope = scopeOf(from, to);
   return query<TrackDb>(sql`
     ${baseCtes(scope)},
@@ -222,29 +251,28 @@ async function readTrack(dates: string[], from: string, to: string): Promise<Tra
     ),
     n AS (
       SELECT ${unitIdOfLabel(sql`nights.room`)} AS unit_id, nights.stay_date,
-             (nights.check_in_date = nights.stay_date
-               AND nights.channel = 'Booking.com'
+             (nights.channel = 'Booking.com'
                AND nights.night_price > 0
-               AND nights.night_commission / nights.night_price > ${BOOSTED_COMMISSION_DETECT}) AS boosted_check_in
+               AND nights.night_commission / nights.night_price > ${BOOSTED_COMMISSION_DETECT}) AS boosted
       FROM nights
       WHERE nights.stay_date BETWEEN ${from}::date AND ${to}::date
     )
     SELECT c.unit_id,
-           to_char(c.stay_date, 'YYYY-MM-DD')                         AS stay_date,
+           to_char(c.stay_date, 'YYYY-MM-DD')                 AS stay_date,
            c.capacity,
-           COUNT(n.unit_id)::int                                      AS sold,
-           COUNT(n.unit_id) FILTER (WHERE n.boosted_check_in)::int    AS boosted_check_ins
+           COUNT(n.unit_id)::int                              AS sold,
+           COUNT(n.unit_id) FILTER (WHERE n.boosted)::int     AS sold_boosted
     FROM cap c
     LEFT JOIN n ON n.unit_id = c.unit_id AND n.stay_date = c.stay_date
     WHERE c.unit_id <> 'other'
-      AND to_char(c.stay_date, 'YYYY-MM-DD') = ANY (string_to_array(${dates.join(',')}, ','))
+      AND to_char(c.stay_date, 'YYYY-MM-DD') = ANY (string_to_array(${nightsList.join(',')}, ','))
     GROUP BY 1, 2, 3
   `);
 }
 
 function summariseTrack(
   rows: TrackDb[],
-  boostedDates: string[],
+  boostedNights: string[],
   detectedOnly: number,
   from: string,
   to: string,
@@ -252,10 +280,10 @@ function summariseTrack(
   let filledByBoost = 0;
   let leftEmpty = 0;
   for (const r of rows) {
-    filledByBoost += n(r.boosted_check_ins);
+    filledByBoost += n(r.sold_boosted);
     leftEmpty += Math.max(0, n(r.capacity) - n(r.sold));
   }
-  return { from, to, boostedDates: boostedDates.length, detectedOnly, filledByBoost, leftEmpty };
+  return { from, to, boostedNights: boostedNights.length, detectedOnly, filledByBoost, leftEmpty };
 }
 
 // ── Assembly ─────────────────────────────────────────────────────────────────
@@ -277,7 +305,7 @@ export async function readBoosterCandidates(): Promise<BoosterResponse> {
     readDetectedBoosts(trackFrom, horizonEnd),
   ]);
 
-  // Past boosted dates (ticked or detected) feed the track record.
+  // Past boosted nights (ticked or attributed from commission) feed the track record.
   const pastBoosted = [
     ...new Set([...Object.keys(flags), ...detected.keys()].filter((d) => d >= trackFrom && d <= historyTo)),
   ].sort();

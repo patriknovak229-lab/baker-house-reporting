@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   CLOSE_IN_DAYS,
+  attributeBoostedNights,
+  nightlyValues,
   WATCH_BAND,
   boostedSellChance,
   boosterVerdict,
@@ -192,5 +194,55 @@ describe('isIsoDate', () => {
     expect(isIsoDate('2026-02-30')).toBe(false);
     expect(isIsoDate('20-11-2026')).toBe(false);
     expect(isIsoDate(20261120)).toBe(false);
+  });
+});
+
+describe('nightlyValues', () => {
+  it('reads one value per night from a Beds24 rate description', () => {
+    const rd =
+      '2026-11-19 (66265686 Non Refundable O308 rewritten from  Early Booker Deal) CZK 2736.53 genius\n' +
+      '2026-11-20 (66265686 Non Refundable O308) CZK 4468.70\n2026-11-21 (66265686 Non Refundable O308) CZK 4728.02';
+    expect(nightlyValues(rd)).toEqual([
+      { date: '2026-11-19', value: 2736.53 },
+      { date: '2026-11-20', value: 4468.7 },
+      { date: '2026-11-21', value: 4728.02 },
+    ]);
+  });
+
+  it('sums a date listed twice and tolerates an empty description', () => {
+    expect(nightlyValues('2026-11-19 (a) CZK 100 / 2026-11-19 (b) CZK 50')).toEqual([{ date: '2026-11-19', value: 150 }]);
+    expect(nightlyValues(null)).toEqual([]);
+  });
+});
+
+describe('attributeBoostedNights', () => {
+  const RATES = { baseCommission: 0.193, boostedCommission: 0.2615 };
+  // BH-96246429 (O.308, 19–22 Nov 2026): 20.96 % overall, only 19 Nov boosted.
+  const O308 = [
+    { date: '2026-11-19', value: 2736.53 },
+    { date: '2026-11-20', value: 4468.7 },
+    { date: '2026-11-21', value: 4728.02 },
+  ];
+
+  it('finds the one boosted night of a mixed stay (BH-96246429)', () => {
+    expect(attributeBoostedNights(O308, 2501.41 / 11933.25, RATES)).toEqual(['2026-11-19']);
+  });
+
+  it('calls every night boosted at the full boosted rate, none at the base rate', () => {
+    expect(attributeBoostedNights(O308, 0.2606, RATES)).toEqual(['2026-11-19', '2026-11-20', '2026-11-21']);
+    expect(attributeBoostedNights(O308, 0.1935, RATES)).toEqual([]);
+  });
+
+  it('refuses to guess between equal-priced nights', () => {
+    const flat = [
+      { date: '2026-12-01', value: 2000 },
+      { date: '2026-12-02', value: 2000 },
+      { date: '2026-12-03', value: 2000 },
+    ];
+    expect(attributeBoostedNights(flat, 0.193 + 0.0685 / 3, RATES)).toBeNull();
+  });
+
+  it('cannot attribute a mixed stay without its nightly values', () => {
+    expect(attributeBoostedNights([], 0.21, RATES)).toBeNull();
   });
 });

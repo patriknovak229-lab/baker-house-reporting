@@ -95,21 +95,25 @@ export interface BoosterDate {
   verdict: BoosterVerdict;
   /** Ticked as boosted in the card; null = not ticked. */
   flag: BoostedFlag | null;
-  /** Highest all-in commission seen on a Booking.com booking for this check-in date, when it looks boosted. */
+  /**
+   * This night is known to be boosted because a Booking.com booking covering it
+   * paid the boosted rate on it (see `attributeBoostedNights`); the value is the
+   * all-in commission that night was charged. null = no such booking.
+   */
   detectedCommission: number | null;
 }
 
-/** How the boosted dates of the last N days actually did. */
+/** How the boosted nights of the last N days actually did. */
 export interface BoosterTrackRecord {
   from: string;
   to: string;
-  /** Distinct boosted check-in dates (ticked or detected from commission). */
-  boostedDates: number;
-  /** …of which only known because a boosted booking came in (not ticked). */
+  /** Distinct boosted nights (ticked, or attributed from a boosted booking's commission). */
+  boostedNights: number;
+  /** …of which only known from a boosted booking's commission (not ticked). */
   detectedOnly: number;
-  /** Rooms still open on those nights that a boosted check-in filled. */
+  /** Room-nights on those nights sold to a booking that paid the boosted rate. */
   filledByBoost: number;
-  /** Rooms left empty on those nights. */
+  /** Room-nights left empty on those nights. */
   leftEmpty: number;
 }
 
@@ -328,4 +332,72 @@ export function isIsoDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const d = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+// ── Per-night boost attribution ──────────────────────────────────────────────
+
+/** One night of a booking and what the guest paid for it. */
+export interface NightValue {
+  date: string;
+  value: number;
+}
+
+const RATE_LINE = /(\d{4}-\d{2}-\d{2}) \([^)]*\) CZK ([0-9.]+)/g;
+
+/**
+ * Nightly prices from a Beds24 `rateDescription` ("2026-11-19 (… Non Refundable
+ * O308 …) CZK 2736.53 genius"), one entry per date — a date listed twice (a
+ * multi-room booking) is summed.
+ */
+export function nightlyValues(rateDescription: string | null | undefined): NightValue[] {
+  const byDate = new Map<string, number>();
+  for (const match of (rateDescription ?? '').matchAll(RATE_LINE)) {
+    const value = Number(match[2]);
+    if (Number.isFinite(value)) byDate.set(match[1], (byDate.get(match[1]) ?? 0) + value);
+  }
+  return [...byDate].map(([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Which nights of a Booking.com booking were boosted, read from its all-in
+ * commission share.
+ *
+ * Booking.com charges the boosted rate on boosted NIGHTS only (proven on
+ * BH-96246429, 19–22 Nov 2026: 20.96 % overall = 19 Nov at 26.15 %, 20–21 Nov at
+ * 19.3 %). So a booking's share is
+ *
+ *     base + (boosted − base) × (value of its boosted nights ÷ value of the stay)
+ *
+ * and the boosted nights are the subset whose value share matches. At (or near)
+ * the full boosted rate every night was boosted; otherwise every subset is tried
+ * and only a UNIQUE match within `tolerance` is accepted — equal-priced nights make
+ * "which one?" unanswerable, and a wrong guess would pollute the track record.
+ * Returns [] for an unboosted booking and null when it cannot be attributed.
+ *
+ * Assumes the boost was at the recommended level; a night ticked at another level
+ * (e.g. 22 %) is counted from its tick instead.
+ */
+export function attributeBoostedNights(
+  nights: NightValue[],
+  share: number,
+  econ: Pick<BoosterEconomics, 'baseCommission' | 'boostedCommission'>,
+  tolerance = 0.03,
+): string[] | null {
+  const span = econ.boostedCommission - econ.baseCommission;
+  if (span <= 0 || nights.length === 0) return null;
+  const implied = (share - econ.baseCommission) / span;
+  if (implied <= tolerance) return [];
+  if (implied >= 1 - tolerance) return nights.map((n) => n.date);
+  if (nights.length > 12) return null;
+
+  const total = nights.reduce((sum, n) => sum + n.value, 0);
+  if (total <= 0) return null;
+  const matches: number[] = [];
+  for (let mask = 1; mask < (1 << nights.length) - 1; mask += 1) {
+    let value = 0;
+    for (let i = 0; i < nights.length; i += 1) if (mask & (1 << i)) value += nights[i].value;
+    if (Math.abs(value / total - implied) <= tolerance) matches.push(mask);
+  }
+  if (matches.length !== 1) return null;
+  return nights.filter((_, i) => matches[0] & (1 << i)).map((n) => n.date);
 }

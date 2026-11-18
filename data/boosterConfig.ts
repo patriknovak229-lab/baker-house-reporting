@@ -41,15 +41,17 @@ export const BOOSTER_ECONOMICS = {
 /** How far ahead the list looks. The booster is a short-term, per-date tool. */
 export const BOOSTER_HORIZON_DAYS = 30;
 
-/** How far back the track record looks for boosted dates and what they filled. */
+/** How far back the track record looks for boosted nights and what they filled. */
 export const BOOSTER_TRACK_RECORD_DAYS = 30;
 
 /**
- * A Booking.com booking whose all-in commission is above this share of its
- * price was made for a boosted check-in date (19.3 % normally, ~26 % boosted).
- * Any slider level from 20 % up clears it; 19 % would not be detected.
+ * A Booking.com booking whose all-in commission share is above this paid the
+ * boosted rate on at least one of its nights. Normal bookings sit at 19.1–19.4 %;
+ * Booking.com charges the boosted rate per boosted night, so a long stay that
+ * crosses one boosted night lands only a little higher (7 nights, 1 boosted ≈
+ * 20.3 %) — hence a threshold just above the normal band, not near 26 %.
  */
-export const BOOSTED_COMMISSION_DETECT = 0.205;
+export const BOOSTED_COMMISSION_DETECT = 0.197;
 
 /**
  * How many days of past nights the "chance it sells anyway" curve learns from.

@@ -148,7 +148,7 @@ function BoostedCell({
       {detectedCommission !== null && (
         <span
           className="inline-block whitespace-nowrap rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-          title={`A Booking.com booking for this check-in date paid ${pct(detectedCommission, 1)} all-in — boosted`}
+          title={`A Booking.com booking covering this night paid the boosted rate on it (≈ ${pct(detectedCommission, 1)} all-in) — this night is boosted`}
         >
           {pct(detectedCommission, 0)} seen
         </span>
@@ -225,8 +225,9 @@ export default function BoosterCandidates() {
   const sellsAbove = Math.min(1, data.breakEvenSellChance + data.watchBand);
   const subtitle = (
     <>
-      Boosting a check-in date at <strong>{econ.boostLevel} %</strong> costs {pct(econ.boostedCommission, 1)} instead
-      of {pct(econ.baseCommission, 1)} on every Booking.com booking for it — including the ones you would get anyway.
+      Boosting a night at <strong>{econ.boostLevel} %</strong> costs {pct(econ.boostedCommission, 1)} instead of{' '}
+      {pct(econ.baseCommission, 1)} on that night of every Booking.com booking that includes it — including the ones
+      you would get anyway; any stay that includes a boosted night shows as “Featured”.
       Assuming a boosted date fills <strong>{pct(econ.fillAtBoost)}</strong> of the rooms still open, it pays while
       an open night has less than a <strong>{pct(data.breakEvenSellChance)}</strong> chance of selling on its own.
       Boost below {pct(boostBelow)} (first night of a gap only), watch {pct(boostBelow)}–{pct(sellsAbove)}, leave
@@ -261,17 +262,17 @@ export default function BoosterCandidates() {
 
       <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
         <strong className="text-gray-800">Track record, {track.from} → {track.to}:</strong>{' '}
-        {track.boostedDates === 0 ? (
-          'no boosted check-in dates yet.'
+        {track.boostedNights === 0 ? (
+          'no boosted nights yet.'
         ) : (
           <>
-            {track.boostedDates} boosted check-in date{track.boostedDates === 1 ? '' : 's'}
+            {track.boostedNights} boosted night{track.boostedNights === 1 ? '' : 's'}
             {track.detectedOnly > 0 && <> ({track.detectedOnly} known only from a boosted booking’s commission)</>} ·
-            the boost filled <strong>{track.filledByBoost}</strong> of {trackOpen} room
+            bookings made under the boost filled <strong>{track.filledByBoost}</strong> of {trackOpen} room-night
             {trackOpen === 1 ? '' : 's'} still open
             {trackOpen > 0 && <> = <strong>{pct(track.filledByBoost / trackOpen)}</strong></>} (assumption{' '}
-            {pct(econ.fillAtBoost)}). Dates boosted but never ticked and never sold are invisible — tick every boost so
-            this stays honest.
+            {pct(econ.fillAtBoost)}). Counted per night, because Booking.com charges the boosted rate per boosted night.
+            Nights boosted but never ticked and never sold are invisible — tick every boost so this stays honest.
           </>
         )}
       </div>
@@ -304,7 +305,7 @@ export default function BoosterCandidates() {
                 <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Verdict</th>
                 <th
                   className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase"
-                  title="Tick the level you set in the Booking.com extranet. 'seen' = a booking for this check-in date already paid the boosted commission."
+                  title="Tick the level you set in the Booking.com extranet. 'seen' = a booking covering this night already paid the boosted rate on it."
                 >
                   Boosted
                 </th>
