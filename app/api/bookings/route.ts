@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Reservation, RateType, Issue } from "@/types/reservation";
 import { readAllAdditionalPayments } from "@/utils/additionalPaymentsStore";
+import { feeFor, reservationsOf } from "@/utils/paymentAllocations";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { countryToLang, isValidCountryCode } from "@/utils/countries";
 import { formatAdditionalGuestsMarker } from "@/utils/additionalGuests";
@@ -108,7 +109,10 @@ async function aggregateStripeFees(reservations: Reservation[]): Promise<Reserva
       ap.status === "partially-refunded" ||
       ap.status === "refunded";
     if (!counted || typeof ap.stripeFeeCzk !== "number") continue;
-    feeByRes.set(ap.reservationNumber, (feeByRes.get(ap.reservationNumber) ?? 0) + ap.stripeFeeCzk);
+    // A combined (linked-stay) payment's fee is split by each booking's share.
+    for (const rn of reservationsOf(ap)) {
+      feeByRes.set(rn, (feeByRes.get(rn) ?? 0) + feeFor(ap, rn));
+    }
   }
 
   if (feeByRes.size === 0) return reservations;

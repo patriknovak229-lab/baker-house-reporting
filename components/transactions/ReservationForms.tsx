@@ -1,6 +1,7 @@
 'use client';
 import type { Reservation } from '@/types/reservation';
 import PaymentLinkModal from './PaymentLinkModal';
+import { netPaidOnBooking } from '@/utils/paymentAllocations';
 import CreateVoucherModal from './CreateVoucherModal';
 import EmailGuestModal from './EmailGuestModal';
 
@@ -29,11 +30,14 @@ export function reservationFormId(kind: ReservationFormKind, reservationNumber: 
 export default function ReservationForm({
   kind,
   reservation,
+  linkedStay,
   onClose,
   onChanged,
 }: {
   kind: ReservationFormKind;
   reservation: Reservation;
+  /** Every booking of the linked stay this one belongs to (date order), when it is in one. */
+  linkedStay?: Reservation[];
   onClose: () => void;
   /** Something was created or sent — refresh the data. */
   onChanged: () => void;
@@ -51,6 +55,15 @@ export default function ReservationForm({
           defaultDescription={`Baker House — reservation ${reservation.reservationNumber}`}
           reservationNumber={reservation.reservationNumber}
           guestName={guestName}
+          linkedStay={linkedStay?.filter((r) => !r.isCancelled).map((r) => ({
+            reservationNumber: r.reservationNumber,
+            checkIn: r.checkInDate,
+            checkOut: r.checkOutDate,
+            room: r.room,
+            price: r.price,
+            // Beds24 deposit + payment links already paid (a combined link counts its share).
+            outstanding: Math.max(0, Math.round((r.price - (r.amountPaid ?? 0) - netPaidOnBooking(r.additionalPayments ?? [], r.reservationNumber)) * 100) / 100),
+          }))}
           onPaymentCreated={onChanged}
           onClose={onClose}
         />

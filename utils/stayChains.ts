@@ -175,6 +175,11 @@ export interface StaySuggestion<T extends SuggestRef = SuggestRef> {
 /** Channel relay addresses — shared by every guest of that channel, so never an identity. */
 const RELAY_EMAIL = /@(?:guest\.booking\.com|guest\.airbnb\.com|stayforlong\.com|m\.expediapartnercentral\.com)$/i;
 
+/** An OTA conduit address (Booking.com / Airbnb / …) — not the guest's own inbox. */
+export function isRelayEmail(email: string | undefined): boolean {
+  return RELAY_EMAIL.test((email ?? "").trim());
+}
+
 function emailsOf(r: SuggestRef): Set<string> {
   const out = new Set<string>();
   for (const raw of [r.email, r.additionalEmail]) {

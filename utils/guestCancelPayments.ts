@@ -14,7 +14,8 @@
 import Stripe from "stripe";
 import type { AdditionalPayment, AdditionalPaymentStatus, PaymentRefund } from "@/types/additionalPayment";
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from "@/utils/additionalPaymentsStore";
-import { recomputePaymentOverride } from "@/utils/paymentReconcile";
+import { recomputeForPayment } from "@/utils/paymentReconcile";
+import { isCombined, netPaidFor, paymentsCovering } from "@/utils/paymentAllocations";
 import { getWebPaymentState, refundWebPayment, type RefundResult } from "@/utils/webPaymentServer";
 import { webPaymentDeps } from "@/utils/webPaymentDeps";
 import type { PaymentPicture } from "@/utils/guestCancellation";
@@ -55,11 +56,12 @@ export async function loadBookingPayments(
     }
   }
 
-  const links = (await readAllAdditionalPayments())
-    .filter((p) => p.reservationNumber === reservationNumber)
+  // A combined (linked-stay) payment is refundable only up to THIS booking's
+  // share — cancelling one booking of the stay must not refund the other.
+  const links = paymentsCovering(await readAllAdditionalPayments(), reservationNumber)
     .filter((p) => p.status === "paid" || p.status === "partially-refunded")
     .sort((a, b) => String(a.paidAt ?? a.createdAt ?? "").localeCompare(String(b.paidAt ?? b.createdAt ?? "")))
-    .map((p) => ({ id: p.id, refundableCzk: round2(Math.max(0, p.amountCzk - linkRefunded(p))), description: p.description ?? "" }));
+    .map((p) => ({ id: p.id, refundableCzk: round2(Math.min(netPaidFor(p, reservationNumber), Math.max(0, p.amountCzk - linkRefunded(p)))), description: p.description ?? "" }));
 
   const hasStripe = web != null || links.length > 0;
   const picture: PaymentPicture = hasStripe
@@ -94,6 +96,8 @@ function mapStatus(s: Stripe.Refund["status"] | null | undefined): PaymentRefund
 /** Refund (part of) one payment link; writes the local refund like /api/stripe/refund. */
 export async function refundPaymentLink(input: {
   sessionId: string;
+  /** The booking being cancelled — tags the refund on a combined payment. */
+  reservationNumber?: string;
   amountCzk: number;
   reason: string;
   idempotencyKey: string;
@@ -103,7 +107,9 @@ export async function refundPaymentLink(input: {
   const idx = payments.findIndex((p) => p.id === input.sessionId);
   if (idx === -1) throw new Error(`Payment ${input.sessionId} not found`);
   const payment = payments[idx];
-  const refundable = round2(payment.amountCzk - linkRefunded(payment));
+  const refundable = input.reservationNumber
+    ? round2(Math.min(netPaidFor(payment, input.reservationNumber), payment.amountCzk - linkRefunded(payment)))
+    : round2(payment.amountCzk - linkRefunded(payment));
   if (input.amountCzk > refundable + 0.001) {
     throw new Error(`Payment link has only ${refundable} Kč left to refund`);
   }
@@ -122,6 +128,7 @@ export async function refundPaymentLink(input: {
         sessionId: input.sessionId,
         operatorEmail: input.operator,
         source: "reporting-guest-cancel",
+        ...(input.reservationNumber && isCombined(payment) ? { reservationNumber: input.reservationNumber } : {}),
         operatorNote: input.reason.slice(0, 450),
       },
     },
@@ -136,17 +143,14 @@ export async function refundPaymentLink(input: {
     refundedBy: input.operator,
     status: mapStatus(refund.status),
     failureReason: refund.failure_reason ?? undefined,
+    ...(input.reservationNumber && isCombined(payment) ? { reservationNumber: input.reservationNumber } : {}),
   };
   const refunds = [...(payment.refunds ?? []).filter((r) => r.id !== refund.id), local];
   const total = refunds.filter((r) => r.status === "succeeded" || r.status === "pending").reduce((s, r) => s + r.amountCzk, 0);
   const status: AdditionalPaymentStatus = total <= 0 ? "paid" : total >= payment.amountCzk ? "refunded" : "partially-refunded";
   payments[idx] = { ...payment, refunds, status };
   await writeAllAdditionalPayments(payments);
-  if (payment.reservationNumber) {
-    await recomputePaymentOverride(payment.reservationNumber).catch((err) =>
-      console.error("[guest-cancel] recomputePaymentOverride failed:", err),
-    );
-  }
+  if (payment.reservationNumber) await recomputeForPayment(payment);
   if (local.status === "failed" || local.status === "canceled") {
     throw new Error(`Stripe did not refund the payment link (status: ${local.status})`);
   }

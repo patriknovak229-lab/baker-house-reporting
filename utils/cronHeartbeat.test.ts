@@ -61,9 +61,8 @@ describe("staleCronJobs", () => {
     expect(staleCronJobs({ daily: { ranAt: "not-a-date" } }, NOW, JOBS)).toEqual([]);
   });
 
-  it("watches the unblocked crons by default, not the payments one", () => {
-    // send-scheduled-payments is deliberately still middleware-blocked, so
-    // watching it would alert forever about a job nobody wants running yet.
+  it("watches every scheduled cron by default", () => {
+    // send-scheduled-payments was switched on 2026-11-18 (scheduled payment links).
     expect(WATCHED_CRON_JOBS.map((j) => j.job)).toEqual([
       "send-due-invoices",
       "check-reviews",
@@ -74,6 +73,8 @@ describe("staleCronJobs", () => {
       "market-refresh",
       // Pay later (NOT the dormant split-payment job above): four runs a day.
       "web-payments",
+      // Scheduled payment links (switched on 2026-11-18).
+      "send-scheduled-payments",
       // The daily catch-up is a Vercel cron too; the watchdog backs it up.
       "catch-up",
     ]);

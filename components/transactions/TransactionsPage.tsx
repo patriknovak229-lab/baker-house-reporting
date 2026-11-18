@@ -44,7 +44,10 @@ import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { computeTurnoverClashes } from "@/utils/turnoverClash";
 import { apartmentRoom } from "@/utils/reservationApartments";
 import { planForUnallocated } from "@/utils/roomAllocation";
-import { confirmedLinks, staySuggestions } from "@/utils/stayChains";
+import { confirmedLinks, stayChainIndex, staySuggestions } from "@/utils/stayChains";
+import { reservationsOf } from "@/utils/paymentAllocations";
+import type { ScheduledPaymentLink } from "@/types/scheduledPaymentLink";
+import { ScheduledLinkAlertsPill, ScheduledLinkRow, needsAttention } from "./ScheduledLinks";
 import { signalsText, type StayLinkAction } from "./StayLinks";
 import { pragueToday } from "@/utils/periodUtils";
 import { formatDate } from "@/utils/formatters";
@@ -369,6 +372,12 @@ export default function TransactionsPage() {
   const closeReservationForm = (kind: ReservationFormKind, reservationNumber: string) =>
     setReservationForms((list) => list.filter((f) => !(f.kind === kind && f.reservationNumber === reservationNumber)));
   const [paymentAlertOpen, setPaymentAlertOpen] = useState(false);
+  // Scheduled payment links (types/scheduledPaymentLink.ts) — the alert pill lists those needing the operator.
+  const [scheduledLinks, setScheduledLinks] = useState<ScheduledPaymentLink[]>([]);
+  const [scheduledAlertOpen, setScheduledAlertOpen] = useState(false);
+  const scheduledLinkAlerts = useMemo(() => scheduledLinks.filter(needsAttention), [scheduledLinks]);
+  // Linked stays (prolongations) — Request Payment offers one link for the whole stay.
+  const stayChainByRes = useMemo(() => stayChainIndex(reservations), [reservations]);
   // Single source of truth for "are we saving / did we save / did it fail" so
   // the drawer can render one consistent toast for any onUpdate-driven write.
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
@@ -399,7 +408,7 @@ export default function TransactionsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [bookingsRes, localStateRes, additionalPaymentsRes, vouchersRes, splitPaymentsRes, invoiceRequestsRes, emailLogRes] = await Promise.all([
+      const [bookingsRes, localStateRes, additionalPaymentsRes, vouchersRes, splitPaymentsRes, invoiceRequestsRes, emailLogRes, scheduledLinksRes] = await Promise.all([
         fetch(`/api/bookings${fullSync ? "?fullSync=true" : ""}`),
         fetch("/api/local-state"),
         fetch("/api/stripe/additional-payments"),
@@ -407,6 +416,7 @@ export default function TransactionsPage() {
         fetch("/api/stripe/split-payments"),
         fetch("/api/invoice-requests"),
         fetch("/api/email-send-log"),
+        fetch("/api/stripe/scheduled-links"),
       ]);
       if (!bookingsRes.ok) {
         const json = await bookingsRes.json().catch(() => ({}));
@@ -435,12 +445,30 @@ export default function TransactionsPage() {
         ? await emailLogRes.json().catch(() => [])
         : [];
 
-      // Group additional payments by reservationNumber for merge
+      const allScheduledLinks: ScheduledPaymentLink[] = scheduledLinksRes.ok
+        ? await scheduledLinksRes.json().catch(() => [])
+        : [];
+      setScheduledLinks(Array.isArray(allScheduledLinks) ? allScheduledLinks : []);
+
+      // Group additional payments by reservation for merge. A combined
+      // (linked-stay) payment goes on EVERY booking it covers.
       const apByRes = new Map<string, AdditionalPayment[]>();
       for (const ap of allAdditionalPayments) {
-        const group = apByRes.get(ap.reservationNumber) ?? [];
-        group.push(ap);
-        apByRes.set(ap.reservationNumber, group);
+        for (const rn of reservationsOf(ap)) {
+          const group = apByRes.get(rn) ?? [];
+          group.push(ap);
+          apByRes.set(rn, group);
+        }
+      }
+
+      // Scheduled payment links → every booking they cover.
+      const slByRes = new Map<string, ScheduledPaymentLink[]>();
+      for (const sl of Array.isArray(allScheduledLinks) ? allScheduledLinks : []) {
+        for (const a of sl.allocations) {
+          const group = slByRes.get(a.reservationNumber) ?? [];
+          group.push(sl);
+          slByRes.set(a.reservationNumber, group);
+        }
       }
 
       // Group vouchers by reservationNumber for merge.
@@ -497,6 +525,7 @@ export default function TransactionsPage() {
         const sps = spByRes.get(r.reservationNumber);
         const irs = irByRes.get(r.reservationNumber);
         const els = elByRes.get(r.reservationNumber);
+        const sls = slByRes.get(r.reservationNumber);
         return {
           ...r,
           ...(aps ? { additionalPayments: aps } : {}),
@@ -504,6 +533,7 @@ export default function TransactionsPage() {
           ...(sps ? { splitPayments: sps } : {}),
           ...(irs ? { invoiceRequests: irs } : {}),
           ...(els ? { emailSendLog: els } : {}),
+          ...(sls ? { scheduledLinks: sls } : {}),
         };
       });
       setReservations(merged);
@@ -1262,9 +1292,11 @@ export default function TransactionsPage() {
   // ── Unpaid additional payments (Stripe payment links not yet paid) ───────────
   const unpaidAdditionalPayments = useMemo(() => {
     const items: { reservation: Reservation; payment: AdditionalPayment }[] = [];
+    const seen = new Set<string>(); // a combined payment sits on each booking it covers — list it once
     for (const r of reservations) {
       for (const ap of r.additionalPayments ?? []) {
-        if (ap.status === "unpaid") {
+        if (ap.status === "unpaid" && !seen.has(ap.id)) {
+          seen.add(ap.id);
           items.push({ reservation: r, payment: ap });
         }
       }
@@ -3296,6 +3328,32 @@ export default function TransactionsPage() {
         </div>
       )}
 
+      {/* Scheduled payment links that need the operator (not sent / unpaid after reminder / failed) */}
+      {scheduledLinkAlerts.length > 0 && (
+        <div className="mb-3">
+          <ScheduledLinkAlertsPill
+            links={scheduledLinkAlerts}
+            open={scheduledAlertOpen}
+            onToggle={() => setScheduledAlertOpen((o) => !o)}
+          />
+          {scheduledAlertOpen && (
+            <div className="mt-2 rounded-lg border border-rose-200 bg-white divide-y divide-rose-50 overflow-hidden">
+              {scheduledLinkAlerts.map((l) => (
+                <ScheduledLinkRow
+                  key={l.id}
+                  link={l}
+                  onChanged={() => fetchReservations()}
+                  onOpenReservation={(rn) => {
+                    const r = reservations.find((x) => x.reservationNumber === rn);
+                    if (r) { setSelectedReservation(r); setScheduledAlertOpen(false); }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Unpaid additional payments pill */}
       {unpaidAdditionalPayments.length > 0 && (
         <div className="mb-3">
@@ -3405,6 +3463,7 @@ export default function TransactionsPage() {
           key={reservationFormId(f.kind, f.reservationNumber)}
           kind={f.kind}
           reservation={reservations.find((r) => r.reservationNumber === f.reservationNumber) ?? f.snapshot}
+          linkedStay={stayChainByRes.get(f.reservationNumber)?.members}
           onClose={() => closeReservationForm(f.kind, f.reservationNumber)}
           onChanged={() => { fetchReservations(); fetchRoomMoves(); }}
         />

@@ -27,6 +27,21 @@ export interface PaymentRefund {
   status: 'pending' | 'succeeded' | 'failed' | 'canceled';
   /** Stripe's failure_reason when status === 'failed'. */
   failureReason?: string;
+  /**
+   * The booking this refund is for, when the payment covers several bookings
+   * (combined linked-stay link) and the refund was made for one of them, e.g.
+   * cancelling the extension. Untagged refunds are spread pro rata.
+   */
+  reservationNumber?: string;
+}
+
+/**
+ * One booking's share of a payment that covers several bookings (one Stripe
+ * link for a stay booked as linked reservations — see utils/stayChains.ts).
+ */
+export interface PaymentAllocation {
+  reservationNumber: string;
+  amountCzk: number;
 }
 
 export interface AdditionalPayment {
@@ -61,4 +76,12 @@ export interface AdditionalPayment {
    * app-initiated AND dashboard-initiated refunds stay in sync.
    */
   refunds?: PaymentRefund[];
+  /**
+   * Set only when ONE Stripe payment covers several bookings (linked stay).
+   * The amounts add up to `amountCzk`; `reservationNumber` is the first
+   * booking. Absent = the whole payment belongs to `reservationNumber`.
+   * Per-booking money (paid status, Stripe fee, refunds) is read through
+   * utils/paymentAllocations.ts, never from `reservationNumber` directly.
+   */
+  allocations?: PaymentAllocation[];
 }

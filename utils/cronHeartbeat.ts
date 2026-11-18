@@ -125,6 +125,16 @@ export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
     catchUp: 'missed-or-failed',
   },
   {
+    // Scheduled payment links (utils/scheduledPaymentLinks). Emails go out
+    // before the link's status is saved, so a half-finished run is a human call.
+    job: 'send-scheduled-payments',
+    label: 'Scheduled payment links (09:00 UTC)',
+    maxAgeHours: 36,
+    path: '/api/cron/send-scheduled-payments',
+    schedule: '0 9 * * *',
+    catchUp: 'missed-only',
+  },
+  {
     job: 'catch-up',
     label: 'Missed-run catch-up (12:00 UTC)',
     maxAgeHours: 36,

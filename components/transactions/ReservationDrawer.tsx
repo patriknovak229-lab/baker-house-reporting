@@ -7,6 +7,8 @@ import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
 import type { SplitPayment } from "@/types/splitPayment";
+import { ScheduledLinkRow } from "@/components/transactions/ScheduledLinks";
+import { amountFor, isCombined, reservationsOf } from "@/utils/paymentAllocations";
 import MessageThread from "./MessageThread";
 import type { ReservationFormKind } from "./ReservationForms";
 import Badge from "@/components/shared/Badge";
@@ -296,11 +298,14 @@ function AdditionalPaymentRow({
   guestPhone,
   guestName,
   onRefresh,
+  forReservation,
 }: {
   ap: AdditionalPayment;
   guestPhone?: string;
   guestName?: string;
   onRefresh?: () => void;
+  /** The drawer's booking — a combined (linked-stay) payment shows this booking's share. */
+  forReservation?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -459,6 +464,12 @@ function AdditionalPaymentRow({
               <span className="ml-1 text-rose-600 font-medium">· Link expired</span>
             )}
           </p>
+          {isCombined(ap) && (
+            <p className="text-[10px] text-violet-700 font-medium">
+              Linked stay · covers {reservationsOf(ap).join(' + ')}
+              {forReservation ? ` · this booking ${amountFor(ap, forReservation).toLocaleString("cs-CZ")} Kč` : ''}
+            </p>
+          )}
         </div>
 
         {/* Amount + status label */}
@@ -5899,6 +5910,7 @@ export default function ReservationDrawer({
                         guestPhone={reservation.phone}
                         guestName={`${reservation.firstName} ${reservation.lastName}`.trim()}
                         onRefresh={onPaymentCreated}
+                        forReservation={reservation.reservationNumber}
                       />
                     ))}
                 </div>
@@ -5919,6 +5931,7 @@ export default function ReservationDrawer({
                       guestPhone={reservation.phone}
                       guestName={`${reservation.firstName} ${reservation.lastName}`.trim() || undefined}
                       onRefresh={onPaymentCreated}
+                      forReservation={reservation.reservationNumber}
                     />
                   ))}
                 </div>
@@ -5937,6 +5950,21 @@ export default function ReservationDrawer({
                     .sort((a, b) => a.paymentNumber - b.paymentNumber)
                     .map((sp) => (
                       <ScheduledSplitPaymentRow key={sp.id} sp={sp} />
+                    ))}
+                </div>
+              </div>
+            )}
+            {/* Scheduled payment links (emailed by the daily cron; utils/scheduledPaymentLinks) */}
+            {(reservation.scheduledLinks ?? []).filter((l) => l.status !== 'cancelled').length > 0 && (
+              <div className="mt-3 border border-blue-100 rounded-lg overflow-hidden">
+                <p className="text-[11px] font-medium text-blue-700 uppercase tracking-wide px-3 py-2 bg-blue-50 border-b border-blue-100">
+                  Scheduled payment links
+                </p>
+                <div className="divide-y divide-blue-50">
+                  {(reservation.scheduledLinks ?? [])
+                    .filter((l) => l.status !== 'cancelled')
+                    .map((l) => (
+                      <ScheduledLinkRow key={l.id} link={l} onChanged={() => onPaymentCreated?.()} />
                     ))}
                 </div>
               </div>

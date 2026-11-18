@@ -30,7 +30,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { requireRole } from '@/utils/authGuard';
-import { recomputePaymentOverride } from '@/utils/paymentReconcile';
+import { recomputeForPayment } from '@/utils/paymentReconcile';
 import type {
   AdditionalPayment,
   AdditionalPaymentStatus,
@@ -170,13 +170,7 @@ export async function POST(req: NextRequest) {
   await writeAllAdditionalPayments(payments);
 
   // Reconcile reservation payment status badge
-  if (payment.reservationNumber) {
-    try {
-      await recomputePaymentOverride(payment.reservationNumber);
-    } catch (err) {
-      console.error('[stripe/refund] recomputePaymentOverride failed:', err);
-    }
-  }
+  if (payment.reservationNumber) await recomputeForPayment(payment);
 
   // Operator-audit Telegram
   const tg = [

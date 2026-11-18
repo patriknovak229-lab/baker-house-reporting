@@ -1,3 +1,4 @@
+import type { ScheduledPaymentLink } from "./scheduledPaymentLink";
 import type { AdditionalPayment } from "./additionalPayment";
 import type { Voucher } from "./voucher";
 import type { SplitPayment } from "./splitPayment";
@@ -624,6 +625,7 @@ export interface Reservation {
   issues?: Issue[]; // locally managed task/issue log; undefined = no issues
   additionalPayments?: AdditionalPayment[]; // Stripe payment links created for this reservation
   splitPayments?: SplitPayment[]; // scheduled future payments (cron-emailed when sendDate ≤ today)
+  scheduledLinks?: ScheduledPaymentLink[]; // payment links scheduled for a later email (covers this booking)
   vouchers?: Voucher[]; // discount vouchers linked to this reservation
   parkingOverride?: string; // undefined = auto rules, "none" = no parking, "152"/"153"/etc = manual space
   /** Is the guest actually bringing a car? From their reply to the post-booking

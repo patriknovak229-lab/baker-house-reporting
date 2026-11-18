@@ -242,6 +242,7 @@ export async function POST(req: NextRequest) {
         } else {
           const r = await refundPaymentLink({
             sessionId: part.id.slice(5),
+            reservationNumber,
             amountCzk: part.amountCzk,
             reason,
             idempotencyKey,

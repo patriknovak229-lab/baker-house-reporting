@@ -2,6 +2,28 @@
 import { useState, useMemo } from 'react';
 import FloatingPanel from '@/components/shared/FloatingPanel';
 import { normalizeForSearch } from '@/utils/stringUtils';
+import { pragueToday } from '@/utils/periodUtils';
+import { isRelayEmail } from '@/utils/stayChains';
+
+/** One booking of a linked stay (prolongation), as offered for a combined link. */
+export interface LinkedStayBooking {
+  reservationNumber: string;
+  checkIn: string;
+  checkOut: string;
+  room: string;
+  price: number;
+  /** price − already paid (Beds24 deposit + paid links) — the prefill. */
+  outstanding: number;
+}
+
+/** Prague date + n days, YYYY-MM-DD. */
+function pragueDatePlus(days: number): string {
+  const d = new Date(pragueToday() + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+const kc = (n: number) => `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
 
 export interface ReservationSummary {
   reservationNumber: string;
@@ -26,10 +48,12 @@ interface Props {
   reservations?:       ReservationSummary[];
   /** Called after a payment link is successfully generated */
   onPaymentCreated?:   () => void;
+  /** Drawer context, booking is part of a linked stay: offer one link for every booking. */
+  linkedStay?:         LinkedStayBooking[];
   onClose: () => void;
 }
 
-type Step = 'form' | 'link';
+type Step = 'form' | 'link' | 'scheduled';
 
 export default function PaymentLinkModal({
   defaultEmail,
@@ -40,15 +64,30 @@ export default function PaymentLinkModal({
   guestName: fixedGuestName,
   reservations,
   onPaymentCreated,
+  linkedStay,
   onClose,
 }: Props) {
+  const stay = linkedStay && linkedStay.length > 1 ? linkedStay : null;
+  const [wholeStay, setWholeStay] = useState(!!stay);
+  const [stayAmounts, setStayAmounts] = useState<Record<string, string>>(
+    () => Object.fromEntries((stay ?? []).map((b) => [b.reservationNumber, b.outstanding > 0 ? String(b.outstanding) : ''])),
+  );
+  const stayDescription = stay
+    ? `Baker House — stay ${stay[0].checkIn} – ${stay[stay.length - 1].checkOut}`
+    : '';
+  const stayTotal = (stay ?? []).reduce((s, b) => s + (parseFloat(stayAmounts[b.reservationNumber] ?? '') || 0), 0);
+
+  // Send now (generate a link) or schedule an email for a later date (daily cron).
+  const [when, setWhen] = useState<'now' | 'schedule'>('now');
+  const [sendDate, setSendDate] = useState(pragueDatePlus(1));
   const [step, setStep]               = useState<Step>('form');
-  const [description, setDescription] = useState(defaultDescription ?? '');
+  const [description, setDescription] = useState((linkedStay && linkedStay.length > 1 ? `Baker House — stay ${linkedStay[0].checkIn} – ${linkedStay[linkedStay.length - 1].checkOut}` : defaultDescription) ?? '');
   const [amount, setAmount]           = useState(defaultAmount ? String(defaultAmount) : '');
   const [email, setEmail]             = useState(defaultEmail  ?? '');
   const [phone, setPhone]             = useState(defaultPhone  ?? '');
 
-  const [isMainPayment, setIsMainPayment] = useState(false);
+  // A whole-stay link pays the bookings themselves, so it starts as a main payment.
+  const [isMainPayment, setIsMainPayment] = useState(!!(linkedStay && linkedStay.length > 1));
 
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
@@ -86,14 +125,55 @@ export default function PaymentLinkModal({
     setSelectedRes(null);
   }
 
+  /** Bookings + amounts this payment is for; null = free-standing link (no booking). */
+  function buildAllocations(): { reservationNumber: string; amountCzk: number }[] | null {
+    if (stay && wholeStay) {
+      return stay.map((b) => ({ reservationNumber: b.reservationNumber, amountCzk: parseFloat(stayAmounts[b.reservationNumber] ?? '') || 0 }));
+    }
+    const rn = fixedReservationNumber ?? selectedRes?.reservationNumber;
+    return rn ? [{ reservationNumber: rn, amountCzk: parseFloat(amount) || 0 }] : null;
+  }
+
   async function handleGenerate() {
-    const amountNum = parseFloat(amount);
+    const allocations = buildAllocations();
+    const amountNum = stay && wholeStay ? stayTotal : parseFloat(amount);
     if (!description.trim()) { setError('Description is required'); return; }
+    if (allocations && allocations.length > 1) {
+      const empty = allocations.find((a) => !(a.amountCzk >= 1));
+      if (empty) { setError(`Enter an amount for ${empty.reservationNumber} (min. 1 Kč)`); return; }
+    }
     if (!amountNum || amountNum < 1) { setError('Enter a valid amount (min. 1 Kč)'); return; }
+    if (when === 'schedule') {
+      if (!allocations) { setError('A scheduled link must be attached to a reservation'); return; }
+      if (!email.trim()) { setError('A scheduled link is emailed — enter the guest email'); return; }
+      if (isRelayEmail(email)) { setError("That's a Booking.com/Airbnb relay address — use the guest's own email, or send the link yourself"); return; }
+      if (!sendDate || sendDate <= pragueToday()) { setError('Pick a date from tomorrow on — for today use Send now'); return; }
+    }
 
     setLoading(true);
     setError(null);
     try {
+      if (when === 'schedule') {
+        const res = await fetch('/api/stripe/scheduled-links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            allocations,
+            description:   description.trim(),
+            isMainPayment,
+            sendDate,
+            guestEmail:    email.trim(),
+            guestPhone:    phone.trim() || undefined,
+            guestName:     fixedGuestName ?? selectedRes?.guestName,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? 'Failed to schedule the payment link');
+        setStep('scheduled');
+        onPaymentCreated?.();
+        return;
+      }
+
       const res = await fetch('/api/stripe/payment-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -105,10 +185,12 @@ export default function PaymentLinkModal({
           reservationNumber: fixedReservationNumber ?? selectedRes?.reservationNumber,
           guestName:         fixedGuestName ?? selectedRes?.guestName,
           isMainPayment:     isMainPayment || undefined,
+          ...(allocations && allocations.length > 1 ? { allocations } : {}),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to create payment link');
+      if (stay && wholeStay) setAmount(String(amountNum)); // the "link ready" summary shows the total
       setPaymentUrl(data.url);
       setStep('link');
       onPaymentCreated?.();
@@ -163,7 +245,7 @@ export default function PaymentLinkModal({
   return (
     <FloatingPanel
       id={fixedReservationNumber ? `payment-link:${fixedReservationNumber}` : 'payment-link'}
-      title={step === 'form' ? 'Request Payment' : 'Payment Link Ready'}
+      title={step === 'form' ? 'Request Payment' : step === 'scheduled' ? 'Payment Link Scheduled' : 'Payment Link Ready'}
       subtitle={fixedReservationNumber ? [fixedGuestName, fixedReservationNumber].filter(Boolean).join(' · ') : undefined}
       chipLabel={fixedGuestName ? `Payment · ${fixedGuestName}` : 'Request Payment'}
       onClose={onClose}
@@ -250,6 +332,66 @@ export default function PaymentLinkModal({
             </div>
           )}
 
+          {/* Linked stay — one link for every booking of the stay */}
+          {stay && (
+            <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium text-violet-900">Whole stay — one link</p>
+                  <p className="text-[11px] text-violet-700/80">
+                    {stay.length} linked bookings · {stay[0].checkIn} – {stay[stay.length - 1].checkOut}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-pressed={wholeStay}
+                  onClick={() => {
+                    const next = !wholeStay;
+                    setWholeStay(next);
+                    setIsMainPayment(next);
+                    setDescription(next ? stayDescription : (defaultDescription ?? ''));
+                  }}
+                  className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${wholeStay ? 'bg-violet-600' : 'bg-gray-200'}`}
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${wholeStay ? 'translate-x-4' : 'translate-x-0'}`} />
+                </button>
+              </div>
+              {wholeStay && (
+                <div className="space-y-1.5">
+                  {stay.map((b) => (
+                    <div key={b.reservationNumber} className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs truncate ${b.reservationNumber === fixedReservationNumber ? 'font-semibold text-gray-900' : 'text-gray-800'}`}>
+                          {b.reservationNumber} · {b.room}
+                        </p>
+                        <p className="text-[10px] text-gray-500">
+                          {b.checkIn} – {b.checkOut} · total {kc(b.price)}
+                          {b.outstanding < b.price && <span className="text-amber-700"> · {kc(b.price - b.outstanding)} already paid</span>}
+                        </p>
+                      </div>
+                      <div className="relative w-28 shrink-0">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          aria-label={`Amount for ${b.reservationNumber}`}
+                          value={stayAmounts[b.reservationNumber] ?? ''}
+                          onChange={(e) => setStayAmounts((m) => ({ ...m, [b.reservationNumber]: e.target.value }))}
+                          className="w-full pl-2 pr-7 py-1.5 border border-gray-200 rounded-md text-xs text-right text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300"
+                        />
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">Kč</span>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between pt-1.5 border-t border-violet-200/70">
+                    <span className="text-xs text-violet-900">Guest pays once</span>
+                    <span className="text-sm font-semibold text-violet-900">{kc(stayTotal)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Payment type — only relevant when linked to a reservation */}
           {(fixedReservationNumber || selectedRes) && (
             <div className="flex items-center justify-between py-1">
@@ -289,8 +431,8 @@ export default function PaymentLinkModal({
             />
           </div>
 
-          {/* Amount */}
-          <div>
+          {/* Amount (per booking above for a whole-stay link) */}
+          {!(stay && wholeStay) && <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Amount (CZK) *</label>
             <input
               type="number"
@@ -301,7 +443,7 @@ export default function PaymentLinkModal({
               placeholder="500"
               className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
             />
-          </div>
+          </div>}
 
           {/* Guest email */}
           <div>
@@ -327,6 +469,47 @@ export default function PaymentLinkModal({
             />
           </div>
 
+          {/* When — now, or emailed on a later date by the daily run (needs a booking) */}
+          {(fixedReservationNumber || selectedRes) && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-lg">
+                {(['now', 'schedule'] as const).map((w) => (
+                  <button
+                    key={w}
+                    type="button"
+                    onClick={() => setWhen(w)}
+                    className={`py-1.5 text-xs font-medium rounded-md transition-colors ${when === w ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                  >
+                    {w === 'now' ? 'Send now' : 'Schedule email'}
+                  </button>
+                ))}
+              </div>
+              {when === 'schedule' && (
+                <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2.5 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="pl-send-date" className="text-xs font-medium text-gray-700">Email the link on</label>
+                    <input
+                      id="pl-send-date"
+                      type="date"
+                      min={pragueDatePlus(1)}
+                      value={sendDate}
+                      onChange={(e) => setSendDate(e.target.value)}
+                      className="px-2 py-1 border border-gray-200 rounded-md text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    />
+                  </div>
+                  <ul className="text-[11px] text-blue-900/80 space-y-0.5 list-disc pl-4">
+                    <li>Sent by email around 10:00 on that day, to the address above.</li>
+                    <li>Not sent — you get an alert instead — if the amount no longer matches the booking total (paid in part, price changed, cancelled).</li>
+                    <li>Unpaid the next day → one reminder with a fresh link. Still unpaid → alert here and in the operations Telegram group.</li>
+                  </ul>
+                  {email.trim() && isRelayEmail(email) && (
+                    <p className="text-[11px] text-rose-700">This is a Booking.com/Airbnb relay address — it needs the guest&apos;s own email.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {error && (
             <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
           )}
@@ -336,8 +519,26 @@ export default function PaymentLinkModal({
             disabled={loading}
             className="w-full py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition-colors"
           >
-            {loading ? 'Generating…' : 'Generate Payment Link'}
+            {loading
+              ? (when === 'schedule' ? 'Scheduling…' : 'Generating…')
+              : when === 'schedule'
+                ? `Schedule email for ${sendDate}`
+                : stay && wholeStay ? `Generate one link · ${kc(stayTotal)}` : 'Generate Payment Link'}
           </button>
+        </div>
+      )}
+
+      {step === 'scheduled' && (
+        <div className="px-6 py-5 space-y-4">
+          <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 space-y-1">
+            <p className="text-sm font-medium text-gray-900">{description}</p>
+            <p className="text-xl font-bold text-blue-700">{kc(stay && wholeStay ? stayTotal : parseFloat(amount) || 0)}</p>
+            <p className="text-xs text-gray-600">
+              Will be emailed to {email.trim()} on <span className="font-medium">{sendDate}</span>.
+              It shows under Scheduled payment links in the drawer, where you can cancel it.
+            </p>
+          </div>
+          <button onClick={onClose} className="w-full py-2 text-sm text-gray-500 hover:text-gray-700">Done</button>
         </div>
       )}
 

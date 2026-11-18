@@ -27,3 +27,4 @@ export * from './corporate';
 export * from './webFunnel';
 export * from './team';
 export * from './webPayments';
+export * from './scheduledPaymentLinks';

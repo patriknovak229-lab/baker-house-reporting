@@ -251,15 +251,14 @@ describe('parseGaReport', () => {
 describe('cron wiring', () => {
   // Each of these has failed silently in this repo before: a cron in vercel.json
   // that proxy.ts still 307s to /login never runs, and nothing errors.
-  it('exempts every scheduled cron path from the auth middleware, except the payments job', () => {
+  it('exempts every scheduled cron path from the auth middleware', () => {
     const root = join(__dirname, '..');
     const crons = (JSON.parse(readFileSync(join(root, 'vercel.json'), 'utf8')) as { crons: { path: string }[] }).crons;
     const proxy = readFileSync(join(root, 'proxy.ts'), 'utf8');
     const matcher = /matcher:\s*\['([^']+)'\]/.exec(proxy)?.[1] ?? '';
     for (const { path } of crons) {
       const exempt = matcher.includes(`|${path.slice(1)}|`) || matcher.includes(`|${path.slice(1)})`);
-      if (path === '/api/cron/send-scheduled-payments') expect(exempt, path).toBe(false);
-      else expect(exempt, path).toBe(true);
+      expect(exempt, path).toBe(true);
     }
     expect(crons.map((c) => c.path)).toContain('/api/cron/web-funnel-sync');
     expect(crons.map((c) => c.path)).toContain('/api/cron/ga-traffic-sync');

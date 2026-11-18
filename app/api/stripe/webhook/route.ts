@@ -7,7 +7,8 @@ import type {
   PaymentRefund,
 } from '@/types/additionalPayment';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
-import { recomputePaymentOverride } from '@/utils/paymentReconcile';
+import { recomputeForPayment } from '@/utils/paymentReconcile';
+import { reservationsOf } from '@/utils/paymentAllocations';
 import { readAllStripePayments, writeAllStripePayments } from '@/utils/stripePaymentsStore';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
@@ -228,11 +229,9 @@ export async function POST(req: NextRequest) {
 
     // Reconcile reservation paymentStatusOverride based on the new payment state.
     // Best-effort: if Beds24 lookup fails or the override was manually set, this is a no-op.
-    try {
-      await recomputePaymentOverride(record.reservationNumber);
-    } catch (err) {
-      console.error('[stripe/webhook] recomputePaymentOverride failed:', err);
-    }
+    // A combined (linked-stay) payment updates every booking it covers.
+    const settled = idx !== -1 ? payments[idx] : { reservationNumber: record.reservationNumber, amountCzk: record.amountCzk };
+    await recomputeForPayment(settled);
   }
 
   // Telegram notification
@@ -241,7 +240,9 @@ export async function POST(req: NextRequest) {
     `💳 <b>Payment received</b>`,
     `📝 ${record.description || '—'}`,
     `💰 ${amount}`,
-    record.reservationNumber ? `🏨 Reservation #${record.reservationNumber}` : '',
+    meta.reservationNumbers
+      ? `🏨 Reservations #${meta.reservationNumbers.split(',').join(' + #')} (linked stay)`
+      : record.reservationNumber ? `🏨 Reservation #${record.reservationNumber}` : '',
     record.guestEmail ? `📧 ${record.guestEmail}` : '',
     record.guestPhone ? `📞 ${record.guestPhone}` : '',
   ].filter(Boolean).join('\n');
@@ -316,14 +317,7 @@ async function handleChargeFeeSync(charge: Stripe.Charge): Promise<void> {
   await writeAllAdditionalPayments(payments);
 
   // Roll the new fee total up to reservation.paymentChargeAmount
-  const reservationNumber = payments[idx].reservationNumber;
-  if (reservationNumber) {
-    try {
-      await recomputePaymentOverride(reservationNumber);
-    } catch (err) {
-      console.error('[stripe/webhook] recomputePaymentOverride after fee sync failed:', err);
-    }
-  }
+  if (payments[idx].reservationNumber) await recomputeForPayment(payments[idx]);
   console.log(
     `[stripe/webhook] imported fee ${fee.toFixed(2)} Kč for session ${session.id} via ${charge.id}`,
   );
@@ -393,6 +387,10 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
       refundedAt,
       reason: prior?.reason ?? sr.reason ?? undefined,
       refundedBy: prior?.refundedBy,
+      // Booking tag on a combined payment's refund (ours, or from the refund's metadata).
+      ...((prior?.reservationNumber ?? sr.metadata?.reservationNumber)
+        ? { reservationNumber: prior?.reservationNumber ?? sr.metadata?.reservationNumber }
+        : {}),
       status: mapStripeRefundStatus(sr.status),
       failureReason: sr.failure_reason ?? undefined,
     };
@@ -423,13 +421,7 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
   await writeAllAdditionalPayments(payments);
 
   // Reconcile reservation paymentStatusOverride
-  if (payment.reservationNumber) {
-    try {
-      await recomputePaymentOverride(payment.reservationNumber);
-    } catch (err) {
-      console.error('[stripe/webhook] recomputePaymentOverride after refund sync failed:', err);
-    }
-  }
+  if (payment.reservationNumber) await recomputeForPayment(payment);
 
   // Operator notification — keep it tight
   const newlyAdded = merged.filter((r) => !existingByStripeId.has(r.id));
@@ -440,7 +432,7 @@ async function handleChargeRefundSync(charge: Stripe.Charge): Promise<void> {
       `📝 ${payment.description || '—'}`,
       `💰 ${sum.toLocaleString('cs-CZ')} Kč refunded`,
       `📊 Status: ${newStatus}`,
-      payment.reservationNumber ? `🏨 Reservation #${payment.reservationNumber}` : '',
+      payment.reservationNumber ? `🏨 Reservation #${reservationsOf(payment).join(' + #')}` : '',
     ].filter(Boolean).join('\n');
     await sendTelegram(lines);
   }

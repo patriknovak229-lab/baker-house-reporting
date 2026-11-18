@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { requireRole } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
+import { paymentsCovering, reservationsOf } from '@/utils/paymentAllocations';
 import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additionalPayment';
 import type { StripePaymentRecord } from '@/app/api/stripe/webhook/route';
 import { readAllStripePayments } from '@/utils/stripePaymentsStore';
@@ -57,7 +58,8 @@ export async function POST(req: NextRequest) {
 
   const allPayments = await readAllAdditionalPayments();
 
-  const linked = allPayments.filter((p) => p.reservationNumber === reservationNumber);
+  // Payments filed under this booking or covering it as part of a linked stay.
+  const linked = paymentsCovering(allPayments, reservationNumber);
 
   // ── Direct/Direct-Web fallback: import a Stripe payment as a paid
   // AdditionalPayment so the fee rolls up into reservation.paymentChargeAmount.
@@ -462,6 +464,9 @@ export async function POST(req: NextRequest) {
   // Always recompute override at the end, even if no AdditionalPayment changed
   // (covers the case where webhook updated AdditionalPayment but reconcile failed)
   const reconcile = await recomputePaymentOverride(reservationNumber);
+  // The other bookings of any combined payment checked here.
+  const others = new Set(linked.flatMap((p) => reservationsOf(p)).filter((rn) => rn && rn !== reservationNumber));
+  for (const rn of others) await recomputePaymentOverride(rn).catch((err) => console.error('[check-payment] recompute', rn, err));
 
   return NextResponse.json({
     ok: true,

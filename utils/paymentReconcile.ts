@@ -19,7 +19,9 @@
 
 import type { PaymentStatus } from '@/types/reservation';
 import { getAccessToken } from '@/utils/beds24Auth';
+import type { AdditionalPayment } from '@/types/additionalPayment';
 import { readAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
+import { netPaidOnBooking, reservationsOf } from '@/utils/paymentAllocations';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
@@ -93,18 +95,9 @@ export async function recomputePaymentOverride(
   // contributes 0; partially-refunded contributes the remainder. Also
   // include 'partially-refunded' and 'refunded' statuses (a refunded
   // payment was once paid — the refund is reflected in the subtraction).
-  const paidSum = allPayments
-    .filter((p) =>
-      p.reservationNumber === reservationNumber &&
-      (p.status === 'paid' || p.status === 'partially-refunded' || p.status === 'refunded'),
-    )
-    .reduce((sum, p) => {
-      const refundedSum = (p.refunds ?? [])
-        .filter((r) => r.status === 'succeeded' || r.status === 'pending')
-        .reduce((s, r) => s + r.amountCzk, 0);
-      const net = Math.max(0, (p.amountCzk ?? 0) - refundedSum);
-      return sum + net;
-    }, 0);
+  // A combined (linked-stay) payment counts only this booking's share —
+  // utils/paymentAllocations.
+  const paidSum = netPaidOnBooking(allPayments, reservationNumber);
 
   if (bookingPrice === null) {
     // Can't fetch price → can't decide. Leave override untouched.
@@ -137,4 +130,22 @@ export async function recomputePaymentOverride(
   await writeAllReservationOverrides(overrides);
 
   return { applied: true, status: newStatus, paidSum, bookingPrice };
+}
+
+/**
+ * Recompute every booking a payment covers (one for a normal link, each
+ * booking of a linked stay for a combined one). Errors are logged per booking
+ * so one failing Beds24 lookup doesn't skip the rest.
+ */
+export async function recomputeForPayment(
+  payment: Pick<AdditionalPayment, 'reservationNumber' | 'amountCzk' | 'allocations'>,
+): Promise<void> {
+  for (const rn of reservationsOf(payment)) {
+    if (!rn) continue;
+    try {
+      await recomputePaymentOverride(rn);
+    } catch (err) {
+      console.error(`[paymentReconcile] recompute failed for ${rn}:`, err);
+    }
+  }
 }

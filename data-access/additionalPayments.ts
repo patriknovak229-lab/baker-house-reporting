@@ -39,6 +39,7 @@ function payToRow(p: AdditionalPayment): AdditionalPaymentInsert {
     invoiceId: p.invoiceId ?? null,
     stripeFeeCzk: n(p.stripeFeeCzk),
     isMainPayment: p.isMainPayment ?? null,
+    allocations: p.allocations && p.allocations.length > 0 ? p.allocations : null,
   };
 }
 
@@ -52,6 +53,7 @@ function refundToRow(paymentId: string, r: PaymentRefund): PaymentRefundInsert {
     refundedBy: r.refundedBy ?? null,
     status: r.status,
     failureReason: r.failureReason ?? null,
+    reservationNumber: r.reservationNumber ?? null,
   };
 }
 
@@ -64,6 +66,7 @@ function refundFromRow(r: PaymentRefundRow): PaymentRefund {
     refundedBy: u(r.refundedBy),
     status: r.status,
     failureReason: u(r.failureReason),
+    ...(r.reservationNumber ? { reservationNumber: r.reservationNumber } : {}),
   };
 }
 
@@ -81,6 +84,7 @@ function payFromRow(row: AdditionalPaymentRow, refunds: PaymentRefund[]): Additi
     invoiceId: u(row.invoiceId),
     stripeFeeCzk: num(row.stripeFeeCzk),
     isMainPayment: u(row.isMainPayment),
+    ...(row.allocations && row.allocations.length > 0 ? { allocations: row.allocations } : {}),
     // Omit the key entirely when there are no refunds (matches the Redis shape
     // where unrefunded payments have no `refunds` property).
     ...(refunds.length > 0 ? { refunds } : {}),

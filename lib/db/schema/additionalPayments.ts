@@ -1,5 +1,5 @@
-import { pgTable, text, numeric, boolean, timestamp } from 'drizzle-orm/pg-core';
-import type { AdditionalPaymentStatus } from '../../../types/additionalPayment';
+import { pgTable, text, numeric, boolean, timestamp, jsonb } from 'drizzle-orm/pg-core';
+import type { AdditionalPaymentStatus, PaymentAllocation } from '../../../types/additionalPayment';
 
 /** Stripe additional payments — was Redis JSON array `baker:additional-payments`. */
 export const additionalPayments = pgTable('additional_payments', {
@@ -15,6 +15,8 @@ export const additionalPayments = pgTable('additional_payments', {
   invoiceId: text('invoice_id'), // → revenue_invoices.id
   stripeFeeCzk: numeric('stripe_fee_czk'),
   isMainPayment: boolean('is_main_payment'),
+  /** Per-booking split when one link covers a linked stay (utils/paymentAllocations). */
+  allocations: jsonb('allocations').$type<PaymentAllocation[]>(),
 });
 
 /** Refund events — was the embedded `AdditionalPayment.refunds[]`; own table (amounts get summed). */
@@ -27,6 +29,8 @@ export const paymentRefunds = pgTable('payment_refunds', {
   refundedBy: text('refunded_by'),
   status: text('status').$type<'pending' | 'succeeded' | 'failed' | 'canceled'>().notNull(),
   failureReason: text('failure_reason'),
+  /** Booking the refund is for on a combined payment (utils/paymentAllocations). */
+  reservationNumber: text('reservation_number'),
 });
 
 export type AdditionalPaymentRow = typeof additionalPayments.$inferSelect;
