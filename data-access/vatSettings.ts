@@ -8,7 +8,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { appSettings } from '@/lib/db/schema';
-import type { OtaTaxDocument, VatConfig, VatDecision, VatSettings } from '@/types/vat';
+import type { OtaTaxDocument, VatAcknowledgement, VatConfig, VatDecision, VatSettings } from '@/types/vat';
 import { DEFAULT_VAT_CONFIG } from '@/utils/vat/config';
 import { isValidIsoDate } from '@/utils/vat/czechCalendar';
 
@@ -16,7 +16,7 @@ const SETTING = 'vat-settings';
 const DECISIONS: readonly VatDecision[] = ['merge', 'separate', 'include', 'exclude'];
 
 export function defaultVatSettings(): VatSettings {
-  return { config: { ...DEFAULT_VAT_CONFIG }, otaDocuments: {}, decisions: {} };
+  return { config: { ...DEFAULT_VAT_CONFIG }, otaDocuments: {}, decisions: {}, acknowledged: {} };
 }
 
 /** Coerce anything stored / posted into a well-formed VatSettings. Throws on invalid values. */
@@ -62,7 +62,15 @@ export function sanitizeVatSettings(raw: unknown): VatSettings {
     if (DECISIONS.includes(value as VatDecision)) decisions[key] = value as VatDecision;
   }
 
-  return { config, otaDocuments, decisions, updatedAt: src.updatedAt, updatedBy: src.updatedBy };
+  const acknowledged: Record<string, VatAcknowledgement> = {};
+  for (const [key, value] of Object.entries(src.acknowledged ?? {})) {
+    const a = value as Partial<VatAcknowledgement> | null;
+    if (key.length <= 300 && a && typeof a.at === 'string' && typeof a.by === 'string') {
+      acknowledged[key] = { at: a.at, by: a.by.slice(0, 255) };
+    }
+  }
+
+  return { config, otaDocuments, decisions, acknowledged, updatedAt: src.updatedAt, updatedBy: src.updatedBy };
 }
 
 export async function readVatSettings(): Promise<VatSettings> {

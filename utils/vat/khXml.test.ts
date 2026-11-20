@@ -41,7 +41,7 @@ const cfg: VatConfig = {
 function sample(): VatMonthResult {
   return computeVatMonth({
     month: '2027-02', today: '2027-03-10',
-    settings: { config: cfg, otaDocuments: {}, decisions: {} },
+    settings: { config: cfg, otaDocuments: {}, decisions: {}, acknowledged: {} },
     fx: (cur) => (cur === 'EUR' ? { rateMilli: 24250, unit: 1, fixingDate: '2027-02-01' } : null),
     settlements: [
       { id: 'b1', name: 'Booking.com February 2027', source: 'booking', periodStart: '2027-02-01', periodEnd: '2027-02-28', grossHal: 10_000_000, commissionHal: 1_800_000, adjustmentsHal: null },
@@ -115,7 +115,7 @@ describe('vat/khXml', () => {
 function sampleInputForSimulation() {
   return {
     month: '2027-02', today: '2027-03-10',
-    settings: { config: { ...cfg, payerFrom: null }, otaDocuments: {}, decisions: {} },
+    settings: { config: { ...cfg, payerFrom: null }, otaDocuments: {}, decisions: {}, acknowledged: {} },
     fx: () => null, settlements: [], revenueInvoices: [], stripePayments: [], refunds: [], reservations: {}, supplierInvoices: [],
   };
 }

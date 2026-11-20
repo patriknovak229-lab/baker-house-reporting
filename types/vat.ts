@@ -54,12 +54,19 @@ export interface OtaTaxDocument {
 
 export type VatDecision = 'merge' | 'separate' | 'include' | 'exclude';
 
+export interface VatAcknowledgement {
+  at: string;
+  by: string;
+}
+
 export interface VatSettings {
   config: VatConfig;
   /** settlementGroupId → the OTA's own tax documents for that settlement. */
   otaDocuments: Record<string, OtaTaxDocument[]>;
   /** Flag decision key → the operator's choice (overrides the default). */
   decisions: Record<string, VatDecision>;
+  /** Flag ack key → who confirmed the flag is OK, and when. Hides it from the counts. */
+  acknowledged: Record<string, VatAcknowledgement>;
   updatedAt?: string;
   updatedBy?: string;
 }
@@ -215,6 +222,10 @@ export interface VatFlag {
   title: string;
   detail?: string;
   items?: VatFlagItem[];
+  /** Settings key for "operator confirmed this is OK" (warnings / info only). */
+  ackKey?: string;
+  /** Set when the operator confirmed this flag — it no longer counts. */
+  acknowledged?: VatAcknowledgement;
 }
 
 export interface VatTotals {

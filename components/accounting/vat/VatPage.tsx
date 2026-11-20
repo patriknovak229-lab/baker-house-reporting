@@ -30,6 +30,8 @@ const SEVERITY_STYLE = {
   info: { box: 'bg-slate-50 border-slate-200', dot: 'bg-slate-400', text: 'text-slate-700', label: 'Info' },
 } as const;
 
+const ACK_STYLE = { box: 'bg-white border-gray-200 opacity-70', dot: 'bg-green-500', text: 'text-gray-600', label: 'OK' } as const;
+
 const DECISION_LABEL: Record<VatDecision, string> = {
   merge: 'Count once', separate: 'Count both', include: 'Include', exclude: 'Exclude',
 };
@@ -65,7 +67,11 @@ const th = 'px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-w
 const td = 'px-2 py-1.5 text-sm text-gray-700 align-top';
 const tdNum = 'px-2 py-1.5 text-sm text-gray-900 text-right tabular-nums whitespace-nowrap align-top';
 
-function FlagList({ flags, canEdit, onDecide }: { flags: VatFlag[]; canEdit: boolean; onDecide: (key: string, d: VatDecision | null) => void }) {
+function FlagList({ flags, canEdit, onDecide, onAcknowledge }: {
+  flags: VatFlag[]; canEdit: boolean;
+  onDecide: (key: string, d: VatDecision | null) => void;
+  onAcknowledge: (key: string, ok: boolean) => void;
+}) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   if (flags.length === 0) {
     return <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">No flags — the month looks clean.</div>;
@@ -73,22 +79,34 @@ function FlagList({ flags, canEdit, onDecide }: { flags: VatFlag[]; canEdit: boo
   return (
     <div className="space-y-2">
       {flags.map((f) => {
-        const s = SEVERITY_STYLE[f.severity];
+        const ack = f.acknowledged;
+        const s = ack ? ACK_STYLE : SEVERITY_STYLE[f.severity];
         const key = `${f.code}|${f.severity}`;
         const items = f.items ?? [];
-        const expanded = open[key] ?? (f.severity === 'error' || items.some((i) => i.options));
+        const expanded = open[key] ?? (!ack && (f.severity === 'error' || items.some((i) => i.options)));
         return (
           <div key={key} className={`rounded-xl border px-4 py-3 ${s.box}`}>
-            <button className="w-full flex items-start gap-2.5 text-left" onClick={() => setOpen((o) => ({ ...o, [key]: !expanded }))}>
-              <span className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${s.dot}`} />
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${s.text}`}>
-                  {f.title}{items.length > 0 && <span className="font-normal opacity-70"> · {items.length}</span>}
-                </p>
-                {f.detail && <p className="text-xs text-gray-600 mt-0.5">{f.detail}</p>}
-              </div>
-              {items.length > 0 && <span className="text-xs text-gray-400">{expanded ? '▾' : '▸'}</span>}
-            </button>
+            <div className="flex items-start gap-2.5">
+              <button className="flex-1 min-w-0 flex items-start gap-2.5 text-left" onClick={() => setOpen((o) => ({ ...o, [key]: !expanded }))}>
+                <span className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${s.dot}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-medium ${s.text}`}>
+                    {ack && <span className="mr-1">✓</span>}
+                    {f.title}{items.length > 0 && <span className="font-normal opacity-70"> · {items.length}</span>}
+                  </p>
+                  {ack
+                    ? <p className="text-xs text-gray-500 mt-0.5">Confirmed OK by {ack.by} · {toCzechDate(ack.at.slice(0, 10))}</p>
+                    : f.detail && <p className="text-xs text-gray-600 mt-0.5">{f.detail}</p>}
+                </div>
+                {items.length > 0 && <span className="text-xs text-gray-400">{expanded ? '▾' : '▸'}</span>}
+              </button>
+              {f.ackKey && canEdit && (
+                <button onClick={() => onAcknowledge(f.ackKey!, !ack)}
+                  className={`flex-shrink-0 px-2 py-0.5 rounded-md border text-[11px] ${ack ? 'border-transparent text-gray-400 hover:text-gray-600 underline' : 'bg-white border-gray-300 text-gray-600 hover:border-green-500 hover:text-green-700'}`}>
+                  {ack ? 'Undo' : 'Mark as OK'}
+                </button>
+              )}
+            </div>
             {expanded && items.length > 0 && (
               <ul className="mt-2 ml-4.5 space-y-1">
                 {items.map((it, i) => (
@@ -166,7 +184,7 @@ export default function VatPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const patch = useCallback(async (body: { config?: Partial<VatConfig>; otaDocuments?: Record<string, OtaTaxDocument[] | null>; decisions?: Record<string, VatDecision | null> }) => {
+  const patch = useCallback(async (body: { config?: Partial<VatConfig>; otaDocuments?: Record<string, OtaTaxDocument[] | null>; decisions?: Record<string, VatDecision | null>; acknowledged?: Record<string, boolean | null> }) => {
     const res = await fetch('/api/vat/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -177,9 +195,14 @@ export default function VatPage() {
     patch({ decisions: { [key]: decision } }).catch((e) => setError(e instanceof Error ? e.message : 'Save failed'));
   }, [patch]);
 
+  const onAcknowledge = useCallback((key: string, ok: boolean) => {
+    patch({ acknowledged: { [key]: ok || null } }).catch((e) => setError(e instanceof Error ? e.message : 'Save failed'));
+  }, [patch]);
+
   const counts = useMemo(() => ({
-    error: result?.flags.filter((f) => f.severity === 'error').length ?? 0,
-    warning: result?.flags.filter((f) => f.severity === 'warning').length ?? 0,
+    error: result?.flags.filter((f) => f.severity === 'error' && !f.acknowledged).length ?? 0,
+    warning: result?.flags.filter((f) => f.severity === 'warning' && !f.acknowledged).length ?? 0,
+    confirmed: result?.flags.filter((f) => f.acknowledged).length ?? 0,
   }), [result]);
 
   const r = result;
@@ -242,9 +265,9 @@ export default function VatPage() {
           </div>
 
           {/* Flags */}
-          <Section title={`Checks · ${counts.error} error${counts.error === 1 ? '' : 's'}, ${counts.warning} warning${counts.warning === 1 ? '' : 's'}`}
-            subtitle="Errors must be fixed before filing. Items with buttons need a decision (admin).">
-            <FlagList flags={r.flags} canEdit={canEdit} onDecide={onDecide} />
+          <Section title={`Checks · ${counts.error} error${counts.error === 1 ? '' : 's'}, ${counts.warning} warning${counts.warning === 1 ? '' : 's'}${counts.confirmed ? `, ${counts.confirmed} confirmed OK` : ''}`}
+            subtitle="Errors must be fixed before filing. Warnings you have checked can be marked as OK (admin).">
+            <FlagList flags={r.flags} canEdit={canEdit} onDecide={onDecide} onAcknowledge={onAcknowledge} />
           </Section>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">

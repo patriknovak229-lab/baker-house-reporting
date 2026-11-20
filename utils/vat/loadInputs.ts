@@ -23,6 +23,7 @@ import {
   type RevenueBuild, type VatEngineInput, buildRevenue, computeThreshold, computeVatMonth, overviewMonth, thresholdFlags,
 } from './engine';
 import { loadFxLookup } from './cnb';
+import { applyAcknowledgements } from './acknowledge';
 
 const PRAGUE_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague', year: 'numeric', month: '2-digit', day: '2-digit' });
 
@@ -180,6 +181,7 @@ export function monthResult(data: VatData, month: string, today = pragueToday())
   for (const w of data.sourceWarnings) extra.push({ code: 'DATA_SOURCE', severity: 'warning', title: w });
   const order = { error: 0, warning: 1, info: 2 } as const;
   r.flags = [...extra, ...r.flags].sort((a, b) => order[a.severity] - order[b.severity]);
+  applyAcknowledgements(r.flags, data.settings.acknowledged);
   r.generatedAt = new Date().toISOString();
   return r;
 }

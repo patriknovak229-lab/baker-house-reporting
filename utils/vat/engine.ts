@@ -936,7 +936,7 @@ export function computeThreshold(rev: RevenueBuild, year: number): VatThreshold 
 export function thresholdFlags(t: VatThreshold, payerFrom: string | null): VatFlag[] {
   const flags: VatFlag[] = [];
   if (t.crossedImmediate && (!payerFrom || payerFrom > monthEnd(t.crossedImmediate))) {
-    flags.push({ code: 'THRESHOLD_IMMEDIATE', severity: 'error',
+    flags.push({ code: 'THRESHOLD_IMMEDIATE', severity: 'warning',
       title: `Turnover passed 2 536 500 Kč in ${t.crossedImmediate} — VAT payer from the next day`,
       detail: 'By law the company became a VAT payer the day after the turnover was exceeded, and had 10 working days to file the registration. Talk to the tax adviser and set the registration date in the VAT settings.' });
   } else if (t.crossedStandard && !payerFrom) {
@@ -951,8 +951,8 @@ export function overviewMonth(r: VatMonthResult): VatOverviewMonth {
   return {
     month: r.month, mode: r.mode, grossRevenueHal: r.totals.grossRevenueHal, outputVatHal: r.totals.outputVatHal,
     deductionHal: r.totals.deductionHal, payableHal: r.totals.payableHal,
-    errors: r.flags.filter((f) => f.severity === 'error').length,
-    warnings: r.flags.filter((f) => f.severity === 'warning').length,
+    errors: r.flags.filter((f) => f.severity === 'error' && !f.acknowledged).length,
+    warnings: r.flags.filter((f) => f.severity === 'warning' && !f.acknowledged).length,
     deadline: r.deadline,
   };
 }

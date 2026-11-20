@@ -16,6 +16,8 @@ interface SettingsPatch {
   otaDocuments?: Record<string, OtaTaxDocument[] | null>;
   /** decision key → decision; null resets to the engine default. */
   decisions?: Record<string, VatDecision | null>;
+  /** flag ack key → true confirms the flag is OK, null/false undoes it. */
+  acknowledged?: Record<string, boolean | null>;
 }
 
 // PATCH-style PUT: merges into the stored settings so two edits can't clobber each other.
@@ -41,10 +43,16 @@ export async function PUT(req: NextRequest) {
       if (decision === null) delete decisions[key];
       else decisions[key] = decision;
     }
+    const acknowledged = { ...current.acknowledged };
+    for (const [key, ok] of Object.entries(patch.acknowledged ?? {})) {
+      if (ok) acknowledged[key] = { at: new Date().toISOString(), by: guard.email };
+      else delete acknowledged[key];
+    }
     const merged = sanitizeVatSettings({
       config: { ...current.config, ...(patch.config ?? {}) },
       otaDocuments,
       decisions,
+      acknowledged,
     });
     return NextResponse.json(await writeVatSettings(merged, guard.email));
   } catch (err) {

@@ -25,7 +25,7 @@ function sup(p: Partial<InSupplierInvoice> & Pick<InSupplierInvoice, 'id' | 'sup
 }
 
 function settings(over: Partial<VatSettings> = {}): VatSettings {
-  return { config: { ...DEFAULT_VAT_CONFIG, payerFrom: '2027-01-01' }, otaDocuments: {}, decisions: {}, ...over };
+  return { config: { ...DEFAULT_VAT_CONFIG, payerFrom: '2027-01-01' }, otaDocuments: {}, decisions: {}, acknowledged: {}, ...over };
 }
 
 function input(over: Partial<VatEngineInput> = {}): VatEngineInput {
