@@ -5,7 +5,7 @@ import {
   splitTotals,
   revenueInvoiceId,
 } from "./invoiceUtils";
-import { formatCurrency } from "./formatters";
+import { formatCurrencyExact } from "./formatters";
 import type { Reservation, InvoiceData, InvoiceSplit } from "@/types/reservation";
 
 const res = {
@@ -66,9 +66,18 @@ describe("splitTotals", () => {
     expect(t.remaining).toBe(-3000);
   });
 
-  it("tolerates 1 Kč of rounding on an even split of an odd price", () => {
-    // 27001 split in two rounds to 13501 + 13500 = 27001, and 13501 + 13501 = 27002.
-    expect(splitTotals(27001, [split({ amountCzk: 13501 }), split({ id: "s2", seq: 2, amountCzk: 13501 })]).over).toBe(false);
+  it("absorbs floating-point error but not a real overbill", () => {
+    // 0.1 + 0.2 === 0.30000000000000004 — summing decimals drifts in binary.
+    const drift = splitTotals(0.3, [split({ amountCzk: 0.1 }), split({ id: "s2", seq: 2, amountCzk: 0.2 })]);
+    expect(drift.over).toBe(false);
+    // A whole crown over is now an error: it used to sit inside the tolerance.
+    expect(splitTotals(27000, [split({ amountCzk: 26000 }), split({ id: "s2", seq: 2, amountCzk: 1001 })]).over).toBe(true);
+  });
+
+  it("splits a price with haléře into parts that sum exactly", () => {
+    const t = splitTotals(3687.67, [split({ amountCzk: 1843.84 }), split({ id: "s2", seq: 2, amountCzk: 1843.83 })]);
+    expect(t.over).toBe(false);
+    expect(Math.abs(t.remaining)).toBeLessThan(0.005);
   });
 
   it("treats no splits as nothing allocated", () => {
@@ -82,14 +91,14 @@ describe("buildInvoiceHTML with a split's amount", () => {
 
   it("bills the split amount and never the booking price", () => {
     const html = render({ amountOverride: 9000 });
-    expect(html).toContain(formatCurrency(9000));
-    expect(html).not.toContain(formatCurrency(27000));
+    expect(html).toContain(formatCurrencyExact(9000));
+    expect(html).not.toContain(formatCurrencyExact(27000));
   });
 
   it("prices the nights from the split, not the booking", () => {
     const html = render({ amountOverride: 9000 });
-    expect(html).toContain(formatCurrency(600)); // 9000 / 15 nights
-    expect(html).not.toContain(formatCurrency(1800)); // 27000 / 15
+    expect(html).toContain(formatCurrencyExact(600)); // 9000 / 15 nights
+    expect(html).not.toContain(formatCurrencyExact(1800)); // 27000 / 15
   });
 
   it("reads as a standalone invoice — nothing marks it as part of a split", () => {
@@ -118,6 +127,6 @@ describe("buildInvoiceHTML with a split's amount", () => {
 
   it("leaves the whole-booking invoice untouched when no split is passed", () => {
     const html = buildInvoiceHTML(res, invoiceData, "INV-92538626", undefined, true);
-    expect(html).toContain(formatCurrency(27000));
+    expect(html).toContain(formatCurrencyExact(27000));
   });
 });

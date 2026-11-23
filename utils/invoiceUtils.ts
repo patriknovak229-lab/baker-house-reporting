@@ -1,6 +1,6 @@
 import QRCodeLib from "qrcode";
 import type { Reservation, InvoiceData, InvoiceModification, InvoiceSplit, PaymentStatus } from "@/types/reservation";
-import { formatDate, formatCurrency } from "./formatters";
+import { formatDate, formatCurrencyExact } from "./formatters";
 
 /**
  * A Czech/Slovak DIČ for a *company* is the country prefix plus its 8-digit
@@ -195,6 +195,77 @@ export function splitInvoiceNumber(reservationNumber: string, seq: number): stri
   return `${generateInvoiceNumber(reservationNumber)}-${seq}`;
 }
 
+/** Round to whole haléře — the smallest unit a Czech invoice can state. */
+export function roundHaler(amountCzk: number): number {
+  return Math.round(amountCzk * 100) / 100;
+}
+
+/**
+ * Divide `totalCzk` into one amount per entry in `weights`, in proportion to
+ * those weights, so that every amount is a whole number of haléře AND the
+ * amounts sum back to `totalCzk` EXACTLY.
+ *
+ * Used wherever one price becomes several figures on paper:
+ *   - line items for a stay split across date ranges (weights = nights each)
+ *   - "Split evenly" across N invoices (weights = all 1s)
+ *
+ * The exactness is the whole point. These numbers go to a guest's accounting
+ * team, and parts that don't add up to the stay are a discrepancy they chase.
+ * Proportional division almost never lands on whole haléře — 100.00 over three
+ * nights is 33.333… each — so a leftover haléř or two always has to be placed
+ * somewhere deliberately.
+ *
+ * Contract:
+ *   allocateCzk(100, [1, 1, 1])  → three amounts summing to exactly 100
+ *   allocateCzk(3687.67, [1, 1]) → two amounts summing to exactly 3687.67
+ *   allocateCzk(900, [2, 1])     → [600, 300]
+ *   allocateCzk(100, [])         → []
+ *   weights that are all zero    → divide evenly rather than returning zeros
+ */
+export function allocateCzk(totalCzk: number, weights: number[]): number[] {
+  if (weights.length === 0) return [];
+
+  // Work in whole haléře as integers. Doing this on the crown floats would
+  // reintroduce the drift the exact amounts exist to avoid.
+  const totalHaler = Math.round(totalCzk * 100);
+  const weightSum = weights.reduce((sum, w) => sum + (Number(w) || 0), 0);
+  // Nothing to divide in proportion to → share equally.
+  const effective = weightSum > 0 ? weights.map((w) => Number(w) || 0) : weights.map(() => 1);
+  const effectiveSum = weightSum > 0 ? weightSum : weights.length;
+
+  const exact = effective.map((w) => (totalHaler * w) / effectiveSum);
+  const amounts = exact.map(Math.floor);
+  // Flooring always undershoots, never by more than one haléř per part.
+  let leftover = totalHaler - amounts.reduce((sum, h) => sum + h, 0);
+
+  // Largest remainder: the parts that lost most to flooring get the spare
+  // haléře first. Each part then lands within one haléř of its fair share,
+  // rather than the last invoice quietly absorbing all of the correction —
+  // these go to different companies, and a visible gap invites questions.
+  const byRemainder = exact
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((a, b) => b.frac - a.frac);
+
+  for (const { index } of byRemainder) {
+    if (leftover <= 0) break;
+    amounts[index] += 1;
+    leftover -= 1;
+  }
+
+  return amounts.map((haler) => haler / 100);
+}
+
+/**
+ * Slack allowed when comparing split amounts against the booking price.
+ *
+ * Half a haléř — enough to absorb the binary floating-point error in summing
+ * decimal amounts (0.1 + 0.2 !== 0.3), and nothing more. It used to be a whole
+ * crown, because the parts were seeded as whole crowns and an odd price could
+ * not be divided evenly. Now that a part can carry haléře the parts add up
+ * exactly, so a crown of slack would just be a crown of silent overbilling.
+ */
+export const SPLIT_ROUNDING_TOLERANCE_CZK = 0.005;
+
 /**
  * How much of the booking the splits account for. `over` is the guard the
  * drawer alerts on — the parts of a bill may add up to less than the booking
@@ -207,8 +278,7 @@ export function splitTotals(bookingPrice: number, splits: InvoiceSplit[] | undef
 } {
   const allocated = (splits ?? []).reduce((sum, s) => sum + (Number(s.amountCzk) || 0), 0);
   const remaining = bookingPrice - allocated;
-  // 1 Kč tolerance: an even split of an odd price rounds, and that is not an error.
-  return { allocated, remaining, over: remaining < -1 };
+  return { allocated, remaining, over: remaining < -SPLIT_ROUNDING_TOLERANCE_CZK };
 }
 
 /**
@@ -286,7 +356,7 @@ function buildStatusBandHTML(res: Reservation, ownTotal: boolean): string {
   // variant or one part of a split.
   const outstandingLine =
     status === "Partially Paid" && !ownTotal && typeof res.amountPaid === "number"
-      ? `Uhrazeno / Paid: ${formatCurrency(res.amountPaid)} · Zbývá uhradit / Outstanding: ${formatCurrency(Math.max(0, res.price - res.amountPaid))}`
+      ? `Uhrazeno / Paid: ${formatCurrencyExact(res.amountPaid)} · Zbývá uhradit / Outstanding: ${formatCurrencyExact(Math.max(0, res.price - res.amountPaid))}`
       : "";
 
   const cancelled = res.isCancelled === true || (res.status ?? "").toLowerCase().startsWith("cancel");
@@ -387,18 +457,11 @@ export function buildInvoiceHTML(
     const totalNights = modification.numberOfNights > 0 ? modification.numberOfNights : 1;
     const avgPPN = invoiceTotal / totalNights; // price per night (average)
 
-    // Distribute the invoice total across ranges; last range absorbs rounding
+    // Distribute the invoice total across the ranges, in proportion to their
+    // nights, to the haléř — the line items must sum to the Total row.
     const ranges = modification.dateRanges;
     const nightsList = ranges.map(r => nightsBetween(r.from, r.to));
-    const linePrices: number[] = [];
-    for (let i = 0; i < ranges.length; i++) {
-      if (i === ranges.length - 1) {
-        const sumSoFar = linePrices.reduce((s, v) => s + v, 0);
-        linePrices.push(invoiceTotal - sumSoFar);
-      } else {
-        linePrices.push(Math.round(nightsList[i] * avgPPN));
-      }
-    }
+    const linePrices = allocateCzk(invoiceTotal, nightsList);
 
     lineItemsHtml = ranges.map((r, i) => {
       const isLast = i === ranges.length - 1;
@@ -406,8 +469,8 @@ export function buildInvoiceHTML(
       return `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:6px;margin-bottom:${isLast ? "0" : "4px"};${borderStyle};font-size:13px">
       <span>${lineDescription}<br/><span style="font-size:11px;color:${MID_BROWN}">${guestNameLine} · ${shortDate(r.from)} – ${shortDate(r.to)}</span></span>
       <span style="text-align:right;min-width:40px">${nightsList[i]}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(avgPPN)}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(linePrices[i])}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrencyExact(avgPPN)}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrencyExact(linePrices[i])}</span>
     </div>`;
     }).join("");
   } else {
@@ -415,8 +478,8 @@ export function buildInvoiceHTML(
     lineItemsHtml = `<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding-bottom:8px;border-bottom:1px solid #EFEAE4;font-size:13px">
       <span>${lineDescription}<br/><span style="font-size:11px;color:${MID_BROWN}">${guestNameLine}</span></span>
       <span style="text-align:right;min-width:40px">${res.numberOfNights}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(unitPrice)}</span>
-      <span style="text-align:right;min-width:80px">${formatCurrency(invoiceTotal)}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrencyExact(unitPrice)}</span>
+      <span style="text-align:right;min-width:80px">${formatCurrencyExact(invoiceTotal)}</span>
     </div>`;
   }
 
@@ -499,7 +562,7 @@ export function buildInvoiceHTML(
     ${lineItemsHtml}
     <div style="display:flex;justify-content:space-between;margin-top:8px;font-weight:bold;font-size:15px">
       <span>Celkem / Total</span>
-      <span style="color:${GOLD}">${formatCurrency(invoiceTotal)}</span>
+      <span style="color:${GOLD}">${formatCurrencyExact(invoiceTotal)}</span>
     </div>
   </div>
 ${statusBandHtml}
@@ -516,7 +579,7 @@ ${statusBandHtml}
       <div style="font-size:11px;color:${MID_BROWN};margin-bottom:2px">SWIFT: ${PAYMENT_SWIFT}</div>
       <div style="font-size:11px;color:${MID_BROWN};margin-bottom:2px">VS: ${payment.info.vs}</div>
       <div style="font-size:12px;color:${DARK_BROWN};font-weight:bold;margin-top:4px">
-        Částka / Amount: ${Math.round(payment.info.amountCZK).toLocaleString("cs-CZ")} Kč
+        Částka / Amount: ${formatCurrencyExact(payment.info.amountCZK)}
       </div>
     </div>
   </div>` : ""}

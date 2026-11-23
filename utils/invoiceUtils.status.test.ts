@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildInvoiceHTML, resolvePaymentChannel, effectivePaymentStatus } from "./invoiceUtils";
-import { formatCurrency } from "./formatters";
+import { formatCurrencyExact } from "./formatters";
 import type { Reservation, InvoiceData } from "@/types/reservation";
 
 // Minimal shapes — buildInvoiceHTML only reads these fields.
@@ -43,7 +43,7 @@ describe("invoice status band — payment status", () => {
   it("shows the outstanding balance on a partially paid booking", () => {
     const out = html({ paymentStatus: "Partially Paid", amountPaid: 10000 });
     expect(out).toContain("ČÁSTEČNĚ UHRAZENO / PARTIALLY PAID");
-    expect(out).toContain(`Outstanding: ${formatCurrency(15000)}`);
+    expect(out).toContain(`Outstanding: ${formatCurrencyExact(15000)}`);
   });
 });
 

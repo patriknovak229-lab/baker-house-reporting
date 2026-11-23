@@ -17,7 +17,7 @@ import { WebPaymentRefund } from "@/components/transactions/WebPaymentRefund";
 import { GuestCancellation } from "@/components/transactions/GuestCancellation";
 import { isDirectChannel } from "@/utils/guestCancellation";
 import { PayLaterPanel } from "@/components/transactions/PayLaterPanel";
-import { formatDate, formatCurrency } from "@/utils/formatters";
+import { formatDate, formatCurrency, formatCurrencyExact } from "@/utils/formatters";
 import { pragueToday } from "@/utils/periodUtils";
 import { isFullyRefunded, platformRefundShare, shortenedRevenueSplit } from "@/utils/reservationRevenue";
 import { planShortening, describeShortening, nightsLabel } from "@/utils/stayShorten";
@@ -49,6 +49,9 @@ import {
   generateInvoiceNumber,
   splitInvoiceNumber,
   splitTotals,
+  allocateCzk,
+  roundHaler,
+  SPLIT_ROUNDING_TOLERANCE_CZK,
   revenueInvoiceId,
   deriveIcoFromDic,
   missingInvoiceFields,
@@ -3156,6 +3159,7 @@ function SplitInvoiceEditor({
               <input
                 type="number"
                 min={0}
+                step="0.01"
                 value={Number.isFinite(sp.amountCzk) ? sp.amountCzk : ""}
                 onChange={(e) => onPatch(sp.id, { amountCzk: Number(e.target.value) })}
                 className={`${inputCls} ${Number(sp.amountCzk) > 0 ? "" : "border-amber-300"}`}
@@ -3195,7 +3199,7 @@ function SplitInvoiceEditor({
         className={`rounded-md px-2.5 py-2 text-xs border ${
           over
             ? "bg-red-50 border-red-200 text-red-700"
-            : Math.abs(remaining) <= 1
+            : Math.abs(remaining) <= SPLIT_ROUNDING_TOLERANCE_CZK
               ? "bg-green-50 border-green-200 text-green-800"
               : "bg-amber-50 border-amber-200 text-amber-800"
         }`}
@@ -3203,18 +3207,18 @@ function SplitInvoiceEditor({
         <div className="flex justify-between font-medium">
           <span>Invoiced</span>
           <span>
-            {formatCurrency(allocated)} of {formatCurrency(reservation.price)}
+            {formatCurrencyExact(allocated)} of {formatCurrencyExact(reservation.price)}
           </span>
         </div>
         {over ? (
           <p className="mt-1">
-            <span className="font-semibold">Over the booking price by {formatCurrency(-remaining)}.</span>{" "}
+            <span className="font-semibold">Over the booking price by {formatCurrencyExact(-remaining)}.</span>{" "}
             The parts of a bill can add up to less than the stay, never more — reduce an amount before generating.
           </p>
-        ) : Math.abs(remaining) <= 1 ? (
+        ) : Math.abs(remaining) <= SPLIT_ROUNDING_TOLERANCE_CZK ? (
           <p className="mt-1">The whole booking is accounted for.</p>
         ) : (
-          <p className="mt-1">{formatCurrency(remaining)} of the booking will not be invoiced.</p>
+          <p className="mt-1">{formatCurrencyExact(remaining)} of the booking will not be invoiced.</p>
         )}
       </div>
 
@@ -4376,14 +4380,12 @@ export default function ReservationDrawer({
     const next = !splitMode;
     setSplitMode(next);
     if (next && splitForms.length === 0) {
-      // Whole crowns on both parts: a booking price carrying haléře would
-      // otherwise seed a field with 13760.599999999999. The ≤1 Kč tolerance in
-      // splitTotals absorbs the rounding.
-      const price = Math.round(reservation?.price ?? 0);
-      const half = Math.round(price / 2);
+      // Even halves to the haléř, summing to the booking price exactly — a
+      // price of 13760.6 must not seed a field with 13760.599999999999.
+      const [first, second] = allocateCzk(reservation?.price ?? 0, [1, 1]);
       setSplitForms([
-        blankSplit(1, half, invoiceForm.billingEmail),
-        blankSplit(2, price - half),
+        blankSplit(1, first, invoiceForm.billingEmail),
+        blankSplit(2, second),
       ]);
     }
   }
@@ -4391,7 +4393,7 @@ export default function ReservationDrawer({
   function addSplit() {
     setSplitForms((list) => {
       const { remaining } = splitTotals(reservation?.price ?? 0, list);
-      return [...list, blankSplit(nextSplitSeq(list), Math.max(0, Math.round(remaining)))];
+      return [...list, blankSplit(nextSplitSeq(list), Math.max(0, roundHaler(remaining)))];
     });
   }
 
@@ -4409,16 +4411,12 @@ export default function ReservationDrawer({
     );
   }
 
-  /** Distribute the booking price evenly; the last part absorbs the rounding. */
+  /** Distribute the booking price evenly, to the haléř, summing to it exactly. */
   function splitEvenly() {
     setSplitForms((list) => {
       if (list.length === 0) return list;
-      const price = Math.round(reservation?.price ?? 0);
-      const each = Math.round(price / list.length);
-      return list.map((sp, i) => ({
-        ...sp,
-        amountCzk: i === list.length - 1 ? price - each * (list.length - 1) : each,
-      }));
+      const amounts = allocateCzk(reservation?.price ?? 0, list.map(() => 1));
+      return list.map((sp, i) => ({ ...sp, amountCzk: amounts[i] }));
     });
   }
 
@@ -6690,7 +6688,7 @@ export default function ReservationDrawer({
                       <div>
                         <span className="text-gray-400">Amount</span>
                         <p className="font-semibold text-indigo-700">
-                          {Math.round(activeSplitQR.amountCZK).toLocaleString("cs-CZ")} Kč
+                          {formatCurrencyExact(activeSplitQR.amountCZK)}
                         </p>
                       </div>
                     </div>
@@ -6725,7 +6723,7 @@ export default function ReservationDrawer({
                               </span>
                             </span>
                             <span className="shrink-0 text-sm font-semibold text-gray-800">
-                              {formatCurrency(sp.amountCzk)}
+                              {formatCurrencyExact(sp.amountCzk)}
                             </span>
                           </button>
 
@@ -6787,12 +6785,12 @@ export default function ReservationDrawer({
                               : "text-gray-600 bg-gray-50 border-gray-200"
                           }`}
                         >
-                          {formatCurrency(allocated)} invoiced of {formatCurrency(reservation.price)}
+                          {formatCurrencyExact(allocated)} invoiced of {formatCurrencyExact(reservation.price)}
                           {over
-                            ? ` — ${formatCurrency(-remaining)} over the booking price.`
-                            : Math.abs(remaining) <= 1
+                            ? ` — ${formatCurrencyExact(-remaining)} over the booking price.`
+                            : Math.abs(remaining) <= SPLIT_ROUNDING_TOLERANCE_CZK
                               ? "."
-                              : ` — ${formatCurrency(remaining)} not invoiced.`}
+                              : ` — ${formatCurrencyExact(remaining)} not invoiced.`}
                         </p>
                       );
                     })()}
@@ -7043,7 +7041,7 @@ export default function ReservationDrawer({
                         step="0.01"
                         value={modifyAmount}
                         onChange={(e) => setModifyAmount(e.target.value)}
-                        placeholder={`${formatCurrency(reservation.price)} · booking price`}
+                        placeholder={`${formatCurrencyExact(reservation.price)} · booking price`}
                         className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-400"
                       />
                       <p className="text-[10px] text-gray-400 mt-1">
@@ -7122,7 +7120,7 @@ export default function ReservationDrawer({
                             </p>
                             {mod.amount != null && (
                               <p className="text-[11px] font-medium text-amber-700 leading-snug">
-                                Amount: {formatCurrency(mod.amount)} <span className="font-normal text-gray-400">(booking price {formatCurrency(reservation.price)})</span>
+                                Amount: {formatCurrencyExact(mod.amount)} <span className="font-normal text-gray-400">(booking price {formatCurrencyExact(reservation.price)})</span>
                               </p>
                             )}
                             {/* Sent record — persisted on the modification itself. */}
