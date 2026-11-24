@@ -146,10 +146,18 @@ export interface ReallocInput {
    */
   guestKey?: string;
   /**
-   * 0..366, higher = arriving sooner. Only breaks ties between plans that move
-   * the same number of guests: prefer moving the guest who arrives later.
+   * Extra cost of moving this row, ≥ 0 and far below one move — it only breaks
+   * ties between plans that move the same number of guests. 0..366 comes from
+   * how soon the guest arrives (prefer moving later arrivals); a row caught in
+   * a double-booking may add `clashMoveBias` on top.
    */
   urgency?: number;
+  /**
+   * The row shares its unit with another booking on the same nights (from
+   * tonight on) — a live double-booking, typically a guest's date change that
+   * Beds24 left in the old unit. Only set when at least one side can move.
+   */
+  clash?: boolean;
 }
 
 export interface ReallocMove {
@@ -197,6 +205,15 @@ export interface ReallocPlan {
   staySplits?: number;
 }
 
+export interface PlanOptions {
+  /**
+   * Rows the search starts from (by `reservationNumber`). Default: every
+   * unplaced row. Anything that transitively overlaps them joins the search;
+   * unplaced rows outside that reach are left alone.
+   */
+  seedIds?: ReadonlySet<string>;
+}
+
 /** Two half-open night intervals overlap when each starts before the other ends. */
 function overlaps(a: ReallocInput, b: ReallocInput): boolean {
   return a.checkIn < b.checkOut && b.checkIn < a.checkOut;
@@ -216,9 +233,14 @@ function overlaps(a: ReallocInput, b: ReallocInput): boolean {
 export function planReallocation(
   group: AllocationGroup,
   reservations: ReallocInput[],
+  opts: PlanOptions = {},
 ): ReallocPlan {
   const units = group.units.map((u) => u.room);
-  const seeds = reservations.filter((r) => r.currentRoom === null);
+  // Where the search starts. By default every unplaced booking; a caller fixing
+  // something else (a double-booking) names the rows that need a home instead.
+  const seeds = opts.seedIds
+    ? reservations.filter((r) => opts.seedIds!.has(r.reservationNumber))
+    : reservations.filter((r) => r.currentRoom === null);
 
   const empty: ReallocPlan = {
     feasible: false,
@@ -451,6 +473,10 @@ export interface ResRef {
   stayLink?: StayLink | null;
   /** Bookings the operator marked "not the same guest". */
   stayLinkRejected?: string[];
+  /** Beds24 `bookingTime` — when the booking was created (ISO). */
+  bookingTimestamp?: string;
+  /** Beds24 `modifiedTime` — last change of any kind, e.g. a guest's date change (ISO). */
+  modifiedAt?: string;
 }
 
 function nameOf(r: ResRef): string {
@@ -489,6 +515,39 @@ function daysBetween(from: string, to: string): number {
  */
 export { guestKeyOf };
 
+/** One side of a live double-booking, as `clashMoveBias` sees it. */
+export interface ClashSide {
+  reservationNumber: string;
+  /** First night (YYYY-MM-DD). */
+  arrival: string;
+  /** Beds24 `bookingTime` — when the guest booked (ISO), if known. */
+  bookedAt?: string;
+  /**
+   * Beds24 `modifiedTime` (ISO), if known. A guest's date change bumps it — but
+   * so does ANY edit (a message, a price tweak, a Beds24-side re-save sweep).
+   */
+  modifiedAt?: string;
+}
+
+/**
+ * Two or more bookings hold the same unit on the same nights; one has to leave.
+ * Returns the extra cost of moving `side` (0 = the one we'd rather move),
+ * compared with the `others` it clashes with.
+ *
+ * Operator's hierarchy (Patrik, 2026-11-24 — "within a room type it shouldn't
+ * matter which; keep suggestions predictable"):
+ *   1. fewest moves                     — one move costs 1 000 000;
+ *   2. the later arrival moves first    — `urgency`, whole units per day sooner;
+ *   3. the booking that changed moves first — HERE, a fraction of one day, so it
+ *      only ever decides between bookings arriving the same day.
+ * "Changed" = the most recent Beds24 `modifiedTime` in the clash. That moves on
+ * any edit, not just a date change — fine for a last-place tie-break.
+ */
+export function clashMoveBias(side: ClashSide, others: ClashSide[]): number {
+  const changedLast = others.every((o) => (side.modifiedAt ?? "") > (o.modifiedAt ?? ""));
+  return changedLast ? 0 : 0.01;
+}
+
 /**
  * Turn a reservation list into solver rows for one allocation group. Shared by
  * the unallocated resolver and the stay-request quote so both apply the SAME
@@ -523,6 +582,10 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
     movable: boolean;
     guestKey?: string;
     label: string;
+    bookedAt?: string;
+    modifiedAt?: string;
+    nameKey?: string; // plain name identity — spots the same guest booked twice
+    clashWith: Row[]; // other rows holding this unit on the same nights
   }
   const seeds: ReallocInput[] = [];
   const rows: Row[] = [];
@@ -578,6 +641,10 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
         movable: !inHouse && !r.isBlackout && !inconsistent,
         guestKey: stayKeys.get(r.reservationNumber),
         label: nameOf(r),
+        bookedAt: r.bookingTimestamp,
+        modifiedAt: r.modifiedAt,
+        nameKey: r.isBlackout ? undefined : guestKeyOf(r),
+        clashWith: [],
       });
     }
   }
@@ -588,6 +655,8 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
     const last = chain[chain.length - 1];
     // If any part of the stay can't move (first booking already in-house), none can.
     const movable = chain.every((c) => c.movable);
+    const clash = chain.some((c) => c.clashWith.length > 0);
+    const bias = clash ? Math.max(...chain.map(clashBiasOf)) : 0;
     return {
       reservationNumber: chain.length === 1 ? first.id : `stay:${chain.map((c) => c.id).join("+")}`,
       checkIn: first.from,
@@ -597,7 +666,8 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
       messaged: movable && first.arrival <= tomorrow,
       label: first.label,
       guestKey: first.guestKey,
-      urgency: movable ? Math.max(0, 366 - daysBetween(today, first.arrival)) : 0,
+      urgency: movable ? Math.max(0, 366 - daysBetween(today, first.arrival)) + bias : 0,
+      ...(clash ? { clash: true } : {}),
       ...(chain.length > 1
         ? { members: chain.map((c) => ({ reservationNumber: c.id, checkIn: c.start, checkOut: c.to })) }
         : {}),
@@ -609,6 +679,42 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
     const list = byUnit.get(row.unit);
     if (list) list.push(row);
     else byUnit.set(row.unit, [row]);
+  }
+
+  // ── Live double-bookings ──
+  // Two rows in one unit on the same nights, from tonight on. Typically a guest
+  // changed dates on the OTA: the channel only checks that the ROOM TYPE has
+  // space, so Beds24 accepts it but keeps the guest in their old unit, which is
+  // taken on the new nights (BH-95599985, Nov 2026). That is always fixable by
+  // reassignment within the type, so both sides are flagged and may seed a plan.
+  // Not flagged — no reshuffle can fix them, the red banner keeps them:
+  //   - both sides pinned (staying guests, blackouts);
+  //   - the SAME guest twice in one unit: a duplicate booking to cancel, not move.
+  for (const list of byUnit.values()) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (!(a.from < b.to && b.from < a.to)) continue;
+        if (!a.movable && !b.movable) continue;
+        if (a.nameKey && a.nameKey === b.nameKey) continue;
+        a.clashWith.push(b);
+        b.clashWith.push(a);
+      }
+    }
+  }
+  const sideOf = (row: Row): ClashSide => ({
+    reservationNumber: row.id,
+    arrival: row.arrival,
+    bookedAt: row.bookedAt,
+    modifiedAt: row.modifiedAt,
+  });
+  function clashBiasOf(row: Row): number {
+    if (row.clashWith.length === 0) return 0;
+    const bias = clashMoveBias(sideOf(row), row.clashWith.map(sideOf));
+    // Keep the policy a tie-break: never negative (pruning needs non-negative
+    // steps) and never near one move (fewest moves must always win).
+    return Number.isFinite(bias) ? Math.min(Math.max(bias, 0), 100_000) : 0;
   }
 
   const inputs: ReallocInput[] = [];
@@ -638,12 +744,12 @@ export function buildGroupInputs(all: ResRef[], group: AllocationGroup, today: s
  * can't avoid the split — re-messaging a guest who hasn't arrived beats asking
  * one to change rooms mid-stay.
  */
-export function solveTwoTier(group: AllocationGroup, inputs: ReallocInput[]): ReallocPlan {
-  const silent = planReallocation(group, inputs.map((i) => (i.messaged ? { ...i, movable: false } : i)));
+export function solveTwoTier(group: AllocationGroup, inputs: ReallocInput[], opts: PlanOptions = {}): ReallocPlan {
+  const silent = planReallocation(group, inputs.map((i) => (i.messaged ? { ...i, movable: false } : i)), opts);
   if (silent.feasible && !silent.staySplits) return silent;
   if (!inputs.some((i) => i.messaged && i.movable)) return silent; // escalating would search the same space
 
-  const escalated = planReallocation(group, inputs);
+  const escalated = planReallocation(group, inputs, opts);
   if (!escalated.feasible) return silent.feasible ? silent : escalated;
   if (silent.feasible && (silent.staySplits ?? 0) <= (escalated.staySplits ?? 0)) return silent;
   return { ...escalated, escalated: escalated.moves.some((m) => m.needsGuestNotice) };
@@ -660,7 +766,14 @@ export function solveTwoTier(group: AllocationGroup, inputs: ReallocInput[]): Re
  * solver should never trip it; if it does, the planner has a bug and the
  * operator gets "handle manually" instead of a wrong suggestion.
  */
-export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocPlan, today: string): string | null {
+export function verifyPlan(
+  all: ResRef[],
+  group: AllocationGroup,
+  plan: ReallocPlan,
+  today: string,
+  /** Bookings the plan exists to un-double-book — they must end up alone. */
+  mustBeClear: readonly string[] = [],
+): string | null {
   const units = new Set(group.units.map((u) => u.room));
   const stayKeys = sameStayKeys(all);
   const destination = new Map<string, string>();
@@ -677,6 +790,7 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
     from: string;
     to: string;
     key?: string;
+    nameKey?: string;
   }
   const occ: Occ[] = [];
   for (const r of all) {
@@ -687,7 +801,7 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
         occ.push({
           id: leg.reservationNumber, name: nameOf(r), unit, origUnit: null, arrival: r.checkInDate,
           start: r.checkInDate, from: r.checkInDate > today ? r.checkInDate : today, to: r.checkOutDate,
-          key: stayKeys.get(r.reservationNumber),
+          key: stayKeys.get(r.reservationNumber), nameKey: guestKeyOf(r),
         });
       }
     }
@@ -701,7 +815,7 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
       occ.push({
         id, name: nameOf(r), unit, origUnit: s.room, arrival: r.checkInDate,
         start: s.from, from: s.from > today ? s.from : today, to: s.to,
-        key: stayKeys.get(r.reservationNumber),
+        key: stayKeys.get(r.reservationNumber), nameKey: r.isBlackout ? undefined : guestKeyOf(r),
       });
     }
   }
@@ -716,6 +830,17 @@ export function verifyPlan(all: ResRef[], group: AllocationGroup, plan: ReallocP
         if (a.from < b.to && b.from < a.to) {
           return `${a.name} would be double-booked with ${b.name} in ${a.unit}.`;
         }
+      }
+    }
+  }
+
+  // Rule 3 — a plan fixing a double-booking must actually leave those bookings
+  // alone in their unit (whether they moved or the other side did).
+  for (const id of mustBeClear) {
+    for (const a of occ.filter((o) => o.id === id)) {
+      for (const b of occ) {
+        if (b.id === a.id || b.unit !== a.unit || (a.nameKey && a.nameKey === b.nameKey)) continue;
+        if (a.from < b.to && b.from < a.to) return `${a.name} would still share ${a.unit} with ${b.name}.`;
       }
     }
   }
@@ -777,6 +902,71 @@ export function planForUnallocated(
     };
   }
   return { group, plan };
+}
+
+/**
+ * A booking sharing its unit with another on the same nights — most often a
+ * guest's OTA date change that Beds24 left in the old unit. The channel only
+ * accepts a date change when the ROOM TYPE has space, so within Urban/Deluxe
+ * this is always a room-assignment problem, not an overbooking: plan the
+ * fewest moves that give everyone involved a unit of their own.
+ *
+ * Seeds the search with THIS clash only (the target and whatever overlaps it in
+ * its unit), so an unrelated problem elsewhere in the group can't make this
+ * plan fail. Returns `{ error }` when there is nothing live to fix here: no
+ * overlap from tonight on, a unit outside the shuffle groups, both sides
+ * pinned, or the same guest booked twice (cancel one rather than move it).
+ */
+export function planForClash(
+  all: ResRef[],
+  targetReservationNumber: string,
+  today: string,
+): { group: AllocationGroup; plan: ReallocPlan; clashWith: string[] } | { error: string } {
+  const target = all.find((r) => r.reservationNumber === targetReservationNumber);
+  if (!target || target.isCancelled) return { error: "Reservation not found" };
+
+  const isTarget = (id: string) => id === targetReservationNumber || id.startsWith(`${targetReservationNumber}#`);
+  for (const span of occupancySpans(target)) {
+    const group = groupForRoom(span.room);
+    if (!group) continue;
+    const inputs = buildGroupInputs(all, group, today);
+
+    // The target's row(s) in this group that are caught in a live clash…
+    const mine = inputs.filter(
+      (i) => i.clash && (isTarget(i.reservationNumber) || (i.members ?? []).some((m) => isTarget(m.reservationNumber))),
+    );
+    if (mine.length === 0) continue;
+    // …and the rows they clash with: same unit, overlapping nights.
+    const partners = inputs.filter(
+      (i) =>
+        i.clash &&
+        !mine.includes(i) &&
+        mine.some((m) => m.currentRoom === i.currentRoom && m.checkIn < i.checkOut && i.checkIn < m.checkOut),
+    );
+    const seeds = [...mine, ...partners];
+    const plan = solveTwoTier(group, inputs, { seedIds: new Set(seeds.map((i) => i.reservationNumber)) });
+    const clashWith = partners.flatMap((i) => (i.members ?? [i]).map((m) => m.reservationNumber));
+    if (!plan.feasible) return { group, plan, clashWith };
+
+    const bookingIds = seeds.flatMap((i) => (i.members ?? [i]).map((m) => m.reservationNumber));
+    const violation = verifyPlan(all, group, plan, today, bookingIds);
+    if (violation) {
+      console.error("[roomAllocation] safety check rejected a clash plan", { targetReservationNumber, violation, plan });
+      return {
+        group,
+        clashWith,
+        plan: {
+          feasible: false,
+          placements: [],
+          moves: [],
+          assignment: {},
+          reason: `Safety check stopped this suggestion: ${violation} Handle it manually in Beds24 — and please report it, it means the planner has a bug.`,
+        },
+      };
+    }
+    return { group, plan, clashWith };
+  }
+  return { error: "No live double-booking to fix" };
 }
 
 // ─── Execute-time validation ───────────────────────────────────────────────────

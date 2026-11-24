@@ -43,7 +43,7 @@ import { normalizeForSearch, phoneDigits } from "@/utils/stringUtils";
 import { isRateTypeInScope, effectiveRateType } from "@/utils/rateType";
 import { computeTurnoverClashes } from "@/utils/turnoverClash";
 import { apartmentRoom } from "@/utils/reservationApartments";
-import { planForUnallocated } from "@/utils/roomAllocation";
+import { planForClash, planForUnallocated } from "@/utils/roomAllocation";
 import { confirmedLinks, stayChainIndex, staySuggestions } from "@/utils/stayChains";
 import { reservationsOf } from "@/utils/paymentAllocations";
 import type { ScheduledPaymentLink } from "@/types/scheduledPaymentLink";
@@ -1062,13 +1062,59 @@ export default function TransactionsPage() {
     return map;
   }, [unallocatedReservations, reservations]);
 
+  /**
+   * Double-bookings the resolver can fix: two live bookings in one Urban/Deluxe
+   * unit on the same nights. Typically a guest changed dates on the OTA — the
+   * channel only checks the ROOM TYPE has space, and Beds24 keeps them in their
+   * old unit, which is taken on the new nights (BH-95599985). It's a room
+   * assignment problem, so it joins the "Room assignment needed" panel with a
+   * suggested fix. One row per clash, titled by the booking changed most
+   * recently (usually the one whose dates moved). Clashes nobody can fix by a
+   * reshuffle (both guests staying, same guest booked twice) stay on the red
+   * banner only.
+   */
+  const clashRows = useMemo(() => {
+    const today = pragueToday();
+    const candidates = reservations
+      .filter((r) => !r.isCancelled && !r.isBlackout && (r.overlapWith?.length ?? 0) > 0)
+      .sort((a, b) => (b.modifiedAt ?? "").localeCompare(a.modifiedAt ?? ""));
+    const seen = new Set<string>();
+    const rows: { r: Reservation; result: Extract<ReturnType<typeof planForClash>, { plan: unknown }> }[] = [];
+    for (const r of candidates) {
+      if (seen.has(r.reservationNumber)) continue;
+      const result = planForClash(reservations, r.reservationNumber, today);
+      if ("error" in result) continue;
+      seen.add(r.reservationNumber);
+      for (const id of result.clashWith) seen.add(id.split("#")[0]);
+      rows.push({ r, result });
+    }
+    return rows;
+  }, [reservations]);
+
+  /** Every row of the "Room assignment needed" panel, with its plan. */
+  const assignmentRows = useMemo(
+    () => [
+      ...unallocatedReservations.map((r) => ({ r, kind: "unallocated" as const, clashWith: [] as string[] })),
+      ...clashRows.map(({ r, result }) => ({ r, kind: "clash" as const, clashWith: result.clashWith })),
+    ],
+    [unallocatedReservations, clashRows],
+  );
+  const assignmentPlans = useMemo(() => {
+    const map: Record<string, ReturnType<typeof planForUnallocated>> = { ...unallocatedPlans };
+    for (const { r, result } of clashRows) map[r.reservationNumber] = result;
+    return map;
+  }, [unallocatedPlans, clashRows]);
+
   /** Booking# currently being applied to Beds24, + per-booking error text. */
   const [resolveBusy, setResolveBusy] = useState<string | null>(null);
   const [resolveError, setResolveError] = useState<Record<string, string>>({});
 
   const executeReallocation = useCallback(
     async (targetResNum: string) => {
-      const result = unallocatedPlans[targetResNum];
+      const result = assignmentPlans[targetResNum];
+      const why = clashRows.some((c) => c.r.reservationNumber === targetResNum)
+        ? "to fix a double-booking"
+        : "to fit an arriving guest";
       if (!result || "error" in result || !result.plan.feasible) return;
       const { plan } = result;
       const moves = [
@@ -1114,7 +1160,7 @@ export default function TransactionsPage() {
             const issue: Issue = {
               id: `${stamp}-${m.reservationNumber}`,
               category: "problem",
-              text: `🔀 Room reassigned${whichApartment} ${m.from} → ${m.to}${nights} to fit an arriving guest${notice}`,
+              text: `🔀 Room reassigned${whichApartment} ${m.from} → ${m.to}${nights} ${why}${notice}`,
               actionableDate: todayIso,
               resolved: false,
               createdAt: new Date().toISOString(),
@@ -1147,7 +1193,7 @@ export default function TransactionsPage() {
         setResolveBusy(null);
       }
     },
-    [unallocatedPlans, fetchReservations, fetchRoomMoves, reservations],
+    [assignmentPlans, clashRows, fetchReservations, fetchRoomMoves, reservations],
   );
 
   /**
@@ -1749,9 +1795,10 @@ export default function TransactionsPage() {
                   Same-room conflict detected ({pairList.length} {pairList.length === 1 ? 'pair' : 'pairs'})
                 </p>
                 <p className="text-[12px] text-red-700 mt-0.5">
-                  Two or more reservations occupy the same room on overlapping dates — one of them is almost
-                  certainly a cancellation that didn&apos;t reach the cache. Verify on Beds24 and click Refresh
-                  if needed.
+                  Two or more reservations occupy the same room on overlapping dates — either a guest changed
+                  dates on the OTA and Beds24 kept them in a unit that&apos;s now taken, or a cancellation
+                  didn&apos;t reach the cache (verify on Beds24 and click Refresh). Within 1KK Urban / 1KK Deluxe
+                  the <span className="font-semibold">Room assignment needed</span> panel suggests the fix.
                 </p>
                 <ul className="mt-2 space-y-0.5 text-[12px] font-mono">
                   {pairList.map((p) => (
@@ -1844,7 +1891,7 @@ export default function TransactionsPage() {
         || upcomingEarlyCheckins.length > 0
         || upcomingLateCheckouts.length > 0
         || turnoverClashes.length > 0
-        || unallocatedReservations.length > 0
+        || assignmentRows.length > 0
         || activeBlackouts.length > 0
         || activeRestrictions.length > 0
         || roomMoves.length > 0
@@ -1961,13 +2008,13 @@ export default function TransactionsPage() {
                 </svg>
               </button>
             )}
-            {unallocatedReservations.length > 0 && (
+            {assignmentRows.length > 0 && (
               <button
                 onClick={() => setUnallocatedPanelOpen((o) => !o)}
                 className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-sm font-medium hover:bg-amber-100 transition-colors"
               >
                 <span className="flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-[10px] font-bold shrink-0">⚠</span>
-                {unallocatedReservations.length} room {unallocatedReservations.length === 1 ? "assignment" : "assignments"} needed
+                {assignmentRows.length} room {assignmentRows.length === 1 ? "assignment" : "assignments"} needed
                 <span className="text-amber-600 font-normal">· assign in Beds24</span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${unallocatedPanelOpen ? "rotate-180" : ""}`}
@@ -2744,19 +2791,19 @@ export default function TransactionsPage() {
             </div>
           )}
 
-          {unallocatedReservations.length > 0 && unallocatedPanelOpen && (
+          {assignmentRows.length > 0 && unallocatedPanelOpen && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 overflow-hidden">
               <div className="px-4 py-2 bg-amber-100/60 border-b border-amber-300 flex items-center gap-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-amber-900">
                   Room assignment needed
                 </span>
                 <span className="text-[11px] text-amber-700">
-                  Beds24 couldn&apos;t auto-allocate · review the suggested move, then approve — or open to handle manually
+                  Beds24 couldn&apos;t auto-allocate, or left a booking in a unit that&apos;s taken · review the suggested move, then approve — or open to handle manually
                 </span>
               </div>
               <div className="divide-y divide-amber-200">
-                {unallocatedReservations.map((r) => {
-                  const result = unallocatedPlans[r.reservationNumber];
+                {assignmentRows.map(({ r, kind, clashWith }) => {
+                  const result = assignmentPlans[r.reservationNumber];
                   const busy = resolveBusy === r.reservationNumber;
                   const err = resolveError[r.reservationNumber];
                   const canDo = Boolean(role && canMutate(role, "transactions"));
@@ -2776,6 +2823,20 @@ export default function TransactionsPage() {
                             {r.checkInDate} → {r.checkOutDate} · {r.numberOfNights}n · {r.channel} ·{" "}
                             <span className="font-mono">{r.reservationNumber}</span>
                           </p>
+                          {/* Allocated, but its unit is taken on some of its nights — most
+                              often a guest's OTA date change Beds24 left in the old unit. */}
+                          {kind === "clash" && (
+                            <p className="text-xs font-medium text-rose-700 mt-0.5">
+                              ⚠ Double-booked in {r.room} with{" "}
+                              {clashWith
+                                .map((id) => {
+                                  const o = reservations.find((x) => x.reservationNumber === id.split("#")[0]);
+                                  return o ? `${o.firstName} ${o.lastName} (${o.checkInDate} → ${o.checkOutDate})` : id;
+                                })
+                                .join(", ")}
+                              <span className="font-normal text-rose-600"> · e.g. dates changed on the OTA, Beds24 kept the old unit</span>
+                            </p>
+                          )}
                         </div>
                         <button
                           onClick={() => { setSelectedReservation(r); setUnallocatedPanelOpen(false); }}
@@ -2805,6 +2866,7 @@ export default function TransactionsPage() {
                                   return leg ? `Assign their ${leg.room} apartment to ${p.room}` : `Assign to ${p.room}`;
                                 })
                                 .join(", ")}
+                              {result.plan.placements.length === 0 && "Fix the double-booking — everyone keeps a unit of their own"}
                               {result.plan.moves.length === 0 && " — no other moves needed"}
                             </p>
                             {placedApartments.length > 0 && (

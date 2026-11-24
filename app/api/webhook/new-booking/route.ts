@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { rejectBadWebhookSecret } from "@/utils/webhookSecret";
+import { clashesInRoom, dateChangeMessage, detectDateChange, type BookingLite } from "@/utils/dateChangeAlert";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
@@ -73,6 +74,10 @@ const NEW_BOOKING_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 // Redis key TTL — once notified, suppress all further webhook calls for this ID
 const NOTIFIED_TTL_SECONDS = 2 * 60 * 60; // 2 hours
 
+const BOOKINGS_CACHE_KEY = "baker:beds24-bookings-cache";
+// One date-change alert per booking + new dates, however often Beds24 re-fires.
+const DATE_CHANGE_TTL_SECONDS = 7 * 24 * 60 * 60;
+
 const ROOM_MAP: Record<string, string> = {
   // Deluxe physical rooms
   "656437": "K.201",
@@ -90,6 +95,44 @@ const ROOM_MAP: Record<string, string> = {
   // Urban virtual sellable for the 1KK Urban triple
   "679714": "K.102 / K.103 / K.106",
 };
+
+/**
+ * "Date change detected": compare the webhook's dates with the cached copy,
+ * which still holds the OLD ones (the dashboard refreshes the cache only when
+ * someone opens it). On a change, Telegram says whether the guest's unit is
+ * now double-booked — the OTA only checks the room TYPE has space, so Beds24
+ * can keep them in a unit that's taken on the new nights. Best-effort: any
+ * failure is logged, never fails the webhook.
+ *
+ * Blind spot: if someone opened the dashboard between the change and this
+ * webhook, the cache already has the new dates and no alert fires — the
+ * Room assignment panel still catches any resulting double-booking.
+ */
+async function alertOnDateChange(booking: Beds24Booking): Promise<"alerted" | "duplicate" | null> {
+  try {
+    const redis = getRedis();
+    if (!redis || booking.id === undefined) return null;
+    const cache = (await redis.get<Record<string, BookingLite>>(BOOKINGS_CACHE_KEY)) ?? {};
+    const change = detectDateChange(booking, cache[String(booking.id)]);
+    if (!change) return null;
+
+    const fresh = await redis.set(`datechange:${booking.id}:${change.to.arrival}:${change.to.departure}`, "1", {
+      nx: true,
+      ex: DATE_CHANGE_TTL_SECONDS,
+    });
+    if (!fresh) return "duplicate";
+
+    const roomName = ROOM_MAP[String(booking.roomId ?? "")] ?? `room ${String(booking.roomId ?? "?")}`;
+    // A virtual room is shared by every booking of its type — "K.102 / K.103 / K.106".
+    const unassigned = roomName.includes("/");
+    const clashes = unassigned ? [] : clashesInRoom(booking, cache);
+    await sendTelegram(dateChangeMessage(booking, change, roomName, clashes, unassigned));
+    return "alerted";
+  } catch (err) {
+    console.error("[webhook] date-change alert failed", err);
+    return null;
+  }
+}
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const denied = rejectBadWebhookSecret(req, "webhook/new-booking");
@@ -121,12 +164,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, skipped: "sub-booking (price=0)" });
   }
 
-  // Skip modifications to existing bookings.
+  // Modifications to existing bookings: no "new booking" message, but a date
+  // change gets its own alert (see utils/dateChangeAlert).
   // A true new booking has bookingTime ≈ now (within 30 min window).
   if (booking?.bookingTime) {
     const age = Date.now() - new Date(booking.bookingTime).getTime();
     if (age > NEW_BOOKING_WINDOW_MS) {
-      return NextResponse.json({ ok: true, skipped: "existing booking update" });
+      const dateChange = booking ? await alertOnDateChange(booking) : null;
+      return NextResponse.json({ ok: true, skipped: "existing booking update", ...(dateChange ? { dateChange } : {}) });
     }
   }
 

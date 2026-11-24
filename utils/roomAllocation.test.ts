@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   planReallocation,
   planForUnallocated,
+  planForClash,
   findMoveCreatedConflict,
   buildGroupInputs,
   verifyPlan,
@@ -610,5 +611,127 @@ describe("operator stay links override names (utils/stayChains)", () => {
     expect(out.plan.moves.map((m) => [m.reservationNumber, m.to])).toEqual([["J2", "K.203"]]);
     expect(out.plan.placements[0].room).toBe("K.202");
     expect(verifyPlan(apart, DELUXE_G, out.plan, "2026-10-06")).toBeNull();
+  });
+});
+
+describe("planForClash — a booking left in a unit that's taken (OTA date change)", () => {
+  const TODAY = "2026-11-24";
+  const R = (rn: string, room: string, ci: string, co: string, name: string, booked: string, mod: string, extra: Partial<ResRef> = {}): ResRef => {
+    const [firstName, ...rest] = name.split(" ");
+    return { reservationNumber: rn, room, checkInDate: ci, checkOutDate: co, firstName, lastName: rest.join(" "), bookingTimestamp: booked, modifiedAt: mod, ...extra };
+  };
+  // BH-95599985 (Silvia Ekres) moved her dates to Dec 12→14 on Booking.com;
+  // Beds24 kept her in K.102, where Andreja already held Dec 13→15. K.103 and
+  // K.106 each had room — one move fixes it. As cached the morning of the fix.
+  const SILVIA: ResRef[] = [
+    R("BH-96160738", "K.102", "2026-12-03", "2026-12-09", "Wouter van Maurik", "2026-11-13T21:15:40Z", "2026-11-13T21:28:56Z"),
+    R("BH-95599985", "K.102", "2026-12-12", "2026-12-14", "Silvia Ekres", "2026-11-02T16:08:46Z", "2026-11-24T06:40:00Z"),
+    R("BH-96563820", "K.102", "2026-12-13", "2026-12-15", "Andreja Belec Vrhovec", "2026-11-22T10:28:49Z", "2026-11-22T10:28:53Z"),
+    R("BH-95314759", "K.102", "2026-12-17", "2026-12-19", "Tereza Jetmarová", "2026-10-27T15:17:48Z", "2026-10-27T15:17:49Z"),
+    R("BH-95886299", "K.103", "2026-12-08", "2026-12-10", "Er Lin", "2026-11-08T23:45:39Z", "2026-11-13T21:28:56Z"),
+    R("BH-96604147", "K.103", "2026-12-11", "2026-12-13", "János Dodó", "2026-11-23T08:49:42Z", "2026-11-23T08:49:46Z"),
+    R("BH-95788868", "K.103", "2026-12-16", "2026-12-18", "Natalia Janglova", "2026-11-06T13:20:32Z", "2026-11-06T13:20:37Z"),
+    R("BH-95858291", "K.103", "2026-12-04", "2026-12-07", "Monika Pawlik", "2026-11-08T10:12:19Z", "2026-11-24T05:48:22Z", { isCancelled: true }),
+    R("BH-95652646", "K.106", "2026-12-04", "2026-12-06", "Pavel Hnilica", "2026-11-03T17:35:08Z", "2026-11-03T17:35:13Z"),
+    R("BH-95877031", "K.106", "2026-12-06", "2026-12-12", "Pranjali Kirloskar Deshmukh", "2026-11-08T18:41:22Z", "2026-11-08T18:41:26Z"),
+    R("BH-95605898", "K.106", "2026-12-18", "2026-12-20", "Sofia Skladanová", "2026-11-02T18:47:35Z", "2026-11-02T18:47:38Z"),
+  ];
+
+  it("prompts a one-move fix that leaves both guests in units of their own", () => {
+    for (const target of ["BH-95599985", "BH-96563820"]) {
+      const out = planForClash(SILVIA, target, TODAY);
+      if ("error" in out) throw new Error(out.error);
+      expect(out.plan.feasible).toBe(true);
+      expect(out.plan.moves).toHaveLength(1);
+      const [m] = out.plan.moves;
+      expect(["BH-95599985", "BH-96563820"]).toContain(m.reservationNumber);
+      expect(m.from).toBe("K.102");
+      expect(["K.103", "K.106"]).toContain(m.to);
+      expect(out.clashWith).toEqual([target === "BH-95599985" ? "BH-96563820" : "BH-95599985"]);
+      // …and the independent check agrees both sides are now alone.
+      expect(verifyPlan(SILVIA, URBAN, out.plan, TODAY, ["BH-95599985", "BH-96563820"])).toBeNull();
+    }
+  });
+
+  it("has nothing to fix for a booking that isn't double-booked", () => {
+    expect(planForClash(SILVIA, "BH-96160738", TODAY)).toEqual({ error: "No live double-booking to fix" });
+  });
+
+  it("leaves clashes no reshuffle can fix to the red banner", () => {
+    // Both guests already staying, or the same guest booked twice: nothing to suggest.
+    const bothStaying = [R("A", "K.102", "2026-11-22", "2026-11-26", "Anna Staying", "", ""), R("B", "K.102", "2026-11-23", "2026-11-27", "Bob Staying", "", "")];
+    expect("error" in planForClash(bothStaying, "A", TODAY)).toBe(true);
+    const duplicate = [R("A", "K.102", "2026-12-12", "2026-12-14", "Silvia Ekres", "", ""), R("B", "K.102", "2026-12-12", "2026-12-14", "EKRES silvia", "", "")];
+    expect("error" in planForClash(duplicate, "A", TODAY)).toBe(true);
+  });
+
+  it("ignores an overlap that is entirely in the past", () => {
+    const past = [R("A", "K.102", "2026-11-10", "2026-11-14", "Anna Past", "", ""), R("B", "K.102", "2026-11-12", "2026-11-16", "Bob Past", "", "")];
+    expect(planForClash(past, "A", TODAY)).toEqual({ error: "No live double-booking to fix" });
+  });
+
+  it("is not derailed by an unrelated, unplaceable booking in the same type", () => {
+    // Urban is sold out Jan 5→7 (three guests + an unplaced fourth): that
+    // booking can't be placed — but the December clash still gets its fix,
+    // and the January plan is unchanged by the December clash.
+    const jan = [
+      R("J1", "K.102", "2027-01-05", "2027-01-07", "Jan One", "", ""),
+      R("J2", "K.103", "2027-01-05", "2027-01-07", "Jan Two", "", ""),
+      R("J3", "K.106", "2027-01-05", "2027-01-07", "Jan Three", "", ""),
+      R("J4", "1KK Urban Studios", "2027-01-05", "2027-01-07", "Jan Four", "", "", { isUnallocatedVR: true }),
+    ];
+    const all = [...SILVIA, ...jan];
+    const clash = planForClash(all, "BH-95599985", TODAY);
+    if ("error" in clash) throw new Error(clash.error);
+    expect(clash.plan.feasible).toBe(true);
+    const unplaced = planForUnallocated(all, "J4", TODAY);
+    if ("error" in unplaced) throw new Error(unplaced.error);
+    expect(unplaced.plan.feasible).toBe(false);
+    expect(unplaced.plan.reason).toMatch(/No conflict-free arrangement/);
+  });
+});
+
+describe("planForClash — which side moves (operator's hierarchy)", () => {
+  // 1. fewest moves · 2. later arrival moves first · 3. the changed booking moves first
+  const TODAY = "2026-11-24";
+  const R = (rn: string, room: string, ci: string, co: string, mod: string, extra: Partial<ResRef> = {}): ResRef => ({
+    reservationNumber: rn, room, checkInDate: ci, checkOutDate: co, firstName: rn, lastName: "Guest", modifiedAt: mod, ...extra,
+  });
+  const movedIds = (all: ResRef[], target: string) => {
+    const out = planForClash(all, target, TODAY);
+    if ("error" in out) throw new Error(out.error);
+    expect(out.plan.feasible).toBe(true);
+    return out.plan.moves.map((m) => `${m.reservationNumber}→${m.to}`);
+  };
+
+  it("2: the later arrival moves — Silvia's case suggests moving Andreja", () => {
+    const all = [
+      R("SILVIA", "K.102", "2026-12-12", "2026-12-14", "2026-11-24T06:40:00Z"),
+      R("ANDREJA", "K.102", "2026-12-13", "2026-12-15", "2026-11-22T10:28:53Z"),
+      R("K106", "K.106", "2026-12-06", "2026-12-12", "2026-11-08T00:00:00Z"),
+      R("K103", "K.103", "2026-12-11", "2026-12-13", "2026-11-23T00:00:00Z"),
+    ];
+    expect(movedIds(all, "SILVIA")).toEqual([expect.stringMatching(/^ANDREJA→K\.10[36]$/)]);
+  });
+
+  it("1: fewest moves beats arrival — moving the earlier guest wins when it saves a move", () => {
+    // Andreja (later) has nowhere to go without a second move; Silvia fits K.103 alone.
+    const all = [
+      R("SILVIA", "K.102", "2026-12-12", "2026-12-14", "2026-11-24T06:40:00Z"),
+      R("ANDREJA", "K.102", "2026-12-13", "2026-12-15", "2026-11-22T10:28:53Z"),
+      R("X", "K.103", "2026-12-14", "2026-12-16", "2026-11-01T00:00:00Z"),
+      R("OV", "K.106", "2026-12-10", "2026-12-20", "2026-11-01T00:00:00Z", { isBlackout: true }),
+    ];
+    expect(movedIds(all, "SILVIA")).toEqual(["SILVIA→K.103"]);
+  });
+
+  it("3: between guests arriving the same day, the booking that changed moves", () => {
+    for (const [changed, other] of [["A", "B"], ["B", "A"]]) {
+      const all = [
+        R(changed, "K.202", "2026-12-12", "2026-12-14", "2026-11-24T07:00:00Z"),
+        R(other, "K.202", "2026-12-12", "2026-12-15", "2026-11-10T07:00:00Z"),
+      ];
+      expect(movedIds(all, changed)).toEqual([`${changed}→K.203`]);
+    }
   });
 });

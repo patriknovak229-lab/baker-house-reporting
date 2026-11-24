@@ -16,6 +16,7 @@ import { describe, it, expect } from "vitest";
 import {
   planReallocation,
   planForUnallocated,
+  planForClash,
   verifyPlan,
   guestKeyOf,
   ALLOCATION_GROUPS,
@@ -184,5 +185,75 @@ describe("planForUnallocated never breaks the hard rules", () => {
     }
     expect(feasible).toBeGreaterThan(500);
     expect(extensionsMoved).toBeGreaterThan(50); // the extension path is genuinely exercised
+  });
+});
+
+describe("planForClash fixes OTA date-change double-bookings without breaking a rule", () => {
+  it("holds on 1500 random months with a guest's date change", () => {
+    const r = prng(4242);
+    const NAMES = [["Piotr", "Marczewski"], ["Anna", "Nováková"], ["Jens", "Berndt"], ["Gina", "Cufi"], ["Silvia", "Ekres"], ["Marco", "Rossi"], ["Lea", "Moreau"], ["Tom", "Hardy"]];
+    let changes = 0;
+    let fixed = 0;
+    for (let t = 0; t < 1500; t++) {
+      const g = GROUPS[r.int(0, GROUPS.length - 1)];
+      const units = g.units.map((u) => u.room);
+      const today = day(r.int(3, 8));
+      const all: ResRef[] = [];
+      let n = 0;
+      for (const u of units) {
+        let d = r.int(1, 3);
+        while (d < 26) {
+          const len = r.int(1, 5);
+          const [fn, ln] = NAMES[r.int(0, NAMES.length - 1)];
+          if (r.next() < 0.75) {
+            all.push({ reservationNumber: `BH-${++n}`, room: u, checkInDate: day(d), checkOutDate: day(d + len), firstName: fn, lastName: ln, ...(r.next() < 0.05 ? { isBlackout: true } : {}) });
+          }
+          d += len + r.int(0, 2);
+        }
+      }
+      // A guest arriving after today changes dates. Their unit keeps them; the
+      // OTA only allowed it because the ROOM TYPE has a free unit every night.
+      const candidates = all.filter((b) => !b.isBlackout && b.checkInDate > today);
+      if (candidates.length === 0) continue;
+      const mover = candidates[r.int(0, candidates.length - 1)];
+      const nights = r.int(1, 4);
+      const start = r.int(Number(today.slice(8)) + 1, 24);
+      const moved: ResRef = { ...mover, checkInDate: day(start), checkOutDate: day(start + nights) };
+      const others = all.filter((b) => b !== mover);
+      const typeHasSpace = Array.from({ length: nights }, (_, k) => day(start + k)).every(
+        (night) => others.filter((b) => b.checkInDate <= night && night < b.checkOutDate).length < units.length,
+      );
+      if (!typeHasSpace) continue;
+      const clashesInUnit = others.some((b) => b.room === moved.room && b.checkInDate < moved.checkOutDate && moved.checkInDate < b.checkOutDate);
+      if (!clashesInUnit) continue;
+      const month = [...others, moved];
+      changes++;
+
+      const out = planForClash(month, moved.reservationNumber, today);
+      if ("error" in out) continue; // e.g. clashed only with a blackout / the same guest
+      expect(out.plan.reason ?? "", `case ${t}`).not.toMatch(/^Safety check/);
+      if (!out.plan.feasible) continue;
+      fixed++;
+      const involved = [moved.reservationNumber, ...out.clashWith];
+      expect(verifyPlan(month, g, out.plan, today, involved), `case ${t}`).toBeNull();
+
+      const byId = new Map(month.map((x) => [x.reservationNumber, x]));
+      for (const m of out.plan.moves) {
+        expect(byId.get(m.reservationNumber)!.checkInDate > today, `case ${t}: moved a staying guest`).toBe(true);
+      }
+      // Re-derive the end state independently: the date-changed guest and their
+      // clash partners each end up alone in their unit on every live night.
+      const unitAfter = (b: ResRef) => out.plan.moves.find((m) => m.reservationNumber === b.reservationNumber)?.to ?? b.room;
+      for (const id of involved) {
+        const a = byId.get(id)!;
+        for (const b of month) {
+          if (b === a || b.isCancelled || unitAfter(b) !== unitAfter(a) || guestKeyOf(b) === guestKeyOf(a)) continue;
+          const from = (x: ResRef) => (x.checkInDate > today ? x.checkInDate : today);
+          expect(from(a) < b.checkOutDate && from(b) < a.checkOutDate, `case ${t}: ${id} still shares ${unitAfter(a)} with ${b.reservationNumber}`).toBe(false);
+        }
+      }
+    }
+    expect(changes).toBeGreaterThan(300);
+    expect(fixed).toBeGreaterThan(200); // the fix path is genuinely exercised
   });
 });
