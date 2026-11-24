@@ -24,30 +24,37 @@ export const RUN_GRACE_MINUTES = 15;
 export const CATCH_UP_HOUR_UTC = 12;
 export const CATCH_UP_BACKUP_HOUR_UTC = 14;
 
-/** Parse a daily "M H * * *" expression. Null for anything else. */
-export function parseDailySchedule(expr: string | undefined): { hour: number; minute: number } | null {
-  const m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec((expr ?? '').trim());
+export interface CronSchedule {
+  hour: number;
+  minute: number;
+  /** 0–6 (Sunday = 0) for a weekly "M H * * D" schedule; null for daily. */
+  weekday: number | null;
+}
+
+/** Parse a daily "M H * * *" or weekly "M H * * D" expression. Null for anything else. */
+export function parseSchedule(expr: string | undefined): CronSchedule | null {
+  const m = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-7])$/.exec((expr ?? '').trim());
   if (!m) return null;
   const minute = Number(m[1]);
   const hour = Number(m[2]);
   if (minute > 59 || hour > 23) return null;
-  return { hour, minute };
+  return { hour, minute, weekday: m[3] === '*' ? null : Number(m[3]) % 7 };
 }
 
 /**
  * Start of the most recent scheduled window that has fully closed (window +
- * grace) by `now`. Today's if it's over, otherwise yesterday's.
+ * grace) by `now`: for a daily job today's or yesterday's, for a weekly one the
+ * latest matching weekday.
  */
-export function latestClosedWindowStart(
-  schedule: { hour: number; minute: number },
-  now: Date,
-): Date {
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), schedule.hour, schedule.minute),
-  );
-  const closesAt = start.getTime() + (HOBBY_WINDOW_MINUTES + RUN_GRACE_MINUTES) * 60_000;
-  if (closesAt > now.getTime()) start.setUTCDate(start.getUTCDate() - 1);
-  return start;
+export function latestClosedWindowStart(schedule: CronSchedule, now: Date): Date {
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), schedule.hour, schedule.minute);
+  for (let back = 0; ; back++) {
+    const start = new Date(today);
+    start.setUTCDate(start.getUTCDate() - back);
+    if (schedule.weekday !== null && start.getUTCDay() !== schedule.weekday) continue;
+    const closesAt = start.getTime() + (HOBBY_WINDOW_MINUTES + RUN_GRACE_MINUTES) * 60_000;
+    if (closesAt <= now.getTime()) return start;
+  }
 }
 
 export type CatchUpAction =
@@ -59,6 +66,10 @@ export type CatchUpAction =
   | 'rerun-missed'
   /** Invoked but didn't complete, and the policy allows a retry → re-run. */
   | 'rerun-failed'
+  /** Completed, but its upstream source had gaps (`summary.degraded`) → re-run
+   *  quietly: the gap often fills within hours, and the job itself announces a
+   *  gap that persists, so the catch-up never reports it. */
+  | 'rerun-degraded'
   /** Invoked but didn't complete, and a blind retry could duplicate side effects. */
   | 'needs-human';
 
@@ -79,6 +90,12 @@ function phaseOf(hb: CronHeartbeat): string {
   return typeof p === 'string' ? p : 'completed'; // legacy writes had no phase
 }
 
+/** The run completed but some upstream data was missing (see CronHeartbeat.summary). */
+export function isDegraded(hb: CronHeartbeat | null | undefined): boolean {
+  const d = hb?.summary?.degraded;
+  return Array.isArray(d) && d.length > 0;
+}
+
 /**
  * Which jobs need re-running right now, and why. Jobs with policy 'never' (the
  * catch-up itself) are left out: they're the watchdog's to watch.
@@ -90,7 +107,7 @@ export function planCatchUp(
 ): CatchUpItem[] {
   const out: CatchUpItem[] = [];
   for (const j of jobs) {
-    const schedule = parseDailySchedule(j.schedule);
+    const schedule = parseSchedule(j.schedule);
     const policy = j.catchUp ?? 'never';
     if (!j.path || !schedule || policy === 'never') continue;
     const windowStart = latestClosedWindowStart(schedule, now);
@@ -121,7 +138,7 @@ export function planCatchUp(
       continue;
     }
     if (phase === 'completed' || phase === 'seeded') {
-      out.push({ ...base, action: 'ok' });
+      out.push({ ...base, action: policy === 'missed-or-failed' && isDegraded(hb) ? 'rerun-degraded' : 'ok' });
       continue;
     }
     const error = typeof hb.summary?.error === 'string' ? hb.summary.error : undefined;
@@ -131,7 +148,7 @@ export function planCatchUp(
   return out;
 }
 
-export const isRerun = (a: CatchUpAction) => a === 'rerun-missed' || a === 'rerun-failed';
+export const isRerun = (a: CatchUpAction) => a === 'rerun-missed' || a === 'rerun-failed' || a === 'rerun-degraded';
 
 /**
  * Backup trigger for the catch-up itself (it is a Vercel cron too, so its own
@@ -149,8 +166,8 @@ export function catchUpBackupDue(hb: CronHeartbeat | null | undefined, now: Date
 
 /** How a re-run ended, as observed from the job's heartbeat afterwards. */
 export interface CatchUpOutcome extends CatchUpItem {
-  /** Set for re-run jobs only. */
-  result?: 'recovered' | 'still-failing';
+  /** Set for re-run jobs only. 'still-degraded' = completed, upstream gap remains. */
+  result?: 'recovered' | 'still-degraded' | 'still-failing';
   httpStatus?: number | null;
   detail?: string;
 }
@@ -162,13 +179,25 @@ const hhmm = (iso: string | null) => (iso ? `${iso.slice(0, 10)} ${iso.slice(11,
  * day sends nothing. `escape` is injected to keep this module import-free.
  */
 export function catchUpReport(items: CatchUpOutcome[], escape: (s: string) => string): string | null {
-  const notable = items.filter((i) => i.action !== 'ok' && i.action !== 'no-baseline');
+  // A degraded re-run is silent unless the re-run itself broke: the gap is the
+  // source's, and the job announces it once if it persists.
+  const notable = items.filter(
+    (i) =>
+      i.action !== 'ok' &&
+      i.action !== 'no-baseline' &&
+      !(i.action === 'rerun-degraded' && i.result !== 'still-failing'),
+  );
   if (notable.length === 0) return null;
   const lines = ['🔁 <b>Daily cron catch-up</b>'];
   for (const i of notable) {
     const label = escape(i.label);
     if (isRerun(i.action)) {
-      const why = i.action === 'rerun-missed' ? `missed its run (last ${hhmm(i.lastRanAt)})` : `failed${i.error ? `: ${escape(i.error)}` : ''}`;
+      const why =
+        i.action === 'rerun-missed'
+          ? `missed its run (last ${hhmm(i.lastRanAt)})`
+          : i.action === 'rerun-degraded'
+            ? 'was missing upstream data'
+            : `failed${i.error ? `: ${escape(i.error)}` : ''}`;
       if (i.result === 'recovered') {
         lines.push(`✅ ${label} ${why} → re-ran, completed${i.detail ? ` (${escape(i.detail)})` : ''}.`);
       } else {

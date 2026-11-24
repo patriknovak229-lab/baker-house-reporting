@@ -35,6 +35,23 @@ describe("evaluateCronAuth — no CRON_SECRET set", () => {
   });
 });
 
+describe("evaluateCronAuth — deployed on Vercel without CRON_SECRET", () => {
+  it("refuses every signal: a missing secret must not open the payment jobs", () => {
+    for (const headers of [{ xVercelCron: "1" }, { userAgent: CRON_UA }, { xVercelCron: "1", userAgent: CRON_UA }, {}]) {
+      expect(evaluateCronAuth(headers, undefined, true)).toEqual({
+        isCron: false,
+        via: null,
+        unverified: false,
+        missingSecret: true,
+      });
+    }
+  });
+
+  it("a set secret still works on Vercel", () => {
+    expect(evaluateCronAuth({ authorization: "Bearer s" }, "s", true).isCron).toBe(true);
+  });
+});
+
 describe("evaluateCronAuth — CRON_SECRET set", () => {
   const SECRET = "s3cret";
 

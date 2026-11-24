@@ -307,7 +307,7 @@ export default function RadarView() {
       .map((u) => u.label);
   }, [radar]);
 
-  /** Same pull as the 06:30 cron (admin/super — it spends PriceLabs credit). */
+  /** Same pull as the Monday 06:30 cron (admin/super — it spends PriceLabs credit). */
   const refresh = useCallback(async () => {
     setRefreshing(true);
     setRefreshNote(null);
@@ -385,7 +385,7 @@ export default function RadarView() {
   if (!radar || radar.units.every((u) => u.days.length === 0)) {
     return (
       <Card title="Price Radar">
-        <Empty message="No market snapshot yet — run the market refresh from the Analytics page (or wait for the 06:30 cron)." />
+        <Empty message="No market snapshot yet — run the market refresh from the Analytics page (or wait for the Monday 06:30 cron)." />
       </Card>
     );
   }
@@ -397,8 +397,8 @@ export default function RadarView() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
         <span>
-          PriceLabs snapshot from {oldestCapture === null ? '—' : fmtCapture(oldestCapture)} · refreshes daily around
-          06:30
+          PriceLabs snapshot from {oldestCapture === null ? '—' : fmtCapture(oldestCapture)} · refreshes every Monday
+          around 06:30 UTC
         </span>
         <button
           type="button"
@@ -421,9 +421,9 @@ export default function RadarView() {
         </div>
       )}
 
-      {staleHours !== null && staleHours > 48 && (
+      {staleHours !== null && staleHours > 8 * 24 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Market snapshot is {Math.round(staleHours)} h old — the 06:30 refresh may be failing. Data below reflects the last successful pull.
+          Market snapshot is {Math.round(staleHours / 24)} days old — the Monday refresh may be failing. Data below reflects the last successful pull.
         </div>
       )}
 
@@ -570,7 +570,7 @@ export default function RadarView() {
 
       <p className="text-xs text-gray-400">
         {totalFlags} flag{totalFlags === 1 ? '' : 's'} across the snapshot · market data: PriceLabs comp set (Airbnb/VRBO
-        view of Brno; Booking.com-only listings invisible) · snapshot refreshes daily at 06:30 with a Monday Telegram digest.
+        view of Brno; Booking.com-only listings invisible) · snapshot refreshes every Monday at 06:30 UTC, with a Telegram digest.
       </p>
     </div>
   );

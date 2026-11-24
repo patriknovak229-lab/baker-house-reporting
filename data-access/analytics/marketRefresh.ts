@@ -19,6 +19,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { marketDaily, marketHorizon, marketMonthly } from '@/lib/db/schema';
 import { SELLABLE_UNITS } from '@/data/analyticsConfig';
+import type { ListingErrorKind } from '@/utils/marketRefreshHealth';
 import {
   fetchListingMetrics,
   fetchListingPrices,
@@ -54,6 +55,30 @@ export async function marketSnapshotAgeHours(): Promise<number | null> {
   return (Date.now() - new Date(row.newest).getTime()) / 3_600_000;
 }
 
+/**
+ * Hours since each sellable unit's last good PriceLabs pull, keyed by unit id
+ * (null = never). Same "carries a demand reading" rule as marketSnapshotAgeHours,
+ * but per listing: the newest row overall hides a listing that has been stale
+ * for days behind one that refreshed fine.
+ */
+export async function listingAgesHours(): Promise<Record<string, number | null>> {
+  const rows = await db
+    .select({
+      listingId: marketDaily.listingId,
+      newest: sql<Date | null>`max(${marketDaily.capturedAt}) filter (where ${marketDaily.demandDesc} is not null)`,
+    })
+    .from(marketDaily)
+    .groupBy(marketDaily.listingId);
+  const newestByListing = new Map(rows.map((r) => [r.listingId, r.newest]));
+  const out: Record<string, number | null> = {};
+  for (const unit of SELLABLE_UNITS) {
+    if (!unit.priceLabsListingId) continue;
+    const newest = newestByListing.get(unit.priceLabsListingId);
+    out[unit.id] = newest ? (Date.now() - new Date(newest).getTime()) / 3_600_000 : null;
+  }
+  return out;
+}
+
 export interface RefreshResult {
   configured: boolean;
   listings: {
@@ -64,6 +89,8 @@ export interface RefreshResult {
     horizonRows: number;
     compSetListings: number | null;
     error: string | null;
+    /** 'upstream-gap' = PriceLabs answered without usable prices; 'error' = our pull broke. */
+    errorKind: ListingErrorKind | null;
   }[];
   startedAt: string;
   finishedAt: string;
@@ -114,6 +141,7 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
       horizonRows: 0,
       compSetListings: null,
       error: null,
+      errorKind: null,
     };
 
     try {
@@ -311,9 +339,11 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
             },
           }),
       );
-      // Reported as a listing failure: when every listing fails, the route's
-      // heartbeat says "failed" and the 12:00 UTC cron catch-up pulls again.
+      // An upstream gap, not a broken pull: the route completes the run as
+      // "degraded", the 12:00 UTC catch-up retries it quietly, and the operator
+      // hears about it only if the listing stays stale (utils/marketRefreshHealth).
       if (pricesProblem) {
+        entry.errorKind = 'upstream-gap';
         entry.error = `PriceLabs listing_prices unusable (${pricesProblem}) — kept the previous live prices, demand and min-stay`;
         console.error('[market-refresh]', listingId, entry.error);
       }
@@ -372,6 +402,7 @@ export async function refreshMarketSnapshot(todayIso: string): Promise<RefreshRe
       }
     } catch (err) {
       entry.error = err instanceof Error ? err.message : 'Unknown error';
+      entry.errorKind = 'error';
       console.error('[market-refresh]', listingId, err);
     }
 

@@ -2,7 +2,7 @@
  * Price Radar — demand calendar + price-vs-market position, per sellable unit.
  *
  * Everything here is a Postgres read over `market_daily` (the PriceLabs
- * snapshot the 06:30 cron maintains) joined with the curated event calendar.
+ * snapshot the Monday 06:30 cron maintains) joined with the curated event calendar.
  * No external call ever happens on a page load; a stale snapshot degrades to
  * a visible vintage warning, never to a hang.
  *

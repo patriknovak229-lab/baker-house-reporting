@@ -1255,7 +1255,7 @@ function PricePosition({ market, unitIds }: { market: MarketResponse | null; uni
   if (!market || units.length === 0) {
     return (
       <Card title="Price position against the market" subtitle="Appears once a PriceLabs market snapshot has been captured.">
-        <Empty message="No market snapshot yet. The daily refresh writes one, or an admin can trigger it from the header." />
+        <Empty message="No market snapshot yet. The weekly (Monday) refresh writes one, or an admin can trigger it from the header." />
       </Card>
     );
   }

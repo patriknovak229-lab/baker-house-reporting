@@ -105,11 +105,15 @@ export const WATCHED_CRON_JOBS: WatchedCronJob[] = [
     catchUp: 'missed-or-failed',
   },
   {
+    // Weekly since 2026-11-24 (operator: once a week is enough). The catch-up
+    // re-runs a missed Monday, and keeps retrying daily while PriceLabs has gaps
+    // ('rerun-degraded'), so heartbeats normally land within the week; 8 days
+    // absorbs one lost Monday.
     job: 'market-refresh',
-    label: 'PriceLabs market refresh (06:30 UTC)',
-    maxAgeHours: 36,
+    label: 'PriceLabs market refresh (Mon 06:30 UTC)',
+    maxAgeHours: 8 * 24,
     path: '/api/analytics/market/refresh',
-    schedule: '30 6 * * *',
+    schedule: '30 6 * * 1',
     catchUp: 'missed-or-failed',
   },
   {
@@ -149,7 +153,10 @@ export interface CronHeartbeat {
   ranAt: string;
   /** Whatever the job wants on the record — counts, mostly. Never load-bearing.
    *  `summary.phase` carries 'started' | 'completed' | 'failed' when the job
-   *  reports it; absent means a legacy write and is treated as completed. */
+   *  reports it; absent means a legacy write and is treated as completed.
+   *  `summary.degraded` (string[]) on a completed run = the job worked but its
+   *  upstream source had gaps for these items: the watchdog stays quiet and the
+   *  catch-up retries it without reporting (utils/cronCatchUp). */
   summary?: Record<string, unknown>;
   /** True when this row was written by the watchdog to establish a baseline
    *  rather than by a real run. Keeps a fresh deploy from alerting instantly. */
@@ -172,8 +179,10 @@ export interface StaleCronJob {
   /** null when we have never heard from it at all. */
   lastRanAt: string | null;
   hoursSilent: number | null;
-  /** 'silent' = not invoked at all. 'not-completing' = invoked, never finishes. */
-  reason: 'silent' | 'not-completing';
+  /** 'silent' = not invoked at all. 'not-completing' = invoked, never finishes.
+   *  'secret-missing' = this deployment has no CRON_SECRET, so cronAuth refuses
+   *  every scheduled call (a pseudo-job: job 'cron-secret'). */
+  reason: 'silent' | 'not-completing' | 'secret-missing';
   /** Error text from the job, when it reported one. */
   error?: string;
   /** 'not-completing' because the run finished with phase 'failed' (vs stuck at 'started'). */
@@ -188,13 +197,25 @@ export interface StaleCronJob {
  * for it instead. That avoids crying wolf the moment this ships (no job has
  * ever written one), while still catching a job that goes on to miss its
  * window — the seed is what the next check measures against.
+ *
+ * A deployment without CRON_SECRET is reported first, as 'secret-missing':
+ * cronAuth refuses every scheduled call there, and otherwise the only symptom
+ * would be every job going 'silent' a day and a half later, with a probe hint
+ * (401 = healthy) that would point the wrong way.
  */
 export function staleCronJobs(
   heartbeats: Record<string, CronHeartbeat | null>,
   now: Date,
   jobs: WatchedCronJob[] = WATCHED_CRON_JOBS,
+  env: { onVercel: boolean; cronSecretSet: boolean } = {
+    onVercel: !!process.env.VERCEL,
+    cronSecretSet: !!process.env.CRON_SECRET,
+  },
 ): StaleCronJob[] {
   const out: StaleCronJob[] = [];
+  if (env.onVercel && !env.cronSecretSet) {
+    out.push({ job: 'cron-secret', label: 'CRON_SECRET', lastRanAt: null, hoursSilent: null, reason: 'secret-missing' });
+  }
   for (const { job, label, maxAgeHours } of jobs) {
     const hb = heartbeats[job];
     if (!hb?.ranAt) continue; // no baseline yet — caller seeds, doesn't alert
@@ -244,6 +265,12 @@ export function staleCronAlert(stale: StaleCronJob[]): string | null {
     ...stale.map((s) => {
       const when = `${s.lastRanAt?.slice(0, 16).replace('T', ' ')} UTC`;
       const error = s.error ? `: ${esc(s.error)}` : '';
+      if (s.reason === 'secret-missing') {
+        return (
+          '• CRON_SECRET is not set in this deployment — every scheduled job is being refused, so none of them run ' +
+          '(payments, invoices, syncs). Add it back in Vercel → Settings → Environment Variables, then redeploy.'
+        );
+      }
       if (s.reason === 'silent') return `• ${s.label} — not invoked for ${s.hoursSilent}h (last ${when})`;
       return s.failed
         ? `• ${s.label} — ran ${s.hoursSilent}h ago and failed${error} (${when})`
@@ -252,7 +279,8 @@ export function staleCronAlert(stale: StaleCronJob[]): string | null {
   ];
   // The diagnosis that took two days and three separate causes to find — only
   // relevant when a job is not being invoked at all.
-  if (stale.some((s) => s.reason === 'silent')) {
+  // Skipped when the secret is missing: then 401 is the failure, not health.
+  if (stale.some((s) => s.reason === 'silent') && !stale.some((s) => s.reason === 'secret-missing')) {
     lines.push(
       '',
       'If it is not being invoked, probe the path with a plain GET:',

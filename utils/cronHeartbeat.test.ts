@@ -81,6 +81,24 @@ describe("staleCronJobs", () => {
   });
 });
 
+describe("staleCronJobs — CRON_SECRET missing on Vercel", () => {
+  const fresh = { daily: hoursAgo(3), other: hoursAgo(3) };
+
+  it("is reported first, within the hour, before any job goes silent", () => {
+    const stale = staleCronJobs(fresh, NOW, JOBS, { onVercel: true, cronSecretSet: false });
+    expect(stale.map((s) => s.reason)).toEqual(["secret-missing"]);
+    const body = staleCronAlert(stale)!;
+    expect(body).toContain("CRON_SECRET is not set");
+    // The usual probe hint says 401 = healthy, which would point the wrong way here.
+    expect(body).not.toContain("401 = healthy");
+  });
+
+  it("says nothing when the secret is set, or off Vercel (local dev)", () => {
+    expect(staleCronJobs(fresh, NOW, JOBS, { onVercel: true, cronSecretSet: true })).toEqual([]);
+    expect(staleCronJobs(fresh, NOW, JOBS, { onVercel: false, cronSecretSet: false })).toEqual([]);
+  });
+});
+
 describe("unseededCronJobs", () => {
   it("names the jobs with no baseline yet", () => {
     expect(unseededCronJobs({ daily: hoursAgo(1), other: null }, JOBS)).toEqual(["other"]);

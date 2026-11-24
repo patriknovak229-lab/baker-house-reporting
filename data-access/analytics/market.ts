@@ -45,7 +45,9 @@ const HORIZONS: { days: number; label: string }[] = [
 ];
 
 const MAX_HORIZON = 360;
-const STALE_HOURS = 48;
+/** The refresh is weekly (Monday) with daily retries while PriceLabs has gaps,
+ *  so a snapshot only counts as stale once it has missed a whole cycle. */
+const STALE_HOURS = 8 * 24;
 
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);

@@ -6,7 +6,7 @@ import {
   catchUpBackupDue,
   catchUpReport,
   latestClosedWindowStart,
-  parseDailySchedule,
+  parseSchedule,
   planCatchUp,
   type CatchUpOutcome,
 } from './cronCatchUp';
@@ -33,16 +33,28 @@ const SELF: WatchedCronJob = {
 const JOBS = [INVOICES, REVIEWS, SELF];
 
 describe('schedule windows', () => {
-  it('parses daily expressions only', () => {
-    expect(parseDailySchedule('0 9 * * *')).toEqual({ hour: 9, minute: 0 });
-    expect(parseDailySchedule('15 1 * * *')).toEqual({ hour: 1, minute: 15 });
-    expect(parseDailySchedule('*/5 * * * *')).toBeNull();
-    expect(parseDailySchedule('0 9 * * 1')).toBeNull();
-    expect(parseDailySchedule(undefined)).toBeNull();
+  it('parses daily and weekly expressions only', () => {
+    expect(parseSchedule('0 9 * * *')).toEqual({ hour: 9, minute: 0, weekday: null });
+    expect(parseSchedule('15 1 * * *')).toEqual({ hour: 1, minute: 15, weekday: null });
+    expect(parseSchedule('30 6 * * 1')).toEqual({ hour: 6, minute: 30, weekday: 1 });
+    expect(parseSchedule('0 9 * * 7')).toEqual({ hour: 9, minute: 0, weekday: 0 }); // 7 = Sunday
+    expect(parseSchedule('*/5 * * * *')).toBeNull();
+    expect(parseSchedule('0 9 1 * *')).toBeNull();
+    expect(parseSchedule('0 9 * * 1-5')).toBeNull();
+    expect(parseSchedule(undefined)).toBeNull();
+  });
+
+  it('a weekly window is the latest matching weekday that has closed', () => {
+    const monday = { hour: 6, minute: 30, weekday: 1 };
+    // Mon 23 Nov 2026, 07:30 — today's window (06:30–07:45) still open → the previous Monday
+    expect(latestClosedWindowStart(monday, at('2026-11-23T07:30:00Z')).toISOString()).toBe('2026-11-16T06:30:00.000Z');
+    expect(latestClosedWindowStart(monday, at('2026-11-23T12:00:00Z')).toISOString()).toBe('2026-11-23T06:30:00.000Z');
+    // Saturday → back to Monday of that week
+    expect(latestClosedWindowStart(monday, at('2026-11-28T12:00:00Z')).toISOString()).toBe('2026-11-23T06:30:00.000Z');
   });
 
   it('a window counts only once the Hobby hour plus grace is over', () => {
-    const nine = { hour: 9, minute: 0 };
+    const nine = { hour: 9, minute: 0, weekday: null };
     // 10:10 — window 09:00–10:15 still open → yesterday's is the latest closed one
     expect(latestClosedWindowStart(nine, at('2026-11-06T10:10:00Z')).toISOString()).toBe('2026-11-05T09:00:00.000Z');
     expect(latestClosedWindowStart(nine, at('2026-11-06T10:15:00Z')).toISOString()).toBe('2026-11-06T09:00:00.000Z');
@@ -70,6 +82,27 @@ describe('planCatchUp', () => {
 
   it('a failed sync job is retried', () => {
     expect(action({ 'check-reviews': hb('2026-11-06T08:20:00Z', 'failed', { error: 'Beds24 503' }) }, 'check-reviews')).toBe('rerun-failed');
+  });
+
+  it('a completed run with an upstream gap is retried quietly — only where retries are allowed', () => {
+    const gap = hb('2026-11-06T08:20:00Z', 'completed', { degraded: ['urban-1kk'] });
+    expect(action({ 'check-reviews': gap }, 'check-reviews')).toBe('rerun-degraded');
+    expect(action({ 'send-due-invoices': hb('2026-11-06T09:44:00Z', 'completed', { degraded: ['x'] }) })).toBe('ok');
+    expect(action({ 'check-reviews': hb('2026-11-06T08:20:00Z', 'completed', { degraded: [] }) }, 'check-reviews')).toBe('ok');
+  });
+
+  it('weekly market refresh: a missed Monday is re-run, and a degraded one is retried daily until clean', () => {
+    const MARKET: WatchedCronJob = {
+      job: 'market-refresh', label: 'Market', maxAgeHours: 192,
+      path: '/api/analytics/market/refresh', schedule: '30 6 * * 1', catchUp: 'missed-or-failed',
+    };
+    const plan = (h: CronHeartbeat, nowIso: string) => planCatchUp({ 'market-refresh': h }, at(nowIso), [MARKET])[0].action;
+    // Mon 23 Nov 12:05: last run the previous Monday → this Monday was missed
+    expect(plan(hb('2026-11-16T06:53:00Z', 'completed'), '2026-11-23T12:05:00Z')).toBe('rerun-missed');
+    // Wed: Monday ran clean → nothing to do all week
+    expect(plan(hb('2026-11-23T06:53:00Z', 'completed'), '2026-11-25T12:05:00Z')).toBe('ok');
+    // Tue: Monday's retry still had a PriceLabs gap → retry again
+    expect(plan(hb('2026-11-23T12:44:00Z', 'completed', { degraded: ['k201'] }), '2026-11-24T12:05:00Z')).toBe('rerun-degraded');
   });
 
   it('legacy heartbeat without a phase counts as completed', () => {
@@ -118,6 +151,14 @@ describe('catchUpReport', () => {
     const human = catchUpReport([{ ...base, action: 'needs-human', lastPhase: 'started' }], esc)!;
     expect(human).toContain('Not re-run automatically');
   });
+
+  it('a degraded re-run says nothing unless the re-run itself broke', () => {
+    const degraded = { ...base, action: 'rerun-degraded' as const };
+    expect(catchUpReport([{ ...degraded, result: 'recovered' }], esc)).toBeNull();
+    expect(catchUpReport([{ ...degraded, result: 'still-degraded' }], esc)).toBeNull();
+    const broke = catchUpReport([{ ...degraded, result: 'still-failing', httpStatus: 500, detail: 'DB down' }], esc)!;
+    expect(broke).toContain('was missing upstream data → re-run did not complete (HTTP 500): DB down');
+  });
 });
 
 // ── The registry must match what is actually deployed ──
@@ -130,8 +171,9 @@ describe('WATCHED_CRON_JOBS matches vercel.json, proxy.ts and the routes', () =>
   };
   const proxy = readFileSync(path.join(root, 'proxy.ts'), 'utf8');
   const matcher = /matcher:\s*\[\s*'([^']+)'/.exec(proxy)?.[1] ?? '';
-  // Deliberately not running (charges guests; business decision pending) — see proxy.ts.
-  const DISABLED = new Set(['/api/cron/send-scheduled-payments']);
+  // Scheduled paths deliberately left out of the registry. Empty since
+  // send-scheduled-payments was switched on (45daecd, 2026-11-18).
+  const DISABLED = new Set<string>();
 
   it('every scheduled job is registered with the same schedule', () => {
     for (const c of vercel.crons.filter((c) => !DISABLED.has(c.path))) {
@@ -145,7 +187,7 @@ describe('WATCHED_CRON_JOBS matches vercel.json, proxy.ts and the routes', () =>
     expect(matcher).not.toBe('');
     for (const j of WATCHED_CRON_JOBS) {
       expect(vercel.crons.some((c) => c.path === j.path), `${j.job} not in vercel.json`).toBe(true);
-      expect(parseDailySchedule(j.schedule), `${j.job} schedule`).not.toBeNull();
+      expect(parseSchedule(j.schedule), `${j.job} schedule`).not.toBeNull();
       expect(matcher.includes(`|${j.path!.slice(1)}`), `${j.path} is not exempt in proxy.ts`).toBe(true);
     }
   });

@@ -29,7 +29,7 @@ import { requireRole } from '@/utils/authGuard';
 import { cronAuth, cronBaseUrl, cronDispatchHeaders } from '@/utils/cronAuth';
 import { readCronHeartbeats, readCronHistory, writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { WATCHED_CRON_JOBS } from '@/utils/cronHeartbeat';
-import { catchUpReport, isRerun, planCatchUp, type CatchUpOutcome } from '@/utils/cronCatchUp';
+import { catchUpReport, isDegraded, isRerun, planCatchUp, type CatchUpOutcome } from '@/utils/cronCatchUp';
 import { withCronLock } from '@/utils/cronLock';
 import { escapeHtml, sendTechnicalAlert } from '@/utils/telegram';
 
@@ -76,12 +76,15 @@ async function catchUp(): Promise<Response> {
       const hb = after[item.job];
       const ranAt = hb?.ranAt ? new Date(hb.ranAt).getTime() : 0;
       const phase = hb?.summary?.phase;
-      const recovered = ranAt >= dispatchedAt - 5_000 && (phase === 'completed' || phase == null);
+      const completed = ranAt >= dispatchedAt - 5_000 && (phase === 'completed' || phase == null);
+      // Completed with an upstream gap still open is not "recovered" — it is
+      // also not a failure (utils/cronCatchUp: 'rerun-degraded').
+      const result = !completed ? 'still-failing' : isDegraded(hb) ? 'still-degraded' : 'recovered';
       return {
         ...item,
-        result: recovered ? 'recovered' : 'still-failing',
+        result,
         httpStatus: http[idx].status,
-        detail: recovered ? summarize(hb?.summary) : (stringOr(hb?.summary?.error) ?? http[idx].error),
+        detail: completed ? summarize(hb?.summary) : (stringOr(hb?.summary?.error) ?? http[idx].error),
       };
     });
 
@@ -93,6 +96,7 @@ async function catchUp(): Promise<Response> {
       phase: 'completed',
       checked: plan.length,
       recovered: pick((o) => o.result === 'recovered'),
+      stillDegraded: pick((o) => o.result === 'still-degraded'),
       stillFailing: pick((o) => o.result === 'still-failing'),
       needsHuman: pick((o) => o.action === 'needs-human'),
       noBaseline: pick((o) => o.action === 'no-baseline'),
