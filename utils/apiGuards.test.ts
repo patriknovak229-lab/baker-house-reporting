@@ -18,6 +18,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
   'vouchers/redeem': 'rental-site checkout (public; guessing limit still open)',
   'webhook/beds24-message': 'WEBHOOK_SECRET',
   'webhook/new-booking': 'WEBHOOK_SECRET',
+  'webhook/watchdog': 'WEBHOOK_SECRET (cron-job.org 5-minute ping)',
   'webhook/web-booking-warning': 'WEB_BOOKING_ALERT_SECRET',
   'webhook/web-payment-schedule': 'WEB_BOOKING_ALERT_SECRET',
 };

@@ -68,14 +68,7 @@ import {
   type ExtractedInvoiceFields,
 } from '@/utils/invoiceFieldExtractor';
 import { deriveIcoFromDic, invoiceRequestSettledOnReservation } from '@/utils/invoiceUtils';
-import {
-  WATCHED_CRON_JOBS,
-  staleCronJobs,
-  unseededCronJobs,
-  staleCronAlert,
-} from '@/utils/cronHeartbeat';
-import { catchUpBackupDue } from '@/utils/cronCatchUp';
-import { cronBaseUrl, cronDispatchHeaders } from '@/utils/cronAuth';
+import { checkCronLiveness } from '@/utils/cronWatchdog';
 import {
   renderMissingFieldsReply,
   renderInvoiceConfirmation,
@@ -95,7 +88,7 @@ import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
 import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
 import { runContactPass, tryCaptureContactReply } from '@/utils/guestContactService';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
-import { escapeHtml, guestNameLine, invoiceAlertChatId, sendTechnicalAlert, sendTelegram as sendTelegramTo } from '@/utils/telegram';
+import { escapeHtml, guestNameLine, invoiceAlertChatId, sendTelegram as sendTelegramTo } from '@/utils/telegram';
 import {
   amountHoldReason,
   amountTaskNote,
@@ -471,12 +464,11 @@ function detectAutoReplyCategory(text: string): Promise<DetectionResult> {
  */
 async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> {
   detectionMemo.clear();
-  // Pass 0 — is the Vercel cron scheduler still reaching its jobs? This lives
-  // HERE, not in the crons, because a watchdog inside the thing it watches is
-  // not a watchdog: the bookings-archive check was parked inside the invoice
-  // cron for exactly this purpose and died with it. This poll is driven by the
-  // dashboard every ~30s and by an external cron-job.org ping every 5 min, so
-  // it keeps ticking through the precise failure that stops the crons.
+  // Pass 0 — is the Vercel cron scheduler still reaching its jobs? TRANSITION
+  // (2026-11-25): the watchdogs now have their own route, app/api/webhook/watchdog,
+  // so a bug in this guest code can't take them down. They stay here until
+  // cron-job.org points at that route, then these two calls go. Running from
+  // both is harmless: they share the same Redis throttles.
   if (redis) {
     try {
       await checkCronLiveness(redis);
@@ -1851,94 +1843,6 @@ function makeLogId(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
-}
-
-// ─── Cron liveness watchdog ──────────────────────────────────────────────────
-
-/** Throttles the DB read — a 36h threshold does not need a check every 30s. */
-const CRON_CHECK_KEY = 'baker:cron-watchdog:checked';
-const CRON_CHECK_EVERY_MS = 60 * 60 * 1000; // 1h
-/** One alert per job per day: a dead cron stays dead, and hourly nagging about
- *  it would train the operator to ignore the channel. */
-const CRON_ALERT_TTL_SECONDS = 24 * 60 * 60;
-
-/**
- * Alert when a watched Vercel cron job has gone quiet. See utils/cronHeartbeat.
- *
- * Jobs we have never heard from are SEEDED rather than alerted on: on first
- * deploy no job has a heartbeat, and firing immediately would be noise. The
- * seed is the baseline the next check measures against, so a job that then
- * fails to run still trips the alarm one window later.
- */
-async function checkCronLiveness(redis: Redis): Promise<void> {
-  const last = await redis.get<number>(CRON_CHECK_KEY);
-  if (last && Date.now() - last < CRON_CHECK_EVERY_MS) return;
-  await redis.set(CRON_CHECK_KEY, Date.now(), { ex: 7200 });
-
-  // Lazily imported, matching how the invoice-request store keeps the Postgres
-  // client off this route's hot path — the watchdog runs at most hourly and
-  // shouldn't weigh on every message poll's cold start.
-  const { readCronHeartbeats, writeCronHeartbeat } = await import('@/data-access/cronHeartbeat');
-
-  const jobs = WATCHED_CRON_JOBS.map((j) => j.job);
-  const heartbeats = await readCronHeartbeats(jobs);
-
-  for (const job of unseededCronJobs(heartbeats)) {
-    await writeCronHeartbeat(job, { ranAt: new Date().toISOString(), seeded: true });
-    console.log(`[cron watchdog] seeded baseline for ${job}`);
-  }
-
-  await fireCatchUpBackupIfDue(redis, heartbeats['catch-up']);
-
-  const stale = staleCronJobs(heartbeats, new Date());
-  if (stale.length === 0) return;
-
-  // Drop any we have already shouted about today.
-  const fresh: typeof stale = [];
-  for (const s of stale) {
-    const key = `baker:cron-watchdog:alerted:${s.job}`;
-    if (await redis.get(key)) continue;
-    await redis.set(key, 1, { ex: CRON_ALERT_TTL_SECONDS });
-    fresh.push(s);
-  }
-
-  const body = staleCronAlert(fresh);
-  if (body) {
-    // Technical chat, not the ops group (operator request 2026-11-08).
-    await sendTechnicalAlert(body);
-    console.warn(`[cron watchdog] ${fresh.map((s) => s.job).join(', ')} silent`);
-  }
-}
-
-/**
- * Backup trigger for the daily catch-up (app/api/cron/catch-up). That route is
- * a Vercel cron too, so its own delivery can be dropped, the one failure it
- * exists to absorb. This watchdog runs on the cron-job.org 5-minute ping,
- * outside Vercel's scheduler, so from 14:00 UTC it fires the catch-up if it
- * hasn't run today. Once a day at most (Redis NX).
- *
- * Fire-and-forget on purpose: the catch-up can take minutes (it re-runs jobs
- * with 300s budgets) and this route has 60s. The short timeout only drops OUR
- * wait; Vercel keeps the called function running after the caller disconnects
- * unless `supportsCancellation` is configured, which this project doesn't do.
- */
-async function fireCatchUpBackupIfDue(
-  redis: Redis,
-  hb: Parameters<typeof catchUpBackupDue>[0],
-): Promise<void> {
-  const now = new Date();
-  if (!catchUpBackupDue(hb, now)) return;
-  const key = `baker:cron-catchup:backup-fired:${now.toISOString().slice(0, 10)}`;
-  const first = await redis.set(key, 1, { nx: true, ex: 26 * 60 * 60 });
-  if (first === null) return;
-  console.warn('[cron watchdog] catch-up has not run today — firing it as a backup');
-  await fetch(`${cronBaseUrl()}/api/cron/catch-up`, {
-    headers: cronDispatchHeaders(),
-    cache: 'no-store',
-    signal: AbortSignal.timeout(5_000),
-  }).catch(() => {
-    // Expected: we stop waiting after 5s while the catch-up keeps running.
-  });
 }
 
 // ─── Multi-turn invoice request flow ─────────────────────────────────────────
