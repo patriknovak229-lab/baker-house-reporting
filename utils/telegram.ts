@@ -44,6 +44,16 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 /**
+ * "👤 First Last" line for booking alerts, escaped. A raw `&` or `<` in a guest
+ * name makes Telegram reject the whole message (400 "can't parse entities"),
+ * and the booking's dedupe key is already set by then, so the alert is lost.
+ */
+export function guestNameLine(firstName?: string | null, lastName?: string | null): string {
+  const name = `${firstName ?? ""} ${lastName ?? ""}`.trim();
+  return `👤 ${name ? escapeHtml(name) : "—"}`;
+}
+
+/**
  * Destination for PRICING alerts (parity violations, radar digest). Falls back
  * to the ops group until TELEGRAM_PRICING_CHAT_ID is set — the operator wants
  * pricing noise out of the shared Baker House Operations group, so this should

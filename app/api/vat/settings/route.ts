@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readVatSettings, sanitizeVatSettings, writeVatSettings } from '@/data-access/vatSettings';
 import type { OtaTaxDocument, VatConfig, VatDecision } from '@/types/vat';
 
 // GET /api/vat/settings — registration date, filing identity, OTA document numbers, flag decisions.
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
   return NextResponse.json(await readVatSettings());
 }
@@ -23,7 +23,7 @@ interface SettingsPatch {
 // PATCH-style PUT: merges into the stored settings so two edits can't clobber each other.
 // Admin only (accounting mutations are admin-only).
 export async function PUT(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
   let patch: SettingsPatch;
   try {

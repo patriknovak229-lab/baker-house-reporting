@@ -20,7 +20,7 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { isValidCountryCode } from '@/utils/countries';
 import { escapeHtml, sendTelegram } from '@/utils/telegram';
@@ -52,7 +52,7 @@ interface StayOutcome {
 }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
 

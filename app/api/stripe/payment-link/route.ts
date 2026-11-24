@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { PaymentAllocation } from '@/types/additionalPayment';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 import { allocationsError } from '@/utils/paymentAllocations';
@@ -14,7 +14,7 @@ import { createPaymentLink } from '@/utils/paymentLinkServer';
  * equal their sum. Without a booking the link is free-standing (no record).
  */
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super']);
+  const authResult = await requireAccess('transactions', 'change');
   if ('error' in authResult) return authResult.error;
 
   const { amountCzk, description, guestEmail, guestPhone, reservationNumber, guestName, isMainPayment, allocations } = await req.json();

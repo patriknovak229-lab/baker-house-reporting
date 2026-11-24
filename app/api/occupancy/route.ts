@@ -15,8 +15,7 @@
  * Access: every valid role (admin/super/viewer/accountant/occupancy).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
-import { OCCUPANCY_VIEW_ROLES } from '@/utils/roles';
+import { requireAccess } from '@/utils/authGuard';
 import { getRedis, buildReservationSet } from '@/utils/beds24Reservations';
 import { computeSnapshotData } from '@/utils/occupancySnapshot';
 import { ALL_ROOMS_BY_CATEGORY } from '@/utils/roomCategory';
@@ -29,7 +28,7 @@ const OCCUPANCY_CACHE_KEY = 'baker:occupancy-cache';
 const ROOMS: string[] = [...ALL_ROOMS_BY_CATEGORY];
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(OCCUPANCY_VIEW_ROLES);
+  const guard = await requireAccess('occupancy', 'view');
   if ('error' in guard) return guard.error;
 
   const redis = getRedis();
@@ -55,7 +54,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(OCCUPANCY_VIEW_ROLES);
+  const guard = await requireAccess('occupancy', 'change');
   if ('error' in guard) return guard.error;
 
   const redis = getRedis();

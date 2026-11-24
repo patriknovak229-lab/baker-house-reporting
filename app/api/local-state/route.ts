@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 
 // All locally managed reservation fields (not stored in Beds24)
@@ -7,6 +7,8 @@ import { readAllReservationOverrides, writeAllReservationOverrides } from '@/uti
 
 // GET /api/local-state — returns full overrides map
 export async function GET() {
+  const guard = await requireAccess('transactions', 'view');
+  if ('error' in guard) return guard.error;
   return NextResponse.json(await readAllReservationOverrides());
 }
 
@@ -14,7 +16,7 @@ export async function GET() {
 // Body: { reservationNumber: string, fields: Record<string, unknown> }
 // Passing an empty fields object removes that reservation's entry.
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const { reservationNumber, fields } = await req.json();

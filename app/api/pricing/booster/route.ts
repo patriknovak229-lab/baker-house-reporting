@@ -6,13 +6,13 @@
  * utils/boosterCandidates.ts). A Postgres read — no Beds24 or PriceLabs call.
  */
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readBoosterCandidates } from '@/data-access/pricing/boosterCandidates';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('pricing', 'view');
   if ('error' in guard) return guard.error;
 
   try {

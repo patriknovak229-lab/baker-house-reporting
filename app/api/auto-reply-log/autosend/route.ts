@@ -7,21 +7,21 @@
  * queue.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import {
   readAutoSendCategories,
   writeAutoSendCategories,
 } from '@/data-access/autoSendCategories';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('autoReply', 'view');
   if ('error' in guard) return guard.error;
   const categories = await readAutoSendCategories();
   return NextResponse.json({ categories });
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('autoReply', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { categories?: unknown };

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
@@ -8,7 +8,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;
@@ -40,7 +40,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;

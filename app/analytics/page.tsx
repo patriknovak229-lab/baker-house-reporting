@@ -10,7 +10,7 @@
  */
 import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
-import { canAccessAnalytics, type Role } from '@/utils/roles';
+import { can, canAccessAnalytics, isRole, type Role } from '@/utils/roles';
 import AnalyticsPage from '@/components/analytics/AnalyticsPage';
 
 export const metadata = {
@@ -20,7 +20,9 @@ export const metadata = {
 export default async function Page() {
   // Local dev bypass, matching app/page.tsx: skip OAuth when DEV_ADMIN_EMAIL is set.
   if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
-    return <AnalyticsPage canRefreshMarket canSeeWebFunnel />;
+    const devRole = isRole(process.env.DEV_ROLE) ? process.env.DEV_ROLE : 'admin';
+    if (!canAccessAnalytics(devRole)) redirect('/');
+    return <AnalyticsPage canRefreshMarket={can(devRole, 'analytics', 'change')} canSeeWebFunnel={can(devRole, 'analytics')} />;
   }
 
   const session = await auth();
@@ -39,9 +41,8 @@ export default async function Page() {
    */
   return (
     <AnalyticsPage
-      canRefreshMarket={role === 'admin' || role === 'super'}
-      // New sections default to admin only; the web-funnel route enforces it too.
-      canSeeWebFunnel={role === 'admin'}
+      canRefreshMarket={can(role, 'analytics', 'change')}
+      canSeeWebFunnel={can(role, 'analytics')}
     />
   );
 }

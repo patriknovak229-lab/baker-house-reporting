@@ -7,12 +7,12 @@
  * existing Stripe refund through ./record. See utils/webPaymentServer.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getWebPaymentState, WebPaymentError } from '@/utils/webPaymentServer';
 import { webPaymentDeps } from '@/utils/webPaymentDeps';
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('refunds', 'view');
   if ('error' in guard) return guard.error;
 
   const reservationNumber = req.nextUrl.searchParams.get('reservationNumber')?.trim();

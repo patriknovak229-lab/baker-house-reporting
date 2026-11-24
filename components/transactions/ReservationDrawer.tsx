@@ -69,7 +69,7 @@ import {
 } from "@/utils/invoiceAutoSendRules";
 import { formatPhoneDisplay } from "@/utils/stringUtils";
 import { useSession } from "next-auth/react";
-import { canMutate } from "@/utils/roles";
+import { can, canMutate } from "@/utils/roles";
 import { isGuestNoteDismissed } from "@/utils/guestNote";
 import { nonArrivalBlockReason } from "@/utils/nonArrival";
 import type { Role } from "@/utils/roles";
@@ -5678,14 +5678,14 @@ export default function ReservationDrawer({
               <PayLaterPanel
                 key={`pay-later-${reservation.reservationNumber}`}
                 reservationNumber={reservation.reservationNumber}
-                canAct={naUserRole === "admin"}
+                canAct={can(naUserRole, "payLater", "change")}
               />
             )}
             {reservation.channel === "Direct-Web" && !reservation.nonArrival && canEditNonArrival && (
               <WebPaymentRefund
                 key={reservation.reservationNumber}
                 reservation={reservation}
-                canRefund={naUserRole === "admin"}
+                canRefund={can(naUserRole, "refunds", "change")}
                 canRecord={canEditNonArrival}
                 onPlatformRefund={(pr) => onUpdate({ ...reservation, platformRefund: pr })}
               />
@@ -6022,7 +6022,7 @@ export default function ReservationDrawer({
             {isDirectChannel(reservation.channel) &&
               !reservation.isCancelled &&
               !reservation.nonArrival &&
-              naUserRole === "admin" &&
+              can(naUserRole, "refunds", "change") &&
               reservation.checkOutDate >= pragueToday() && (
                 <GuestCancellation
                   key={`guest-cancel-${reservation.reservationNumber}`}

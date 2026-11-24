@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
 import { rejectBadWebhookSecret } from "@/utils/webhookSecret";
+import { escapeHtml, guestNameLine } from "@/utils/telegram";
 import { clashesInRoom, dateChangeMessage, detectDateChange, type BookingLite } from "@/utils/dateChangeAlert";
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -216,10 +217,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const message = [
     `🏠 <b>New Booking — ${room}</b>`,
-    `👤 ${firstName} ${lastName}`.trim() || "👤 —",
+    guestNameLine(firstName, lastName),
     `📅 ${formatDate(booking?.arrival ?? "")} → ${formatDate(booking?.departure ?? "")} (${nights} nights)`,
     `👥 ${guests} guests`,
-    `📣 ${channel}`,
+    `📣 ${escapeHtml(channel)}`,
     `💰 ${price}`,
   ].join("\n");
 

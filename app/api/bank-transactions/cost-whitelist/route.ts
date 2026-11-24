@@ -1,18 +1,18 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { BankCostRule } from '@/types/bankCostWhitelist';
 import { ruleHasIdentity } from '@/types/bankCostWhitelist';
 import { readAllBankCostWhitelist, writeAllBankCostWhitelist } from '@/utils/bankCostWhitelistStore';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   return NextResponse.json(await readAllBankCostWhitelist());
 }
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await request.json() as Partial<BankCostRule>;
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const id = new URL(request.url).searchParams.get('id');

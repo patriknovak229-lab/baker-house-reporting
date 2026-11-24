@@ -12,14 +12,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { sendSms, smsConfigured } from '@/utils/sms';
 import { toE164 } from '@/utils/phone';
 import type { EmailSendLogEntry } from '@/types/emailSendLog';
 import { readAllEmailSendLog, writeAllEmailSendLog } from '@/utils/emailSendLogStore';
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   if (!smsConfigured()) {

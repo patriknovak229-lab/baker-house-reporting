@@ -19,7 +19,7 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { generatePDF } from '@/utils/pdfGenerate';
 import { buildOfferHTML, type OfferInput, type OfferStay } from '@/utils/corporateOfferHtml';
 import { addDays, isYmd, nightsBetween } from '@/utils/corporateSchedule';
@@ -33,7 +33,7 @@ const MAX_STAYS = 120;
 const DEFAULT_VALID_DAYS = 14;
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { agreementId?: unknown; validUntil?: unknown; offer?: unknown };

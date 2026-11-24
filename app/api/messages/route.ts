@@ -3,7 +3,7 @@ import { Redis } from '@upstash/redis';
 import { triggerAutoReplyPoll } from '@/utils/autoReplyNudge';
 import { readAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import { getAccessToken } from '@/utils/beds24Auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { isInvoiceRequest, parseInvoiceRequest } from '@/utils/invoiceRequestParser';
 import { sendBeds24Message } from '@/utils/beds24Messages';
 import { markOperatorActive } from '@/utils/operatorActivity';
@@ -265,7 +265,7 @@ export async function GET(req: NextRequest) {
 
 // ── POST /api/messages — send a message to a guest ────────────────────────────
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const { bookingId, message } = await req.json();

@@ -7,6 +7,8 @@ import { canAccessAnalytics, canAccessTab } from '@/utils/roles';
 interface NavProps {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
+  /** From AppShell, so the local dev bypass (no session) shows the tested role's tabs. */
+  role?: Role;
 }
 
 const ALL_TABS: { id: Tab; label: string }[] = [
@@ -17,9 +19,9 @@ const ALL_TABS: { id: Tab; label: string }[] = [
   { id: 'pricing', label: 'Pricing' },
 ];
 
-export default function Nav({ activeTab, onTabChange }: NavProps) {
+export default function Nav({ activeTab, onTabChange, role: roleProp }: NavProps) {
   const { data: session } = useSession();
-  const role = session?.user?.role as Role | undefined;
+  const role = roleProp ?? (session?.user?.role as Role | undefined);
   const tabs = ALL_TABS.filter((t) => !role || canAccessTab(role, t.id));
 
   return (

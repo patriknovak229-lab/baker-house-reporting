@@ -3,7 +3,7 @@ import { google } from 'googleapis';
 import { PDFDocument } from 'pdf-lib';
 import sharp from 'sharp';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 
@@ -45,7 +45,7 @@ async function getOrCreateFolder(drive: ReturnType<typeof google.drive>): Promis
 }
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const refreshToken = await getGoogleRefreshToken();

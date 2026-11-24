@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { findDuplicateInvoice, normalizeInvoiceAmounts } from '@/utils/invoiceChecks';
 import { isOtaSupplier, OTA_INVOICE_SKIP_MESSAGE } from '@/utils/otaSupplier';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const invoices = await readAllSupplierInvoices();
@@ -18,7 +18,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await request.json() as SupplierInvoice & { force?: boolean };

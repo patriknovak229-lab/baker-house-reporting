@@ -14,7 +14,7 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { priceSegment, type SegmentPrice } from '@/utils/beds24Pricing';
 import { nightsBetween, isYmd } from '@/utils/corporateSchedule';
 import { SELLABLE_ROOM_IDS } from '@/utils/corporateInput';
@@ -36,7 +36,7 @@ export interface QuotedCorporateSegment extends Segment, SegmentPrice {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { segments?: unknown; adults?: unknown; children?: unknown };

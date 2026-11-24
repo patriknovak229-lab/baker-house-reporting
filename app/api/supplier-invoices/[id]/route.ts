@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { normalizeInvoiceAmounts } from '@/utils/invoiceChecks';
@@ -11,7 +11,7 @@ export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;
@@ -39,7 +39,7 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;

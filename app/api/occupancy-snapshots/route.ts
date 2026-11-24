@@ -14,7 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import {
   putSnapshot,
   listSnapshots,
@@ -60,7 +60,7 @@ function isValidSnapshotData(d: unknown): d is SnapshotData {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('performance', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { data?: unknown; token?: string; expiresInDays?: number | null };
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('performance', 'view');
   if ('error' in guard) return guard.error;
 
   const snapshots = await listSnapshots();
@@ -120,7 +120,7 @@ export async function GET() {
 }
 
 export async function DELETE(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('performance', 'change');
   if ('error' in guard) return guard.error;
 
   let token = req.nextUrl.searchParams.get('token')?.trim() || '';

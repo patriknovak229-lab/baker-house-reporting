@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
@@ -16,7 +16,7 @@ export const maxDuration = 60;
  * Booking requires the payout's contents to tie to the bank credit exactly.
  */
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { transactionId, dryRun } = await request.json() as { transactionId?: string; dryRun?: boolean };

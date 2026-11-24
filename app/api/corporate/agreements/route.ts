@@ -15,7 +15,7 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { generateStays } from '@/utils/corporateSchedule';
 import { materialiseStays, parseAgreementInput, parseStayInputs } from '@/utils/corporateInput';
 import {
@@ -29,7 +29,7 @@ import {
 import type { CorporateAgreementInsert, CorporateStayInsert } from '@/lib/db/schema/corporate';
 
 export async function GET() {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'view');
   if ('error' in guard) return guard.error;
   try {
     const agreements = await listAgreements();
@@ -41,7 +41,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
 
   let body: unknown;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
@@ -80,7 +80,7 @@ export interface PLData {
 const emptyLine = (): PLLine => ({ total: 0, rows: [] });
 
 export async function GET(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super', 'accountant']);
+  const authResult = await requireAccess('accounting', 'view');
   if ('error' in authResult) return authResult.error;
 
   const { searchParams } = new URL(req.url);

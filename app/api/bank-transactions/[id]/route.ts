@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { BankTransaction, IgnoreCategoryId, RecurringCostCategoryId } from '@/types/bankTransaction';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { buildRuleFromTx } from '@/types/bankCostWhitelist';
@@ -40,7 +40,7 @@ export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;

@@ -13,7 +13,7 @@
  * credential. Admin-gated all the same, since it describes storage internals.
  */
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { STORE_DOMAINS, storeEnvKey, getStoreMode } from '@/lib/dataStore';
 import { bookingsMirrorWriteEnabled } from '@/utils/bookingsMirror';
 
@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('system', 'view');
   if ('error' in guard) return guard.error;
 
   const domains = STORE_DOMAINS.map((domain) => {

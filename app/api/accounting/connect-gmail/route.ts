@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { Redis } from '@upstash/redis';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 
 const STATE_KEY = 'baker:gmail-oauth-state';
 const STATE_TTL = 600; // 10 minutes
@@ -26,7 +26,7 @@ function getOAuthClient() {
  *  Initiates the OAuth flow for the invoice Gmail account.
  *  Admin only — redirects to Google's consent page. */
 export async function GET() {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const redis = getRedis();

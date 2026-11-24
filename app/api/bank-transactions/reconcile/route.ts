@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 import { readAllRevenueInvoices, writeAllRevenueInvoices } from '@/utils/revenueInvoicesStore';
@@ -25,7 +25,7 @@ export const maxDuration = 60;
  * Every link records autoMatchReason so it can be reviewed / undone.
  */
 export async function POST() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const [transactions, invoices, revenueInvoices, groups] = await Promise.all([

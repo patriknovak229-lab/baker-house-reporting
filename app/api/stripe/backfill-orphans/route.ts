@@ -17,7 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { Reservation } from '@/types/reservation';
 import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
 import { readAllAdditionalPayments, writeAllAdditionalPayments } from '@/utils/additionalPaymentsStore';
@@ -169,7 +169,7 @@ async function buildReport(req: NextRequest): Promise<OrphanReport> {
 }
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('system', 'change');
   if ('error' in guard) return guard.error;
 
   try {
@@ -184,7 +184,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('system', 'change');
   if ('error' in guard) return guard.error;
 
   try {

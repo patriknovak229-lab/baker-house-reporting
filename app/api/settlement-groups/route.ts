@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { SettlementGroup } from '@/types/settlementGroup';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
@@ -11,7 +11,7 @@ import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankT
 
 // GET /api/settlement-groups — return all groups sorted newest first
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const groups = await readAllSettlementGroups();
@@ -25,7 +25,7 @@ export async function GET() {
 //   • report-first (Revenue tab): pass OTA earnings-report fields (source/period/gross…)
 //     with no transaction — creates an empty group ready for payouts to be linked.
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await request.json() as {

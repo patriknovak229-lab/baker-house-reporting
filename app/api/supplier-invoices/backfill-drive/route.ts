@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { Redis } from '@upstash/redis';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { createInvoiceGmailClient, fetchInvoicePdfForMessage } from '@/utils/gmailInvoice';
 import { uploadInvoicePdfToDrive } from '@/utils/driveInvoice';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
@@ -21,7 +21,7 @@ function getRedis(): Redis | null {
  * invoices whose Drive upload silently failed (e.g. expired Google sign-in).
  */
 export async function POST() {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const redis = getRedis();

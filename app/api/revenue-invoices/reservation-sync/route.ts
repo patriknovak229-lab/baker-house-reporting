@@ -23,11 +23,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { syncIssuedRevenueInvoices, type DesiredRevenueInvoice } from '@/utils/revenueInvoiceSync';
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { reservationNumber, invoices: desired } = (await request.json()) as {

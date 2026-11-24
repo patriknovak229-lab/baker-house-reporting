@@ -1,6 +1,6 @@
 import NextAuth from 'next-auth';
 import Google from 'next-auth/providers/google';
-import { getRoleForEmail } from '@/utils/roles';
+import { resolveRole } from '@/utils/userRoles';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -31,14 +31,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: { signIn: '/login' },
   callbacks: {
     async signIn({ user }) {
-      // Reject anyone not in an allowed email list
-      return getRoleForEmail(user.email ?? '') !== null;
+      // Reject anyone who has no role (app_users / ADMIN_EMAILS)
+      return (await resolveRole(user.email)) !== null;
     },
     async jwt({ token, user, account }) {
-      if (user?.email) {
-        const role = getRoleForEmail(user.email);
-        if (role) token.role = role;
-      }
+      // Re-checked on EVERY request, not just at sign-in, so removing someone
+      // or changing their role on /admin/users lands within a minute (the
+      // lookup is cached for 60 s). No role any more → null ends the session.
+      const role = await resolveRole(user?.email ?? token.email);
+      if (!role) return null;
+      token.role = role;
       // Capture Google access + refresh tokens on first sign-in. They stay in
       // the encrypted JWT only — server routes read them with
       // utils/googleSessionToken.

@@ -1,20 +1,30 @@
 import { auth } from '@/auth';
 import { NextResponse } from 'next/server';
-import type { Role } from '@/utils/roles';
+import { PERMISSIONS, isRole, type Access, type Area, type Role } from '@/utils/roles';
 
-/** Call at the top of any API route handler that requires specific roles.
- *  Returns { role, email } on success or { error: NextResponse } on failure.
- *  email is the operator's Google account email (or DEV_ADMIN_EMAIL in dev). */
+/** Local dev bypass: DEV_ADMIN_EMAIL skips Google auth; DEV_ROLE (optional)
+ *  picks the role to test as, default admin. */
+function devIdentity(): { role: Role; email: string } | null {
+  if (process.env.NODE_ENV !== 'development' || !process.env.DEV_ADMIN_EMAIL) return null;
+  const role = isRole(process.env.DEV_ROLE) ? process.env.DEV_ROLE : 'admin';
+  return { role, email: process.env.DEV_ADMIN_EMAIL };
+}
+
+/**
+ * Low-level check against an explicit role list. API routes use
+ * `requireAccess` instead, so the permission map in utils/roles.ts stays the
+ * one place that decides (utils/apiGuards.test.ts enforces it).
+ * Returns { role, email } on success or { error: NextResponse } on failure.
+ */
 export async function requireRole(
-  allowedRoles: Role[]
+  allowedRoles: Role[],
 ): Promise<{ role: Role; email: string } | { error: NextResponse }> {
-  // Local dev bypass: set DEV_ADMIN_EMAIL in .env.local to skip Google auth
-  if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
-    const devRole: Role = 'admin';
-    if (!allowedRoles.includes(devRole)) {
+  const dev = devIdentity();
+  if (dev) {
+    if (!allowedRoles.includes(dev.role)) {
       return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
     }
-    return { role: devRole, email: process.env.DEV_ADMIN_EMAIL };
+    return dev;
   }
 
   const session = await auth();
@@ -26,4 +36,12 @@ export async function requireRole(
     return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
   }
   return { role, email: session.user.email ?? 'unknown' };
+}
+
+/** Call at the top of every API route handler: may this user view / change `area`? */
+export function requireAccess(
+  area: Area,
+  access: Access,
+): Promise<{ role: Role; email: string } | { error: NextResponse }> {
+  return requireRole(PERMISSIONS[area][access]);
 }

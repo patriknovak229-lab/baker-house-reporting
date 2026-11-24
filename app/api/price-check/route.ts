@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccessToken } from '@/utils/beds24Auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 // Beds24 price plumbing is shared with /api/stay-request/quote — one place for
 // the offers-vs-calendar distinction and the undocumented response shapes.
 import {
@@ -78,7 +78,7 @@ async function fetchCalendarPrices(
  *   1KK Urban Studios = Beds24 roomId 679714 (virtual room qty=3, maps to K.102 + K.103 + K.106)
  */
 export async function GET(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super']);
+  const authResult = await requireAccess('pricing', 'view');
   if ('error' in authResult) return authResult.error;
 
   const arrival = req.nextUrl.searchParams.get('arrival');

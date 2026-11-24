@@ -20,7 +20,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import {
   buildTemplate,
   renderAutoReply,
@@ -46,7 +46,7 @@ const PREVIEW_CATEGORIES = [
 type PreviewCategory = (typeof PREVIEW_CATEGORIES)[number];
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('autoReply', 'view');
   if ('error' in guard) return guard.error;
 
   const sp = req.nextUrl.searchParams;

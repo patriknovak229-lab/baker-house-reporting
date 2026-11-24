@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 
 // POST /api/vouchers/send-email — send voucher code to guest via email
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super']);
+  const authResult = await requireAccess('transactions', 'change');
   if ('error' in authResult) return authResult.error;
 
   const { to, guestName, voucherCode, discountType, value } = await req.json();

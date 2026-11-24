@@ -1,13 +1,13 @@
 import { redirect } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import { auth } from "@/auth";
-import type { Role } from "@/utils/roles";
+import { isRole, type Role } from "@/utils/roles";
 
 export default async function Page() {
   // Server-side dev bypass: skip Google OAuth when DEV_ADMIN_EMAIL is set locally.
   // process.env is available in server components; this never reaches the client bundle.
   if (process.env.NODE_ENV === 'development' && process.env.DEV_ADMIN_EMAIL) {
-    return <AppShell devRole="admin" />;
+    return <AppShell devRole={isRole(process.env.DEV_ROLE) ? process.env.DEV_ROLE : "admin"} />;
   }
 
   // Stakeholder occupancy-only accounts have no reporting-app tabs — send them

@@ -27,7 +27,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
@@ -61,7 +61,7 @@ function previousDay(yyyymmdd: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let token: string;
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
  * BH-blackouts in production data can be cancelled via the Beds24 UI if needed.
  */
 export async function DELETE(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let token: string;

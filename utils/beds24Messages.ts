@@ -11,6 +11,18 @@ import { getAccessToken } from '@/utils/beds24Auth';
 
 const BEDS24_API_BASE = 'https://beds24.com/api/v2';
 
+let sentCount = 0;
+
+/**
+ * Guest messages this server instance has sent so far. The auto-reply poll
+ * compares it before and after a guest message whose handling failed, to tell
+ * whether something already went out to the guest. Another request on the
+ * same instance can only push it up, so that check errs towards "sent".
+ */
+export function beds24MessagesSent(): number {
+  return sentCount;
+}
+
 export interface SendMessageResult {
   /** Beds24's response payload, useful for capturing the new message id. */
   raw: unknown;
@@ -48,6 +60,7 @@ export async function sendBeds24Message(
     const text = await res.text();
     throw new Error(`Beds24 ${res.status}: ${text}`);
   }
+  sentCount++;
 
   const raw = await res.json().catch(() => null);
   const messageId = extractMessageId(raw);

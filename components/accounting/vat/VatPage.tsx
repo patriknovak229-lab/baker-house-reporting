@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { QRCodeSVG } from 'qrcode.react';
-import type { Role } from '@/utils/roles';
+import { can, type Role } from '@/utils/roles';
 import type {
   OtaTaxDocument, VatA2Row, VatConfig, VatDecision, VatFlag, VatMonthResult, VatOverview, VatSettings,
 } from '@/types/vat';
@@ -146,7 +146,7 @@ function FlagList({ flags, canEdit, onDecide, onAcknowledge }: {
 export default function VatPage() {
   const { data: session } = useSession();
   const role = (session?.user as { role?: Role } | undefined)?.role;
-  const canEdit = role !== 'accountant'; // the API enforces admin-only writes regardless
+  const canEdit = can(role, 'accounting', 'change'); // the API enforces it regardless
 
   const [month, setMonth] = useState(lastClosedMonth);
   const [result, setResult] = useState<VatMonthResult | null>(null);

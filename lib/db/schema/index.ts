@@ -28,3 +28,4 @@ export * from './webFunnel';
 export * from './team';
 export * from './webPayments';
 export * from './scheduledPaymentLinks';
+export * from './appUsers';

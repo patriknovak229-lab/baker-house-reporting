@@ -6,13 +6,13 @@
  * Never calls PriceLabs — the 06:30 market refresh cron owns that.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readRadar } from '@/data-access/pricing/radar';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('pricing', 'view');
   if ('error' in guard) return guard.error;
 
   const raw = Number(req.nextUrl.searchParams.get('days') ?? 365);

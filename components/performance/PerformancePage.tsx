@@ -17,6 +17,8 @@ import GrossProfitBridgeView from "./GrossProfitBridgeView";
 import type { VariableCostsLookup, VariableCostsResponse } from "@/utils/variableCostsShared";
 import { expandLinkedReservations } from "@/utils/expandReservations";
 import ShareSnapshotModal from "./ShareSnapshotModal";
+import { useSession } from "next-auth/react";
+import { can, type Role } from "@/utils/roles";
 
 export default function PerformancePage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -94,6 +96,9 @@ export default function PerformancePage() {
   });
   const [selectedRooms, setSelectedRooms] = useState<Room[]>([...ALL_ROOMS]);
   const [shareOpen, setShareOpen] = useState(false);
+  // Share links create public snapshots — a change, so Performance viewers don't get the button.
+  const { data: session } = useSession();
+  const canShare = can((session?.user as { role?: Role } | undefined)?.role, "performance", "change");
   // Month chosen in the "Month Picker" preset ("YYYY-MM"); defaults to this month.
   const [pickedMonth, setPickedMonth] = useState<string>(
     () => new Date().toLocaleDateString("sv-SE").slice(0, 7),
@@ -176,6 +181,7 @@ export default function PerformancePage() {
             </svg>
             Export PDF
           </button>
+          {canShare && (
           <button
             onClick={() => setShareOpen(true)}
             disabled={isLoading}
@@ -188,6 +194,7 @@ export default function PerformancePage() {
             </svg>
             Share
           </button>
+          )}
         </div>
       </div>
 

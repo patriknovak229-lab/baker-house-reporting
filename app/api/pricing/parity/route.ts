@@ -6,14 +6,14 @@
  *        ingests the answer within a few minutes.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { pragueToday } from '@/utils/periodUtils';
 import { queueCheck, readParity } from '@/data-access/pricing/parity';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('pricing', 'view');
   if ('error' in guard) return guard.error;
 
   try {
@@ -28,7 +28,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('pricing', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await req.json().catch(() => null);

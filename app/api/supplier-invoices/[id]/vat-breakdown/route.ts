@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllSupplierInvoices, setSupplierInvoiceVatBreakdown } from '@/utils/supplierInvoicesStore';
 import { readAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
 import { deriveVatBreakdown, meaningfulVatRows, round2 } from '@/utils/invoiceChecks';
@@ -28,7 +28,7 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await params;
 

@@ -14,14 +14,14 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { parseAgreementPatch } from '@/utils/corporateInput';
 import { deleteAgreement, getAgreementDetail, updateAgreement } from '@/data-access/corporate';
 
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'view');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
   const agreement = await getAgreementDetail(id);
@@ -30,7 +30,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
 
@@ -50,7 +50,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 }
 
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
 

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
 import { readGmailInvoiceToken } from '@/utils/gmailInvoiceTokenStore';
 import { NOT_OTA_SENDERS_QUERY, OTA_SENDERS_QUERY } from '@/utils/otaSupplier';
@@ -96,7 +96,7 @@ async function tryFetchPdf(url: string): Promise<{ pdf: Buffer } | { reason: Ski
 }
 
 export async function POST() {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const label = process.env.GMAIL_INVOICE_LABEL;

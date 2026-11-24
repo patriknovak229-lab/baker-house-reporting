@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super']);
+  const authResult = await requireAccess('transactions', 'change');
   if ('error' in authResult) return authResult.error;
 
   const { to, guestName, description, amountCzk, paymentUrl } = await req.json();

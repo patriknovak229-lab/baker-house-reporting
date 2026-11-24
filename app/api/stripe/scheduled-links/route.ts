@@ -11,7 +11,7 @@
  * The daily cron /api/cron/send-scheduled-payments does the sending.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { PaymentAllocation } from '@/types/additionalPayment';
 import type { ScheduledPaymentLink } from '@/types/scheduledPaymentLink';
 import { SCHEDULED_LINK_ALERT_STATUSES } from '@/types/scheduledPaymentLink';
@@ -27,13 +27,13 @@ export const dynamic = 'force-dynamic';
 const bad = (status: number, error: string) => NextResponse.json({ error }, { status });
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super', 'viewer', 'accountant']);
+  const guard = await requireAccess('transactions', 'view');
   if ('error' in guard) return guard.error;
   return NextResponse.json(await listScheduledLinks());
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await req.json().catch(() => ({}));
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await req.json().catch(() => ({}));

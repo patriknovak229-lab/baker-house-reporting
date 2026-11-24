@@ -9,20 +9,20 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import type { WebPaymentMode } from '@/types/webPayment';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { escapeHtml, sendTechnicalAlert } from '@/utils/telegram';
 import { readWebPaymentMode, writeWebPaymentMode } from '@/utils/webPayments/deps';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('payLater', 'view');
   if ('error' in guard) return guard.error;
   return NextResponse.json({ mode: await readWebPaymentMode() });
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('payLater', 'change');
   if ('error' in guard) return guard.error;
   const body = (await req.json().catch(() => null)) as { mode?: string } | null;
   const mode = body?.mode as WebPaymentMode | undefined;

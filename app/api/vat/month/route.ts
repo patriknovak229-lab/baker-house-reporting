@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { loadVatData, monthResult } from '@/utils/vat/loadInputs';
 import { isValidMonth } from '@/utils/vat/czechCalendar';
 
 // GET /api/vat/month?month=YYYY-MM — the VAT return + control statement for one month, with flags.
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const month = new URL(req.url).searchParams.get('month');

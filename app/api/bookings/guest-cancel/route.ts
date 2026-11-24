@@ -28,7 +28,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { requireRole } from "@/utils/authGuard";
+import { requireAccess } from "@/utils/authGuard";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { getRedis, mapChannel } from "@/utils/beds24Reservations";
 import { sendTelegram, escapeHtml } from "@/utils/telegram";
@@ -137,7 +137,7 @@ async function loadLiveDirectBooking(reservationNumber: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(["admin"]);
+  const guard = await requireAccess('refunds', 'view');
   if ("error" in guard) return guard.error;
   const reservationNumber = req.nextUrl.searchParams.get("reservationNumber")?.trim() ?? "";
   const live = await loadLiveDirectBooking(reservationNumber);
@@ -158,7 +158,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(["admin"]);
+  const guard = await requireAccess('refunds', 'change');
   if ("error" in guard) return guard.error;
 
   let body: {

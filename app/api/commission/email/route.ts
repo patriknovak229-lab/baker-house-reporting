@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import nodemailer from 'nodemailer';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 import { buildSettlementHTML } from '@/utils/settlementHtml';
 import { generatePDF } from '@/utils/pdfGenerate';
@@ -31,7 +31,7 @@ function getRedis(): Redis | null {
 
 // GET /api/commission/email — saved owner-name → email map (for pre-fill).
 export async function GET() {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
   const redis = getRedis();
   if (!redis) return NextResponse.json({});
@@ -42,7 +42,7 @@ export async function GET() {
 // POST /api/commission/email — email the settlement PDF to the owner.
 // Body: { settlement, email, saveEmail? }. Optionally persists the address.
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { settlement, email, saveEmail } = (await req.json()) as {

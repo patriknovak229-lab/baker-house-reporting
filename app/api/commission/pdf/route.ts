@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 import { buildSettlementHTML } from '@/utils/settlementHtml';
 import { generatePDF } from '@/utils/pdfGenerate';
@@ -8,7 +8,7 @@ import { generatePDF } from '@/utils/pdfGenerate';
 // Accepts a full settlement snapshot (issued or freshly computed) so the
 // operator can export before or after persisting to history.
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const settlement = (await req.json()) as CommissionSettlement;

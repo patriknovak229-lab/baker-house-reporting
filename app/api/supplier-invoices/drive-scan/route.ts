@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
 import { getOrCreateInvoiceFolder } from '@/utils/driveInvoice';
 import { readAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
@@ -35,7 +35,7 @@ function mimeForExt(ext: string): string {
 }
 
 export async function POST() {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const refreshToken = await getGoogleRefreshToken();

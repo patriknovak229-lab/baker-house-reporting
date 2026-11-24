@@ -183,6 +183,13 @@
       "when": 1795016548821,
       "tag": "0025_linked_payment_links",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795522286256,
+      "tag": "0026_app_users",
+      "breakpoints": true
     }
   ]
 }

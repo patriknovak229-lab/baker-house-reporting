@@ -2,6 +2,8 @@ import { NextResponse, after } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { triggerAutoReplyPoll } from '@/utils/autoReplyNudge';
+import { requireAccess } from '@/utils/authGuard';
+import { can } from '@/utils/roles';
 import { readAllAutoReplyLog } from '@/utils/autoReplyLogStore';
 import type {
   PendingDraft,
@@ -79,6 +81,9 @@ function getRedis(): Redis | null {
  * incoming messages — see /api/webhook/beds24-message for context).
  */
 export async function GET() {
+  const guard = await requireAccess('transactions', 'view');
+  if ('error' in guard) return guard.error;
+
   let token: string;
   try {
     token = await getAccessToken();
@@ -175,7 +180,8 @@ export async function GET() {
   // Pending operator-approval drafts + queued `other` messages
   let pendingDrafts: PendingDraft[] = [];
   let pendingOthers: PendingOther[] = [];
-  if (redis) {
+  // AI drafts belong to auto-reply, which a User (view-only tier) doesn't see.
+  if (redis && can(guard.role, 'autoReply')) {
     pendingDrafts = await readAndCleanHash<PendingDraft>(redis, PENDING_DRAFTS_KEY);
     pendingOthers = await readAndCleanHash<PendingOther>(redis, PENDING_OTHERS_KEY);
   }

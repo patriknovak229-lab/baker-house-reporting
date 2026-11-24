@@ -15,7 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
-import { requireRole } from "@/utils/authGuard";
+import { requireAccess } from "@/utils/authGuard";
 import type { Reservation } from "@/types/reservation";
 import {
   buildConfirmationHTML,
@@ -39,7 +39,7 @@ const RESERVATIONS_ALIAS = "reservations@bakerhouseapartments.cz";
 async function buildPreview(req: NextRequest): Promise<NextResponse | null> {
   if (req.nextUrl.searchParams.get("preview") !== "1") return null;
 
-  const guard = await requireRole(["admin", "super"]);
+  const guard = await requireAccess("transactions", "change");
   if ("error" in guard) return guard.error;
 
   let body: { reservation?: Reservation };
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
   const preview = await buildPreview(req);
   if (preview) return preview;
 
-  const guard = await requireRole(["admin", "super"]);
+  const guard = await requireAccess("transactions", "change");
   if ("error" in guard) return guard.error;
 
   let body: { reservation?: Reservation; to?: string };

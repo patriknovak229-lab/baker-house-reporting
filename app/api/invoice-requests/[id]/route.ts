@@ -21,7 +21,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { InvoiceRequestStatus } from '@/types/invoiceRequest';
 import { readAllInvoiceRequests, writeAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 import { restoredInvoiceRequestStatus } from '@/utils/invoiceUtils';
@@ -30,7 +30,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;

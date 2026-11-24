@@ -54,7 +54,7 @@ export default function AppShell({ devRole }: AppShellProps) {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Nav activeTab={activeTab} onTabChange={handleTabChange} />
+      <Nav activeTab={activeTab} onTabChange={handleTabChange} role={role} />
       <main>
         {activeTab === 'transactions' && <TransactionsPage />}
         {/* Receives the role so the tab works under the local DEV_ADMIN_EMAIL

@@ -10,11 +10,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super', 'viewer', 'accountant']);
+  const guard = await requireAccess('transactions', 'view');
   if ('error' in guard) return guard.error;
 
   const reservationNumber = req.nextUrl.searchParams.get('reservationNumber');

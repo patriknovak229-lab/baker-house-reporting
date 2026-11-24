@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import ExcelJS from 'exceljs';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import type { BankTransaction } from '@/types/bankTransaction';
@@ -95,7 +95,7 @@ const BANK_COLUMNS: { header: string; key: keyof BankRow; width: number }[] = [
 ];
 
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'accountant']);
+  const authResult = await requireAccess('accounting', 'change');
   if ('error' in authResult) return authResult.error;
 
   const { searchParams } = new URL(req.url);

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
 import { readAllBankTransactions, writeAllBankTransactions } from '@/utils/bankTransactionsStore';
 
@@ -17,7 +17,7 @@ export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;
@@ -73,7 +73,7 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;

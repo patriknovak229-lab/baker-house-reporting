@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { loadVatData, monthResult } from '@/utils/vat/loadInputs';
 import { isValidMonth } from '@/utils/vat/czechCalendar';
 import { buildVatPdfHtml } from '@/utils/vat/pdfHtml';
@@ -8,7 +8,7 @@ import { generatePDF } from '@/utils/pdfGenerate';
 // GET /api/vat/pdf?month=YYYY-MM — the month's VAT summary as a PDF for the accountant.
 // &view=html returns the same document as a printable web page (fallback if PDF rendering fails).
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const params = new URL(req.url).searchParams;

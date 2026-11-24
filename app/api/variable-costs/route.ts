@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { computeVariableCosts } from '@/utils/variableCostsEngine';
+import { requireAccess } from '@/utils/authGuard';
 
 // Bypass Next.js's static route-handler cache — must read live Redis state
 // on every request, otherwise newly logged consumable / assignment / pickup
@@ -17,6 +18,8 @@ export const revalidate = 0;
  * handler drags its server-only dependencies into the client bundle.
  */
 export async function GET() {
+  const guard = await requireAccess('performance', 'view');
+  if ('error' in guard) return guard.error;
   const body = await computeVariableCosts();
   if (!body) {
     return NextResponse.json({ error: 'Redis not configured' }, { status: 503 });

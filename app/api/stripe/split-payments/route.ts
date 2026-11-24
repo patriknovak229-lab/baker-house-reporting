@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { AdditionalPayment } from '@/types/additionalPayment';
 import type { SplitPayment } from '@/types/splitPayment';
 import { readAllSplitPayments, writeAllSplitPayments } from '@/utils/splitPaymentsStore';
@@ -95,7 +95,7 @@ async function mintCheckoutSession(args: {
  * The daily cron will mint sessions + email guests on the day.
  */
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super']);
+  const authResult = await requireAccess('transactions', 'change');
   if ('error' in authResult) return authResult.error;
 
   const body = (await req.json()) as BodyShape;
@@ -262,7 +262,7 @@ export async function POST(req: NextRequest) {
  *   (no query)                  → every SplitPayment (used by TransactionsPage to merge per-reservation)
  */
 export async function GET(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super', 'viewer', 'accountant']);
+  const authResult = await requireAccess('transactions', 'view');
   if ('error' in authResult) return authResult.error;
 
   const reservationNumber = req.nextUrl.searchParams.get('reservationNumber');

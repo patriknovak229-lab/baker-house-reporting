@@ -8,12 +8,12 @@
  * Body: { reservationNumber, refundId }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { recordExistingRefund, WebPaymentError } from '@/utils/webPaymentServer';
 import { webPaymentDeps } from '@/utils/webPaymentDeps';
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await req.json().catch(() => ({}));

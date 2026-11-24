@@ -21,7 +21,7 @@ import { google } from 'googleapis';
 import QRCodeLib from 'qrcode';
 import { Redis } from '@upstash/redis';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { generatePDF } from '@/utils/pdfGenerate';
 import {
   buildInvoiceHTML,
@@ -75,7 +75,7 @@ async function getOrCreateFolder(drive: ReturnType<typeof google.drive>): Promis
 }
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const refreshToken = await getGoogleRefreshToken();

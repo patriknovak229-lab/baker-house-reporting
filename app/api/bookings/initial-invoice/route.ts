@@ -34,7 +34,7 @@
  * retry of the booking would create a duplicate.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { InvoiceData, InvoiceStatus, Issue, Reservation } from '@/types/reservation';
 import { readAllReservationOverrides, writeAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { buildReservationSet } from '@/utils/beds24Reservations';
@@ -65,7 +65,7 @@ async function patchOverride(reservationNumber: string, patch: (entry: OverrideE
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const parsed = parseNewBookingInvoice(await req.json().catch(() => null), pragueToday());

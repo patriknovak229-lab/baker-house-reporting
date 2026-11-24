@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { recomputePaymentOverride } from '@/utils/paymentReconcile';
 import { paymentsCovering, reservationsOf } from '@/utils/paymentAllocations';
 import type { AdditionalPayment, AdditionalPaymentStatus } from '@/types/additionalPayment';
@@ -38,7 +38,7 @@ interface DetailRow {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await req.json().catch(() => ({}));

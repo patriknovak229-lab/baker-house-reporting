@@ -53,7 +53,7 @@ import { pragueToday } from "@/utils/periodUtils";
 import { formatDate } from "@/utils/formatters";
 import { ratingClass } from "@/utils/rating";
 import { useSession } from "next-auth/react";
-import { canMutate } from "@/utils/roles";
+import { can, canMutate } from "@/utils/roles";
 import type { Role } from "@/utils/roles";
 
 // ─── Local state persistence (Redis-backed) ──────────────────────────────────
@@ -1696,7 +1696,7 @@ export default function TransactionsPage() {
               </svg>
               Translate
             </button>
-            {role === "admin" && (
+            {can(role, "payLater", "change") && (
               <button
                 onClick={() => { setShowPayLater(true); focusFloatingPanel("pay-later"); }}
                 title="Website bookings paid later: the mode switch and every scheduled card charge"

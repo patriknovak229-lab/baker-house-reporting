@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { BankTransaction, BankTransactionState } from '@/types/bankTransaction';
 import { matchesCostRule } from '@/types/bankCostWhitelist';
 import { readAllSupplierInvoices, writeAllSupplierInvoices } from '@/utils/supplierInvoicesStore';
@@ -28,7 +28,7 @@ function dedupeById(txs: BankTransaction[]): { deduped: BankTransaction[]; remov
 // ── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   let csvText: string;

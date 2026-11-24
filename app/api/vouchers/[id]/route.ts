@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllVouchers, writeAllVouchers } from '@/utils/vouchersStore';
 
 // DELETE /api/vouchers/[id] — soft-delete (set status to 'deleted')
@@ -8,7 +8,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;

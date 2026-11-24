@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import sharp from 'sharp';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
 import { extractInvoice, ExtractionError } from '@/utils/invoiceExtraction';
 
@@ -16,7 +16,7 @@ function isHeic(mimeType: string, fileName: string): boolean {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const apiKey = process.env.ANTHROPIC_API_KEY;

@@ -18,7 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { BEDS24_API_BASE, getRedis } from '@/utils/beds24Reservations';
 import { pragueToday } from '@/utils/periodUtils';
@@ -145,7 +145,7 @@ function errorResponse(err: unknown, status = 502): NextResponse {
 }
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'view');
   if ('error' in guard) return guard.error;
 
   const redis = getRedis();
@@ -172,7 +172,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { roomIds?: unknown; kind?: unknown; from?: unknown; to?: unknown };
@@ -259,7 +259,7 @@ export async function POST(req: NextRequest) {
  * and re-set, and a conflict changes nothing (the old restriction stays).
  */
 export async function PATCH(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { id?: unknown; kind?: unknown; from?: unknown; to?: unknown };
@@ -333,7 +333,7 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const parsed = parseRestrictionId(req.nextUrl.searchParams.get('id') ?? '');

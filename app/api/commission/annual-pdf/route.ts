@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { AnnualOverview } from '@/utils/commissionYear';
 import { buildAnnualOverviewHTML } from '@/utils/annualStatementHtml';
 import { generatePDF } from '@/utils/pdfGenerate';
@@ -12,7 +12,7 @@ import { generatePDF } from '@/utils/pdfGenerate';
 // costs, settlements), so recomputing server-side would risk exporting numbers
 // the operator never saw. Same contract as /api/commission/pdf.
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const overview = (await req.json()) as AnnualOverview;

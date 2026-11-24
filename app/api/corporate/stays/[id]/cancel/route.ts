@@ -12,7 +12,7 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { escapeHtml, sendTelegram } from '@/utils/telegram';
 import { modifyBookingGroup, roomLabel } from '@/utils/corporateBooking';
@@ -22,7 +22,7 @@ import { getAgreement, getStay, updateStay } from '@/data-access/corporate';
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
 

@@ -3,7 +3,7 @@ import { google } from 'googleapis';
 import { PDFDocument } from 'pdf-lib';
 import sharp from 'sharp';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { Redis } from '@upstash/redis';
 import { getOrCreateInvoiceFolder } from '@/utils/driveInvoice';
 
@@ -18,7 +18,7 @@ function safe(str: string): string {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   // Use the admin's own Google OAuth tokens

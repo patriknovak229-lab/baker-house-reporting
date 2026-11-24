@@ -20,7 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { webPaymentRepo } from '@/data-access/webPayments';
 import { OPEN_WEB_PAYMENT_STATUSES } from '@/types/webPayment';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { cronAuth } from '@/utils/cronAuth';
 import { withCronLock } from '@/utils/cronLock';
 import { escapeHtml, sendTechnicalAlert } from '@/utils/telegram';
@@ -37,7 +37,7 @@ async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, JOB);
   let actor = 'job';
   if (!isCron) {
-    const guard = await requireRole(['admin']);
+    const guard = await requireAccess('payLater', 'change');
     if ('error' in guard) return guard.error;
     actor = guard.email;
   }

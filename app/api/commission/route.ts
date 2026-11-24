@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { CommissionSettlement } from '@/types/commissionSettlement';
 import { negativePayableWarning, type ComputedSettlement } from '@/utils/commissionCalc';
 import { readAllCommissionSettlements, writeAllCommissionSettlements } from '@/utils/commissionSettlementsStore';
@@ -14,7 +14,7 @@ export function settlementId(unitId: string, month: string): string {
 
 // GET /api/commission — list all issued settlements
 export async function GET() {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const settlements = await readAllCommissionSettlements();
@@ -26,7 +26,7 @@ export async function GET() {
 // Re-issuing the same unit+month overwrites the prior snapshot (unless it is
 // already reconciled to a bank payout, which is protected).
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const session = await auth();

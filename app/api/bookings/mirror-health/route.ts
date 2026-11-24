@@ -11,14 +11,14 @@
  * Admin-only — it reports storage internals and sample reservation numbers.
  */
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { checkBookingsMirrorHealth } from '@/utils/bookingsMirrorHealth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'view');
   if ('error' in guard) return guard.error;
 
   try {

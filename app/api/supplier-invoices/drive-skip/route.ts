@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { addDriveScanSkipEntries } from '@/data-access/driveScanSkip';
 
 /**
@@ -8,7 +8,7 @@ import { addDriveScanSkipEntries } from '@/data-access/driveScanSkip';
  * settlement report instead).
  */
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const body = await request.json() as { fileId?: string; note?: string };

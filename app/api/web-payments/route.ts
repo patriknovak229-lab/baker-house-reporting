@@ -7,7 +7,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { webPaymentRepo } from '@/data-access/webPayments';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { cronBaseUrl } from '@/utils/cronAuth';
 import { readWebPaymentMode } from '@/utils/webPayments/deps';
 import { toView } from '@/utils/webPayments/engine';
@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic';
 const viewIo = { baseUrl: cronBaseUrl, now: () => new Date() };
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('payLater', 'view');
   if ('error' in guard) return guard.error;
 
   const reservation = req.nextUrl.searchParams.get('reservation');

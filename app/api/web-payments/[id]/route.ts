@@ -15,7 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import type { WebPaymentAction } from '@/types/webPayment';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { webPaymentsIo } from '@/utils/webPayments/deps';
 import { applyAdminAction } from '@/utils/webPayments/engine';
 
@@ -27,7 +27,7 @@ type Ctx = { params: Promise<{ id: string }> };
 const ACTIONS = new Set(['charge_now', 'send_link', 'set_amount', 'set_no_auto_cancel', 'mark_paid_other', 'cancel_now', 'close']);
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('payLater', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
 

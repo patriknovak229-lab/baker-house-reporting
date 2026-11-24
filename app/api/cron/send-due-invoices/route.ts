@@ -44,7 +44,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { cronAuth } from '@/utils/cronAuth';
 import { withCronLock } from '@/utils/cronLock';
 import type { InvoiceData, Issue, InvoiceStatus, InvoiceSplit, Reservation } from '@/types/reservation';
@@ -103,7 +103,7 @@ function beat(summary: Record<string, unknown>): Promise<void> {
 async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, 'send-due-invoices');
   if (!isCron) {
-    const auth = await requireRole(['admin', 'super']);
+    const auth = await requireAccess('transactions', 'change');
     if ('error' in auth) return auth.error;
   }
 

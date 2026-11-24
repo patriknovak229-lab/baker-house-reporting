@@ -10,12 +10,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { createGeneralTask, isKnownOperator, resolveGeneralTask } from '@/data-access/team';
 import { TEAM_ALL, isYmd, validateTeamText } from '@/utils/teamItems';
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { assignee?: unknown; text?: unknown; dueDate?: unknown };
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { id?: unknown; done?: unknown };

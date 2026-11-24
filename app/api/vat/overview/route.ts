@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { loadVatData, overview } from '@/utils/vat/loadInputs';
 
 // GET /api/vat/overview?year=YYYY — per-month VAT summary + the registration-threshold tracker.
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const year = Number(new URL(req.url).searchParams.get('year'));

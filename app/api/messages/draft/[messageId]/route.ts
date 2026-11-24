@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { sendBeds24Message } from '@/utils/beds24Messages';
 import { markOperatorActive } from '@/utils/operatorActivity';
 import { translateReplyToGuest } from '@/utils/translateReply';
@@ -154,7 +154,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ messageId: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('autoReply', 'change');
   if ('error' in guard) return guard.error;
 
   const { messageId } = await params;
@@ -299,7 +299,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ messageId: string }> },
 ) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('autoReply', 'change');
   if ('error' in guard) return guard.error;
 
   const { messageId } = await params;

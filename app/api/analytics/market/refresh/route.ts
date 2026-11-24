@@ -15,7 +15,7 @@
  * money (PriceLabs bills per synced listing) and takes tens of seconds.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { pragueToday } from '@/utils/periodUtils';
 import { listingAgesHours, refreshMarketSnapshot } from '@/data-access/analytics/marketRefresh';
 import {
@@ -54,7 +54,7 @@ async function run(req: NextRequest) {
   // = never invoked.
   const { isCron } = cronAuth(req, JOB);
   if (!isCron) {
-    const guard = await requireRole(['admin', 'super']);
+    const guard = await requireAccess('analytics', 'change');
     if ('error' in guard) return guard.error;
   }
 

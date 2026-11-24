@@ -16,12 +16,12 @@
  * refund is recorded exactly once — here. See utils/webPaymentServer.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { refundWebPayment, WebPaymentError } from '@/utils/webPaymentServer';
 import { webPaymentDeps } from '@/utils/webPaymentDeps';
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('refunds', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { reservationNumber?: string; sessionId?: string; amountCzk?: unknown; reason?: string; idempotencyKey?: string };

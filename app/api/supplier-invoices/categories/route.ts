@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { InvoiceCategory } from '@/types/supplierInvoice';
 import { paletteColorAt } from '@/utils/categoryColors';
 import { readAllInvoiceCategories, writeAllInvoiceCategories } from '@/utils/invoiceCategoriesStore';
@@ -35,7 +35,7 @@ async function getCategories(): Promise<InvoiceCategory[]> {
 
 // GET — list all categories (admin + accountant)
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
   const categories = await getCategories();
   return NextResponse.json(categories);
@@ -43,7 +43,7 @@ export async function GET() {
 
 // POST — create a new category (admin only)
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { label, color } = await request.json() as { label?: string; color?: string };
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
 
 // DELETE — remove a category by id (admin only)
 export async function DELETE(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await request.json() as { id?: string };

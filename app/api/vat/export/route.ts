@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { loadVatData, monthResult, pragueToday } from '@/utils/vat/loadInputs';
 import { isValidMonth } from '@/utils/vat/czechCalendar';
 import { buildDpXml, buildKhXml } from '@/utils/vat/khXml';
@@ -10,7 +10,7 @@ type Format = (typeof FORMATS)[number];
 
 // GET /api/vat/export?month=YYYY-MM&format=kh-xml|dp-xml|csv|xlsx — downloads for EPO and the accountant.
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const params = new URL(req.url).searchParams;

@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readGmailInvoiceToken, deleteGmailInvoiceToken } from '@/utils/gmailInvoiceTokenStore';
 
 /** GET /api/accounting/connect-gmail/status
  *  Returns whether the invoice Gmail account is connected. */
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
 
   const token = await readGmailInvoiceToken();
@@ -21,7 +21,7 @@ export async function GET() {
 /** DELETE /api/accounting/connect-gmail/status
  *  Disconnects the invoice Gmail account by removing the stored token. */
 export async function DELETE() {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   await deleteGmailInvoiceToken();

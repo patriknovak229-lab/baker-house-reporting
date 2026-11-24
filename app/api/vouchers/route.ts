@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllVouchers, writeAllVouchers } from '@/utils/vouchersStore';
 import type { Voucher } from '@/types/voucher';
 
 // GET /api/vouchers — list all vouchers
 export async function GET() {
-  const guard = await requireRole(['admin', 'super', 'accountant']);
+  const guard = await requireAccess('transactions', 'view');
   if ('error' in guard) return guard.error;
 
   const vouchers = await readAllVouchers();
@@ -15,7 +15,7 @@ export async function GET() {
 
 // POST /api/vouchers — create a new voucher
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const session = await auth();

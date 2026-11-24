@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import type { WhitelistedSupplier } from '@/types/supplierInvoice';
 import { readAllSupplierWhitelist, writeAllSupplierWhitelist } from '@/utils/supplierWhitelistStore';
 import { findKnownSupplier, normalizeIco } from '@/utils/supplierRegistry';
@@ -7,14 +7,14 @@ import { isOtaSupplier, OTA_INVOICE_SKIP_MESSAGE } from '@/utils/otaSupplier';
 
 // GET — list all whitelisted suppliers (admin + accountant)
 export async function GET() {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'view');
   if ('error' in guard) return guard.error;
   return NextResponse.json(await readAllSupplierWhitelist());
 }
 
 // POST — add a supplier to the whitelist (admin only)
 export async function POST(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { supplierName, supplierICO, category } = await request.json() as {
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
 
 // DELETE — remove a supplier by id (admin only)
 export async function DELETE(request: Request) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await request.json() as { id?: string };

@@ -25,7 +25,7 @@
  * Auth: platform cron via utils/cronAuth (exempted in proxy.ts); manual = admin/super.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { cronAuth, cronBaseUrl, cronDispatchHeaders } from '@/utils/cronAuth';
 import { readCronHeartbeats, readCronHistory, writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { WATCHED_CRON_JOBS } from '@/utils/cronHeartbeat';
@@ -53,7 +53,7 @@ const RERUN_TIMEOUT_MS = 285_000;
 async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, JOB);
   if (!isCron) {
-    const guard = await requireRole(['admin', 'super']);
+    const guard = await requireAccess('system', 'change');
     if ('error' in guard) return guard.error;
   }
 

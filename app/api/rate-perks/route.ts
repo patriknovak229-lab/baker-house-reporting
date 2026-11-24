@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllReservationOverrides } from '@/utils/reservationOverridesStore';
 import { publishRatePerksEntry, removeRatePerksEntry } from '@/utils/ratePerksPublish';
 import { publishOpsTasksEntry, removeOpsTasksEntry } from '@/utils/opsTasksPublish';
@@ -31,7 +31,7 @@ import type { Issue, RateType } from '@/types/reservation';
  * which skips cancellations outright.
  */
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   const {

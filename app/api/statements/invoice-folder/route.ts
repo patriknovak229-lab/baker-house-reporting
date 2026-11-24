@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
 import { google } from 'googleapis';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getGoogleRefreshToken } from '@/utils/googleSessionToken';
 import type { SupplierInvoice } from '@/types/supplierInvoice';
 import { readAllSettlementGroups } from '@/utils/settlementGroupsStore';
@@ -54,7 +54,7 @@ interface Item {
  * Copies (never moves) so the flat archive and existing pdfLinks stay intact; idempotent.
  */
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'accountant']);
+  const authResult = await requireAccess('accounting', 'change');
   if ('error' in authResult) return authResult.error;
 
   const { searchParams } = new URL(req.url);

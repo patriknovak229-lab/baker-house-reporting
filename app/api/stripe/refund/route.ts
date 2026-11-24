@@ -29,7 +29,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { recomputeForPayment } from '@/utils/paymentReconcile';
 import type {
   AdditionalPayment,
@@ -52,7 +52,7 @@ async function sendTelegram(message: string): Promise<void> {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('refunds', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { sessionId?: string; amountCzk?: number; reason?: string };

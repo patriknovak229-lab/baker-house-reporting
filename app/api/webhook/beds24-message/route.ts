@@ -42,7 +42,10 @@ import type { Reservation, Issue, Room, InvoiceData, InvoiceModification, Parkin
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { isUnfinishedCheckout } from '@/utils/unfinishedCheckout';
-import { sendBeds24Message } from '@/utils/beds24Messages';
+import { beds24MessagesSent, sendBeds24Message } from '@/utils/beds24Messages';
+import { failedMessageAction } from '@/utils/autoReplyRetry';
+import { appendMessageIssue, buildMessageIssue } from '@/utils/messageIssue';
+import { pragueToday } from '@/utils/periodUtils';
 import { translateReplyToGuest } from '@/utils/translateReply';
 import { readAutoSendCategories } from '@/data-access/autoSendCategories';
 import {
@@ -92,7 +95,7 @@ import { RATE_TYPES_KEY } from '@/utils/ratePerksPublish';
 import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
 import { runContactPass, tryCaptureContactReply } from '@/utils/guestContactService';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
-import { escapeHtml, invoiceAlertChatId, sendTechnicalAlert, sendTelegram as sendTelegramTo } from '@/utils/telegram';
+import { escapeHtml, guestNameLine, invoiceAlertChatId, sendTechnicalAlert, sendTelegram as sendTelegramTo } from '@/utils/telegram';
 import {
   amountHoldReason,
   amountTaskNote,
@@ -519,69 +522,151 @@ async function pollAndProcessUnreadMessages(redis: Redis | null): Promise<void> 
       if (!claimed) continue;
     }
 
-    // Urgent? (lockout, no power / heating / water, "we can't stay here"…)
-    // → Telegram the ops group straight away, before any reply logic, and
-    // keep the message out of auto-send so a human answers it.
-    let urgency: UrgencyResult = { urgent: false, labels: [] };
+    // The message is claimed now, so a step that throws must not drop it
+    // silently: `failure` keeps the first error, and the finally block decides
+    // whether to release it for the next poll or hand it to a human.
+    let failure: unknown = null;
+    const sentBefore = beds24MessagesSent();
     try {
-      urgency = assessUrgency(m.message, await detectAutoReplyCategory(m.message));
-      if (urgency.urgent) await notifyUrgentMessage(redis, m, urgency);
-    } catch (err) {
-      console.error(`[urgent] check failed for msg ${m.id}:`, err);
-    }
+      // Urgent? (lockout, no power / heating / water, "we can't stay here"…)
+      // → Telegram the ops group straight away, before any reply logic, and
+      // keep the message out of auto-send so a human answers it.
+      let urgency: UrgencyResult = { urgent: false, labels: [] };
+      try {
+        urgency = assessUrgency(m.message, await detectAutoReplyCategory(m.message));
+        if (urgency.urgent) await notifyUrgentMessage(redis, m, urgency);
+      } catch (err) {
+        console.error(`[urgent] check failed for msg ${m.id}:`, err);
+        failure ??= err;
+      }
 
-    // An answer to the post-booking contact question? Whatever it finds is
-    // saved; true = the message was only that answer and the guest has been
-    // thanked, so nothing else needs to reply to it.
-    try {
-      const contactHandled = await tryCaptureContactReply({
-        redis,
-        bookingId: m.bookingId,
-        messageId: m.id,
-        messageText: m.message,
-        language: (await detectAutoReplyCategory(m.message)).language,
-        urgent: urgency.urgent,
-      });
-      if (contactHandled) continue;
-    } catch (err) {
-      console.error(`[guest-contact] capture failed for msg ${m.id}:`, err);
-    }
-
-    try {
-      // The invoice flow ALWAYS runs (even in review mode): it collects the
-      // invoice details and creates the checkout-dated "Send invoice" task.
-      // It never issues the actual invoice — that stays manual. Only its
-      // deterministic ask/confirmation messages auto-send.
-      const handled = await tryInvoiceFlow({
-        redis,
-        bookingId: m.bookingId,
-        messageId: m.id,
-        messageText: m.message,
-      });
-      if (handled) continue;
-
-      // AI review mode: every OTHER (non-invoice) message → KB-grounded draft
-      // → operator approval queue. Nothing here auto-sends.
-      if (AI_REVIEW_ALL) {
-        await aiReviewDraft({
+      // An answer to the post-booking contact question? Whatever it finds is
+      // saved; true = the message was only that answer and the guest has been
+      // thanked, so nothing else needs to reply to it.
+      try {
+        const contactHandled = await tryCaptureContactReply({
           redis,
           bookingId: m.bookingId,
           messageId: m.id,
           messageText: m.message,
+          language: (await detectAutoReplyCategory(m.message)).language,
           urgent: urgency.urgent,
         });
-        continue;
+        if (contactHandled) continue;
+      } catch (err) {
+        console.error(`[guest-contact] capture failed for msg ${m.id}:`, err);
+        failure ??= err;
       }
 
-      await processGuestMessage({
-        bookingId: m.bookingId,
-        messageId: m.id,
-        messageText: m.message,
-        skipDedupe: true, // already deduped above
-      });
-    } catch (err) {
-      console.error(`[auto-reply] processing failed for msg ${m.id}:`, err);
+      try {
+        // The invoice flow ALWAYS runs (even in review mode): it collects the
+        // invoice details and creates the checkout-dated "Send invoice" task.
+        // It never issues the actual invoice — that stays manual. Only its
+        // deterministic ask/confirmation messages auto-send.
+        const handled = await tryInvoiceFlow({
+          redis,
+          bookingId: m.bookingId,
+          messageId: m.id,
+          messageText: m.message,
+        });
+        if (handled) continue;
+
+        // AI review mode: every OTHER (non-invoice) message → KB-grounded draft
+        // → operator approval queue. Nothing here auto-sends.
+        if (AI_REVIEW_ALL) {
+          await aiReviewDraft({
+            redis,
+            bookingId: m.bookingId,
+            messageId: m.id,
+            messageText: m.message,
+            urgent: urgency.urgent,
+          });
+          continue;
+        }
+
+        await processGuestMessage({
+          bookingId: m.bookingId,
+          messageId: m.id,
+          messageText: m.message,
+          skipDedupe: true, // already deduped above
+        });
+      } catch (err) {
+        console.error(`[auto-reply] processing failed for msg ${m.id}:`, err);
+        failure ??= err;
+      }
+    } finally {
+      // Runs on `continue` too, so a step that failed before a later step
+      // handled the message is still counted.
+      if (failure && redis) {
+        await afterFailedMessage(redis, m, failure, beds24MessagesSent() > sentBefore);
+      }
     }
+  }
+}
+
+/** Hash: Beds24 guest-message id → how many times its handling has failed. */
+const FAILED_ATTEMPTS_KEY = 'baker:auto-reply:failed-attempts';
+const FAILED_ATTEMPTS_TTL_SECONDS = 14 * 24 * 60 * 60;
+
+/**
+ * A claimed guest message failed part-way. Either release it so the next
+ * poll runs the pipeline on it again, or give up (utils/autoReplyRetry decides
+ * which). Giving up puts a "Message issue" task on the reservation in the
+ * Transactions overview, plus an ops Telegram when the guest got nothing and
+ * is still waiting. Never throws.
+ *
+ * A retry re-runs steps that already succeeded; that is safe for the urgent
+ * Telegram (SET NX per message) and the pending draft (keyed by message id),
+ * but not for anything sent to the guest, which is why `sentToGuest` is passed.
+ */
+async function afterFailedMessage(
+  redis: Redis,
+  m: UnreadGuestMessage,
+  err: unknown,
+  sentToGuest: boolean,
+): Promise<void> {
+  const reason = err instanceof Error ? err.message : String(err);
+  try {
+    const attempt = await redis.hincrby(FAILED_ATTEMPTS_KEY, String(m.id), 1);
+    await redis.expire(FAILED_ATTEMPTS_KEY, FAILED_ATTEMPTS_TTL_SECONDS);
+    if (failedMessageAction(attempt, sentToGuest) === 'retry') {
+      await redis.srem(PROCESSED_KEY, String(m.id));
+      console.warn(`[auto-reply] msg ${m.id} failed (attempt ${attempt}: ${reason}) — released for the next poll`);
+      return;
+    }
+    console.error(`[auto-reply] msg ${m.id} failed (attempt ${attempt}: ${reason}) — handing to the operator`);
+    const reservationNumber = `BH-${m.bookingId}`;
+    const overrides = await readAllReservationOverrides<{ issues?: Issue[] }>();
+    const current = overrides[reservationNumber] ?? {};
+    const next = appendMessageIssue(
+      Array.isArray(current.issues) ? current.issues : [],
+      buildMessageIssue({
+        beds24MessageId: m.id,
+        guestMessage: m.message,
+        reason,
+        attempts: attempt,
+        sentToGuest,
+        today: pragueToday(),
+        nowIso: new Date().toISOString(),
+      }),
+    );
+    if (next) {
+      overrides[reservationNumber] = { ...current, issues: next };
+      await writeAllReservationOverrides(overrides);
+    }
+    // The guest got nothing and is waiting: say so in the ops group too.
+    if (!sentToGuest) {
+      await sendTelegram(
+        [
+          `⚠️ <b>Guest message not handled automatically — ${reservationNumber}</b>`,
+          `💬 ${escapeHtml(trimQuote(m.message))}`,
+          `Reason: ${escapeHtml(reason)} (failed ${attempt}×)`,
+          'Please answer it by hand.',
+        ].join('\n'),
+      );
+    }
+  } catch (e) {
+    console.error(`[auto-reply] failure handling for msg ${m.id} failed:`, e);
   }
 }
 
@@ -2854,10 +2939,10 @@ async function maybeNotifyNewBooking(
 
   const text = [
     `🏠 <b>New Booking — ${room}</b>`,
-    `👤 ${firstName} ${lastName}`.trim() || '👤 —',
+    guestNameLine(firstName, lastName),
     `📅 ${formatDate(booking.arrival ?? '')} → ${formatDate(booking.departure ?? '')} (${nights} nights)`,
     `👥 ${guests} guests`,
-    `📣 ${channel}`,
+    `📣 ${escapeHtml(channel)}`,
     `💰 ${price}`,
   ].join('\n');
 
@@ -3069,10 +3154,10 @@ async function maybeNotifyCancellation(
     unfinished
       ? `💳 <b>Booking not completed — ${room}</b>`
       : `❌ <b>Booking Cancelled — ${room}</b>`,
-    `👤 ${firstName} ${lastName}`.trim() || '👤 —',
+    guestNameLine(firstName, lastName),
     `📅 ${formatDate(booking.arrival ?? '')} → ${formatDate(booking.departure ?? '')} (${nights} nights)`,
     `👥 ${guests} guests`,
-    `📣 ${channel}`,
+    `📣 ${escapeHtml(channel)}`,
     `💰 ${price}`,
     ...(unfinished
       ? ['ℹ️ Guest left the booking page without paying — no room is held.']

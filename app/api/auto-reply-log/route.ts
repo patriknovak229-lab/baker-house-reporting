@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readAllAutoReplyLog, readAllAutoReplyEditLog } from '@/utils/autoReplyLogStore';
 import { readAllInvoiceRequests } from '@/utils/invoiceRequestsStore';
 import { readAutoSendCategories } from '@/data-access/autoSendCategories';
@@ -235,7 +235,7 @@ function computeCategoryStats(
 }
 
 export async function GET(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('autoReply', 'view');
   if ('error' in guard) return guard.error;
 
   // Optional ?category=X → the returned action list shows the latest 100 of

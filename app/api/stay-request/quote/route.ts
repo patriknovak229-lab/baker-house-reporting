@@ -17,7 +17,7 @@
  * same nights — that gap is what the operator's discount is for.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { priceSegment, type SegmentPrice } from '@/utils/beds24Pricing';
 import { SELLABLE_UNITS, nightsBetween } from '@/utils/stayRequest';
 
@@ -49,7 +49,7 @@ export interface QuotedSegment extends QuoteRequestSegment, SegmentPrice {
 const isYmd = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 export async function POST(req: NextRequest) {
-  const authResult = await requireRole(['admin', 'super']);
+  const authResult = await requireAccess('transactions', 'change');
   if ('error' in authResult) return authResult.error;
 
   let body: { segments?: unknown; adults?: unknown; children?: unknown };

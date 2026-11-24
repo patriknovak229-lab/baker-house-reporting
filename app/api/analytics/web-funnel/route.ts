@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET(request: Request) {
-  const parsed = await parseAnalyticsRequest(request, ['admin']);
+  const parsed = await parseAnalyticsRequest(request);
   if ('error' in parsed) return parsed.error;
   try {
     return NextResponse.json(await readWebFunnel(parsed.scope.from, parsed.scope.to, parsed.todayIso));

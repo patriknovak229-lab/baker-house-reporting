@@ -13,7 +13,7 @@
  * Auth: platform cron via utils/cronAuth (exempted in proxy.ts); manual = admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { cronAuth } from '@/utils/cronAuth';
 import { withCronLock } from '@/utils/cronLock';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
@@ -29,7 +29,7 @@ const JOB = 'ga-traffic-sync';
 async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, JOB);
   if (!isCron) {
-    const guard = await requireRole(['admin']);
+    const guard = await requireAccess('analytics', 'change');
     if ('error' in guard) return guard.error;
   }
 

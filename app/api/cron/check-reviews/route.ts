@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Redis } from "@upstash/redis";
-import { requireRole } from "@/utils/authGuard";
+import { requireAccess } from "@/utils/authGuard";
 import { cronAuth } from "@/utils/cronAuth";
 import { withCronLock } from "@/utils/cronLock";
 import { writeCronHeartbeat } from "@/data-access/cronHeartbeat";
@@ -41,7 +41,7 @@ function getRedis(): Redis {
 async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, "check-reviews");
   if (!isCron) {
-    const authResult = await requireRole(["admin", "super"]);
+    const authResult = await requireAccess('transactions', 'change');
     if ("error" in authResult) return authResult.error;
   }
 

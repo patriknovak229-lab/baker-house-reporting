@@ -6,14 +6,14 @@
  * Booking.com; the booster itself is switched in the extranet.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { readBoostedDates, setBoostedDate } from '@/data-access/pricing/boostedDates';
 import { BOOST_LEVELS, isIsoDate } from '@/utils/boosterCandidates';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('pricing', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { date?: unknown; commission?: unknown };

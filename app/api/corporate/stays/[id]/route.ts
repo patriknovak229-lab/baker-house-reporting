@@ -17,7 +17,7 @@
  * Auth: admin.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { getAccessToken } from '@/utils/beds24Auth';
 import { hasGuestChange, parseStayPatch } from '@/utils/corporateInput';
 import { effectiveGuest, modifyBookingGroup } from '@/utils/corporateBooking';
@@ -27,7 +27,7 @@ import type { CorporateStayInsert } from '@/lib/db/schema/corporate';
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
-  const guard = await requireRole(['admin']);
+  const guard = await requireAccess('corporate', 'change');
   if ('error' in guard) return guard.error;
   const { id } = await ctx.params;
 

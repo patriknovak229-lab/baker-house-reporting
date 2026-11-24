@@ -11,7 +11,7 @@
  */
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import {
   listOpenGeneralTasks,
   listTeamUsers,
@@ -23,7 +23,7 @@ import { normalizeEmail, taskVisibleTo, type TeamFeed } from '@/utils/teamItems'
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'view');
   if ('error' in guard) return guard.error;
   const me = normalizeEmail(guard.email);
 

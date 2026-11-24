@@ -5,7 +5,7 @@ import { feeFor, reservationsOf } from "@/utils/paymentAllocations";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { countryToLang, isValidCountryCode } from "@/utils/countries";
 import { formatAdditionalGuestsMarker } from "@/utils/additionalGuests";
-import { requireRole } from "@/utils/authGuard";
+import { requireAccess } from "@/utils/authGuard";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy, freeCancelDaysLeft } from "@/utils/cancellationPolicy";
 import { autoRatePerks, effectiveRatePerks } from "@/utils/ratePerks";
@@ -274,7 +274,7 @@ function tagOverlappingReservations(reservations: Reservation[]): Reservation[] 
 
 // ─── POST handler — create a manual direct booking ───────────────────────────
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(["admin", "super"]);
+  const guard = await requireAccess('transactions', 'change');
   if ("error" in guard) return guard.error;
 
   let token: string;

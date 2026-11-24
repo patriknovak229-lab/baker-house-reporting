@@ -17,7 +17,7 @@
  * Auth: platform cron via utils/cronAuth (exempted in proxy.ts); manual = admin/super.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { cronAuth } from '@/utils/cronAuth';
 import { withCronLock } from '@/utils/cronLock';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
@@ -35,7 +35,7 @@ const JOB = 'overdue-tasks';
 async function run(req: NextRequest) {
   const { isCron } = cronAuth(req, JOB);
   if (!isCron) {
-    const guard = await requireRole(['admin', 'super']);
+    const guard = await requireAccess('transactions', 'change');
     if ('error' in guard) return guard.error;
   }
 

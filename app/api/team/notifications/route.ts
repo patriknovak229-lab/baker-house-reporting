@@ -9,12 +9,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { createNotification, isKnownOperator, markNotificationsRead } from '@/data-access/team';
 import { TEAM_ALL, validateTeamText } from '@/utils/teamItems';
 
 export async function POST(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { recipient?: unknown; text?: unknown };
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const guard = await requireRole(['admin', 'super']);
+  const guard = await requireAccess('transactions', 'change');
   if ('error' in guard) return guard.error;
 
   let body: { ids?: unknown };

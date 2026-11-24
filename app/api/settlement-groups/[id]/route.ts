@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/utils/authGuard';
+import { requireAccess } from '@/utils/authGuard';
 import { type SettlementGroup, isReportSettlement } from '@/types/settlementGroup';
 import type { RevenueInvoice } from '@/types/revenueInvoice';
 import { settlementDisplayName } from '@/utils/settlementRecords';
@@ -12,7 +12,7 @@ type Params = { params: Promise<{ id: string }> };
 
 // PUT /api/settlement-groups/[id] — mutate group
 export async function PUT(request: Request, { params }: Params) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;
@@ -171,7 +171,7 @@ export async function PUT(request: Request, { params }: Params) {
 
 // DELETE /api/settlement-groups/[id] — remove group; reset all its txs and invoices
 export async function DELETE(_request: Request, { params }: Params) {
-  const guard = await requireRole(['admin', 'accountant']);
+  const guard = await requireAccess('accounting', 'change');
   if ('error' in guard) return guard.error;
 
   const { id } = await params;
