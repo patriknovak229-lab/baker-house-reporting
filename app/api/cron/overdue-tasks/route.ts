@@ -7,6 +7,10 @@
  * yet, then stamps `overdue_notified_at` so each task alerts exactly once.
  * A failed send stamps nothing, so tomorrow's run retries.
  *
+ * Tasks the system raised itself (a cron that needs a human — utils/systemAlerts)
+ * are technical, so their nudge goes to the technical chat instead, with the
+ * email backup (operator request 2026-11-08: no technical noise in Operations).
+ *
  * Reservation-level tasks are not covered: they live in reservation overrides
  * and keep their red "overdue" badge in the Pending tasks pill.
  *
@@ -18,9 +22,10 @@ import { cronAuth } from '@/utils/cronAuth';
 import { withCronLock } from '@/utils/cronLock';
 import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { listTeamUsers, listUnannouncedOverdueTasks, markOverdueAnnounced } from '@/data-access/team';
-import { escapeHtml, sendTelegram } from '@/utils/telegram';
+import { escapeHtml, sendTechnicalAlert, sendTelegram } from '@/utils/telegram';
 import { pragueToday } from '@/utils/periodUtils';
 import { overdueTasksTelegram } from '@/utils/teamItems';
+import { isSystemTask } from '@/utils/systemAlerts';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -49,10 +54,24 @@ async function runLocked(): Promise<Response> {
     }
 
     const users = await listTeamUsers();
-    const sent = await sendTelegram(overdueTasksTelegram(overdue, users, today, escapeHtml));
-    if (!sent) throw new Error('Telegram send failed — tasks left unannounced for the next run');
-
-    await markOverdueAnnounced(overdue.map((t) => t.id));
+    const groups = [
+      { tasks: overdue.filter((t) => !isSystemTask(t)), send: (m: string) => sendTelegram(m) },
+      { tasks: overdue.filter(isSystemTask), send: sendTechnicalAlert },
+    ];
+    // Stamp each group only once its own message went out.
+    const announced: string[] = [];
+    for (const g of groups) {
+      if (g.tasks.length === 0) continue;
+      if (await g.send(overdueTasksTelegram(g.tasks, users, today, escapeHtml))) {
+        announced.push(...g.tasks.map((t) => t.id));
+      }
+    }
+    await markOverdueAnnounced(announced);
+    if (announced.length < overdue.length) {
+      throw new Error(
+        `Telegram send failed — ${overdue.length - announced.length} task(s) left unannounced for the next run`,
+      );
+    }
     await beat({ phase: 'completed', announced: overdue.length });
     return NextResponse.json({ ok: true, announced: overdue.length });
   } catch (err) {

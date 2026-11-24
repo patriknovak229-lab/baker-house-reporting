@@ -29,9 +29,18 @@ import { requireRole } from '@/utils/authGuard';
 import { cronAuth, cronBaseUrl, cronDispatchHeaders } from '@/utils/cronAuth';
 import { readCronHeartbeats, readCronHistory, writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { WATCHED_CRON_JOBS } from '@/utils/cronHeartbeat';
-import { catchUpReport, isDegraded, isRerun, planCatchUp, type CatchUpOutcome } from '@/utils/cronCatchUp';
+import {
+  catchUpReport,
+  catchUpTaskText,
+  isDegraded,
+  isRerun,
+  planCatchUp,
+  type CatchUpOutcome,
+} from '@/utils/cronCatchUp';
 import { withCronLock } from '@/utils/cronLock';
-import { escapeHtml, sendTechnicalAlert } from '@/utils/telegram';
+import { checkTechnicalChat, escapeHtml, sendTechnicalAlert } from '@/utils/telegram';
+import { sendAlertEmail } from '@/utils/alertEmail';
+import { raiseSystemTask } from '@/data-access/systemTasks';
 
 // Re-runs happen in parallel; the slowest jobs (reviews, market refresh) allow
 // 300s, so this waits up to just under that for each.
@@ -88,8 +97,26 @@ async function catchUp(): Promise<Response> {
       };
     });
 
+    // Anything only a human can settle also becomes a dashboard task, so a
+    // missed Telegram no longer means a missed invoice or payment link.
+    const tasksRaised = await raiseTasks(outcomes);
     const report = catchUpReport(outcomes, escapeHtml);
-    if (report) await sendTechnicalAlert(report);
+    if (report) {
+      await sendTechnicalAlert(
+        tasksRaised > 0 ? `${report}\n\n📋 Added to the dashboard tasks so it isn't lost.` : report,
+      );
+    }
+    // Once a day: can the bot still reach the technical chat? If not, every
+    // alert above and the watchdog's are going nowhere — say so by email.
+    const telegram = await checkTechnicalChat();
+    if (!telegram.ok && process.env.VERCEL) {
+      await sendAlertEmail(
+        'Baker House: Telegram alerts are not getting through',
+        `The bot cannot reach the technical chat: ${escapeHtml(telegram.reason ?? 'unknown')}.\n` +
+          'Until this is fixed, technical alerts fall back to this address. Check TELEGRAM_BOT_TOKEN and that ' +
+          'the bot is still a member of the chat (TELEGRAM_PRICING_CHAT_ID / TELEGRAM_CHAT_ID).',
+      );
+    }
 
     const pick = (pred: (o: CatchUpOutcome) => boolean) => outcomes.filter(pred).map((o) => o.job);
     const summary = {
@@ -110,6 +137,21 @@ async function catchUp(): Promise<Response> {
     await sendTechnicalAlert(`⚠️ Daily cron catch-up crashed: ${escapeHtml(message)}`).catch(() => {});
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** One dashboard task per job that needs a human (catchUpTaskText). Never throws; returns how many were new. */
+async function raiseTasks(outcomes: CatchUpOutcome[]): Promise<number> {
+  let created = 0;
+  for (const o of outcomes) {
+    const text = catchUpTaskText(o);
+    if (!text) continue;
+    try {
+      if ((await raiseSystemTask(`cron:${o.job}`, text)) === 'created') created++;
+    } catch (err) {
+      console.error(`[cron/${JOB}] could not raise a task for ${o.job}:`, err);
+    }
+  }
+  return created;
 }
 
 /** Call a job's own route the way Vercel would. Never throws. */

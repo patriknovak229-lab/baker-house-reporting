@@ -43,7 +43,6 @@ export async function sendTelegram(
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
 /**
  * Destination for PRICING alerts (parity violations, radar digest). Falls back
  * to the ops group until TELEGRAM_PRICING_CHAT_ID is set — the operator wants
@@ -77,7 +76,42 @@ export function technicalChatId(): string | undefined {
   return pricingChatId();
 }
 
-/** `sendTelegram` to the technical chat (see technicalChatId). Never throws. */
-export function sendTechnicalAlert(message: string): Promise<boolean> {
-  return sendTelegram(message, { chatId: technicalChatId() });
+/**
+ * `sendTelegram` to the technical chat (see technicalChatId). Never throws.
+ *
+ * When Telegram does not deliver it (bot token revoked, bot removed from the
+ * chat, Telegram down, a message it refuses to parse) the alert goes out by
+ * email instead (utils/alertEmail) — otherwise a broken bot would silence every
+ * alert without a trace. Deployments only, so local runs never email. True when
+ * either channel delivered.
+ */
+export async function sendTechnicalAlert(message: string): Promise<boolean> {
+  if (await sendTelegram(message, { chatId: technicalChatId() })) return true;
+  if (!process.env.VERCEL) return false;
+  const { sendAlertEmail } = await import("./alertEmail");
+  return sendAlertEmail(
+    "Baker House: technical alert (Telegram did not deliver it)",
+    `${message}\n\n<i>Sent by email because Telegram refused or could not be reached — see "[telegram]" in the Vercel logs.</i>`,
+  );
+}
+
+/**
+ * Can the bot still post to the technical chat? `getChat` fails for a revoked
+ * token AND for a bot removed from the chat — the two ways alerts stop silently.
+ */
+export async function checkTechnicalChat(): Promise<{ ok: boolean; reason?: string }> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = technicalChatId();
+  if (!token || !chatId) return { ok: false, reason: "TELEGRAM_BOT_TOKEN or the chat id is not set" };
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(chatId)}`,
+      { cache: "no-store" },
+    );
+    if (res.ok) return { ok: true };
+    const body = (await res.json().catch(() => null)) as { description?: string } | null;
+    return { ok: false, reason: `HTTP ${res.status}${body?.description ? `: ${body.description}` : ""}` };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }

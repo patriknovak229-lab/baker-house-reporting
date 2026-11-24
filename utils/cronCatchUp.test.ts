@@ -5,6 +5,7 @@ import { WATCHED_CRON_JOBS, type CronHeartbeat, type WatchedCronJob } from './cr
 import {
   catchUpBackupDue,
   catchUpReport,
+  catchUpTaskText,
   latestClosedWindowStart,
   parseSchedule,
   planCatchUp,
@@ -150,6 +151,19 @@ describe('catchUpReport', () => {
     expect(failed).toContain('re-run did not complete (HTTP 307)');
     const human = catchUpReport([{ ...base, action: 'needs-human', lastPhase: 'started' }], esc)!;
     expect(human).toContain('Not re-run automatically');
+  });
+
+  it('turns only the outcomes a human must settle into dashboard tasks', () => {
+    const human = catchUpTaskText({ ...base, action: 'needs-human', lastPhase: 'started', lastRanAt: '2026-11-06T09:12:00Z' })!;
+    expect(human).toContain('Invoice <auto-send>: started 2026-11-06 09:12 UTC but never finished');
+    expect(human).toContain('Check what went out');
+    const broke = catchUpTaskText({ ...base, action: 'rerun-missed', result: 'still-failing', httpStatus: 500, detail: 'DB down' })!;
+    expect(broke).toContain('re-run did not complete (HTTP 500): DB down');
+    expect(catchUpTaskText({ ...base, action: 'rerun-degraded', result: 'still-failing' })).not.toBeNull();
+    // Fixed itself, or nothing to do → no task
+    expect(catchUpTaskText({ ...base, action: 'rerun-missed', result: 'recovered' })).toBeNull();
+    expect(catchUpTaskText({ ...base, action: 'rerun-degraded', result: 'still-degraded' })).toBeNull();
+    expect(catchUpTaskText({ ...base, action: 'ok' })).toBeNull();
   });
 
   it('a degraded re-run says nothing unless the re-run itself broke', () => {

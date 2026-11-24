@@ -214,3 +214,27 @@ export function catchUpReport(items: CatchUpOutcome[], escape: (s: string) => st
   }
   return lines.join('\n');
 }
+
+/**
+ * Plain-text dashboard task for an outcome only a human can settle, or null.
+ * Raised alongside the Telegram report (app/api/cron/catch-up), so a missed
+ * message no longer means a missed invoice or payment link: the task stays in
+ * the dashboard until resolved, and is re-announced when overdue.
+ */
+export function catchUpTaskText(item: CatchUpOutcome): string | null {
+  if (item.action === 'needs-human') {
+    return (
+      `${item.label}: started ${hhmm(item.lastRanAt)} but never finished${item.error ? ` (${item.error})` : ''}. ` +
+      'Not re-run automatically — part of its work may already be done (e.g. invoices or payment links emailed ' +
+      'but not marked as sent). Check what went out, then run the job by hand if anything is missing.'
+    );
+  }
+  if (isRerun(item.action) && item.result === 'still-failing') {
+    return (
+      `${item.label}: the daily catch-up re-ran it and the re-run did not complete` +
+      `${item.httpStatus ? ` (HTTP ${item.httpStatus})` : ''}${item.detail ? `: ${item.detail}` : ''}. ` +
+      'It will not run again until its next schedule — check the Vercel logs for this job.'
+    );
+  }
+  return null;
+}
