@@ -190,6 +190,13 @@
       "when": 1795522286256,
       "tag": "0026_app_users",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1795613816856,
+      "tag": "0027_corporate_invoices",
+      "breakpoints": true
     }
   ]
 }

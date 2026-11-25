@@ -11,6 +11,7 @@ import {
   type StayPriceSource,
   type StayStatus,
 } from '@/utils/corporateShared';
+import { INVOICE_STATUS_LABELS, type CorporateInvoiceStatus } from '@/utils/corporateInvoice';
 
 export const inputCls =
   'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:bg-gray-50 disabled:text-gray-400';
@@ -73,6 +74,22 @@ export function AgreementStatusBadge({ status }: { status: AgreementStatus }) {
   return (
     <Badge variant={AGREEMENT_VARIANT[status]} size="xs">
       {AGREEMENT_STATUS_LABELS[status]}
+    </Badge>
+  );
+}
+
+const INVOICE_VARIANT: Record<CorporateInvoiceStatus, 'gray' | 'green' | 'blue' | 'coral' | 'indigo'> = {
+  scheduled: 'gray',
+  issued: 'indigo',
+  sent: 'blue',
+  paid: 'green',
+  void: 'coral',
+};
+
+export function InvoiceStatusBadge({ status }: { status: CorporateInvoiceStatus }) {
+  return (
+    <Badge variant={INVOICE_VARIANT[status]} size="xs">
+      {INVOICE_STATUS_LABELS[status]}
     </Badge>
   );
 }

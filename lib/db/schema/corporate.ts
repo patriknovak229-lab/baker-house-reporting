@@ -8,6 +8,7 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import type {
   AgreementStatus,
@@ -16,6 +17,13 @@ import type {
   StayPriceSource,
   StayStatus,
 } from '../../../utils/corporateShared';
+import type {
+  CorporateBillTo,
+  CorporateInvoiceKind,
+  CorporateInvoiceLine,
+  CorporateInvoiceStatus,
+  DueRule,
+} from '../../../utils/corporateInvoice';
 
 /**
  * Corporate agreements — a company's standing request for repeated stays, and
@@ -118,7 +126,67 @@ export const corporateStays = pgTable(
   ],
 );
 
+/**
+ * Invoices for an agreement — see utils/corporateInvoice.ts for the model.
+ *
+ * One row per invoice, from the moment it is scheduled. While `scheduled` it
+ * has dates but no number and no amount: the amount is computed from the
+ * stays (overlaid with the live Beds24 bookings) at issue time, so a stay
+ * cancelled in the meantime is never billed. Issuing freezes everything the
+ * document shows — number, lines, total, who it is addressed to — so the PDF
+ * can be re-rendered byte-for-byte later.
+ *
+ * `invoice_number` is unique: the yearly sequence is allocated by a
+ * conditional UPDATE (`… WHERE invoice_number IS NULL`), so two senders racing
+ * on one scheduled invoice can never both number it.
+ */
+export const corporateInvoices = pgTable(
+  'corporate_invoices',
+  {
+    /** `CI-<base36 ms>-<4 random chars>` */
+    id: text('id').primaryKey(),
+    agreementId: text('agreement_id')
+      .notNull()
+      .references(() => corporateAgreements.id, { onDelete: 'cascade' }),
+    kind: text('kind').$type<CorporateInvoiceKind>().notNull(),
+    status: text('status').$type<CorporateInvoiceStatus>().notNull().default('scheduled'),
+    /** First night billed. */
+    periodFrom: date('period_from', { mode: 'string' }).notNull(),
+    /** Last night billed, inclusive. */
+    periodTo: date('period_to', { mode: 'string' }).notNull(),
+    /** 'YYYY-MM' for monthly invoices. */
+    billedMonth: text('billed_month'),
+    issueDate: date('issue_date', { mode: 'string' }).notNull(),
+    dueDate: date('due_date', { mode: 'string' }).notNull(),
+    /** The rule the due date came from — display only, the date is what counts. */
+    dueRule: jsonb('due_rule').$type<DueRule>(),
+    includePaymentDetails: boolean('include_payment_details').notNull().default(true),
+    invoiceNumber: text('invoice_number'),
+    /** To the haléř; null until issued. */
+    amountCzk: numeric('amount_czk', { precision: 12, scale: 2 }),
+    lines: jsonb('lines').$type<CorporateInvoiceLine[]>(),
+    billTo: jsonb('bill_to').$type<CorporateBillTo>(),
+    sentAt: timestamp('sent_at', { withTimezone: true, mode: 'date' }),
+    sentTo: text('sent_to'),
+    sendCount: integer('send_count').notNull().default(0),
+    paidAt: date('paid_at', { mode: 'string' }),
+    paidSource: text('paid_source').$type<'manual' | 'bank'>(),
+    paymentCheckSnoozedUntil: date('payment_check_snoozed_until', { mode: 'string' }),
+    error: text('error'),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('corporate_invoices_number_idx').on(t.invoiceNumber),
+    index('corporate_invoices_agreement_idx').on(t.agreementId, t.periodFrom),
+    index('corporate_invoices_status_idx').on(t.status, t.issueDate),
+  ],
+);
+
 export type CorporateAgreementRow = typeof corporateAgreements.$inferSelect;
 export type CorporateAgreementInsert = typeof corporateAgreements.$inferInsert;
 export type CorporateStayRow = typeof corporateStays.$inferSelect;
 export type CorporateStayInsert = typeof corporateStays.$inferInsert;
+export type CorporateInvoiceRow = typeof corporateInvoices.$inferSelect;
+export type CorporateInvoiceInsert = typeof corporateInvoices.$inferInsert;

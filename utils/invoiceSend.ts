@@ -170,6 +170,56 @@ export async function sendInvoiceEmail(
 
   const pdfBuffer = await generatePDF(html);
 
+  const to = billTo.billingEmail;
+  const outcome = await sendMailWithRetry({
+    to,
+    // Built once and reused across retries: identical Message-ID means a
+    // recipient that receives both copies (mail-server race) can collapse them,
+    // and the ID shows up in Gmail's Sent folder for after-the-fact checking.
+    messageId: `<${invoiceNum}-${Date.now()}@bakerhouseapartments.cz>`,
+    subject: `Invoice ${invoiceNum} – Baker House Apartments`,
+    text: `Dear guest,\n\nPlease find your invoice ${invoiceNum} attached.\n\nThank you for staying with us!\n\nPatrik & Zuzana\nBaker House Apartments\nhttps://www.bakerhouseapartments.cz`,
+    attachments: [
+      {
+        filename: `${invoiceNum}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+    label: invoiceNum,
+  });
+  return { invoiceNumber: invoiceNum, sentTo: to, ...outcome };
+}
+
+export interface InvoiceMail {
+  to: string;
+  messageId: string;
+  subject: string;
+  text: string;
+  attachments: { filename: string; content: Buffer; contentType: string }[];
+  /** Shown in the logs ("INV-…"). */
+  label: string;
+}
+
+export interface MailOutcome {
+  outcome: 'sent' | 'deferred';
+  attempts: number;
+  deferral?: string;
+}
+
+/**
+ * Email one invoice through the configured SMTP account, with the outcome
+ * rules at the top of this file: 'sent', 'deferred' (handed over after DATA —
+ * never retried), or a throw when it was genuinely not accepted. Shared by the
+ * guest invoice above and the corporate invoices (utils/corporateInvoiceService).
+ */
+export async function sendMailWithRetry(mail: InvoiceMail): Promise<MailOutcome> {
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  if (!smtpUser || !smtpPass) {
+    throw new Error('SMTP not configured (SMTP_USER / SMTP_PASS missing)');
+  }
+
   const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST ?? 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT ?? '587'),
@@ -181,29 +231,20 @@ export async function sendInvoiceEmail(
     ? `"Baker House Apartments" <${process.env.SMTP_FROM}>`
     : `"Baker House Apartments" <${smtpUser}>`;
 
-  const to = billTo.billingEmail;
-  // Built once and reused across retries: identical Message-ID means a
-  // recipient that receives both copies (mail-server race) can collapse them,
-  // and the ID shows up in Gmail's Sent folder for after-the-fact checking.
   const message = {
     from,
-    to,
-    messageId: `<${invoiceNum}-${Date.now()}@bakerhouseapartments.cz>`,
-    subject: `Invoice ${invoiceNum} – Baker House Apartments`,
-    text: `Dear guest,\n\nPlease find your invoice ${invoiceNum} attached.\n\nThank you for staying with us!\n\nPatrik & Zuzana\nBaker House Apartments\nhttps://www.bakerhouseapartments.cz`,
-    attachments: [
-      {
-        filename: `${invoiceNum}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf',
-      },
-    ],
+    to: mail.to,
+    messageId: mail.messageId,
+    subject: mail.subject,
+    text: mail.text,
+    attachments: mail.attachments,
   };
+  const invoiceNum = mail.label;
 
   for (let attempt = 1; ; attempt++) {
     try {
       await transporter.sendMail(message);
-      return { invoiceNumber: invoiceNum, sentTo: to, outcome: 'sent', attempts: attempt };
+      return { outcome: 'sent', attempts: attempt };
     } catch (err) {
       const { transient, afterData, response } = classifySmtpError(err);
 
@@ -214,8 +255,6 @@ export async function sendInvoiceEmail(
           `[invoiceSend] ${invoiceNum} deferred by the mail server after DATA (attempt ${attempt}): ${response ?? 'no response'}`,
         );
         return {
-          invoiceNumber: invoiceNum,
-          sentTo: to,
           outcome: 'deferred',
           attempts: attempt,
           deferral: response ?? (err instanceof Error ? err.message : String(err)),

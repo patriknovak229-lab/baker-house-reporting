@@ -29,6 +29,9 @@ export const CHROMIUM_ROUTES = [
   "/api/commission/annual-pdf",
   "/api/commission/email",
   "/api/corporate/offer-pdf",
+  "/api/corporate/invoices",
+  "/api/corporate/invoices/action",
+  "/api/corporate/invoices/document",
   "/api/vat/pdf",
 ];
 

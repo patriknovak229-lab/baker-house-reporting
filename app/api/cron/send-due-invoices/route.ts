@@ -39,6 +39,11 @@
  * banner) and fire a Telegram alert. Idempotency = invoiceStatus + resolved
  * task, so a re-run never double-sends.
  *
+ * Corporate invoices: the same run also issues + emails the corporate
+ * invoices scheduled for today (utils/corporateInvoiceSend →
+ * sendDueCorporateInvoices) — piggybacking instead of a new cron slot, and
+ * isolated so neither half can break the other.
+ *
  * Auth: platform cron via utils/cronAuth (CRON_SECRET when set, else Vercel's
  * documented header/user-agent); otherwise admin/super for a manual trigger.
  */
@@ -61,6 +66,8 @@ import { writeCronHeartbeat } from '@/data-access/cronHeartbeat';
 import { autoSendWindowStart } from '@/utils/invoiceAutoSendRules';
 import { revenueInvoiceId } from '@/utils/invoiceUtils';
 import { syncIssuedRevenueInvoices } from '@/utils/revenueInvoiceSync';
+import { sendDueCorporateInvoices, type CorporateCronResult } from '@/utils/corporateInvoiceSend';
+import { pragueToday } from '@/utils/periodUtils';
 
 export const maxDuration = 60;
 
@@ -321,6 +328,21 @@ async function sendDueInvoices() {
     ).catch(() => {});
   }
 
+  // ── Corporate invoices ──
+  // Scheduled corporate invoices (Corporate tab → Invoices) whose issue date
+  // has come: issued, emailed, Telegram summary. Its own module and its own
+  // failure handling — it never throws and never touches the counters above.
+  // Prague date: the operator picked the issue date on a Prague calendar.
+  let corporate: CorporateCronResult | { error: string };
+  try {
+    corporate = await sendDueCorporateInvoices(pragueToday());
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error('[cron] corporate invoices step failed:', err);
+    corporate = { error: reason };
+    await sendTechnicalAlert(`⚠️ Corporate invoices step crashed: ${escapeHtml(reason)}`).catch(() => {});
+  }
+
   // ── Bookings-archive heartbeat ──
   // Piggybacks on this daily run rather than adding a cron (Vercel's cron slots
   // are finite, and this job already fires at 09:00 and already has Telegram).
@@ -352,6 +374,7 @@ async function sendDueInvoices() {
     skippedStale,
     failed,
     errors: errors.length > 0 ? errors : undefined,
+    corporate,
     mirrorHealth,
   };
 
@@ -370,6 +393,7 @@ async function sendDueInvoices() {
     skippedHeld,
     skippedStale,
     skippedIncomplete,
+    corporate: 'error' in corporate ? { error: corporate.error } : { due: corporate.due, sent: corporate.sent, held: corporate.held, failed: corporate.failed },
   });
 
   return NextResponse.json(result);

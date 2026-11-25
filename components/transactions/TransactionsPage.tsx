@@ -13,6 +13,7 @@ import {
   INVOICE_BLOCKER_LABEL,
 } from "@/utils/invoiceAutoSendRules";
 import UnsentInvoicesPanel from "./UnsentInvoicesPanel";
+import InvoicePaymentChecks, { type OverdueInvoice } from "./InvoicePaymentChecks";
 import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { RoomMoveNotice } from "@/types/roomMove";
 import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
@@ -611,6 +612,25 @@ export default function TransactionsPage() {
     [roomMoves, fetchRoomMoves],
   );
 
+  // ── Corporate invoice payment checks ──
+  // Only for roles that can see Corporate; for everyone else the pill never
+  // appears (the route would 403 anyway). Fetched once per page load and after
+  // every action in the panel — due dates move by the day, not the minute.
+  const fetchOverdueInvoices = useCallback(async () => {
+    try {
+      const res = await fetch('/api/corporate/invoices/overdue');
+      if (!res.ok) return;
+      const json = await res.json();
+      setOverdueInvoices(json.invoices ?? []);
+    } catch {
+      // Never block the page; the next load retries.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (can(role, "corporate")) void fetchOverdueInvoices();
+  }, [role, fetchOverdueInvoices]);
+
   // ── Team notifications + general tasks ──
   const fetchTeam = useCallback(async () => {
     try {
@@ -843,6 +863,9 @@ export default function TransactionsPage() {
   const [postStayPanelOpen, setPostStayPanelOpen] = useState(false);
   const [ackingPostStayId, setAckingPostStayId] = useState<string | null>(null);
   const [unsentInvoicePanelOpen, setUnsentInvoicePanelOpen] = useState(false);
+  /** Corporate invoices past due with no payment recorded ("check invoice payment"). */
+  const [overdueInvoices, setOverdueInvoices] = useState<OverdueInvoice[]>([]);
+  const [invoiceChecksOpen, setInvoiceChecksOpen] = useState(false);
 
   interface DataIssue {
     reservation: Reservation;
@@ -1897,6 +1920,7 @@ export default function TransactionsPage() {
         || roomMoves.length > 0
         || pendingStaySuggestions.length > 0
         || unsentInvoiceRows.length > 0
+        || overdueInvoices.length > 0
         || postStayChanges.length > 0) && (
         <div className="mb-3 space-y-2">
           {/* Pills row. Desktop is three columns so Pending tasks sits in the
@@ -1983,6 +2007,27 @@ export default function TransactionsPage() {
                 </span>
                 <svg
                   className={`w-3.5 h-3.5 transition-transform ${notificationsPanelOpen ? "rotate-180" : ""}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            )}
+            {overdueInvoices.length > 0 && (
+              <button
+                onClick={() => setInvoiceChecksOpen((o) => !o)}
+                title={overdueInvoices.map((i) => `${i.invoiceNumber} · ${i.companyName} · ${i.daysPastDue} d overdue`).join("\n")}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-300 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                Check invoice payment
+                <span className="px-1.5 rounded-full bg-red-600 text-white text-[10px] font-bold">{overdueInvoices.length}</span>
+                <span className="text-red-500 font-normal">· past due</span>
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${invoiceChecksOpen ? "rotate-180" : ""}`}
                   fill="none" stroke="currentColor" viewBox="0 0 24 24"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -2242,6 +2287,15 @@ export default function TransactionsPage() {
                 })}
               </ul>
             </div>
+          )}
+
+          {/* Corporate invoices past due with no payment recorded */}
+          {overdueInvoices.length > 0 && invoiceChecksOpen && (
+            <InvoicePaymentChecks
+              rows={overdueInvoices}
+              canChange={can(role, "corporate", "change")}
+              onChanged={() => void fetchOverdueInvoices()}
+            />
           )}
 
           {/* Unsent invoices panel — past stays the guest asked to be invoiced for */}

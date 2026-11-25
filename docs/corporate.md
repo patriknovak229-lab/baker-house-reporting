@@ -104,17 +104,88 @@ migration `0016_complex_inertia`), Postgres-only — no Redis, no `STORE_*` flag
 Money is `numeric` (string in Drizzle; converted in `data-access/corporate.ts`).
 `(agreement_id, seq)` is unique; stays are never renumbered.
 
-## 6. Not built yet (phase 2)
+## 6. Invoices
 
-- **Automatic invoicing** per the stored `billingCadence` (per stay before
-  arrival / monthly / up front). The data is there; the sender is not.
+**Invoice** pill in the agreement header — it appears once the billing details
+are complete (company, address, IČO or DIČ, a valid invoice email; the Billing
+block says what's missing otherwise). It opens the Invoices panel:
+`components/corporate/InvoicePanel.tsx`.
+
+| Kind | What it bills | How it goes out |
+|---|---|---|
+| **Monthly** | One calendar month of nights (`billed_month`). | Scheduled ahead, one row per month. Issue timing (in advance N days before the month · 1st of the month · last day · 1st of the next month, in arrears) and a due rule (N days after issue · day X of the previous / billed / following month, 31 = last day) prefill each month's dates; every date stays editable. The **09:00 cron** issues + emails each on its issue date. |
+| **Ad hoc** | Any range of nights (first night … last night). | **Send now**, **Issue only** (number + PDF, email later), or **Schedule** for a date. Due date with +7/+14/+30/end-of-month shortcuts. |
+
+**How lines are computed** (`utils/corporateInvoice.ts`, tested): only
+**created** stays are billed. Each stay's price is spread over its nights in
+whole crowns (largest remainder, sums back exactly) and an invoice takes the
+nights inside its range — so a 73-night stay split Dec/Jan/Feb adds back to
+its price to the crown, whatever mix of monthly and ad hoc invoices covers it.
+Stays are overlaid with the **live Beds24 booking** (`utils/corporateInvoiceService.ts`):
+its dates/price win when they differ, a booking cancelled in Beds24 is left
+off, the guest name comes from Beds24; every difference shows as a note in the
+preview. Ranges of non-void invoices may not overlap — a night is never billed
+twice.
+
+**Statuses**: `scheduled` (dates, no number, amount computed at issue) →
+`issued` (number, frozen lines + bill-to snapshot, revenue record) → `sent`
+→ `paid`; `void` keeps the number and turns the revenue record into a
+"mistake". A scheduled invoice can be rescheduled or cancelled (deleted —
+it never existed as a document).
+
+**Numbers**: `INV-C<year>-<seq>` (e.g. `INV-C2026-001`), a yearly sequence
+allocated by a conditional UPDATE (`… WHERE invoice_number IS NULL`, unique
+index), so two senders can't both number one invoice. The digits (`2026001`)
+are the variable symbol; 7 digits can't collide with the booking-based guest
+invoices (`INV-<8-digit Beds24 id>`).
+
+**Document** (`utils/corporateInvoiceHtml.ts`): bilingual, same branding as
+the guest invoice, issue + due dates, period, one line per stay part
+("part of stay …" when a stay crosses the range), total, payment block (account,
+IBAN/SWIFT, VS, QR) unless unticked. `GET /api/corporate/invoices/document?id=&format=pdf|html`
+(a scheduled one renders as a watermarked HTML preview). Emailed from
+`SMTP_FROM` with a CZ/EN text through `sendMailWithRetry` (`utils/invoiceSend.ts`)
+— the same sent/deferred/no-duplicate rules as guest invoices.
+
+**Payment**: issuing writes a revenue record `rev-<CI id>` (issued,
+accommodation_direct, `clientName` = company, `dueDate`), so Accounting's
+auto-match pairs the company's transfer by VS or name + amount. When that
+record is reconciled the invoice turns **paid** (synced whenever invoices are
+listed). Otherwise "Mark paid" by hand.
+
+**Check invoice payment** (Transactions pill, right column, corporate view
+roles): every issued/sent invoice from the day AFTER its due date while
+unpaid — `GET /api/corporate/invoices/overdue`. Panel: PDF, Mark paid,
+Resend (reminder copy), Snooze 3 days.
+
+**Cron** (`/api/cron/send-due-invoices`, 09:00 UTC, Prague date): after the
+guest invoices, `sendDueCorporateInvoices` issues + emails every scheduled
+invoice due today. It **holds** (no number, reason on the row, Telegram once)
+when Beds24 can't be read or a planned/failed stay sits in the range; an
+invoice numbered but not emailed stays `issued` for the operator. Summary to
+the invoice-alert Telegram chat.
+
+**Routes**: `GET|POST /api/corporate/invoices` (list / create monthly or ad
+hoc), `POST …/preview` (no save), `POST …/action` (issue, send, reschedule,
+cancel, void, markPaid, unmarkPaid, snooze), `GET …/document`, `GET …/overdue`.
+The three that render PDFs are in `CHROMIUM_ROUTES`; the PDF/email half lives
+in `utils/corporateInvoiceSend.ts` so preview/overdue don't bundle Chromium.
+
+**Storage**: `corporate_invoices` (`lib/db/schema/corporate.ts`, migration
+`0027_corporate_invoices`). Deleting an agreement is refused once any of its
+invoices has a number.
+
+## 7. Not built yet
+
+- Per-stay ("before each arrival") and up-front invoicing as automatic
+  schedules — today: ad hoc invoices with a scheduled date.
+- Credit notes (dobropis) for a sent invoice — today: void + a new invoice.
 - Extending or re-patterning an existing agreement (today: new agreement).
 - A Corporate filter chip in Transactions (badge only for now).
 - Availability hints in the agreement DETAIL for failed stays (the preview has
   them; the detail would need to load `/api/bookings`).
-- Opening the tab to `super`.
 
-## 7. Verifying live
+## 8. Verifying live
 
 Local dev has no `BEDS24_REFRESH_TOKEN`: the wizard, preview and the draft
 path work; availability reads "unknown" (no reservations), dynamic pricing and

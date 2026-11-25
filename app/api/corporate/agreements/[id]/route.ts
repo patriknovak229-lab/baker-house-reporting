@@ -9,7 +9,8 @@
  *            Changing the default guest does not touch Beds24 — created
  *            bookings keep the guest they were made with; edit a stay to push
  *            a real name through.
- *   DELETE → only while nothing exists in Beds24 (no created or cancelled stay).
+ *   DELETE → only while nothing exists in Beds24 (no created or cancelled stay)
+ *            and no invoice was issued. Scheduled invoices go with it.
  *
  * Auth: admin.
  */
@@ -17,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAccess } from '@/utils/authGuard';
 import { parseAgreementPatch } from '@/utils/corporateInput';
 import { deleteAgreement, getAgreementDetail, updateAgreement } from '@/data-access/corporate';
+import { agreementHasIssuedInvoices } from '@/data-access/corporateInvoices';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -62,6 +64,13 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
         error:
           'This agreement has bookings in Beds24. Cancel the stays first, or mark the agreement completed/cancelled instead of deleting it.',
       },
+      { status: 409 },
+    );
+  }
+  // An issued invoice is an accounting document — its agreement stays.
+  if (await agreementHasIssuedInvoices(id)) {
+    return NextResponse.json(
+      { error: 'This agreement has issued invoices. Mark it completed or cancelled instead of deleting it.' },
       { status: 409 },
     );
   }

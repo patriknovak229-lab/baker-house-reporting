@@ -37,6 +37,8 @@ import {
   splitGuestName,
 } from './ui';
 import { downloadOfferPdf, offerFromAgreement } from './offer';
+import InvoicePanel from './InvoicePanel';
+import { missingBillingDetails } from '@/utils/corporateInvoice';
 
 interface Props {
   agreement: AgreementDetailDto;
@@ -61,6 +63,9 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [lastRun, setLastRun] = useState<{ created: number; failed: number } | null>(null);
+  const [showInvoices, setShowInvoices] = useState(false);
+  /** The Invoice pill appears once a Czech invoice could be addressed and sent. */
+  const billingMissing = missingBillingDetails(agreement);
 
   const s = agreement.summary;
   const toCreate = agreement.stays.filter((st) => st.status === 'planned' || st.status === 'failed');
@@ -163,6 +168,20 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
               {busy === 'create' ? 'Creating…' : `Create ${toCreate.length} booking${toCreate.length === 1 ? '' : 's'} in Beds24`}
             </button>
           )}
+          {billingMissing.length === 0 && (
+            <button
+              onClick={() => setShowInvoices((v) => !v)}
+              title="Create, schedule and send invoices to the company"
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium shadow-sm border ${
+                showInvoices ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Invoice
+            </button>
+          )}
           <button
             onClick={() => void downloadOffer()}
             disabled={busy !== null || s.stays - s.skipped - s.cancelled === 0}
@@ -208,6 +227,9 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
           <Fact label="IČO" value={agreement.ico} />
           <Fact label="DIČ / VAT" value={agreement.vatNumber} />
           <Fact label="Invoice email" value={agreement.billingEmail} />
+          {billingMissing.length > 0 && (
+            <p className="text-[11px] text-amber-700 pt-1">To invoice, add: {billingMissing.join(', ')} (Edit details).</p>
+          )}
         </FactBlock>
         <FactBlock title="Company contact">
           <Fact label="Name" value={agreement.repName} />
@@ -246,6 +268,10 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
           onDelete={s.created === 0 && s.cancelled === 0 ? () => void deleteAgreement() : undefined}
           onStatus={(status) => void patchAgreement({ status })}
         />
+      )}
+
+      {showInvoices && billingMissing.length === 0 && (
+        <InvoicePanel agreement={agreement} canEdit={canEdit} onClose={() => setShowInvoices(false)} />
       )}
 
       {/* ── Stays ── */}
