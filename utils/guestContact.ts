@@ -279,14 +279,14 @@ export function renderReminder(args: {
   return [c.greeting(args.firstName.trim()), '', c.intro, '', list, '', c.closing, '', 'Baker House Apartments'].join('\n');
 }
 
-const THANKS: Record<ContactLang, { head: string; phone: string; car: string; noCar: string; yes: string }> = {
-  en: { head: 'Thank you, noted:', phone: 'Phone', car: 'Car', noCar: 'no car', yes: 'yes' },
-  cs: { head: 'Děkujeme, poznamenali jsme si:', phone: 'Telefon', car: 'Auto', noCar: 'bez auta', yes: 'ano' },
-  de: { head: 'Vielen Dank, notiert:', phone: 'Telefon', car: 'Auto', noCar: 'kein Auto', yes: 'ja' },
-  hu: { head: 'Köszönjük, feljegyeztük:', phone: 'Telefon', car: 'Autó', noCar: 'nincs autó', yes: 'igen' },
-  pl: { head: 'Dziękujemy, zanotowaliśmy:', phone: 'Telefon', car: 'Samochód', noCar: 'bez samochodu', yes: 'tak' },
-  ru: { head: 'Спасибо, мы записали:', phone: 'Телефон', car: 'Автомобиль', noCar: 'без автомобиля', yes: 'да' },
-  sk: { head: 'Ďakujeme, poznačili sme si:', phone: 'Telefón', car: 'Auto', noCar: 'bez auta', yes: 'áno' },
+const THANKS: Record<ContactLang, { head: string; phone: string; car: string; noCar: string; yes: string; parkingOk: string }> = {
+  en: { head: 'Thank you, noted:', phone: 'Phone', car: 'Car', noCar: 'no car', yes: 'yes', parkingOk: 'Parking: a garage space is reserved for your apartment.' },
+  cs: { head: 'Děkujeme, poznamenali jsme si:', phone: 'Telefon', car: 'Auto', noCar: 'bez auta', yes: 'ano', parkingOk: 'Parkování: místo v garáži máte k apartmánu zajištěné.' },
+  de: { head: 'Vielen Dank, notiert:', phone: 'Telefon', car: 'Auto', noCar: 'kein Auto', yes: 'ja', parkingOk: 'Parken: Ein Garagenstellplatz ist für Ihr Apartment reserviert.' },
+  hu: { head: 'Köszönjük, feljegyeztük:', phone: 'Telefon', car: 'Autó', noCar: 'nincs autó', yes: 'igen', parkingOk: 'Parkolás: az apartmanhoz egy garázshely le van foglalva.' },
+  pl: { head: 'Dziękujemy, zanotowaliśmy:', phone: 'Telefon', car: 'Samochód', noCar: 'bez samochodu', yes: 'tak', parkingOk: 'Parking: miejsce w garażu jest zarezerwowane dla Państwa apartamentu.' },
+  ru: { head: 'Спасибо, мы записали:', phone: 'Телефон', car: 'Автомобиль', noCar: 'без автомобиля', yes: 'да', parkingOk: 'Парковка: место в гараже закреплено за вашим апартаментом.' },
+  sk: { head: 'Ďakujeme, poznačili sme si:', phone: 'Telefón', car: 'Auto', noCar: 'bez auta', yes: 'áno', parkingOk: 'Parkovanie: miesto v garáži máte k apartmánu zabezpečené.' },
 };
 
 /** Short confirmation echoing back what was saved, so the guest can spot a typo. */
@@ -294,6 +294,8 @@ export function renderThanks(args: {
   lang: ContactLang;
   phone?: string;
   parking?: { status: 'car' | 'no-car'; plate?: string };
+  /** The guest asked for parking — confirm their apartment's garage space is reserved. */
+  confirmParking?: boolean;
 }): string | null {
   const c = THANKS[args.lang];
   const lines: string[] = [];
@@ -301,6 +303,7 @@ export function renderThanks(args: {
   if (args.parking) {
     const value = args.parking.status === 'no-car' ? c.noCar : (args.parking.plate ?? c.yes);
     lines.push(`${c.car}: ${value}`);
+    if (args.confirmParking && args.parking.status === 'car') lines.push(c.parkingOk);
   }
   if (lines.length === 0) return null;
   return [c.head, ...lines].join('\n');

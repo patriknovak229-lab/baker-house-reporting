@@ -382,7 +382,12 @@ export async function tryCaptureContactReply(args: {
   if (args.urgent || !extracted.onlyContactInfo) return false;
 
   const lang = contactLang(args.language || b.lang);
-  const text = renderThanks({ lang, phone: applied.phone, parking: applied.parking });
+  const text = renderThanks({
+    lang,
+    phone: applied.phone,
+    parking: applied.parking,
+    confirmParking: extracted.parkingRequest,
+  });
   if (!text) return false;
   try {
     const result = await sendAuto(redis, bookingId, text);

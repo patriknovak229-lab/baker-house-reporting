@@ -200,6 +200,11 @@ describe("wording", () => {
     expect(renderThanks({ lang: "cs", parking: { status: "no-car" } })).toBe("Děkujeme, poznamenali jsme si:\nAuto: bez auta");
     expect(renderThanks({ lang: "de", parking: { status: "car" } })).toBe("Vielen Dank, notiert:\nAuto: ja");
     expect(renderThanks({ lang: "en" })).toBeNull();
+    expect(renderThanks({ lang: "sk", parking: { status: "car", plate: "KE 431JK" }, confirmParking: true })).toBe(
+      "Ďakujeme, poznačili sme si:\nAuto: KE 431JK\nParkovanie: miesto v garáži máte k apartmánu zabezpečené.",
+    );
+    // A guest saying "no car" never gets the parking line, even if flagged.
+    expect(renderThanks({ lang: "en", parking: { status: "no-car" }, confirmParking: true })).toBe("Thank you, noted:\nCar: no car");
   });
 
   it("normalises plates", () => {

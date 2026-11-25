@@ -24,6 +24,7 @@ import { czechGreetingLine, repliesInCzech } from '@/utils/czechVocative';
 import { EARLY_CHECKIN_TIME, LATE_CHECKOUT_TIME } from '@/utils/ratePerks';
 import { parseTvLogins, tvLoginFor } from '@/utils/sledovaniTv';
 import type { ParkingAssignment } from '@/utils/parkingUtils';
+import { toPlainChat } from '@/utils/plainChat';
 
 const MODEL = 'claude-sonnet-4-6';
 const SIGN_OFF = '\n\n— Zuzana';
@@ -71,6 +72,7 @@ How to reply:
 - Do NOT commit to anything involving money or exceptions (refunds, special late checkout, discounts, anything not stated) — say you'll confirm and come back to them.
 - Never reveal you are an AI, and never mention an "operator", "team", "system" or anyone other than yourself. You are Zuzana.
 - Do NOT add a sign-off — it is appended automatically.
+- **Plain text only.** Booking.com / Airbnb chat shows markdown symbols literally, so never use **bold**, *italics*, # headings or [links](…). Write numbers and times plainly (místo č. 153, od 13:00). A simple "- " list is fine when it genuinely helps.
 - **Thanks / conversation-enders:** when the guest only sends thanks, an acknowledgement, or a sign-off with nothing actually asked, follow §16 of the KNOWLEDGE BASE — reply with ONE short line, at most ~10 words (e.g. "Rádo se stalo, kdyby cokoli, dejte vědět."). No repeating what was resolved, no wishes for the stay unless they're leaving/arriving, no emoji. BUT never send this twice in a row: if your own most recent message in the CONVERSATION above was already such a closing line, reply with exactly SKIP. If there is otherwise genuinely nothing to respond to, also reply SKIP.`;
 
 /**
@@ -215,7 +217,10 @@ export async function composeAiReply(input: ComposeInput): Promise<ComposeResult
     if (!block || block.type !== 'text') return { draftText: '', model: MODEL };
     const text = block.text.trim();
     if (!text || text === 'SKIP') return { draftText: '', model: MODEL };
-    return { draftText: `${greetingFor(input)}\n${stripGreeting(text)}${SIGN_OFF}`, model: MODEL };
+    return {
+      draftText: `${greetingFor(input)}\n${toPlainChat(stripGreeting(text))}${SIGN_OFF}`,
+      model: MODEL,
+    };
   } catch (err) {
     console.error('[aiReplyComposer] failed:', err instanceof Error ? err.message : err);
     return { draftText: '', model: MODEL };

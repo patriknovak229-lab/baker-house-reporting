@@ -12,12 +12,14 @@ describe("parseContact", () => {
       car: "no",
       plate: null,
       onlyContactInfo: true,
+      parkingRequest: false,
     });
     expect(parseContact('{"phone":"  ","car":"maybe","plate":"","onlyContactInfo":"yes"}')).toEqual({
       phone: null,
       car: null,
       plate: null,
       onlyContactInfo: false,
+      parkingRequest: false,
     });
     expect(parseContact("not json").phone).toBeNull();
   });
@@ -26,7 +28,7 @@ describe("parseContact", () => {
 describe("planSave", () => {
   it("stores the phone as E.164 and the car answer as the guest's", () => {
     expect(
-      planSave({ phone: "+49 151 2345678", car: "yes", plate: " m-ab 123 ", onlyContactInfo: true }, both, null, NOW),
+      planSave({ phone: "+49 151 2345678", car: "yes", plate: " m-ab 123 ", onlyContactInfo: true, parkingRequest: false }, both, null, NOW),
     ).toEqual({
       phone: "+491512345678",
       parking: { status: "car", plate: "M-AB 123", source: "guest", updatedAt: NOW.toISOString() },
@@ -34,8 +36,8 @@ describe("planSave", () => {
   });
 
   it("a plate alone means they're coming by car; 'no' drops any plate", () => {
-    expect(planSave({ phone: null, car: null, plate: "BA123XY", onlyContactInfo: true }, both, null, NOW).parking?.status).toBe("car");
-    expect(planSave({ phone: null, car: "no", plate: "BA123XY", onlyContactInfo: true }, both, null, NOW).parking).toEqual({
+    expect(planSave({ phone: null, car: null, plate: "BA123XY", onlyContactInfo: true, parkingRequest: false }, both, null, NOW).parking?.status).toBe("car");
+    expect(planSave({ phone: null, car: "no", plate: "BA123XY", onlyContactInfo: true, parkingRequest: false }, both, null, NOW).parking).toEqual({
       status: "no-car",
       source: "guest",
       updatedAt: NOW.toISOString(),
@@ -43,13 +45,13 @@ describe("planSave", () => {
   });
 
   it("never overwrites a phone on file, and skips an unusable one", () => {
-    const answer = { phone: "+43 676 1234567", car: null, plate: null, onlyContactInfo: true };
+    const answer = { phone: "+43 676 1234567", car: null, plate: null, onlyContactInfo: true, parkingRequest: false };
     expect(planSave(answer, { phone: false, parking: true }, null, NOW).phone).toBeUndefined();
     expect(planSave({ ...answer, phone: "12" }, both, null, NOW).phone).toBeUndefined();
   });
 
   it("a guest may change their own answer, never the operator's", () => {
-    const answer = { phone: null, car: "yes" as const, plate: null, onlyContactInfo: true };
+    const answer = { phone: null, car: "yes" as const, plate: null, onlyContactInfo: true, parkingRequest: false };
     const fromGuest = { status: "no-car" as const, source: "guest" as const, updatedAt: "x" };
     const fromOperator = { status: "no-car" as const, source: "operator" as const, updatedAt: "x" };
     expect(planSave(answer, { phone: false, parking: false }, fromGuest, NOW).parking?.status).toBe("car");

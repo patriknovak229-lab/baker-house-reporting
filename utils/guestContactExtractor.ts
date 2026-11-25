@@ -17,9 +17,11 @@ export interface ExtractedContact {
   plate: string | null;
   /** true when the message is nothing beyond these answers (+ greetings/thanks). */
   onlyContactInfo: boolean;
+  /** true when the guest says they want / are interested in parking (no question attached). */
+  parkingRequest: boolean;
 }
 
-const EMPTY: ExtractedContact = { phone: null, car: null, plate: null, onlyContactInfo: false };
+const EMPTY: ExtractedContact = { phone: null, car: null, plate: null, onlyContactInfo: false, parkingRequest: false };
 
 const MODEL = 'claude-opus-5-5';
 
@@ -28,12 +30,13 @@ const nullable = (schema: Record<string, unknown>) => ({ anyOf: [schema, { type:
 const OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['phone', 'car', 'plate', 'onlyContactInfo'],
+  required: ['phone', 'car', 'plate', 'onlyContactInfo', 'parkingRequest'],
   properties: {
     phone: nullable({ type: 'string' }),
     car: nullable({ type: 'string', enum: ['yes', 'no'] }),
     plate: nullable({ type: 'string' }),
     onlyContactInfo: { type: 'boolean' },
+    parkingRequest: { type: 'boolean' },
   },
 };
 
@@ -48,7 +51,8 @@ Extract their answers from the message below.
 - phone: the guest's OWN contact number, only if they give one. Return it in international format with a leading "+" (e.g. "+49 151 2345678"). If they wrote a national number with a leading 0 and their country is known${args.guestCountry ? ` (booking country: ${args.guestCountry})` : ''}, replace the 0 with that country's calling code. Never return a booking number, PIN, price, date or a number they quote from us. null when absent.
 - car: "yes" if they are coming by car. That includes asking for, requesting or asking about a parking space, the garage or where to park — a guest only asks about parking when they bring a car — as well as "my partner drives", a rental car, or giving a plate. "no" if they say they are not (train, plane, no car, walking, "we don't need parking"…). null when nothing in the message touches on a car or parking.
 - plate: the licence plate(s) exactly as written; several cars → comma-separated. null when absent.
-- onlyContactInfo: true when the message contains nothing beyond these answers, greetings and thanks. false when it also asks a question, makes a request or says anything else that needs a reply (check-in time, parking location, early arrival, a problem…).
+- parkingRequest: true when the guest simply says they want, need or are interested in parking ("we'd like parking", "máme zájem o parkování", "ráda bych využila parkování", "please provide a parking place"). Every apartment already includes one garage space, so this is an answer, not a question. false otherwise.
+- onlyContactInfo: true when the message contains nothing beyond these answers, a plain parking request (above), greetings and thanks. false when it also asks a question or says anything else that needs a reply (where the garage is, parking times, a second car, check-in time, early arrival, a problem…).
 
 Only fill what is clearly stated — never guess.
 
@@ -115,5 +119,6 @@ export function parseContact(raw: string): ExtractedContact {
     car,
     plate: str(p.plate),
     onlyContactInfo: p.onlyContactInfo === true,
+    parkingRequest: p.parkingRequest === true,
   };
 }
