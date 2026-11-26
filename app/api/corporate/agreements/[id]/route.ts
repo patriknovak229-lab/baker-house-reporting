@@ -6,9 +6,11 @@
  *            room types and pricing are deliberately NOT editable: they define
  *            the generated stays, and changing them under created bookings has
  *            no honest answer. Make a new agreement instead.
- *            Changing the default guest does not touch Beds24 — created
- *            bookings keep the guest they were made with; edit a stay to push
- *            a real name through.
+ *            A change to the default guest (or the company name / rep phone it
+ *            falls back to) is pushed to every CREATED, not-yet-departed stay
+ *            whose effective guest changes — stays with their own guest keep
+ *            it. The agreement is saved first; a Beds24 refusal is reported
+ *            per stay in `guestPush.failed` (retry by editing that stay).
  *   DELETE → only while nothing exists in Beds24 (no created or cancelled stay)
  *            and no invoice was issued. Scheduled invoices go with it.
  *
@@ -17,7 +19,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAccess } from '@/utils/authGuard';
 import { parseAgreementPatch } from '@/utils/corporateInput';
-import { deleteAgreement, getAgreementDetail, updateAgreement } from '@/data-access/corporate';
+import { deleteAgreement, getAgreement, getAgreementDetail, listStays, updateAgreement } from '@/data-access/corporate';
+import { getAccessToken } from '@/utils/beds24Auth';
+import { modifyBookingGroup, staysNeedingGuestPush } from '@/utils/corporateBooking';
 import { agreementHasIssuedInvoices } from '@/data-access/corporateInvoices';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -45,10 +49,45 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const parsed = parseAgreementPatch(body);
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
+  const before = await getAgreement(id);
+  if (!before) return NextResponse.json({ error: 'Agreement not found' }, { status: 404 });
   const updated = await updateAgreement(id, parsed.value);
   if (!updated) return NextResponse.json({ error: 'Agreement not found' }, { status: 404 });
+  const after = (await getAgreement(id)) ?? before;
+
+  // ── Push the new default guest to created bookings that use it ──
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' });
+  const targets = staysNeedingGuestPush(before, after, await listStays(id), today);
+  const guestPush = { updated: [] as string[], failed: [] as { stayId: string; error: string }[] };
+  if (targets.length > 0) {
+    let token: string | null = null;
+    try {
+      token = await getAccessToken();
+    } catch (err) {
+      const error = `Beds24 sign-in failed: ${err instanceof Error ? err.message : String(err)}`;
+      for (const t of targets) guestPush.failed.push({ stayId: t.stayId, error });
+    }
+    if (token) {
+      // One stay at a time: each is its own booking group, and a refusal on
+      // one must not stop the rest.
+      for (const t of targets) {
+        try {
+          await modifyBookingGroup(token, t.bookingId, {
+            firstName: t.guest.firstName,
+            lastName: t.guest.lastName,
+            phone: t.guest.phone,
+            email: t.guest.email,
+          });
+          guestPush.updated.push(t.stayId);
+        } catch (err) {
+          guestPush.failed.push({ stayId: t.stayId, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+  }
+
   const agreement = await getAgreementDetail(id);
-  return NextResponse.json({ agreement });
+  return NextResponse.json({ agreement, guestPush });
 }
 
 export async function DELETE(_req: NextRequest, ctx: Ctx) {

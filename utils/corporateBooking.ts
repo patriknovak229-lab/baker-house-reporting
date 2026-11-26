@@ -69,6 +69,40 @@ export function effectiveGuest(
   };
 }
 
+type GuestSource = Pick<
+  CorporateAgreement,
+  'companyName' | 'guestFirstName' | 'guestLastName' | 'guestPhone' | 'guestEmail' | 'repPhone'
+>;
+
+/**
+ * Created stays whose Beds24 guest must change after an agreement edit: the
+ * effective guest (stay's own → agreement default → "<Company> TBA") differs
+ * before vs after. Stays with their own name keep it; stays already checked
+ * out (departure before `today`) are left as history.
+ */
+export function staysNeedingGuestPush(
+  before: GuestSource,
+  after: GuestSource,
+  stays: Pick<CorporateStay, 'id' | 'status' | 'beds24BookingId' | 'departure' | 'guestFirstName' | 'guestLastName' | 'guestPhone' | 'guestEmail'>[],
+  today: string,
+): { stayId: string; bookingId: number; guest: EffectiveGuest }[] {
+  const out: { stayId: string; bookingId: number; guest: EffectiveGuest }[] = [];
+  for (const s of stays) {
+    if (s.status !== 'created' || !s.beds24BookingId || s.departure < today) continue;
+    const was = effectiveGuest(before, s);
+    const now = effectiveGuest(after, s);
+    if (
+      was.firstName !== now.firstName ||
+      was.lastName !== now.lastName ||
+      was.phone !== now.phone ||
+      was.email !== now.email
+    ) {
+      out.push({ stayId: s.id, bookingId: s.beds24BookingId, guest: now });
+    }
+  }
+  return out;
+}
+
 export interface CorporateBookingPayload {
   roomId: number;
   status: 'confirmed';

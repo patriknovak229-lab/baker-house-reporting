@@ -3,6 +3,7 @@ import {
   buildCorporateBookingPayload,
   describeBeds24Failure,
   effectiveGuest,
+  staysNeedingGuestPush,
   extractBookingId,
   parseBeds24BatchResponse,
 } from './corporateBooking';
@@ -168,5 +169,52 @@ describe('Beds24 batch reply parsing', () => {
     expect(describeBeds24Failure({ message: 'Rate limit' })).toBe('Rate limit');
     expect(describeBeds24Failure({ info: 'Nope' })).toBe('Nope');
     expect(describeBeds24Failure({ weird: true })).toBe('{"weird":true}');
+  });
+});
+
+describe('staysNeedingGuestPush', () => {
+  const base = {
+    companyName: 'MITEA c.a.',
+    guestFirstName: null,
+    guestLastName: null,
+    guestPhone: null,
+    guestEmail: null,
+    repPhone: '+420 111',
+  };
+  const stay = (over: Record<string, unknown>) => ({
+    id: 'CS-1',
+    status: 'created' as const,
+    beds24BookingId: 100,
+    departure: '2026-12-18',
+    guestFirstName: null,
+    guestLastName: null,
+    guestPhone: null,
+    guestEmail: null,
+    ...over,
+  });
+  const after = { ...base, guestFirstName: 'Jan', guestLastName: 'Novák' };
+
+  it('pushes the new default guest to created, upcoming stays without their own name', () => {
+    const out = staysNeedingGuestPush(base, after, [stay({})], '2026-11-26');
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ stayId: 'CS-1', bookingId: 100, guest: { firstName: 'Jan', lastName: 'Novák', phone: '+420 111' } });
+  });
+
+  it('skips stays with their own guest, planned stays and departed stays', () => {
+    const stays = [
+      stay({ id: 'own', guestFirstName: 'Eva', guestLastName: 'Malá' }),
+      stay({ id: 'planned', status: 'planned', beds24BookingId: null }),
+      stay({ id: 'past', departure: '2026-11-20' }),
+    ];
+    expect(staysNeedingGuestPush(base, after, stays, '2026-11-26')).toEqual([]);
+  });
+
+  it('pushes nothing when the effective guest is unchanged (e.g. a notes-only edit)', () => {
+    expect(staysNeedingGuestPush(base, { ...base }, [stay({})], '2026-11-26')).toEqual([]);
+  });
+
+  it('a company rename renames TBA placeholder bookings', () => {
+    const out = staysNeedingGuestPush(base, { ...base, companyName: 'MITEA a.s.' }, [stay({})], '2026-11-26');
+    expect(out[0].guest).toMatchObject({ firstName: 'MITEA a.s.', lastName: 'TBA' });
   });
 });

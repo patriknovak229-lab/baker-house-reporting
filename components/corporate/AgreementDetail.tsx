@@ -63,6 +63,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [lastRun, setLastRun] = useState<{ created: number; failed: number } | null>(null);
+  const [guestPush, setGuestPush] = useState<{ updated: string[]; failed: { stayId: string; error: string }[] } | null>(null);
   const [showInvoices, setShowInvoices] = useState(false);
   /** The Invoice pill appears once a Czech invoice could be addressed and sent. */
   const billingMissing = missingBillingDetails(agreement);
@@ -115,11 +116,19 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
 
   async function patchAgreement(body: Record<string, unknown>) {
     await run('agreement', async () => {
-      const json = await api<{ agreement: AgreementDetailDto }>(`/api/corporate/agreements/${encodeURIComponent(agreement.id)}`, {
+      const json = await api<{
+        agreement: AgreementDetailDto;
+        guestPush?: { updated: string[]; failed: { stayId: string; error: string }[] };
+      }>(`/api/corporate/agreements/${encodeURIComponent(agreement.id)}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
       });
       onChanged(json.agreement);
+      const push = json.guestPush;
+      const touched = push && push.updated.length + push.failed.length > 0;
+      setGuestPush(touched ? push : null);
+      // Renamed bookings: refresh the shared cache so Transactions shows them now.
+      if (push && push.updated.length > 0) void fetch('/api/bookings?fullSync=true').catch(() => {});
     });
   }
 
@@ -204,7 +213,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
         </div>
       </div>
 
-      {(error || lastRun) && (
+      {(error || lastRun || guestPush) && (
         <div className="px-4 sm:px-6 pt-3 space-y-2">
           {error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           {lastRun && (
@@ -215,6 +224,18 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
             >
               {lastRun.created} booking{lastRun.created === 1 ? '' : 's'} created
               {lastRun.failed > 0 ? `, ${lastRun.failed} refused by Beds24 — see the rows marked Failed.` : '.'}
+            </div>
+          )}
+          {guestPush && (
+            <div
+              className={`rounded-md border px-3 py-2 text-sm ${
+                guestPush.failed.length > 0 ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-green-200 bg-green-50 text-green-800'
+              }`}
+            >
+              Guest updated on {guestPush.updated.length} booking{guestPush.updated.length === 1 ? '' : 's'} in Beds24
+              {guestPush.failed.length > 0
+                ? `; ${guestPush.failed.length} not updated (${guestPush.failed.map((f) => f.stayId).join(', ')}) — edit those stays to retry. ${guestPush.failed[0].error}`
+                : '.'}
             </div>
           )}
         </div>
@@ -402,7 +423,7 @@ function AgreementEditor({
         <Field label="Contact email" optional>
           <input className={inputCls} value={f.repEmail} onChange={(e) => set('repEmail', e.target.value)} />
         </Field>
-        <Field label="Default guest first name" optional hint="Used for stays created from now on; existing bookings keep their guest.">
+        <Field label="Default guest first name" optional hint="Also renamed on upcoming bookings without their own guest.">
           <input className={inputCls} value={f.guestFirstName} onChange={(e) => set('guestFirstName', e.target.value)} />
         </Field>
         <Field label="Default guest last name" optional>

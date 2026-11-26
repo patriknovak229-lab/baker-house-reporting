@@ -89,7 +89,7 @@ duplicate.
 | Skip / unskip | same (`status`) | Only before anything exists in Beds24. |
 | Create / Retry | `POST …/[id]/create-bookings { stayIds }` | Needs price > 0. |
 | Cancel a created stay | `POST /api/corporate/stays/[id]/cancel` | Sets `cancelled` on the whole booking group; nights go back on sale. Telegram. |
-| Edit contacts / billing / notes / status | `PATCH /api/corporate/agreements/[id]` | Default-guest changes do **not** touch existing bookings. |
+| Edit contacts / billing / notes / status | `PATCH /api/corporate/agreements/[id]` | Default-guest (or company name / rep phone) changes are pushed to Beds24 on every created, not-yet-departed stay without its own guest; refusals reported per stay. |
 | Delete | `DELETE /api/corporate/agreements/[id]` | Only while no stay was ever created. |
 | Offer PDF | `POST /api/corporate/offer-pdf` | Stateless: renders `utils/corporateOfferHtml.ts` (bilingual CZ/EN, invoice branding) via `generatePDF`; listed in `CHROMIUM_ROUTES`. Number `OFF-<yyyymmdd>-<agreement suffix>`, valid 14 days by default. Shows period, nights pattern, apartment types, stays, total nights, **rate per night** (flat rate, or the average with the discount note), guests, invoicing rhythm, the stay table and the total. The detail header also shows the average rate per night. |
 
