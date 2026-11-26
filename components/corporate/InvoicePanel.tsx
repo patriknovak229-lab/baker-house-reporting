@@ -9,7 +9,7 @@
  *
  *   Monthly schedule — one invoice per calendar month of the stays. Issue
  *     timing + due rule fill in each month's dates, every date stays editable,
- *     and the 09:00 cron issues + emails each on its issue date.
+ *     and the daily cron (09:00 UTC = 10:00 Prague) issues + emails each on its issue date.
  *   Ad hoc — one invoice over any range of nights: send now, issue only, or
  *     schedule for a date.
  *
@@ -581,7 +581,7 @@ function MonthlyForm({
   const total = chosen.reduce((s, r) => s + (previews[r.month]?.totalCzk ?? 0), 0);
 
   async function submit() {
-    if (!window.confirm(`Schedule ${chosen.length} monthly invoice(s) for ${agreement.companyName}? Each is issued and emailed to ${agreement.billingEmail} at 09:00 on its issue date.`))
+    if (!window.confirm(`Schedule ${chosen.length} monthly invoice(s) for ${agreement.companyName}? Each is issued and emailed to ${agreement.billingEmail} in the morning run (10:00 Prague, 11:00 in summer) on its issue date.`))
       return;
     setBusy(true);
     setError(null);
@@ -705,10 +705,17 @@ function MonthlyForm({
           {busy ? 'Scheduling…' : `Schedule ${chosen.length} invoice${chosen.length === 1 ? '' : 's'}`}
         </button>
         <span className="text-xs text-gray-500">
-          ≈ {czkExact(total)} in total today. Each goes out at 09:00 on its issue date to {agreement.billingEmail}; its amount is fixed then, from the bookings as
-          they stand.
+          ≈ {czkExact(total)} in total today. Each goes out in the morning run (10:00 Prague, 11:00 in summer) on its issue date to {agreement.billingEmail}; its
+          amount is fixed then, from the bookings as they stand.
         </span>
       </div>
+      {chosen.some((r) => r.issueDate === today) && (
+        <p className="text-[11px] text-amber-700">
+          {chosen.filter((r) => r.issueDate === today).map((r) => monthLabel(r.month)).join(', ')} is dated today. Scheduling doesn&apos;t send it; if
+          today&apos;s run has passed it goes out tomorrow (dated tomorrow). To send it today, press <span className="font-semibold">Send now</span> on its row
+          after scheduling.
+        </p>
+      )}
     </div>
   );
 }

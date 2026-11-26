@@ -21,7 +21,6 @@
  * preview with these functions, the API and the cron issue with them.
  */
 import { addDays, isYmd, nightsBetween } from './corporateSchedule';
-import { allocateCzk } from './invoiceUtils';
 import type { StayStatus } from './corporateShared';
 
 // ─── Enumerations ────────────────────────────────────────────────────────────
@@ -306,9 +305,20 @@ export function parseDueRule(raw: unknown): DueRule | null {
  */
 export function perNightAmounts(priceCzk: number, nights: number): number[] {
   if (nights <= 0) return [];
-  // allocateCzk works in haléře; asking it to split hundredths of the price
-  // and scaling back gives whole crowns with the same exactness guarantee.
-  return allocateCzk(Math.round(priceCzk) / 100, new Array(nights).fill(1)).map((x) => Math.round(x * 100));
+  // Cumulative rounding: night i gets round(P·i/N) − round(P·(i−1)/N). Any run
+  // of consecutive nights (a month) then sums to its proportional share of the
+  // price, rounded — the figure an offer quotes as "price × nights ÷ all nights"
+  // — and all nights still add up to the price exactly. (Giving the leftover
+  // crowns to the first nights instead skews early months by a few crowns.)
+  const total = Math.round(priceCzk);
+  const out: number[] = [];
+  let prev = 0;
+  for (let i = 1; i <= nights; i++) {
+    const cum = Math.round((total * i) / nights);
+    out.push(cum - prev);
+    prev = cum;
+  }
+  return out;
 }
 
 /**

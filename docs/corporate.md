@@ -113,7 +113,7 @@ block says what's missing otherwise). It opens the Invoices panel:
 
 | Kind | What it bills | How it goes out |
 |---|---|---|
-| **Monthly** | One calendar month of nights (`billed_month`). | Scheduled ahead, one row per month. Issue timing (in advance N days before the month · 1st of the month · last day · 1st of the next month, in arrears) and a due rule (N days after issue · day X of the previous / billed / following month, 31 = last day) prefill each month's dates; every date stays editable. The **09:00 cron** issues + emails each on its issue date. |
+| **Monthly** | One calendar month of nights (`billed_month`). | Scheduled ahead, one row per month. Issue timing (in advance N days before the month · 1st of the month · last day · 1st of the next month, in arrears) and a due rule (N days after issue · day X of the previous / billed / following month, 31 = last day) prefill each month's dates; every date stays editable. The **daily cron (09:00 UTC = 10:00 Prague, 11:00 in summer)** issues + emails each on its issue date; scheduling never sends — a month dated today goes out at the next run unless "Send now" is used. |
 | **Ad hoc** | Any range of nights (first night … last night). | **Send now**, **Issue only** (number + PDF, email later), or **Schedule** for a date. Due date with +7/+14/+30/end-of-month shortcuts. |
 
 **How lines are computed** (`utils/corporateInvoice.ts`, tested): only

@@ -81,6 +81,15 @@ describe('buildInvoiceLines', () => {
     expect(dec.totalCzk + jan.totalCzk + feb.totalCzk).toBe(16321 + 143485);
     expect(dec.lines[1].amountCzk + jan.totalCzk + feb.totalCzk).toBe(143485);
   });
+  it('bills each month its proportional share, as quoted in the offer', () => {
+    const totals = [
+      ['2026-12-01', '2026-12-31'],
+      ['2027-01-01', '2027-01-31'],
+      ['2027-02-01', '2027-02-28'],
+    ].map(([from, to]) => buildInvoiceLines(LONG_STAY, from, to).totalCzk);
+    // 16 321 + 143 485 × 14/73 · 143 485 × 31/73 · 143 485 × 28/73, rounded.
+    expect(totals).toEqual([43839, 60932, 55035]);
+  });
   it('an ad hoc range over everything bills each stay in full', () => {
     const all = buildInvoiceLines(LONG_STAY, '2026-12-09', '2027-02-28');
     expect(all.lines.map((l) => l.amountCzk)).toEqual([16321, 143485]);
