@@ -8,7 +8,10 @@ import type { EmailSendLogEntry } from "./emailSendLog";
 // "Google" = Google Hotel Ads: the guest clicks through from Google and books on
 // the Beds24 booking page (Beds24 apiSource "Google Ads"). Commission-free like
 // the direct channels, paid through Beds24's Stripe gateway.
-export type Channel = "Booking.com" | "Airbnb" | "Google" | "Direct" | "Direct-Phone" | "Direct-Web";
+// "Corporate" = a stay created by a corporate agreement (Corporate tab), tagged
+// `[CORPORATE:<id>]` in Beds24 comments. Commercially it behaves like
+// Direct-Phone (operator-arranged, no channel fee, house policy, Standard rate).
+export type Channel = "Booking.com" | "Airbnb" | "Google" | "Direct" | "Direct-Phone" | "Direct-Web" | "Corporate";
 // Physical room name (e.g. "K.201") or combined for package bookings (e.g. "K.202 + K.203")
 export type Room = string;
 export type CleaningStatus = "Pending" | "In Progress" | "Completed";
@@ -516,6 +519,11 @@ export interface Reservation {
    * sync, never stored in the overrides map. See utils/corporateShared.ts.
    */
   corporateAgreementId?: string;
+  /**
+   * The agreement's company name (Postgres), attached by the /api/bookings GET
+   * so the drawer can show which corporate client the stay belongs to.
+   */
+  corporateCompanyName?: string;
   /**
    * Everyone on the booking besides the lead guest (firstName/lastName), as
    * full names. Parsed from the `[ADDITIONAL GUESTS: …]` comment line the New

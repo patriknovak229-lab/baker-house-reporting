@@ -89,7 +89,7 @@ function toneOf(value: number | null | undefined, flat = 0.02): string {
   return '';
 }
 
-const DIRECT = ['Direct-Web', 'Direct-Phone', 'Direct'];
+const DIRECT = ['Direct-Web', 'Direct-Phone', 'Direct', 'Corporate'];
 
 // ── Section ──────────────────────────────────────────────────────────────────
 

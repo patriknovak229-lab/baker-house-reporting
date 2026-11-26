@@ -3273,7 +3273,7 @@ function BreakdownRow({
 }
 
 // Channels where zero fees is expected and should NOT trigger a warning
-const NO_FEE_CHANNELS: Reservation["channel"][] = ["Direct-Phone"];
+const NO_FEE_CHANNELS: Reservation["channel"][] = ["Direct-Phone", "Corporate"];
 
 /**
  * How a shortened stay's money is booked: stayed nights at the original nightly
@@ -4869,7 +4869,7 @@ export default function ReservationDrawer({
   );
 
   const isOTAChannel = reservation.channel === "Booking.com" || reservation.channel === "Airbnb";
-  const isDirectPhone = reservation.channel === "Direct-Phone";
+  const isDirectPhone = reservation.channel === "Direct-Phone" || reservation.channel === "Corporate";
   const isDirectWeb = reservation.channel === "Direct-Web";
   // Rate plan applies to OTA + Direct-Web stays that are current/future or booked
   // since launch, or whenever a rate is already known (detected or manually set).
@@ -5130,6 +5130,14 @@ export default function ReservationDrawer({
               <ReadOnlyField label="Check-out" value={formatDate(reservation.checkOutDate)} />
               <ReadOnlyField label="Nights" value={String(reservation.numberOfNights)} />
               <ReadOnlyField label="Reservation Date" value={formatDate(reservation.reservationDate)} />
+              {reservation.corporateAgreementId && (
+                <div className="col-span-2">
+                  <ReadOnlyField
+                    label="Company"
+                    value={`🏢 ${reservation.corporateCompanyName ?? "Corporate agreement (name unavailable)"}`}
+                  />
+                </div>
+              )}
             </div>
 
             {onStayLink && (

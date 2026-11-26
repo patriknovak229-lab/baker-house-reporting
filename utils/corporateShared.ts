@@ -18,9 +18,9 @@
 
 /**
  * Written into `comments` on every Beds24 booking an agreement creates, next
- * to the existing phone-booking marker. The channel stays Direct-Phone — a
- * corporate stay IS a direct booking arranged by the operator — and this tag is
- * what tells the dashboard which agreement the booking belongs to.
+ * to the existing phone-booking marker. The tag maps the booking to its own
+ * "Corporate" channel (mapChannel) — commercially treated like Direct-Phone —
+ * and tells the dashboard which agreement the booking belongs to.
  */
 export function corporateMarker(agreementId: string): string {
   return `[CORPORATE:${agreementId}]`;

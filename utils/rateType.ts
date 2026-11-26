@@ -66,7 +66,8 @@ export function channelHasRatePlan(channel: Channel): boolean {
     channel === "Booking.com" ||
     channel === "Airbnb" ||
     channel === "Direct-Web" ||
-    channel === "Direct-Phone"
+    channel === "Direct-Phone" ||
+    channel === "Corporate"
   );
 }
 
@@ -139,7 +140,7 @@ export function detectRateType(input: {
   // only one rate is sold direct → always Standard. There's no channel rate text
   // to parse, so return before the signal check. (Follows the Standard perk
   // policy like any Standard rate — see autoRatePerks / STANDARD_PERK_CHANGE_DATE.)
-  if (input.channel === "Direct-Web" || input.channel === "Direct-Phone") return "Standard";
+  if (input.channel === "Direct-Web" || input.channel === "Direct-Phone" || input.channel === "Corporate") return "Standard";
 
   const hay = input.signals
     .filter((s): s is string => typeof s === "string" && s.length > 0)

@@ -27,6 +27,7 @@ import {
 import { MOVE_CLEANINGS_KEY, buildMoveCleaningsMap } from "@/utils/moveCleaningsPublish";
 import { attachRoomSegments, occupancySpans } from "@/utils/roomSegments";
 import { listMidStayMoveHistory } from "@/data-access/roomMoves";
+import { getAgreementCompanyNames } from "@/data-access/corporate";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 
 // Synced guest reviews (Booking.com / Airbnb) cache, keyed by booking channel
@@ -606,6 +607,20 @@ export async function GET(req: NextRequest) {
     const withSegments = attachRoomSegments(withStripeFees, moveHistory);
     const withOverlapFlags = tagOverlappingReservations(withSegments);
     const withNonArrival = await attachNonArrivalOverlay(withOverlapFlags);
+
+    // Corporate stays: label each with its agreement's company (drawer field).
+    // A failed read only leaves the field blank.
+    const agreementIds = [...new Set(withNonArrival.flatMap((r) => (r.corporateAgreementId ? [r.corporateAgreementId] : [])))];
+    if (agreementIds.length > 0) {
+      const companies = await getAgreementCompanyNames(agreementIds).catch((err) => {
+        console.error("[bookings] corporate company lookup failed:", err);
+        return new Map<string, string>();
+      });
+      for (const r of withNonArrival) {
+        const name = r.corporateAgreementId ? companies.get(r.corporateAgreementId) : undefined;
+        if (name) r.corporateCompanyName = name;
+      }
+    }
 
     // Publish effective rate types for the cleaning app (rate-based perks).
     await persistRateTypeMap(withNonArrival).catch((err) =>

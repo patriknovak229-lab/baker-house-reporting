@@ -154,6 +154,16 @@ export async function listAgreements(): Promise<AgreementListItem[]> {
   }));
 }
 
+/** Company name per agreement id — for labelling corporate bookings in Transactions. */
+export async function getAgreementCompanyNames(ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({ id: corporateAgreements.id, companyName: corporateAgreements.companyName })
+    .from(corporateAgreements)
+    .where(inArray(corporateAgreements.id, ids));
+  return new Map(rows.map((r) => [r.id, r.companyName]));
+}
+
 export async function getAgreement(id: string): Promise<CorporateAgreement | null> {
   const rows = await db.select().from(corporateAgreements).where(eq(corporateAgreements.id, id)).limit(1);
   return rows[0] ? agreementRowToDto(rows[0]) : null;

@@ -119,6 +119,9 @@ export function mapChannel(apiSource = "", referer = "", comments = ""): Channel
   // BH-95080626: apiSource "Google Ads", channel "googleads", referer "google".
   if (/google/i.test(apiSource)) return "Google";
 
+  // Corporate-agreement stays carry the phone marker too — check them first.
+  if (parseCorporateMarker(comments)) return "Corporate";
+
   // Marker in comments wins over Beds24's overridden referer
   if (comments.includes(APP_PHONE_MARKER)) return "Direct-Phone";
 

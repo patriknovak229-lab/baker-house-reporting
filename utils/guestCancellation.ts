@@ -34,7 +34,7 @@ export const REFUND_MODE_LABEL: Record<GuestCancelRefundMode, string> = {
 
 /** Is this a channel where the guest cancels with US (not on an OTA)? */
 export function isDirectChannel(channel: string | undefined | null): boolean {
-  return channel === "Direct" || channel === "Direct-Phone" || channel === "Direct-Web";
+  return channel === "Direct" || channel === "Direct-Phone" || channel === "Direct-Web" || channel === "Corporate";
 }
 
 /**

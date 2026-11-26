@@ -74,11 +74,14 @@ function channelBadgeVariant(channel: Channel) {
   if (channel === "Google")       return "google";        // white chip, Google wordmark colours
   if (channel === "Direct-Phone") return "green";         // green
   if (channel === "Direct-Web")   return "green-light";   // mint/light green
+  if (channel === "Corporate")    return "green-dark";    // dark green
   return "gray";                                          // legacy "Direct" — neutral
 }
 
 function channelBadgeLabel(channel: Channel): ReactNode {
-  return channel === "Google" ? <GoogleWordmark /> : channel;
+  if (channel === "Google") return <GoogleWordmark />;
+  if (channel === "Corporate") return "🏢 Corporate";
+  return channel;
 }
 
 function paymentBadgeVariant(status: PaymentStatus) {
@@ -723,11 +726,6 @@ function ReservationCard({
           </span>
         )}
         <Badge variant={channelBadgeVariant(res.channel)} size="xs">{channelBadgeLabel(res.channel)}</Badge>
-        {res.corporateAgreementId && (
-          <span title={`Created by corporate agreement  — see the Corporate tab`}>
-            <Badge variant="indigo" size="xs">🏢 Corporate</Badge>
-          </span>
-        )}
         <StayLinkBadge chain={stayChain} />
         <span className="ml-auto flex items-center gap-0.5">
           <span className={`font-mono text-[11px] text-gray-400 ${res.isCancelled ? 'line-through' : ''}`}>{res.reservationNumber}</span>
@@ -1092,14 +1090,6 @@ export default function ReservationTable({
                       <Badge variant={channelBadgeVariant(res.channel)} size="xs">
                         {channelBadgeLabel(res.channel)}
                       </Badge>
-                      {res.corporateAgreementId && (
-                        <span
-                          className="ml-1 inline-flex"
-                          title={`Created by corporate agreement  — see the Corporate tab`}
-                        >
-                          <Badge variant="indigo" size="xs">🏢 Corporate</Badge>
-                        </span>
-                      )}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <span className={roomChipClasses(res.room)}>{res.room}</span>

@@ -15,6 +15,7 @@ export const CHANNEL_COLORS: Record<string, string> = {
   "Google":       "#4285F4",
   "Direct-Phone": "#10B981", // emerald-500 — solid green
   "Direct-Web":   "#6EE7B7", // emerald-300 — lighter mint green
+  "Corporate":    "#065F46", // emerald-800 — dark green (corporate agreements)
   "Direct":       "#94A3B8", // slate-400 — neutral fallback for legacy direct
 };
 

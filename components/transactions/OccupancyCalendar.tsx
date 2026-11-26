@@ -70,6 +70,7 @@ const CHANNEL_FILL: Record<string, Palette> = {
   "Direct":       { f: '#CECBF6', b: '#7F77DD', t: '#26215C', a: '#534AB7' },
   "Direct-Phone": { f: '#7FB558', b: '#3F6E14', t: '#0F2603', a: '#2C5009' },
   "Direct-Web":   { f: '#C0DD97', b: '#639922', t: '#173404', a: '#3B6D11' },
+  "Corporate":    { f: '#3F7A2A', b: '#1E4A0C', t: '#FFFFFF', a: '#143306' },
 };
 const CHANNEL_NONE: Palette = RATE_NONE;
 
@@ -611,6 +612,7 @@ export default function OccupancyCalendar({
           { label: "Google", pal: CHANNEL_FILL.Google },
           { label: "Web", pal: CHANNEL_FILL["Direct-Web"] },
           { label: "Phone", pal: CHANNEL_FILL["Direct-Phone"] },
+          { label: "Corporate", pal: CHANNEL_FILL.Corporate },
           { label: "Direct", pal: CHANNEL_FILL.Direct },
         ]
       : colorBy === 'occupancy'

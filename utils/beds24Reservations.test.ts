@@ -80,6 +80,8 @@ describe('mapChannel', () => {
     expect(mapChannel('Airbnb', '', '')).toBe('Airbnb');
     expect(mapChannel('Direct', 'API', '[Created via Reporting App — Phone]')).toBe('Direct-Phone');
     expect(mapChannel('Direct', 'API', '')).toBe('Direct-Web');
+    // Corporate-agreement stays carry the phone marker too; the agreement tag wins.
+    expect(mapChannel('Direct', 'API', `${APP_PHONE_MARKER}\n[CORPORATE:ca-mww3lz3g-w9rq]`)).toBe('Corporate');
   });
 
   it('recognises Google Hotel Ads bookings (BH-95080626)', () => {

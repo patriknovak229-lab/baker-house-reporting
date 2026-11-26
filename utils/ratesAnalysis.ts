@@ -140,7 +140,7 @@ export const MIN_COUNTERFACTUAL_BOOKINGS = 15;
 export const LADDER_PLANS: LadderPlan[] = ['Non-refundable', 'Standard', 'Flexible'];
 
 /** 'Direct' is the pre-split label for direct bookings, still on older rows. */
-const DIRECT_CHANNELS = ['Direct-Web', 'Direct-Phone', 'Direct'];
+const DIRECT_CHANNELS = ['Direct-Web', 'Direct-Phone', 'Direct', 'Corporate'];
 const BOOKING_COM = 'Booking.com';
 
 // ── Inputs ───────────────────────────────────────────────────────────────────

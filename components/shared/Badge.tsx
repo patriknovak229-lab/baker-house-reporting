@@ -17,6 +17,7 @@ interface BadgeProps {
   | "amber-filled"
   | "green-filled"
   | "green-light"
+  | "green-dark"
   | "orange"
   | "orange-light"
   | "booking-com"
@@ -38,6 +39,8 @@ const variantClasses: Record<BadgeProps["variant"], string> = {
   purple: "bg-purple-600 text-white ring-1 ring-purple-400",
   "amber-filled": "bg-amber-500 text-white",
   "green-filled": "bg-green-600 text-white",
+  // Dark green — Corporate channel (agreement stays)
+  "green-dark": "bg-emerald-800 text-white",
   // Lighter, mintier green — used for Direct-Web to differentiate from Direct-Phone
   "green-light": "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
   "orange": "bg-orange-500 text-white",
