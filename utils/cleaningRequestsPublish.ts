@@ -27,11 +27,19 @@
  * Two writers, same pattern as the ops-task map: the bookings sync rewrites the
  * whole map (authoritative — a cancelled stay drops out on its own), and a
  * drawer save patches the one reservation.
+ *
+ * Corporate stays add a second source: the mid-stay cleanings assigned in the
+ * Corporate tab (utils/corporateCleaning.ts, stored on corporate_stays). They
+ * ride the same map, id `corp-<stay>-<date>`, text "Úklid během pobytu", so the
+ * cleaning app and the cost engine need no change. Every writer of an entry
+ * MUST pass them in (or carry them over when Postgres is unreadable) — an
+ * entry is rewritten whole, so a writer that forgot them would erase them.
  */
 import { getRedis } from "@/utils/beds24Reservations";
 import { physicalRoomIdForName } from "@/utils/roomAllocation";
 import { cleaningFeedNumbers, reservationApartments, taskTargets } from "@/utils/reservationApartments";
 import { isMidStayDate } from "@/utils/midStayCleaning";
+import { CORPORATE_CLEANING_ID_PREFIX, CORPORATE_CLEANING_TEXT } from "@/utils/corporateCleaning";
 import type { Issue, Reservation } from "@/types/reservation";
 
 export const CLEANING_REQUESTS_KEY = "baker:reservation-cleaning-requests";
@@ -67,9 +75,30 @@ type ReservationFields = Pick<
 export function cleaningRequestsByBooking(
   r: ReservationFields,
   issues: Issue[] | undefined,
+  corporate?: CorporateCleanings,
 ): Record<string, RequestedCleaning[]> {
   const out: Record<string, RequestedCleaning[]> = {};
-  const roomOf = new Map(reservationApartments(r).map((a) => [a.reservationNumber, a.room]));
+  const apartments = reservationApartments(r);
+  const roomOf = new Map(apartments.map((a) => [a.reservationNumber, a.room]));
+  // Corporate stays are single-apartment bookings; the plan sits on the stay's
+  // own booking number, which is the reservation (master) number.
+  const corp = corporate?.[r.reservationNumber];
+  if (corp && apartments.length > 0) {
+    const target = apartments.find((a) => a.reservationNumber === r.reservationNumber) ?? apartments[0];
+    const roomId = target.room ? physicalRoomIdForName(target.room) : null;
+    if (target.room && roomId !== null) {
+      for (const date of corp.dates) {
+        if (!isMidStayDate(r, date)) continue;
+        (out[target.reservationNumber] ??= []).push({
+          id: `${CORPORATE_CLEANING_ID_PREFIX}${corp.stayId}-${date}`,
+          date,
+          roomId,
+          room: target.room,
+          text: CORPORATE_CLEANING_TEXT,
+        });
+      }
+    }
+  }
   for (const i of issues ?? []) {
     if (i.category !== "cleaning" || !isMidStayDate(r, i.actionableDate)) continue;
     for (const target of taskTargets(r, i)) {
@@ -92,10 +121,11 @@ export function cleaningRequestsByBooking(
 export function buildCleaningRequestsMap(
   overrides: Record<string, { issues?: Issue[] } | undefined>,
   reservations: ReservationFields[],
+  corporate?: CorporateCleanings,
 ): Record<string, RequestedCleaning[]> {
   const map: Record<string, RequestedCleaning[]> = {};
   for (const r of reservations) {
-    const byBooking = cleaningRequestsByBooking(r, overrides[r.reservationNumber]?.issues);
+    const byBooking = cleaningRequestsByBooking(r, overrides[r.reservationNumber]?.issues, corporate);
     for (const [bookingNumber, list] of Object.entries(byBooking)) {
       map[bookingNumber] = [...(map[bookingNumber] ?? []), ...list];
     }
@@ -108,16 +138,54 @@ export async function publishCleaningRequestsEntry(
   r: ReservationFields,
   issues: Issue[] | undefined,
 ): Promise<Record<string, RequestedCleaning[]>> {
-  const byBooking = cleaningRequestsByBooking(r, issues);
+  const corporate = await loadCorporateCleanings([r.reservationNumber]);
+  let byBooking = cleaningRequestsByBooking(r, issues, corporate ?? undefined);
   const redis = getRedis();
   if (!redis) return byBooking;
   const map = (await redis.get<Record<string, RequestedCleaning[]>>(CLEANING_REQUESTS_KEY)) ?? {};
+  // Postgres unreadable → keep whatever corporate cleanings were published.
+  if (corporate === null) byBooking = carryOverCorporate(byBooking, map, cleaningFeedNumbers(r));
   for (const n of new Set([...cleaningFeedNumbers(r), ...Object.keys(byBooking)])) {
     if (byBooking[n]?.length) map[n] = byBooking[n];
     else delete map[n];
   }
   await redis.set(CLEANING_REQUESTS_KEY, map);
   return byBooking;
+}
+
+/** Corporate mid-stay cleanings by reservation number (data-access/corporate). */
+export type CorporateCleanings = Record<string, { stayId: string; dates: string[] }>;
+
+/**
+ * Corporate plans from Postgres, or null when they can't be read. Imported
+ * lazily so the pure helpers above stay importable without a database.
+ */
+export async function loadCorporateCleanings(reservationNumbers?: string[]): Promise<CorporateCleanings | null> {
+  try {
+    const { getCorporateCleaningDates } = await import("@/data-access/corporate");
+    return await getCorporateCleaningDates(reservationNumbers);
+  } catch (err) {
+    console.error("[cleaning-requests] corporate cleanings unreadable — keeping the published ones", err);
+    return null;
+  }
+}
+
+/**
+ * Put the previously published corporate cleanings back for the given
+ * bookings — used when Postgres couldn't be read, so a hiccup never erases
+ * cleanings the cleaner may already be assigned to.
+ */
+export function carryOverCorporate(
+  next: Record<string, RequestedCleaning[]>,
+  previous: Record<string, RequestedCleaning[]>,
+  bookings?: string[],
+): Record<string, RequestedCleaning[]> {
+  const out = { ...next };
+  for (const n of bookings ?? Object.keys(previous)) {
+    const kept = (previous[n] ?? []).filter((c) => c.id.startsWith(CORPORATE_CLEANING_ID_PREFIX));
+    if (kept.length) out[n] = [...(out[n] ?? []).filter((c) => !c.id.startsWith(CORPORATE_CLEANING_ID_PREFIX)), ...kept];
+  }
+  return out;
 }
 
 /** Drop a cancelled reservation's requests. */

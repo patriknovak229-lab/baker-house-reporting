@@ -5,7 +5,7 @@
  * Converts between the row shape (numeric → string, timestamps → Date) and the
  * DTOs in utils/corporateShared.ts that the API and the client speak.
  */
-import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { corporateAgreements, corporateStays } from '@/lib/db/schema';
 import type {
@@ -98,6 +98,7 @@ export function stayRowToDto(r: CorporateStayRow): CorporateStay {
     beds24BookingId: r.beds24BookingId,
     reservationNumber: r.reservationNumber,
     error: r.error,
+    cleaningPlan: r.cleaningPlan ?? null,
     bookedAt: r.bookedAt ? r.bookedAt.toISOString() : null,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
@@ -228,6 +229,28 @@ export async function updateStay(
     .where(eq(corporateStays.id, id))
     .returning();
   return rows[0] ? stayRowToDto(rows[0]) : null;
+}
+
+/**
+ * Mid-stay cleaning dates of every CREATED stay that has a plan, by its
+ * reservation number ("BH-…"). Read by the cleaning-request publisher.
+ */
+export async function getCorporateCleaningDates(
+  reservationNumbers?: string[],
+): Promise<Record<string, { stayId: string; dates: string[] }>> {
+  if (reservationNumbers && reservationNumbers.length === 0) return {};
+  const where = reservationNumbers
+    ? and(eq(corporateStays.status, 'created'), inArray(corporateStays.reservationNumber, reservationNumbers))
+    : eq(corporateStays.status, 'created');
+  const rows = await db
+    .select({ id: corporateStays.id, reservationNumber: corporateStays.reservationNumber, plan: corporateStays.cleaningPlan })
+    .from(corporateStays)
+    .where(where);
+  const out: Record<string, { stayId: string; dates: string[] }> = {};
+  for (const r of rows) {
+    if (r.reservationNumber && r.plan?.dates?.length) out[r.reservationNumber] = { stayId: r.id, dates: r.plan.dates };
+  }
+  return out;
 }
 
 /**

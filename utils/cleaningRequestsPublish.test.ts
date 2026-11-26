@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   cleaningRequestsByBooking,
   buildCleaningRequestsMap,
+  carryOverCorporate,
   requestedManualCleanings,
 } from "./cleaningRequestsPublish";
 import { isMidStayDate, defaultMidStayDate } from "./midStayCleaning";
@@ -130,5 +131,30 @@ describe("mid-stay dates", () => {
     expect(isMidStayDate(stay, defaultMidStayDate(stay))).toBe(true);
     // A one-night stay has no mid-stay night; the drawer then blocks Add.
     expect(defaultMidStayDate({ checkInDate: "2026-10-30", checkOutDate: "2026-10-31" })).toBe("2026-10-30");
+  });
+});
+
+describe("corporate mid-stay cleanings", () => {
+  const corp = { "BH-1": { stayId: "CS-x-002", dates: ["2026-11-02", "2026-11-06", "2026-10-30"] } };
+  it("publishes inside-the-stay dates as Úklid během pobytu", () => {
+    expect(cleaningRequestsByBooking(single, [], corp)).toEqual({
+      "BH-1": [
+        { id: "corp-CS-x-002-2026-11-02", date: "2026-11-02", roomId: expect.any(Number), room: "K.201", text: "Úklid během pobytu" },
+      ],
+    });
+  });
+  it("sits alongside drawer requests in the whole-map pass", () => {
+    const map = buildCleaningRequestsMap({ "BH-1": { issues: [issue({ actionableDate: "2026-11-03" })] } }, [single], corp);
+    expect(map["BH-1"].map((c) => c.id).sort()).toEqual(["c1", "corp-CS-x-002-2026-11-02"]);
+  });
+  it("carries published corporate cleanings over when Postgres is unreadable", () => {
+    const previous = {
+      "BH-1": [
+        { id: "corp-CS-x-002-2026-11-02", date: "2026-11-02", roomId: 1, room: "K.201", text: "Úklid během pobytu" },
+        { id: "old-drawer", date: "2026-11-03", roomId: 1, room: "K.201", text: "" },
+      ],
+    };
+    const next = { "BH-1": [{ id: "c1", date: "2026-11-04", roomId: 1, room: "K.201", text: "" }] };
+    expect(carryOverCorporate(next, previous)["BH-1"].map((c) => c.id)).toEqual(["c1", "corp-CS-x-002-2026-11-02"]);
   });
 });

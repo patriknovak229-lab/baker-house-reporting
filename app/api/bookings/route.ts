@@ -18,7 +18,13 @@ import { getRedis, fetchAllBookings, mergeGroupedBookings, mapToReservation, att
 import { readAllReservationOverrides } from "@/utils/reservationOverridesStore";
 import { RATE_PERKS_KEY, RATE_TYPES_KEY } from "@/utils/ratePerksPublish";
 import { OPS_TASKS_KEY, buildOpsTasksMap } from "@/utils/opsTasksPublish";
-import { CLEANING_REQUESTS_KEY, buildCleaningRequestsMap } from "@/utils/cleaningRequestsPublish";
+import {
+  CLEANING_REQUESTS_KEY,
+  buildCleaningRequestsMap,
+  carryOverCorporate,
+  loadCorporateCleanings,
+  type RequestedCleaning,
+} from "@/utils/cleaningRequestsPublish";
 import {
   RESERVATION_APARTMENTS_KEY,
   apartmentParentMap,
@@ -174,7 +180,15 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
   // perks above, so a cancelled stay's tasks drop out on their own.
   const opsMap = buildOpsTasksMap(overrides, live);
   // Requested mid-stay cleanings, which the cleaning app shows as cleanings.
-  const cleaningRequests = buildCleaningRequestsMap(overrides, live);
+  // …including the mid-stay cleanings assigned to corporate stays. Postgres
+  // unreadable → carry the published corporate ones over rather than drop them.
+  const corporateCleanings = await loadCorporateCleanings();
+  let cleaningRequests = buildCleaningRequestsMap(overrides, live, corporateCleanings ?? undefined);
+  if (corporateCleanings === null) {
+    const previous = (await redis.get<Record<string, RequestedCleaning[]>>(CLEANING_REQUESTS_KEY).catch(() => null)) ?? {};
+    const liveNumbers = new Set(live.flatMap((r) => cleaningFeedNumbers(r)));
+    cleaningRequests = carryOverCorporate(cleaningRequests, previous, [...liveNumbers]);
+  }
 
   // Vacated-unit cleanings from mid-stay moves (utils/moveCleaningsPublish).
   const moveCleanings = buildMoveCleaningsMap(reservations);

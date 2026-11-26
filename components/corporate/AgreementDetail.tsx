@@ -38,6 +38,7 @@ import {
 } from './ui';
 import { downloadOfferPdf, offerFromAgreement } from './offer';
 import InvoicePanel from './InvoicePanel';
+import CleaningPlanModal from './CleaningPlanModal';
 import { missingBillingDetails } from '@/utils/corporateInvoice';
 
 interface Props {
@@ -518,6 +519,7 @@ function StayRow({
   const [guestPhone, setGuestPhone] = useState(stay.guestPhone ?? '');
   const [guestEmail, setGuestEmail] = useState(stay.guestEmail ?? '');
   const [price, setPrice] = useState(stay.priceCzk === null ? '' : String(stay.priceCzk));
+  const [showCleanings, setShowCleanings] = useState(false);
 
   const inheritedName = joinGuestName(agreement.guestFirstName, agreement.guestLastName);
   const ownName = joinGuestName(stay.guestFirstName, stay.guestLastName);
@@ -657,6 +659,11 @@ function StayRow({
         <div className="flex flex-col gap-0.5">
           <StayStatusBadge status={stay.status} />
           {stay.reservationNumber && <CopyText value={stay.reservationNumber} />}
+          {stay.cleaningPlan && stay.cleaningPlan.dates.length > 0 && (
+            <span className="text-[11px] text-teal-700" title={stay.cleaningPlan.dates.join(', ')}>
+              🧹 {stay.cleaningPlan.dates.length} mid-stay cleaning{stay.cleaningPlan.dates.length === 1 ? '' : 's'}
+            </span>
+          )}
           {stay.status === 'failed' && stay.error && (
             <span className="text-[11px] text-red-600 max-w-[260px] whitespace-normal">{stay.error}</span>
           )}
@@ -695,6 +702,16 @@ function StayRow({
             )}
             {stay.status === 'created' && (
               <button
+                onClick={() => setShowCleanings(true)}
+                disabled={busy !== null}
+                title="Mid-stay cleanings for this stay (cleaning app: Úklid během pobytu)"
+                className="px-2 py-1 rounded border border-teal-200 text-teal-700 text-[11px] hover:bg-teal-50 disabled:opacity-40"
+              >
+                {stay.cleaningPlan ? 'Edit cleanings' : 'Assign cleanings'}
+              </button>
+            )}
+            {stay.status === 'created' && (
+              <button
                 onClick={() => void cancelStay()}
                 disabled={busy !== null}
                 className="px-2 py-1 rounded border border-rose-200 text-rose-700 text-[11px] hover:bg-rose-50 disabled:opacity-40"
@@ -703,6 +720,9 @@ function StayRow({
               </button>
             )}
           </div>
+          {showCleanings && (
+            <CleaningPlanModal stay={stay} onClose={() => setShowCleanings(false)} onSaved={onRefresh} />
+          )}
         </td>
       )}
     </tr>

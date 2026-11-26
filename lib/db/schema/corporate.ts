@@ -24,6 +24,7 @@ import type {
   CorporateInvoiceStatus,
   DueRule,
 } from '../../../utils/corporateInvoice';
+import type { CleaningPlan } from '../../../utils/corporateCleaning';
 
 /**
  * Corporate agreements — a company's standing request for repeated stays, and
@@ -115,6 +116,8 @@ export const corporateStays = pgTable(
     reservationNumber: text('reservation_number'),
     /** Last Beds24 refusal, kept so the operator can see why and retry. */
     error: text('error'),
+    /** Mid-stay cleanings (utils/corporateCleaning.ts); null = none assigned. */
+    cleaningPlan: jsonb('cleaning_plan').$type<CleaningPlan>(),
     bookedAt: timestamp('booked_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),

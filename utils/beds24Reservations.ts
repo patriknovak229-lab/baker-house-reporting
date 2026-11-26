@@ -1069,6 +1069,18 @@ export function reservationFromCachedBookings(
   return hit ? mapToReservation(hit) : null;
 }
 
+/**
+ * One live reservation from the Redis bookings cache (no Beds24 call), or null
+ * when it isn't cached as a live merged reservation. For routes that need a
+ * booking's current room and dates right after an edit.
+ */
+export async function cachedReservation(reservationNumber: string): Promise<Reservation | null> {
+  const redis = getRedis();
+  if (!redis) return null;
+  const cached = (await redis.get<Record<string, Beds24Booking>>(BOOKINGS_CACHE_KEY)) ?? {};
+  return reservationFromCachedBookings(Object.values(cached), reservationNumber);
+}
+
 export async function buildReservationSet(
   options: { fullSync?: boolean } = {},
 ): Promise<Reservation[]> {

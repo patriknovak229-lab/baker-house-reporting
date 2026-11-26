@@ -13,6 +13,7 @@
  * (see the lib/db.ts note on what happens when a server module leaks into the
  * client bundle).
  */
+import type { CleaningPlan } from './corporateCleaning';
 
 // ─── Beds24 comment marker ───────────────────────────────────────────────────
 
@@ -176,6 +177,8 @@ export interface CorporateStay {
   reservationNumber: string | null;
   /** Why the last create attempt failed, if it did. */
   error: string | null;
+  /** Mid-stay cleanings assigned to this stay, or null. */
+  cleaningPlan: CleaningPlan | null;
   bookedAt: string | null;
   createdAt: string;
   updatedAt: string;

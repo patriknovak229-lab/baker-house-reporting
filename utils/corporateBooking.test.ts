@@ -66,6 +66,7 @@ function stay(overrides: Partial<CorporateStay> = {}): CorporateStay {
     beds24BookingId: null,
     reservationNumber: null,
     error: null,
+    cleaningPlan: null,
     bookedAt: null,
     createdAt: '2026-10-06T10:00:00.000Z',
     updatedAt: '2026-10-06T10:00:00.000Z',
