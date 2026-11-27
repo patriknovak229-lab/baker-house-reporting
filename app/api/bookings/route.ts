@@ -164,8 +164,8 @@ async function persistRateTypeMap(reservations: Reservation[]): Promise<void> {
     const ov = overrides[r.reservationNumber];
     const eff = ov?.rateTypeOverride ?? r.rateType ?? null;
     // Effective perks = rate-derived auto value, then operator override wins.
-    // Pass reservationDate so the Standard rate's perk date-gate applies.
-    const perks = effectiveRatePerks(autoRatePerks(eff, r.reservationDate), ov?.perkOverrides);
+    // Pass reservationDate + channel so the Standard rate's perk gates apply.
+    const perks = effectiveRatePerks(autoRatePerks(eff, r.reservationDate, r.channel), ov?.perkOverrides);
     // Under every apartment's own booking number too — that's how the cleaning
     // app keys each apartment's cleaning (utils/reservationApartments).
     for (const n of cleaningFeedNumbers(r)) {

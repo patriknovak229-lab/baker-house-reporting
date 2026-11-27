@@ -52,22 +52,42 @@ export interface PerkOverrides {
 export const STANDARD_PERK_CHANGE_DATE = "2026-07-23";
 
 /**
+ * Booking.com Standard loses its early check-in. Patrik took it off the
+ * Booking.com Standard rate's listed benefits on this date: over the previous
+ * 90 days that rate earned no more gross profit than Non-refundable, and the
+ * perk had no visible pull on how many guests chose it. Booking.com Standard
+ * reservations CREATED on/after this date carry no perk at all; earlier ones
+ * keep what they were sold. Standard on the other channels (direct web/phone,
+ * Airbnb) is untouched — they never advertised the perk on Booking.com.
+ */
+export const BOOKING_STANDARD_NO_PERK_DATE = "2026-11-27";
+
+const NO_PERKS: RatePerks = { earlyCheckIn: false, lateCheckout: false, specialTreatment: null };
+
+/**
  * Perks a booked rate grants before any operator override.
  *   Non-Refundable / One-Night → none
  *   Standard → late check-out   (booked before STANDARD_PERK_CHANGE_DATE)
  *           → early check-in    (booked on/after STANDARD_PERK_CHANGE_DATE)
+ *           → none              (Booking.com, booked on/after BOOKING_STANDARD_NO_PERK_DATE)
  *   Flexi    → early check-in + late checkout
  *   Weekly   → early check-in + late checkout + welcome bottle of wine
  *
- * `reservationDate` is the booking-made date (YYYY-MM-DD); it only drives the
- * Standard rate's date gate and is ignored by every other rate.
+ * `reservationDate` is the booking-made date (YYYY-MM-DD) and `channel` the
+ * reservation's channel; both only drive the Standard rate's gates and are
+ * ignored by every other rate. A missing channel is treated as not Booking.com,
+ * so a caller that cannot tell keeps the pre-change behaviour.
  */
 export function autoRatePerks(
   rate: RateType | null | undefined,
   reservationDate?: string | null,
+  channel?: string | null,
 ): RatePerks {
   switch (rate) {
     case "Standard": {
+      if (channel === "Booking.com" && !!reservationDate && reservationDate >= BOOKING_STANDARD_NO_PERK_DATE) {
+        return { ...NO_PERKS };
+      }
       const bookedSinceChange = !!reservationDate && reservationDate >= STANDARD_PERK_CHANGE_DATE;
       return bookedSinceChange
         ? { earlyCheckIn: true, lateCheckout: false, specialTreatment: null }
@@ -78,7 +98,7 @@ export function autoRatePerks(
     case "Weekly":
       return { earlyCheckIn: true, lateCheckout: true, specialTreatment: WINE_TREATMENT_NOTE };
     default:
-      return { earlyCheckIn: false, lateCheckout: false, specialTreatment: null };
+      return { ...NO_PERKS };
   }
 }
 

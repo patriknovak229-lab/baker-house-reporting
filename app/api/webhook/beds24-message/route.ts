@@ -1463,7 +1463,7 @@ async function resolveRatePerks(
   }
   if (reservation?.rateType) {
     const eff = effectiveRatePerks(
-      autoRatePerks(reservation.rateType, reservation.reservationDate),
+      autoRatePerks(reservation.rateType, reservation.reservationDate, reservation.channel),
       reservation.perkOverrides,
     );
     return { earlyCheckIn: eff.earlyCheckIn, lateCheckout: eff.lateCheckout };
@@ -1478,7 +1478,7 @@ async function resolveRatePerks(
         )[reservationNumber];
         const rateType = own?.rateTypeOverride ?? mapped.rateType;
         if (rateType) {
-          const eff = effectiveRatePerks(autoRatePerks(rateType, mapped.reservationDate), own?.perkOverrides);
+          const eff = effectiveRatePerks(autoRatePerks(rateType, mapped.reservationDate, mapped.channel), own?.perkOverrides);
           return { earlyCheckIn: eff.earlyCheckIn, lateCheckout: eff.lateCheckout };
         }
       }

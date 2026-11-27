@@ -53,11 +53,12 @@ export async function publishRatePerksEntry(
   rate: RateType | null,
   reservationDate: string | null | undefined,
   perkOverrides: PerkOverrides | undefined,
+  channel?: string | null,
 ): Promise<RatePerks | null> {
   const redis = getRedis();
   if (!redis) return null;
 
-  const perks = effectiveRatePerks(autoRatePerks(rate, reservationDate), perkOverrides);
+  const perks = effectiveRatePerks(autoRatePerks(rate, reservationDate, channel), perkOverrides);
   const map = (await redis.get<Record<string, RatePerks>>(RATE_PERKS_KEY)) ?? {};
   // The rate map is keyed the same way; keep it in step so the cleaning app's
   // rate lookups don't lag a manual rate-type override.

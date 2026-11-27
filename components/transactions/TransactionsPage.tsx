@@ -185,6 +185,7 @@ async function publishRatePerks(r: Reservation): Promise<void> {
       reservationNumber: r.reservationNumber,
       rateType: effectiveRateType(r),
       reservationDate: r.reservationDate,
+      channel: r.channel,
       apartments: r.apartmentReservationNumbers,
       room: r.room,
       linkedRooms: r.linkedRooms,

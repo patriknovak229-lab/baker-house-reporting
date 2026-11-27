@@ -17,10 +17,11 @@ import type { Issue, RateType } from '@/types/reservation';
  * the next Transactions load. The drawer calls this right after the override is
  * saved.
  *
- * Body: { reservationNumber, rateType, reservationDate, apartments?, room,
- *         linkedRooms?, checkInDate, checkOutDate, cancelled? }
+ * Body: { reservationNumber, rateType, reservationDate, channel?, apartments?,
+ *         room, linkedRooms?, checkInDate, checkOutDate, cancelled? }
  * `rateType` is the EFFECTIVE rate the client already resolved (override wins),
- * `reservationDate` the booking-made date for the Standard perk date-gate, and
+ * `reservationDate` the booking-made date and `channel` the reservation's
+ * channel for the Standard perk gates, and
  * `apartments` each apartment's own booking number on a multi-apartment
  * reservation (the cleaning app keys cleanings by those), and the room(s) and
  * stay dates a mid-stay cleaning request is placed by — all booking facts
@@ -35,7 +36,8 @@ export async function POST(req: NextRequest) {
   if ('error' in guard) return guard.error;
 
   const {
-    reservationNumber, rateType, reservationDate, apartments, room, linkedRooms, checkInDate, checkOutDate, cancelled,
+    reservationNumber, rateType, reservationDate, channel, apartments, room, linkedRooms, checkInDate, checkOutDate,
+    cancelled,
   } = await req.json();
   if (!reservationNumber) {
     return NextResponse.json({ error: 'reservationNumber required' }, { status: 400 });
@@ -74,6 +76,7 @@ export async function POST(req: NextRequest) {
     (rateType ?? null) as RateType | null,
     reservationDate ?? null,
     entry?.perkOverrides,
+    typeof channel === 'string' ? channel : null,
   );
   const opsTasks = await publishOpsTasksEntry(r, entry?.issues);
   const cleaningRequests = await publishCleaningRequestsEntry(r, entry?.issues);

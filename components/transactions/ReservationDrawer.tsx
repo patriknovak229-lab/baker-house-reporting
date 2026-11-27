@@ -1495,18 +1495,21 @@ function RateTypeControl({
 function PerksControl({
   rate,
   reservationDate,
+  channel,
   override,
   onOverride,
   rooms,
 }: {
   rate: RateType | null;
   reservationDate?: string | null;
+  /** Booking.com Standard drops its perk for bookings made from 2026-11-27. */
+  channel?: string | null;
   override: PerkOverrides | null | undefined;
   onOverride: (v: PerkOverrides) => void;
   /** Every apartment's room, on a multi-apartment reservation. */
   rooms?: string[];
 }) {
-  const auto = autoRatePerks(rate, reservationDate);
+  const auto = autoRatePerks(rate, reservationDate, channel);
   const eff = effectiveRatePerks(auto, override);
   const ov: PerkOverrides = override ?? {};
 
@@ -5633,6 +5636,7 @@ export default function ReservationDrawer({
                   <PerksControl
                     rate={reservation.rateTypeOverride ?? reservation.rateType ?? null}
                     reservationDate={reservation.reservationDate}
+                    channel={reservation.channel}
                     override={reservation.perkOverrides}
                     onOverride={(v) => onUpdate({ ...reservation, perkOverrides: v })}
                     rooms={reservationApartments(reservation).map((a) => a.room)}
