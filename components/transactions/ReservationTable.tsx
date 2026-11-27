@@ -91,6 +91,54 @@ function paymentBadgeVariant(status: PaymentStatus) {
   return "gray";
 }
 
+/**
+ * A cancelled booking's price: muted (it isn't revenue), with the fee the guest
+ * still pays under it when one is recorded. Beds24 zeroes most cancelled
+ * channel bookings — the tooltip says where the shown value came from.
+ */
+function PriceCell({ res, align }: { res: Reservation; align: "start" | "end" }) {
+  if (!res.isCancelled || res.nonArrival) return <>{formatCurrency(res.price)}</>;
+  const fee = res.cancellationFee?.amountCzk ?? 0;
+  const rec = res.priceRecovery;
+  const title = rec
+    ? `Cancelled. Beds24 now shows ${formatCurrency(rec.beds24PriceCzk)}; this is ${
+        rec.source === "snapshot"
+          ? "the price before the cancellation, as last synced"
+          : rec.approximate
+            ? "estimated from Beds24's rate text (shortened on a long stay)"
+            : "read back from Beds24's rate text"
+      }.`
+    : "Cancelled";
+  return (
+    <span
+      className={`inline-flex flex-col leading-tight ${align === "end" ? "items-end" : "items-start"}`}
+      title={`${title}${fee > 0 ? ` Fee retained: ${formatCurrency(fee)} (counted in revenue).` : " Not counted in revenue."}`}
+    >
+      <span className="text-gray-400 font-normal">
+        {rec?.approximate ? "≈ " : ""}
+        {formatCurrency(res.price)}
+      </span>
+      {fee > 0 && <span className="text-[11px] text-amber-700 font-medium">fee {formatCurrency(fee)}</span>}
+    </span>
+  );
+}
+
+/** Status badge for a cancelled booking — non-arrival, or cancelled (+ fee retained). */
+function CancelledStatusBadges({ res }: { res: Reservation }) {
+  if (res.nonArrival) return <Badge variant="purple" size="xs">🚨 Non-arrival</Badge>;
+  if (!res.isCancelled) return null;
+  return (
+    <>
+      <Badge variant="red" size="xs">🚫 Cancelled</Badge>
+      {(res.cancellationFee?.amountCzk ?? 0) > 0 && (
+        <span title="The guest still pays a cancellation fee — counted in revenue">
+          <Badge variant="amber" size="xs">💰 Fee retained</Badge>
+        </span>
+      )}
+    </>
+  );
+}
+
 /** The refund flag's text: "Fully refunded" once the whole price went back, otherwise the amount. */
 function refundChipLabel(res: Reservation): string {
   return isFullyRefunded(res)
@@ -744,7 +792,7 @@ function ReservationCard({
 
       {/* Row 4: Price · payment · rate */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-medium text-gray-900 text-sm">{formatCurrency(res.price)}</span>
+        <span className="font-medium text-gray-900 text-sm"><PriceCell res={res} align="start" /></span>
         <div className="flex items-center gap-1">
           <PaymentBadge res={res} />
           {res.paymentStatusOverride && (
@@ -765,11 +813,7 @@ function ReservationCard({
         res.isCancelled ||
         (res.platformRefund?.amountCzk ?? 0) > 0) && (
         <div className="flex flex-wrap gap-1 mt-2">
-          {res.nonArrival ? (
-            <Badge variant="purple" size="xs">🚨 Non-arrival</Badge>
-          ) : res.isCancelled ? (
-            <Badge variant="red" size="xs">🚫 Cancelled</Badge>
-          ) : null}
+          <CancelledStatusBadges res={res} />
           {res.platformRefund && res.platformRefund.amountCzk > 0 && (
             <Badge variant="amber" size="xs">
               ↩︎ {refundChipLabel(res)}
@@ -1107,7 +1151,7 @@ export default function ReservationTable({
                       {res.numberOfNights}
                     </td>
                     <td className="px-3 py-3 text-gray-900 font-medium text-right whitespace-nowrap">
-                      {formatCurrency(res.price)}
+                      <PriceCell res={res} align="end" />
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-1">
@@ -1141,6 +1185,7 @@ export default function ReservationTable({
                     {/* Stay Status */}
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1 items-center">
+                        <CancelledStatusBadges res={res} />
                         {res.isUnallocatedVR && (
                           <span title="Beds24 couldn't allocate a physical room — operator must assign manually in Beds24">
                             <Badge variant="amber-filled" size="xs">
@@ -1197,11 +1242,6 @@ export default function ReservationTable({
                     {/* Customer Flags */}
                     <td className="px-3 py-3 whitespace-nowrap">
                       <div className="flex flex-wrap gap-1">
-                        {res.nonArrival ? (
-                          <Badge variant="purple" size="xs">🚨 Non-arrival</Badge>
-                        ) : res.isCancelled ? (
-                          <Badge variant="red" size="xs">🚫 Cancelled</Badge>
-                        ) : null}
                         {res.platformRefund && res.platformRefund.amountCzk > 0 && (
                           <Badge variant="amber" size="xs">
                             ↩︎ {refundChipLabel(res)}

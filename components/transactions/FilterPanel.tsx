@@ -11,6 +11,23 @@ import type {
 import { groupRoomsByCategory } from "@/utils/roomCategory";
 import { RATE_TYPES, RATE_TYPE_LABELS } from "@/utils/rateType";
 
+/** Booking lifecycle, as the Status column shows it. */
+export type BookingStatusFilter = "confirmed" | "cancelled" | "non-arrival";
+
+export const BOOKING_STATUS_OPTIONS: BookingStatusFilter[] = ["confirmed", "cancelled", "non-arrival"];
+export const BOOKING_STATUS_LABELS: Record<BookingStatusFilter, string> = {
+  confirmed: "Confirmed",
+  cancelled: "🚫 Cancelled",
+  "non-arrival": "🚨 Non-arrival",
+};
+
+/** Which status bucket a reservation falls in. Blackouts are none of them. */
+export function bookingStatusOf(r: { isCancelled?: boolean; nonArrival?: unknown }): BookingStatusFilter {
+  if (r.nonArrival) return "non-arrival";
+  if (r.isCancelled) return "cancelled";
+  return "confirmed";
+}
+
 export interface Filters {
   channels: Channel[];
   rooms: Room[];
@@ -23,6 +40,9 @@ export interface Filters {
   customerFlags: CustomerFlag[];
   /** Guest-rating class: "good" 😊 / "bad" 😡 / "none" (unrated). */
   ratings: RatingStatus[];
+  /** Confirmed / cancelled / non-arrival. Picking "Cancelled" also lifts the
+   *  Active view's rule that hides cancellations. */
+  bookingStatuses: BookingStatusFilter[];
   /** Only reservations checked out in the last 7 days, in-house, or upcoming. */
   activeOnly: boolean;
 }
@@ -38,6 +58,7 @@ export const defaultFilters: Filters = {
   rateTypes: [],
   customerFlags: [],
   ratings: [],
+  bookingStatuses: [],
   activeOnly: false,
 };
 
@@ -248,6 +269,7 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
     filters.rateTypes.length > 0 ||
     filters.customerFlags.length > 0 ||
     filters.ratings.length > 0 ||
+    filters.bookingStatuses.length > 0 ||
     filters.activeOnly;
 
   return (
@@ -404,6 +426,16 @@ export default function FilterPanel({ filters, onChange }: FilterPanelProps) {
                 onChange={(v) => onChange({ ...filters, ratings: v })}
               />
               <p className="text-[10px] text-gray-400 mt-1">Good + Bad = all rated</p>
+            </div>
+            <div>
+              <MultiCheckbox
+                label="Booking Status"
+                options={BOOKING_STATUS_OPTIONS}
+                labels={BOOKING_STATUS_LABELS}
+                selected={filters.bookingStatuses}
+                onChange={(v) => onChange({ ...filters, bookingStatuses: v })}
+              />
+              <p className="text-[10px] text-gray-400 mt-1">Cancelled shows even with Active only on</p>
             </div>
           </div>
 

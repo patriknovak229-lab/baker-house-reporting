@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import QRCodeLib from "qrcode";
-import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, InvoiceSplit, RateType, StayShortening, ParkingUse } from "@/types/reservation";
+import type { Reservation, CustomerFlag, InvoiceData, RatingStatus, GuestRating, Issue, IssueCategory, InvoiceModification, InvoiceSplit, RateType, StayShortening, ParkingUse, CancellationFee } from "@/types/reservation";
 import { ratingSmiley, isTopRating, formatRating } from "@/utils/rating";
 import type { AdditionalPayment } from "@/types/additionalPayment";
 import type { Voucher } from "@/types/voucher";
@@ -3326,6 +3326,187 @@ function ShortenedRevenueNote({ reservation }: { reservation: Reservation }) {
   );
 }
 
+/**
+ * Cancellation fee retained — what a guest still pays on a CANCELLED booking:
+ * a cancellation after the free-cancellation deadline, or a non-refundable
+ * rate (BH-95759725, cancelled on arrival day, full price charged).
+ *
+ * Entered by hand because no channel reports it reliably. Booking.com's cancel
+ * payload carries a `total_cancellation_fee`, offered here as a one-click
+ * suggestion — but Booking.com's own docs say that figure is the policy fee
+ * even when the host waives it, so the operator confirms it. Airbnb sends
+ * nothing. Counted as revenue (fee less the channel's commission and payment
+ * charge on it); the room stays free in occupancy, like a non-arrival.
+ */
+function CancellationFeePanel({
+  reservation,
+  canEdit,
+  userEmail,
+  onChange,
+}: {
+  reservation: Reservation;
+  canEdit: boolean;
+  userEmail: string;
+  onChange: (fee: CancellationFee | null) => void;
+}) {
+  const fee = reservation.cancellationFee ?? null;
+  const suggestion = reservation.cancellationFeeSuggestion ?? null;
+  const rec = reservation.priceRecovery ?? null;
+
+  function save(patch: Partial<Pick<CancellationFee, "amountCzk" | "commissionCzk" | "paymentChargeCzk" | "note">>) {
+    const base: CancellationFee = fee ?? {
+      amountCzk: 0,
+      commissionCzk: 0,
+      paymentChargeCzk: 0,
+      flaggedAt: new Date().toISOString(),
+      flaggedBy: userEmail,
+    };
+    // To the haléř; a cleared or mistyped input reads as 0, never NaN or negative.
+    const money = (v: number | undefined, fallback: number) =>
+      Math.max(0, Math.round(((v ?? fallback) || 0) * 100) / 100);
+    const note = (patch.note ?? base.note ?? "").trim();
+    onChange({
+      amountCzk: money(patch.amountCzk, base.amountCzk),
+      commissionCzk: money(patch.commissionCzk, base.commissionCzk),
+      paymentChargeCzk: money(patch.paymentChargeCzk, base.paymentChargeCzk),
+      ...(note ? { note } : {}),
+      flaggedAt: base.flaggedAt,
+      flaggedBy: base.flaggedBy,
+    });
+  }
+
+  const priceSource = rec
+    ? rec.source === "snapshot"
+      ? `Beds24 now shows ${formatCurrency(rec.beds24PriceCzk)}; the price shown is the one before the cancellation, as last synced.`
+      : rec.approximate
+        ? `Beds24 now shows ${formatCurrency(rec.beds24PriceCzk)}; the price shown is estimated from Beds24's rate text, which is shortened on long stays.`
+        : `Beds24 now shows ${formatCurrency(rec.beds24PriceCzk)}; the price shown is read back from Beds24's rate text.`
+    : null;
+
+  const inputCls =
+    "block w-28 mt-0.5 border border-amber-200 rounded px-2 py-1 text-sm text-amber-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:opacity-60";
+
+  return (
+    <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 px-3 py-2.5 space-y-2">
+      <div>
+        <p className="text-sm font-medium text-red-800">🚫 Cancelled</p>
+        <p className="text-[11px] text-red-700 mt-0.5">
+          The booking&apos;s {formatCurrency(reservation.price)} is not counted in revenue.
+          {fee && fee.amountCzk > 0 ? " The retained fee below is." : ""}
+        </p>
+        {priceSource && <p className="text-[11px] text-gray-500 mt-0.5">{priceSource}</p>}
+      </div>
+
+      {fee ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-amber-800">💰 Cancellation fee retained</span>
+            {canEdit && (
+              <button onClick={() => onChange(null)} className="text-[11px] text-amber-600 hover:underline">
+                Remove
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-amber-600 mt-0.5">
+            Counted in revenue; the room stays free in occupancy.
+          </p>
+          <div className="mt-2 flex items-end gap-3 flex-wrap">
+            <label className="text-[11px] text-amber-700">
+              Fee (Kč)
+              <input
+                key={`cf-amount-${fee.amountCzk}`}
+                type="number"
+                min={0}
+                step={0.01}
+                defaultValue={fee.amountCzk}
+                onBlur={(e) => save({ amountCzk: Number(e.target.value) })}
+                disabled={!canEdit}
+                className={inputCls}
+              />
+            </label>
+            <label className="text-[11px] text-amber-700">
+              Commission (Kč)
+              <input
+                key={`cf-comm-${fee.commissionCzk}`}
+                type="number"
+                min={0}
+                step={0.01}
+                defaultValue={fee.commissionCzk}
+                onBlur={(e) => save({ commissionCzk: Number(e.target.value) })}
+                disabled={!canEdit}
+                className={inputCls}
+              />
+            </label>
+            <label className="text-[11px] text-amber-700">
+              Payment charge (Kč)
+              <input
+                key={`cf-charge-${fee.paymentChargeCzk}`}
+                type="number"
+                min={0}
+                step={0.01}
+                defaultValue={fee.paymentChargeCzk}
+                onBlur={(e) => save({ paymentChargeCzk: Number(e.target.value) })}
+                disabled={!canEdit}
+                className={inputCls}
+              />
+            </label>
+            <label className="text-[11px] text-amber-700 flex-1 min-w-[10rem]">
+              Note
+              <input
+                key={`cf-note-${fee.note ?? ""}`}
+                type="text"
+                placeholder="e.g. non-refundable, cancelled on arrival day"
+                defaultValue={fee.note ?? ""}
+                onBlur={(e) => save({ note: e.target.value })}
+                disabled={!canEdit}
+                className="block w-full mt-0.5 border border-amber-200 rounded px-2 py-1 text-sm text-amber-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:opacity-60"
+              />
+            </label>
+          </div>
+          <p className="text-[11px] text-amber-800 mt-1.5">
+            Net retained: {formatCurrency(fee.amountCzk - fee.commissionCzk - fee.paymentChargeCzk)}
+          </p>
+          {suggestion && Math.round(suggestion.amountCzk) !== Math.round(fee.amountCzk) && (
+            <p className="text-[11px] text-amber-700 mt-1">
+              Booking.com reported a fee of {formatCurrency(suggestion.amountCzk)}.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {suggestion && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+              Booking.com reports a cancellation fee of <strong>{formatCurrency(suggestion.amountCzk)}</strong>
+              {" "}(commission {formatCurrency(suggestion.commissionCzk)}, payment charge{" "}
+              {formatCurrency(suggestion.paymentChargeCzk)}). It reports the policy fee even if it&apos;s
+              waived, so confirm it in the extranet before recording it.
+            </p>
+          )}
+          {canEdit && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {suggestion && (
+                <button
+                  onClick={() => save(suggestion)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors"
+                >
+                  💰 Record {formatCurrency(suggestion.amountCzk)} fee
+                </button>
+              )}
+              <button
+                onClick={() => save({ amountCzk: 0 })}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors"
+                title="The guest still pays part or all of a cancelled booking. The fee counts as revenue; the room stays free in occupancy."
+              >
+                💰 {suggestion ? "Enter a different fee" : "Record cancellation fee"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PaymentBreakdown({ reservation }: { reservation: Reservation }) {
   const [open, setOpen] = useState(false);
   const { price, commissionAmount, paymentChargeAmount, channel } = reservation;
@@ -5703,6 +5884,15 @@ export default function ReservationDrawer({
               />
             )}
 
+            {reservation.isCancelled && !reservation.nonArrival && (
+              <CancellationFeePanel
+                reservation={reservation}
+                canEdit={canEditNonArrival}
+                userEmail={naUserEmail}
+                onChange={(cancellationFee) => onUpdate({ ...reservation, cancellationFee })}
+              />
+            )}
+
             {!reservation.nonArrival && (
               <div className="mt-2">
                 {reservation.platformRefund ? (
@@ -5771,7 +5961,9 @@ export default function ReservationDrawer({
                       </p>
                     )}
                   </div>
-                ) : canEditNonArrival ? (
+                ) : canEditNonArrival && !reservation.cancellationFee ? (
+                  // A retained cancellation fee is already the net the guest
+                  // pays — a refund on top would not change its revenue.
                   <button
                     onClick={() => setPlatformRefund({ amountCzk: 0 })}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors"

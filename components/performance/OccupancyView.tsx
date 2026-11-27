@@ -31,7 +31,7 @@ export default function OccupancyView({ reservations, dateRange, selectedRooms }
   // Non-arrivals freed their room (the guest never came) — they carry revenue but
   // no physical occupancy, so drop them from sold-nights. Plain cancellations are
   // already excluded upstream in PerformancePage.
-  const occupancyReservations = reservations.filter((r) => !r.nonArrival);
+  const occupancyReservations = reservations.filter((r) => !r.isCancelled); // non-arrivals + fee-paying cancellations freed the room
   const soldTotal = occupancyReservations.reduce((sum, r) => sum + getNightsInPeriod(r, dateRange), 0);
   const occupancyPct = pct(soldTotal, availableTotal);
 

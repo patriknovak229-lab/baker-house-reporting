@@ -18,7 +18,7 @@ import type { EmailSendLogEntry } from "@/types/emailSendLog";
 import type { RoomMoveNotice } from "@/types/roomMove";
 import type { UnreadBookingSummary } from "@/app/api/messages/unread/route";
 import type { PendingDraft, PendingOther } from "@/app/api/webhook/beds24-message/route";
-import FilterPanel, { makeInitialFilters } from "./FilterPanel";
+import FilterPanel, { bookingStatusOf, makeInitialFilters } from "./FilterPanel";
 import OccupancyCalendar from "./OccupancyCalendar";
 import type { Filters } from "./FilterPanel";
 import ReservationTable from "./ReservationTable";
@@ -85,6 +85,7 @@ type LocalFields = {
   nonArrival?: import('@/types/reservation').NonArrival | null;
   nonArrivalNetPriceCzk?: number | null;
   platformRefund?: import('@/types/reservation').PlatformRefund | null;
+  cancellationFee?: import('@/types/reservation').CancellationFee | null;
   stayShortened?: import('@/types/reservation').StayShortening | null;
   stayLink?: import('@/types/reservation').StayLink | null;
   stayLinkRejected?: string[];
@@ -118,6 +119,7 @@ function extractLocalFields(r: Reservation): LocalFields {
   if (r.nonArrival) local.nonArrival = r.nonArrival;
   if (r.nonArrivalNetPriceCzk != null) local.nonArrivalNetPriceCzk = r.nonArrivalNetPriceCzk;
   if (r.platformRefund) local.platformRefund = r.platformRefund;
+  if (r.cancellationFee) local.cancellationFee = r.cancellationFee;
   if (r.stayShortened) local.stayShortened = r.stayShortened;
   if (r.stayLink) local.stayLink = r.stayLink;
   if (r.stayLinkRejected && r.stayLinkRejected.length > 0) local.stayLinkRejected = r.stayLinkRejected;
@@ -1458,10 +1460,22 @@ export default function TransactionsPage() {
       // Guest rating — good / bad / unrated (matches the smiley in the table)
       if (filters.ratings.length > 0 && !filters.ratings.includes(ratingClass(res))) return false;
 
+      // Booking status — confirmed / cancelled / non-arrival
+      if (
+        filters.bookingStatuses.length > 0 &&
+        (res.isBlackout || !filters.bookingStatuses.includes(bookingStatusOf(res)))
+      ) return false;
+
       // Cancelled bookings are hidden from the Active view (they would flood it
-      // with a year of guest cancellations). Non-arrivals stay — we're still
+      // with a year of guest cancellations) — unless the operator asked for
+      // them with the Booking Status filter. Non-arrivals stay — we're still
       // owed on them and they behave like a live reservation.
-      if (filters.activeOnly && res.isCancelled && !res.nonArrival) return false;
+      if (
+        filters.activeOnly &&
+        res.isCancelled &&
+        !res.nonArrival &&
+        !filters.bookingStatuses.includes("cancelled")
+      ) return false;
 
       // Active only — check-out within the last 7 days, in-house, or upcoming
       if (filters.activeOnly && res.checkOutDate < activeCutoff) return false;

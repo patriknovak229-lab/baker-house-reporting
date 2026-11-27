@@ -18,7 +18,7 @@
  */
 import type { Reservation, Room } from '@/types/reservation';
 import { getNightsInPeriod } from '@/utils/periodUtils';
-import { reservationRevenue, revenueShareInPeriod } from '@/utils/reservationRevenue';
+import { countsInRevenue, reservationRevenue, revenueShareInPeriod } from '@/utils/reservationRevenue';
 import type { DateRange } from '@/utils/periodUtils';
 import type {
   VariableCostEntry,
@@ -78,8 +78,9 @@ export interface GrossProfitTotals {
   cleaningCount: number;
   laundryCount: number;
   cleaningNextMonthCount: number;
-  /** Reservations kept for revenue but which never produced a stay — a guest
-   *  who did not arrive leaves no room to clean, so they must not raise the
+  /** Reservations kept for revenue but which never produced a stay — a
+   *  non-arrival or a cancellation with a retained fee. A guest who did not
+   *  arrive leaves no room to clean, so they must not raise the
    *  expected-cleanings count. Only those departing inside the period, so the
    *  next-month exclusion can't subtract the same booking twice. */
   nonArrivalCount: number;
@@ -157,8 +158,9 @@ export function computeGrossProfit(
     // Plain cancellations contribute nothing. A non-arrival is kept but counted
     // at its net-retained price (original minus any channel-side refund); no OTA
     // commission / payment fee is deducted again since the operator enters the
-    // net amount they actually keep.
-    if (r.isCancelled && !r.nonArrival) continue;
+    // net amount they actually keep. A cancellation with a retained fee counts
+    // the fee, less the channel's cut on it (reservationRevenue).
+    if (!countsInRevenue(r)) continue;
     const nights = getNightsInPeriod(r, dateRange);
     const fraction = revenueShareInPeriod(r, dateRange);
     const { gbv: price, commission, fee: fees } = reservationRevenue(r);
@@ -174,7 +176,7 @@ export function computeGrossProfit(
       // `else if`: a non-arrival departing next month is already excluded by
       // the line above, and subtracting it twice would under-state the count.
       if (r.checkOutDate > dateRange.end) cleaningNextMonthCount += 1;
-      else if (r.nonArrival) nonArrivalCount += 1;
+      else if (r.isCancelled) nonArrivalCount += 1; // non-arrival or fee-paying cancellation: no clean
     }
     if (
       nights === 0 &&

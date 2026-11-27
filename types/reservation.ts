@@ -272,6 +272,53 @@ export interface PlatformRefund {
   stripeRefunds?: PlatformRefundStripeEntry[];
 }
 
+/**
+ * Set on a cancelled booking whose `price` we restored because Beds24 reports
+ * it at 0 Kč — see utils/cancelledBooking.ts. Display/analytics only: a
+ * cancelled booking earns nothing unless a `CancellationFee` is recorded.
+ */
+export interface PriceRecovery {
+  /** What Beds24 reports now (0). */
+  beds24PriceCzk: number;
+  /** "snapshot" = last price our sync saw; "rate-description" = Beds24's rate text. */
+  source: "snapshot" | "rate-description";
+  /** Beds24 truncated the rate text on a long stay — mean night × nights. */
+  approximate?: boolean;
+}
+
+/** Booking.com's cancellation figures from the cancel payload — a suggestion only. */
+export interface CancellationFeeSuggestion {
+  amountCzk: number;
+  commissionCzk: number;
+  paymentChargeCzk: number;
+}
+
+/**
+ * Money the guest still owes on a CANCELLED booking — a cancellation after the
+ * free-cancellation deadline, or a non-refundable rate (BH-95759725: cancelled
+ * on arrival day, Booking.com charged the full 12 314 Kč).
+ *
+ * Operator-entered, because no channel reports it reliably: Booking.com's cancel
+ * payload carries `total_cancellation_fee` (offered as a suggestion), Airbnb
+ * sends nothing at all. Counted as revenue — gross = `amountCzk`, less the
+ * channel's commission and payment charge on it — while the room stays free in
+ * occupancy, exactly like a non-arrival. Persisted in `baker:reservation-overrides`.
+ */
+export interface CancellationFee {
+  /** What the guest is charged, in CZK. */
+  amountCzk: number;
+  /** Channel commission on the fee, in CZK. */
+  commissionCzk: number;
+  /** Channel payment charge on the fee, in CZK. */
+  paymentChargeCzk: number;
+  /** Free-text note ("non-refundable, cancelled on arrival day"), optional. */
+  note?: string;
+  /** ISO timestamp the fee was recorded. */
+  flaggedAt: string;
+  /** Operator email that recorded it. */
+  flaggedBy: string;
+}
+
 /** One Stripe refund counted in a `PlatformRefund` — see `stripeRefunds`. */
 export interface PlatformRefundStripeEntry {
   /** Stripe refund id (re_…). */
@@ -600,6 +647,15 @@ export interface Reservation {
    * Persisted in `baker:reservation-overrides`.
    */
   platformRefund?: PlatformRefund | null;
+  /**
+   * Fee the guest still pays on a cancelled booking (see CancellationFee).
+   * Only meaningful on a cancelled booking that is not a non-arrival.
+   */
+  cancellationFee?: CancellationFee | null;
+  /** Booking.com's cancel-payload fee, to pre-fill `cancellationFee`. Derived, never stored. */
+  cancellationFeeSuggestion?: CancellationFeeSuggestion | null;
+  /** Set when `price` was restored on a cancelled booking Beds24 zeroed. Derived. */
+  priceRecovery?: PriceRecovery | null;
   /**
    * Set when the operator trimmed nights off this stay at the guest's request.
    * The shortened dates are the ones Beds24 reports (occupancy follows them);

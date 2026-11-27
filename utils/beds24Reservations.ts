@@ -11,7 +11,8 @@
 // publish the Postgres bookings archive, or it silently falls behind - see
 // archiveReservationSet at the bottom of this file.
 import { Redis } from "@upstash/redis";
-import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, StayShortening, StayLink, UnallocatedLeg } from "@/types/reservation";
+import type { Reservation, Channel, Room, CleaningStatus, PaymentStatus, NonArrival, PlatformRefund, CancellationFee, StayShortening, StayLink, UnallocatedLeg } from "@/types/reservation";
+import { carryPriceBeforeCancel, parseCancellationFeeSuggestion, recoverCancelledPrice } from "@/utils/cancelledBooking";
 import { getAccessToken } from "@/utils/beds24Auth";
 import { detectRateType, isRateTypeInScope } from "@/utils/rateType";
 import { deriveCancellationPolicy } from "@/utils/cancellationPolicy";
@@ -45,6 +46,7 @@ export function getRedis(): Redis | null {
  * Three overlays, all inputs to the revenue engine (utils/reservationRevenue):
  *   - non-arrival (flag + editable net retained)
  *   - platform refund (amount the operator handed back off-channel)
+ *   - cancellation fee (what a guest still pays on a cancelled booking)
  *   - stay shortening (keeps the money on the original nightly schedule —
  *     without it a shortened stay's full price lands on its remaining nights)
  * Plus the stay links (utils/stayChains) — not money, but the room resolver
@@ -56,6 +58,7 @@ export async function attachNonArrivalOverlay(reservations: Reservation[]): Prom
     nonArrival?: NonArrival | null;
     nonArrivalNetPriceCzk?: number | null;
     platformRefund?: PlatformRefund | null;
+    cancellationFee?: CancellationFee | null;
     stayShortened?: StayShortening | null;
     stayLink?: StayLink | null;
     stayLinkRejected?: string[];
@@ -63,13 +66,15 @@ export async function attachNonArrivalOverlay(reservations: Reservation[]): Prom
   if (Object.keys(overrides).length === 0) return reservations;
   return reservations.map((r) => {
     const ov = overrides[r.reservationNumber];
-    if (!ov?.nonArrival && !ov?.platformRefund && !ov?.stayShortened && !ov?.stayLink && !ov?.stayLinkRejected?.length) return r;
+    if (!ov?.nonArrival && !ov?.platformRefund && !ov?.cancellationFee && !ov?.stayShortened && !ov?.stayLink && !ov?.stayLinkRejected?.length) return r;
     const merged = { ...r };
     if (ov.nonArrival) {
       merged.nonArrival = ov.nonArrival;
       merged.nonArrivalNetPriceCzk = ov.nonArrivalNetPriceCzk ?? ov.nonArrival.originalPriceCzk;
     }
     if (ov.platformRefund) merged.platformRefund = ov.platformRefund;
+    // Only a cancelled booking can retain a fee; a reinstated one ignores it.
+    if (ov.cancellationFee && r.isCancelled) merged.cancellationFee = ov.cancellationFee;
     if (ov.stayShortened) merged.stayShortened = ov.stayShortened;
     if (ov.stayLink) merged.stayLink = ov.stayLink;
     if (ov.stayLinkRejected?.length) merged.stayLinkRejected = ov.stayLinkRejected;
@@ -240,6 +245,9 @@ export interface Beds24Booking {
   status: string;         // "new" | "confirmed" | "cancelled"
   comments: string;       // contains "PRE-PAID" for prepaid reservations
   notes?: string;         // Beds24 "Notes": the web-booking guest note, plus Beds24's own log lines (see utils/guestNote.ts)
+  cancelTime?: string | null; // ISO timestamp of the cancellation
+  /** OUR field, not Beds24's: last non-zero price the sync saw, kept on cancelled bookings (utils/cancelledBooking.ts). */
+  _priceBeforeCancel?: number;
 }
 
 // ─── Channel fee breakdown ───────────────────────────────────────────────────
@@ -738,6 +746,12 @@ export function mapToReservation(b: Beds24Booking): Reservation {
 
   const blackoutMeta = isBlackout ? parseBlackoutMeta(b.comments ?? '') : {};
 
+  // Beds24 zeroes the price of most cancelled channel bookings; bring the
+  // value back so the operator and the analytics still see what the stay was
+  // worth. Display only — revenue skips cancellations unless a fee is recorded.
+  const recovered = isCancelled ? recoverCancelledPrice(b, nights) : null;
+  const cancellationFeeSuggestion = isCancelled ? parseCancellationFeeSuggestion(b.apiMessage) : null;
+
   const corporateAgreementId = parseCorporateMarker(b.comments);
   const additionalGuests = parseAdditionalGuests(b.comments);
   const channel = mapChannel(b.apiSource, b.referer, b.comments ?? "");
@@ -787,7 +801,9 @@ export function mapToReservation(b: Beds24Booking): Reservation {
     numberOfGuests: (b.numAdult ?? 0) + (b.numChild ?? 0),
     email: b.email ?? "",
     phone: b.phone ?? "",
-    price: b.price ?? 0,
+    price: recovered?.price ?? b.price ?? 0,
+    ...(recovered ? { priceRecovery: recovered.recovery } : {}),
+    ...(cancellationFeeSuggestion ? { cancellationFeeSuggestion } : {}),
     // Prefer an explicit country code (country2 = most OTAs, country = Direct/
     // rental-site API bookings — often lowercase). countryFromCodeOrLang maps
     // language codes that OTAs (esp. Airbnb) wrongly drop into the country
@@ -971,6 +987,14 @@ export async function fetchAllBookings(
 
   // ── Pass 1: full-window OR delta ──
   // (Same logic as before. Both passes write into `cached` by id.)
+  // The cache as it stood before this sync — a full sync wipes `cached`, and
+  // carryPriceBeforeCancel needs the old copy to keep a cancelled booking's
+  // price after Beds24 zeroes it.
+  const previous = cached;
+  const store = (b: Beds24Booking) => {
+    const id = String(b.id);
+    cached[id] = carryPriceBeforeCancel(previous[id], b);
+  };
   const primaryParams = new URLSearchParams();
   if (useFullSync) {
     // Full window: 1 year back → 1 year forward (by arrival date). Wipes
@@ -995,9 +1019,7 @@ export async function fetchAllBookings(
     for (const s of ALL_BOOKING_STATUSES) primaryParams.append("status", s);
   }
   const primaryFetched = await paginateBookings(token, primaryParams);
-  for (const b of primaryFetched) {
-    cached[String(b.id)] = b;
-  }
+  for (const b of primaryFetched) store(b);
 
   // ── Pass 2: live-window refresh (always runs) ──
   // Re-pulls every booking with arrival within the last LIVE_REFRESH_LOOKBACK_DAYS
@@ -1020,9 +1042,7 @@ export async function fetchAllBookings(
     liveParams.set("arrivalTo", liveTo.toISOString().slice(0, 10));
     for (const s of ALL_BOOKING_STATUSES) liveParams.append("status", s);
     const liveFetched = await paginateBookings(token, liveParams);
-    for (const b of liveFetched) {
-      cached[String(b.id)] = b;
-    }
+    for (const b of liveFetched) store(b);
   }
 
   // ── Prune very old + persist ──

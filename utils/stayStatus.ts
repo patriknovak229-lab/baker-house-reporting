@@ -29,11 +29,16 @@ function getTomorrow(): string {
  * - Next for room, check-in >14 days away   → no tag
  *
  * In-house reservations always get "in-house" plus an optional checkout tag.
+ *
+ * Cancelled bookings (non-arrivals included) get none — nobody is checking in
+ * — and never count as a room's next arrival, so a cancellation can't hide the
+ * real next guest's "Arriving tomorrow".
  */
 export function computeStayStatus(res: Reservation, allReservations: Reservation[]): StayStatus[] {
   const today = getToday();
   const tomorrow = getTomorrow();
   const statuses: StayStatus[] = [];
+  if (res.isCancelled || res.isBlackout) return statuses;
 
   // Arriving today
   if (res.checkInDate === today) {
@@ -53,7 +58,7 @@ export function computeStayStatus(res: Reservation, allReservations: Reservation
   // Future reservation: is this the next upcoming for its room?
   if (res.checkInDate > today) {
     const nextCheckInForRoom = allReservations
-      .filter((r) => r.room === res.room && r.checkInDate > today)
+      .filter((r) => r.room === res.room && r.checkInDate > today && !r.isCancelled && !r.isBlackout)
       .map((r) => r.checkInDate)
       .sort()[0];
 

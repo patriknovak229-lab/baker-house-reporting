@@ -17,7 +17,7 @@
 import type { Reservation } from '@/types/reservation';
 import type { DateRange } from '@/utils/periodUtils';
 import { daysBetween, getNightsInPeriod } from '@/utils/periodUtils';
-import { hasRevenueInPeriod, reservationRevenue, revenueShareInPeriod } from '@/utils/reservationRevenue';
+import { countsInRevenue, hasRevenueInPeriod, reservationRevenue, revenueShareInPeriod } from '@/utils/reservationRevenue';
 import { expandLinkedReservations } from '@/utils/expandReservations';
 import type { SnapshotData } from '@/types/occupancySnapshot';
 import { isRepeatSegmentPiece } from "@/utils/roomSegments";
@@ -71,12 +71,13 @@ export function computeSnapshotData(
   const inScope = expandLinkedReservations(reservations).filter(
     (r) =>
       !r.isBlackout &&
-      !(r.isCancelled && !r.nonArrival) &&
+      countsInRevenue(r) &&
       hasRevenueInPeriod(r, range) &&
       roomSet.has(r.room),
   );
-  // Occupancy counts physical stays only — non-arrivals freed their room.
-  const occupancyInScope = inScope.filter((r) => !r.nonArrival);
+  // Occupancy counts physical stays only — non-arrivals and fee-paying
+  // cancellations freed their room.
+  const occupancyInScope = inScope.filter((r) => !r.isCancelled);
 
   const daysInPeriod = daysBetween(range.start, range.end);
   const availableTotal = rooms.length * daysInPeriod;

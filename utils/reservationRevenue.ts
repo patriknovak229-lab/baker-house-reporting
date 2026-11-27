@@ -23,12 +23,24 @@ import { getNightsInPeriod, type DateRange } from "@/utils/periodUtils";
  * also carries a refund — its net price already nets one off — which is why the
  * two flags are mutually exclusive in the UI.
  *
- * Plain reservations return their Beds24 figures unchanged. Cancellations that
- * are NOT non-arrivals should be filtered out by the caller before this point.
+ * For a CANCELLED booking with a retained CANCELLATION FEE (the guest cancelled
+ * after the free-cancellation deadline, or on a non-refundable rate), revenue
+ * is that fee, less the commission and payment charge the channel takes on it
+ * — all three as the operator recorded them. Nothing else of the cancelled
+ * booking counts: its `price` is only the restored display value.
+ *
+ * Plain reservations return their Beds24 figures unchanged. Cancellations with
+ * neither a non-arrival flag nor a fee earn nothing; callers filter them out
+ * with `countsInRevenue` before this point.
  */
 export function reservationRevenue(
   r: Reservation,
 ): { gbv: number; commission: number; fee: number } {
+  if (r.isCancelled && !r.nonArrival) {
+    const f = r.cancellationFee;
+    if (!f) return { gbv: 0, commission: 0, fee: 0 };
+    return { gbv: f.amountCzk, commission: f.commissionCzk, fee: f.paymentChargeCzk };
+  }
   if (r.nonArrival) {
     const original = r.nonArrival.originalPriceCzk;
     const net = r.nonArrivalNetPriceCzk ?? original;
@@ -40,6 +52,29 @@ export function reservationRevenue(
     commission: r.commissionAmount,
     fee: r.paymentChargeAmount,
   };
+}
+
+/** A cancelled booking the guest still pays for — a recorded fee above 0 Kč. */
+export function hasRetainedCancellationFee(
+  r: Pick<Reservation, "isCancelled" | "nonArrival" | "cancellationFee">,
+): boolean {
+  return Boolean(r.isCancelled && !r.nonArrival && (r.cancellationFee?.amountCzk ?? 0) > 0);
+}
+
+/**
+ * Does this reservation carry money into revenue? Live bookings, non-arrivals
+ * (net retained) and cancellations with a retained fee do; a plain
+ * cancellation does not. The one rule every revenue view filters by.
+ *
+ * Occupancy is a different question: a non-arrival and a fee-paying
+ * cancellation both freed the room, so occupancy views drop every
+ * `isCancelled` booking regardless.
+ */
+export function countsInRevenue(
+  r: Pick<Reservation, "isCancelled" | "nonArrival" | "cancellationFee">,
+): boolean {
+  if (!r.isCancelled) return true;
+  return Boolean(r.nonArrival) || hasRetainedCancellationFee(r);
 }
 
 /**
