@@ -89,6 +89,7 @@ import { assessUrgency, type UrgencyResult } from '@/utils/urgentMessage';
 import { runContactPass, tryCaptureContactReply } from '@/utils/guestContactService';
 import { isOperatorActive, markAutoSent } from '@/utils/operatorActivity';
 import { escapeHtml, guestNameLine, invoiceAlertChatId, sendTelegram as sendTelegramTo } from '@/utils/telegram';
+import { appendSyncedPropertyIds } from '@/utils/rooms';
 import {
   amountHoldReason,
   amountTaskNote,
@@ -765,6 +766,7 @@ async function pollAndNotifyNewBookings(redis: Redis | null): Promise<void> {
   // Only statuses we'd actually notify on — keeps the payload small and
   // avoids parsing cancelled/black bookings just to discard them.
   params.append('status', 'confirmed');
+  appendSyncedPropertyIds(params);
   params.append('status', 'new');
 
   let fetched: CachedBooking[];
@@ -2939,6 +2941,7 @@ async function pollAndNotifyCancellations(redis: Redis | null): Promise<void> {
   const params = new URLSearchParams();
   params.set('modifiedFrom', since);
   params.append('status', 'cancelled');
+  appendSyncedPropertyIds(params);
 
   let fetched: CachedBooking[];
   try {

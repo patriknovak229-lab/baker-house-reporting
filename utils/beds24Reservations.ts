@@ -23,6 +23,7 @@ import { parseGuestNote } from "@/utils/guestNote";
 import { bookingsMirrorWriteEnabled, publishBookingsMirror } from "@/utils/bookingsMirror";
 import { listMidStayMoveHistory } from "@/data-access/roomMoves";
 import { attachRoomSegments } from "@/utils/roomSegments";
+import { appendSyncedPropertyIds } from "@/utils/rooms";
 
 export const BEDS24_API_BASE = "https://beds24.com/api/v2";
 
@@ -901,6 +902,10 @@ async function paginateBookings(
   // Invoice items carry Beds24's own payment record, which derivePayment needs
   // for Google bookings. Folded into one number per booking before caching.
   params.set("includeInvoiceItems", "true");
+  // Only the properties this app reports on — the token reaches every
+  // property in the Beds24 account (see SYNCED_PROPERTY_IDS).
+  params.delete("propertyId");
+  appendSyncedPropertyIds(params);
   const MAX_PAGES = 200; // defensive — Beds24's largest plausible page count for our scale
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     if (page > 1) params.set("page", String(page));

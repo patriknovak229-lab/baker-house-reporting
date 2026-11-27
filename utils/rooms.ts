@@ -58,6 +58,23 @@ export const AIRBNB_REVIEW_ROOM_IDS: number[] = [
 /** Beds24 property id (single-property account) — Booking.com review fetch. */
 export const REVIEWS_PROPERTY_ID = 311322;
 
+/**
+ * Beds24 properties whose bookings this app reads. The account holds more
+ * than one property (369539 Baker House Residence, created 27 Nov 2026) and a
+ * Beds24 token reaches all of them, so every account-wide `/bookings` listing
+ * (date / modifiedFrom windows) must filter by this list — otherwise a booking
+ * on another property lands in the cache, analytics, commission and alerts.
+ * Lookups by booking `id` don't need it. Add 369539 only once its rooms are
+ * mapped to physical apartments (both properties sell the same units).
+ */
+export const SYNCED_PROPERTY_IDS: readonly number[] = [311322];
+
+/** Append `propertyId=…` for every synced property to a Beds24 query. */
+export function appendSyncedPropertyIds(params: URLSearchParams): URLSearchParams {
+  for (const id of SYNCED_PROPERTY_IDS) params.append("propertyId", String(id));
+  return params;
+}
+
 /** Map a Beds24 roomId to its display name; screams rather than misattributing. */
 export function mapRoom(roomId: number): Room {
   if (UNIT_MAP[roomId]) return UNIT_MAP[roomId];
