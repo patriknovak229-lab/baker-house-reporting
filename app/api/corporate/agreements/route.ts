@@ -104,6 +104,7 @@ export async function POST(req: NextRequest) {
     pricingMode: input.pricingMode,
     flatNightPriceCzk: czkToDb(input.flatNightPriceCzk),
     discountPercent: String(input.discountPercent),
+    commissionPercent: String(input.commissionPercent),
     notes: input.notes,
     status: 'draft',
     createdBy: guard.email,

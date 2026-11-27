@@ -37,6 +37,7 @@ function agreement(overrides: Partial<CorporateAgreement> = {}): CorporateAgreem
     pricingMode: 'flat',
     flatNightPriceCzk: 1850,
     discountPercent: 0,
+    commissionPercent: 0,
     notes: 'Parking needed',
     status: 'draft',
     createdBy: 'op@example.com',
@@ -118,6 +119,17 @@ describe('buildCorporateBookingPayload', () => {
   it('writes the agreed price as the booking price and one accommodation charge', () => {
     expect(payload.price).toBe(3700);
     expect(payload.invoiceItems).toEqual([{ type: 'charge', subType: 1, description: 'Accommodation', qty: 1, amount: 3700 }]);
+  });
+
+  it('sends no commission field when the agreement has none', () => {
+    expect('commission' in payload).toBe(false);
+  });
+
+  it('writes the commission % of the price to Beds24 commission and notes it', () => {
+    const p = buildCorporateBookingPayload(agreement({ commissionPercent: 12.5 }), stay({ priceCzk: 3700 }), 10);
+    expect(p.commission).toBe(462.5);
+    expect(p.price).toBe(3700);
+    expect(p.notes).toContain('Commission 12.5 %');
   });
 
   it('puts invoicing facts in the internal notes', () => {

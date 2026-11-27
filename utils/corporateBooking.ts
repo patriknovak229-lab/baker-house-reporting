@@ -18,6 +18,7 @@
 import { APP_PHONE_MARKER, BEDS24_API_BASE } from './beds24Reservations';
 import { countryToLang } from './countries';
 import { SELLABLE_UNITS } from './stayRequest';
+import { commissionCzk } from './corporateCommission';
 import {
   BILLING_CADENCE_LABELS,
   corporateMarker,
@@ -124,6 +125,12 @@ export interface CorporateBookingPayload {
   flagColor: string;
   flagText: string;
   price: number;
+  /**
+   * The company's rebate in CZK (agreement % × price) — Beds24's own
+   * commission field, the one OTA bookings fill, so every report treats it
+   * as a channel cost. Omitted when the agreement has no commission.
+   */
+  commission?: number;
   invoiceItems: { type: 'charge'; subType: number; description: string; qty: number; amount: number }[];
   actions: { checkAvailability: true };
 }
@@ -135,6 +142,7 @@ export function buildCorporateBookingPayload(
 ): CorporateBookingPayload {
   const guest = effectiveGuest(agreement, stay);
   const price = Math.round(stay.priceCzk ?? 0);
+  const commission = commissionCzk(price, agreement.commissionPercent);
   const countryCode = agreement.nationality.toUpperCase();
 
   // Same markers as the manual phone booking (channel = Direct-Phone), plus
@@ -156,6 +164,7 @@ export function buildCorporateBookingPayload(
     agreement.repName || agreement.repPhone
       ? `Company contact: ${[agreement.repName, agreement.repPhone, agreement.repEmail].filter(Boolean).join(' · ')}`
       : '',
+    agreement.commissionPercent > 0 ? `Commission ${agreement.commissionPercent} % invoiced back by the company` : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -183,6 +192,7 @@ export function buildCorporateBookingPayload(
     flagColor: CORPORATE_FLAG_COLOR,
     flagText: 'Corporate',
     price,
+    ...(commission > 0 ? { commission } : {}),
     invoiceItems: price > 0 ? [{ type: 'charge', subType: 1, description: 'Accommodation', qty: 1, amount: price }] : [],
     actions: { checkAvailability: true },
   };

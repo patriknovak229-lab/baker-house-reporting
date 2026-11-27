@@ -204,6 +204,13 @@
       "when": 1795701796342,
       "tag": "0028_corporate_cleaning_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1795776868759,
+      "tag": "0029_corporate_commission",
+      "breakpoints": true
     }
   ]
 }

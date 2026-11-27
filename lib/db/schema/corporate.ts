@@ -76,6 +76,13 @@ export const corporateAgreements = pgTable(
     pricingMode: text('pricing_mode').$type<PricingMode>().notNull(),
     flatNightPriceCzk: numeric('flat_night_price_czk'),
     discountPercent: numeric('discount_percent').notNull().default('0'),
+    /**
+     * Commission / rebate the company invoices back, as % of each booking's
+     * total price. Written to every booking's Beds24 `commission` field, so
+     * Performance, owner settlements and analytics count it like an OTA's
+     * cut. Editable after saving (unlike pricing) — see utils/corporateCommission.ts.
+     */
+    commissionPercent: numeric('commission_percent').notNull().default('0'),
     notes: text('notes'),
     status: text('status').$type<AgreementStatus>().notNull().default('draft'),
     /** Operator's account email (from the auth guard, never the client). */

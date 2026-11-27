@@ -7,6 +7,7 @@ import { isValidCountryCode } from './countries';
 import { SELLABLE_UNITS } from './stayRequest';
 import { computeStayPrice, validateSchedule, type StayOccurrence } from './corporateSchedule';
 import type { BillingCadence, PricingMode, StayPriceSource, StayStatus } from './corporateShared';
+import { MAX_COMMISSION_PERCENT } from './corporateCommission';
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -73,7 +74,21 @@ export interface AgreementInput {
   pricingMode: PricingMode;
   flatNightPriceCzk: number | null;
   discountPercent: number;
+  commissionPercent: number;
   notes: string | null;
+}
+
+/**
+ * Commission / rebate % — 0 when blank, two decimals, 0 … MAX_COMMISSION_PERCENT.
+ * Shared by the create and edit parsers so both reject the same typos.
+ */
+export function parseCommissionPercent(v: unknown): ParseResult<number> {
+  if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) return { ok: true, value: 0 };
+  const n = optNum(v);
+  if (n === null || n < 0 || n > MAX_COMMISSION_PERCENT) {
+    return fail(`Commission must be between 0 and ${MAX_COMMISSION_PERCENT} percent`);
+  }
+  return { ok: true, value: Math.round(n * 100) / 100 };
 }
 
 export function parseAgreementInput(body: unknown): ParseResult<AgreementInput> {
@@ -125,6 +140,9 @@ export function parseAgreementInput(body: unknown): ParseResult<AgreementInput> 
   const discountPercent = optNum(b.discountPercent) ?? 0;
   if (discountPercent < 0 || discountPercent > 100) return fail('Discount must be between 0 and 100 percent');
 
+  const commission = parseCommissionPercent(b.commissionPercent);
+  if (!commission.ok) return commission;
+
   return {
     ok: true,
     value: {
@@ -152,12 +170,18 @@ export function parseAgreementInput(body: unknown): ParseResult<AgreementInput> 
       pricingMode,
       flatNightPriceCzk: pricingMode === 'flat' ? flatNightPriceCzk : null,
       discountPercent: pricingMode === 'dynamic' ? discountPercent : 0,
+      commissionPercent: commission.value,
       notes: optStr(b.notes, 2000),
     },
   };
 }
 
-/** Fields the operator may change after saving. Schedule, rooms and pricing are fixed — a new agreement instead. */
+/**
+ * Fields the operator may change after saving. Schedule, rooms and pricing are
+ * fixed — a new agreement instead. The commission % is NOT pricing: it changes
+ * no stay's price, only what the company bills back, so it stays editable and
+ * a change is re-applied to the bookings in Beds24.
+ */
 export type AgreementPatch = Partial<
   Pick<
     AgreementInput,
@@ -174,6 +198,7 @@ export type AgreementPatch = Partial<
     | 'guestLastName'
     | 'guestPhone'
     | 'guestEmail'
+    | 'commissionPercent'
     | 'notes'
   >
 > & { status?: 'draft' | 'active' | 'completed' | 'cancelled' };
@@ -209,6 +234,11 @@ export function parseAgreementPatch(body: unknown): ParseResult<AgreementPatch> 
     const v = optStr(b.billingCadence) as BillingCadence | null;
     if (!v || !BILLING_CADENCES.includes(v)) return fail('Unknown billing cadence');
     patch.billingCadence = v;
+  }
+  if ('commissionPercent' in b) {
+    const v = parseCommissionPercent(b.commissionPercent);
+    if (!v.ok) return v;
+    patch.commissionPercent = v.value;
   }
   if ('status' in b) {
     const v = optStr(b.status);

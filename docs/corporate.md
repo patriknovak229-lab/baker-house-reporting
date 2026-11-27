@@ -175,6 +175,43 @@ in `utils/corporateInvoiceSend.ts` so preview/overdue don't bundle Chromium.
 `0027_corporate_invoices`). Deleting an agreement is refused once any of its
 invoices has a number.
 
+## 6b. Commission / rebate (`utils/corporateCommission.ts`)
+
+Some companies (travel agencies, other intermediaries) invoice a % of
+every booking's total back to us. That is a cost of the sale, like a
+Booking.com commission, so it is stored exactly where OTA commissions are:
+the booking's own Beds24 **`commission`** field.
+
+- **Where it is set**: `commission_percent` on the agreement (migration
+  `0029_corporate_commission`, default 0) — in the wizard's Price section and
+  in Edit details. Unlike pricing it stays editable: it changes no stay's
+  price, only what the company bills back.
+- **New bookings**: `buildCorporateBookingPayload` sends
+  `commission = price × % / 100` (to the haléř) with the booking, plus a line in
+  the internal notes. Nothing is sent when the % is 0.
+- **Existing bookings**: changing the % rewrites `commission` on EVERY created
+  stay (past ones too) as % × the **live** Beds24 price (a price edited in
+  Beds24 later is the base, not the frozen stay price). Only the record the
+  agreement created is written, never sub-bookings (the group merge reads
+  price and commission from that record — writing both would double it).
+  `utils/corporateCommissionSync.ts`; idempotent, so a retry is always safe.
+- **Drift check**: the detail screen calls `GET …/agreements/[id]/commission`
+  on open when a % is set (one Beds24 read per 50 bookings) and shows
+  "✓ Beds24 matches on N bookings" or "⚠ N not updated" with **Push to
+  Beds24** (`POST` same route).
+- **Where it shows up, unchanged code**: Beds24 `commission` →
+  `Reservation.commissionAmount` → Net Sales / Gross Profit (Performance,
+  shown as the Corporate channel's commission) → owner settlements
+  (Commission tab: owners bear their 75 % share, like OTA fees; issued
+  settlements stay frozen) → `bookings_mirror.commission_amount` → Analytics
+  → the drawer's "Corporate commission" line. Booster detection is
+  Booking.com-only, so it is unaffected.
+- **Not covered yet (accounting phase)**: the company's commission invoice as
+  a supplier invoice, its bank payment, VAT, and the P&L line. Statements are
+  built from accounting documents, not booking commission, so there is no
+  double count today — the cost simply isn't in the P&L until that invoice is
+  booked.
+
 ## 7. Not built yet
 
 - Per-stay ("before each arrival") and up-front invoicing as automatic

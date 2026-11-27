@@ -1,0 +1,1 @@
+ALTER TABLE "corporate_agreements" ADD COLUMN "commission_percent" numeric DEFAULT '0' NOT NULL;

@@ -11,7 +11,7 @@
  * Every mutation goes through the API and the agreement is re-read from the
  * server afterwards, so what is on screen is always what Postgres holds.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { describeNights } from '@/utils/corporateSchedule';
 import {
   BILLING_CADENCE_LABELS,
@@ -40,6 +40,13 @@ import { downloadOfferPdf, offerFromAgreement } from './offer';
 import InvoicePanel from './InvoicePanel';
 import CleaningPlanModal from './CleaningPlanModal';
 import { missingBillingDetails } from '@/utils/corporateInvoice';
+import {
+  MAX_COMMISSION_PERCENT,
+  agreementCommissionCzk,
+  commissionCzk,
+  describeCommissionSync,
+  type CommissionSyncResult,
+} from '@/utils/corporateCommission';
 
 interface Props {
   agreement: AgreementDetailDto;
@@ -66,10 +73,41 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
   const [lastRun, setLastRun] = useState<{ created: number; failed: number } | null>(null);
   const [guestPush, setGuestPush] = useState<{ updated: string[]; failed: { stayId: string; error: string }[] } | null>(null);
   const [showInvoices, setShowInvoices] = useState(false);
+  /** Beds24 vs the commission % — read on open, refreshed after every push. */
+  const [commission, setCommission] = useState<CommissionSyncResult | null>(null);
+  /** Outcome of the last commission write, shown as a banner. */
+  const [commissionPush, setCommissionPush] = useState<CommissionSyncResult | null>(null);
   /** The Invoice pill appears once a Czech invoice could be addressed and sent. */
   const billingMissing = missingBillingDetails(agreement);
 
   const s = agreement.summary;
+  const pct = agreement.commissionPercent;
+  const commissionTotal = agreementCommissionCzk(agreement.stays, pct);
+  const commissionState = commission ? describeCommissionSync(commission.items) : null;
+  const commissionDrift = commission?.items.some((i) => i.action === 'update') ?? false;
+
+  // Compare Beds24 with the % whenever the % or the number of booked stays
+  // changes (one Beds24 read per 50 bookings). Nothing to compare without a %.
+  useEffect(() => {
+    if (pct <= 0 || s.created === 0) return;
+    let stale = false;
+    fetch(`/api/corporate/agreements/${encodeURIComponent(agreement.id)}/commission`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (stale) return;
+        setCommission(
+          res.ok
+            ? (json.commission as CommissionSyncResult)
+            : { percent: pct, items: [], updated: [], failed: [], error: json.error ?? `HTTP ${res.status}` },
+        );
+      })
+      .catch((e) => {
+        if (!stale) setCommission({ percent: pct, items: [], updated: [], failed: [], error: (e as Error).message });
+      });
+    return () => {
+      stale = true;
+    };
+  }, [agreement.id, pct, s.created]);
   const toCreate = agreement.stays.filter((st) => st.status === 'planned' || st.status === 'failed');
   const unpriced = toCreate.filter((st) => st.priceCzk === null || st.priceCzk <= 0);
   /** Average over priced, counting stays — matches the preview's figure. */
@@ -120,6 +158,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
       const json = await api<{
         agreement: AgreementDetailDto;
         guestPush?: { updated: string[]; failed: { stayId: string; error: string }[] };
+        commissionPush?: CommissionSyncResult | null;
       }>(`/api/corporate/agreements/${encodeURIComponent(agreement.id)}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
@@ -128,9 +167,42 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
       const push = json.guestPush;
       const touched = push && push.updated.length + push.failed.length > 0;
       setGuestPush(touched ? push : null);
-      // Renamed bookings: refresh the shared cache so Transactions shows them now.
-      if (push && push.updated.length > 0) void fetch('/api/bookings?fullSync=true').catch(() => {});
+      const cPush = json.commissionPush ?? null;
+      setCommissionPush(cPush && (cPush.items.length > 0 || cPush.error) ? cPush : null);
+      // Renamed bookings / new commission: refresh the shared cache so
+      // Transactions and Performance show them now.
+      if ((push && push.updated.length > 0) || (cPush && cPush.updated.length > 0)) {
+        void fetch('/api/bookings?fullSync=true').catch(() => {});
+      }
     });
+  }
+
+  async function syncCommission(apply: boolean) {
+    await run(apply ? 'commission-push' : 'commission-check', async () => {
+      const json = await api<{ commission: CommissionSyncResult }>(
+        `/api/corporate/agreements/${encodeURIComponent(agreement.id)}/commission`,
+        apply ? { method: 'POST' } : undefined,
+      );
+      setCommission(json.commission);
+      if (apply) {
+        setCommissionPush(json.commission);
+        if (json.commission.updated.length > 0) void fetch('/api/bookings?fullSync=true').catch(() => {});
+      }
+    });
+  }
+
+  function saveDetails(body: Record<string, unknown>) {
+    const raw = String(body.commissionPercent ?? '').trim().replace(',', '.');
+    const next = raw === '' ? 0 : Number(raw);
+    if (Number.isFinite(next) && next !== pct && s.created > 0) {
+      const ok = window.confirm(
+        `Change the commission from ${pct} % to ${next} %?\n\n` +
+          `It is rewritten on all ${s.created} booked stay${s.created === 1 ? '' : 's'} in Beds24 (past ones too), ` +
+          'so Performance, Analytics and live owner settlements change for those months. Owner settlements already issued stay as issued.',
+      );
+      if (!ok) return;
+    }
+    void patchAgreement(body).then(() => setEditing(false));
   }
 
   async function deleteAgreement() {
@@ -161,7 +233,8 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
           <p className="text-sm text-gray-600">
             {agreement.pricingMode === 'flat'
               ? `Flat ${formatCzk(agreement.flatNightPriceCzk ?? 0)} per night`
-              : `Web price${agreement.discountPercent > 0 ? ` minus ${agreement.discountPercent}%` : ''}`}{' '}
+              : `Web price${agreement.discountPercent > 0 ? ` minus ${agreement.discountPercent}%` : ''}`}
+            {pct > 0 && ` · ${pct} % commission to the company`}{' '}
             · {agreement.adults} adult{agreement.adults === 1 ? '' : 's'}
             {agreement.children > 0 ? `, ${agreement.children} child${agreement.children === 1 ? '' : 'ren'}` : ''} · invoiced{' '}
             {BILLING_CADENCE_LABELS[agreement.billingCadence].toLowerCase()}
@@ -214,7 +287,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
         </div>
       </div>
 
-      {(error || lastRun || guestPush) && (
+      {(error || lastRun || guestPush || commissionPush) && (
         <div className="px-4 sm:px-6 pt-3 space-y-2">
           {error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           {lastRun && (
@@ -239,6 +312,26 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
                 : '.'}
             </div>
           )}
+          {commissionPush && (
+            <div
+              className={`rounded-md border px-3 py-2 text-sm ${
+                commissionPush.error || commissionPush.failed.length > 0
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : 'border-green-200 bg-green-50 text-green-800'
+              }`}
+            >
+              {commissionPush.error
+                ? `Commission saved here, but not in Beds24 — ${commissionPush.error}. Use “Push to Beds24” once Beds24 is reachable.`
+                : <>
+                    Commission {commissionPush.percent} % written to {commissionPush.updated.length} booking
+                    {commissionPush.updated.length === 1 ? '' : 's'} in Beds24
+                    {commissionPush.updated.length === 0 && ' (all already matched)'}
+                    {commissionPush.failed.length > 0
+                      ? `; ${commissionPush.failed.length} not updated (${commissionPush.failed.map((f) => f.stayId).join(', ')}) — use “Push to Beds24” to retry. ${commissionPush.failed[0].error}`
+                      : '.'}
+                  </>}
+            </div>
+          )}
         </div>
       )}
 
@@ -249,6 +342,48 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
           <Fact label="IČO" value={agreement.ico} />
           <Fact label="DIČ / VAT" value={agreement.vatNumber} />
           <Fact label="Invoice email" value={agreement.billingEmail} />
+          <Fact
+            label="Commission"
+            value={pct > 0 ? `${pct} % · −${formatCzk(commissionTotal)} on ${formatCzk(s.priceCzk)}` : null}
+          />
+          {pct > 0 && s.created > 0 && (
+            <div className="flex gap-2">
+              <dt className="w-24 shrink-0 text-gray-400">In Beds24</dt>
+              <dd className="min-w-0">
+                {commission === null || busy === 'commission-check' ? (
+                  <span className="text-gray-400">checking…</span>
+                ) : commission.error ? (
+                  <span className="text-amber-700">{commission.error}</span>
+                ) : (
+                  <span className={commissionState?.tone === 'warn' ? 'text-amber-700' : 'text-emerald-700'}>
+                    {commissionState?.tone === 'ok' ? '✓ ' : '⚠ '}
+                    {commissionState?.text}
+                  </span>
+                )}
+                <span className="ml-2 inline-flex gap-2">
+                  {canEdit && (commissionDrift || commission?.error) && (
+                    <button
+                      onClick={() => void syncCommission(true)}
+                      disabled={busy !== null}
+                      className="text-indigo-600 hover:underline disabled:opacity-50"
+                      title="Write the expected commission to every booking that differs"
+                    >
+                      {busy === 'commission-push' ? 'Pushing…' : 'Push to Beds24'}
+                    </button>
+                  )}
+                  {commission !== null && (
+                    <button
+                      onClick={() => void syncCommission(false)}
+                      disabled={busy !== null}
+                      className="text-gray-400 hover:text-gray-600 hover:underline disabled:opacity-50"
+                    >
+                      re-check
+                    </button>
+                  )}
+                </span>
+              </dd>
+            </div>
+          )}
           {billingMissing.length > 0 && (
             <p className="text-[11px] text-amber-700 pt-1">To invoice, add: {billingMissing.join(', ')} (Edit details).</p>
           )}
@@ -276,6 +411,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
             <>
               {' '}· stays {formatStayDate(s.firstArrival)} → {formatStayDate(s.lastDeparture)} · {s.nights} nights · {formatCzk(s.priceCzk)}
               {avgNight !== null && ` · avg ${formatCzk(avgNight)}/night`}
+              {pct > 0 && ` · commission −${formatCzk(commissionTotal)} · net ${formatCzk(s.priceCzk - commissionTotal)}`}
               {s.unpriced > 0 && ` (${s.unpriced} unpriced)`}
             </>
           )}
@@ -286,7 +422,7 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
         <AgreementEditor
           agreement={agreement}
           busy={busy === 'agreement'}
-          onSave={(body) => void patchAgreement(body).then(() => setEditing(false))}
+          onSave={saveDetails}
           onDelete={s.created === 0 && s.cancelled === 0 ? () => void deleteAgreement() : undefined}
           onStatus={(status) => void patchAgreement({ status })}
         />
@@ -329,6 +465,16 @@ export default function AgreementDetail({ agreement, canEdit, onChanged, onDelet
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** "−1 632 Kč comm." under a stay's price — what the company bills back on it. */
+function StayCommission({ stay, percent }: { stay: CorporateStay; percent: number }) {
+  if (percent <= 0 || !stay.priceCzk || stay.status === 'skipped' || stay.status === 'cancelled') return null;
+  return (
+    <div className="text-[10px] text-rose-500 tabular-nums" title={`${percent} % commission invoiced back by the company`}>
+      −{formatCzk(commissionCzk(stay.priceCzk, percent))} comm.
     </div>
   );
 }
@@ -380,6 +526,7 @@ function AgreementEditor({
     guestLastName: agreement.guestLastName ?? '',
     guestPhone: agreement.guestPhone ?? '',
     guestEmail: agreement.guestEmail ?? '',
+    commissionPercent: String(agreement.commissionPercent),
     notes: agreement.notes ?? '',
   });
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -387,8 +534,8 @@ function AgreementEditor({
   return (
     <div className="mx-4 sm:mx-6 mb-4 rounded-lg border border-indigo-100 bg-indigo-50/40 p-4 space-y-4">
       <p className="text-xs text-gray-500">
-        Schedule, room types and pricing are fixed once an agreement is saved — they define the stays. Change contacts and billing here;
-        for a new pattern create a new agreement.
+        Schedule, room types and pricing are fixed once an agreement is saved — they define the stays. Change contacts, billing and the
+        commission here; for a new pattern create a new agreement.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <Field label="Company name">
@@ -435,6 +582,21 @@ function AgreementEditor({
         </Field>
         <Field label="Default guest email" optional>
           <input className={inputCls} value={f.guestEmail} onChange={(e) => set('guestEmail', e.target.value)} />
+        </Field>
+        <Field
+          label="Commission / rebate (%)"
+          optional
+          hint="Share of each booking's total the company invoices back. Rewritten on every booked stay in Beds24 when changed."
+        >
+          <input
+            className={inputCls}
+            type="number"
+            min={0}
+            max={MAX_COMMISSION_PERCENT}
+            step={0.5}
+            value={f.commissionPercent}
+            onChange={(e) => set('commissionPercent', e.target.value)}
+          />
         </Field>
         <div className="sm:col-span-2 lg:col-span-3">
           <Field label="Notes" optional>
@@ -645,6 +807,7 @@ function StayRow({
               placeholder="CZK"
             />
             {stay.priceSource && <div className="text-[10px] text-gray-400">{PRICE_SOURCE_LABEL[stay.priceSource]}</div>}
+            <StayCommission stay={stay} percent={agreement.commissionPercent} />
           </div>
         ) : (
           <div>
@@ -652,6 +815,7 @@ function StayRow({
               {stay.priceCzk === null ? 'no price' : formatCzk(stay.priceCzk)}
             </span>
             {stay.priceSource && <div className="text-[10px] text-gray-400">{PRICE_SOURCE_LABEL[stay.priceSource]}</div>}
+            <StayCommission stay={stay} percent={agreement.commissionPercent} />
           </div>
         )}
       </td>

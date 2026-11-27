@@ -37,6 +37,7 @@ import {
 } from '@/utils/corporateShared';
 import { Field, RoomTypeOptions, inputCls, roomShortLabel, smallInputCls, splitGuestName } from './ui';
 import { downloadOfferPdf, type OfferPayload } from './offer';
+import { MAX_COMMISSION_PERCENT, commissionCzk } from '@/utils/corporateCommission';
 
 // ─── State shapes ────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ interface FormState {
   pricingMode: PricingMode;
   flatNightPrice: string;
   discountPercent: string;
+  commissionPercent: string;
   notes: string;
 }
 
@@ -94,6 +96,7 @@ const DEFAULT_FORM: FormState = {
   pricingMode: 'dynamic',
   flatNightPrice: '',
   discountPercent: '0',
+  commissionPercent: '0',
   notes: '',
 };
 
@@ -215,6 +218,7 @@ export default function NewAgreementModal({
   const guests = toInt(form.adults, 1) + toInt(form.children, 0);
   const flatRate = toNum(form.flatNightPrice);
   const discount = toNum(form.discountPercent) ?? 0;
+  const commissionPct = toNum(form.commissionPercent) ?? 0;
 
   // ── Live schedule line ──
   const scheduleProblem = validateSchedule({ startDate: form.startDate, endDate: form.endDate, nightWeekdays: form.nightWeekdays });
@@ -239,6 +243,7 @@ export default function NewAgreementModal({
     if (adults < 1) return 'At least one adult';
     if (form.pricingMode === 'flat' && (flatRate === null || flatRate <= 0)) return 'Flat pricing needs a nightly price above 0';
     if (form.pricingMode === 'dynamic' && (discount < 0 || discount > 100)) return 'Discount must be between 0 and 100';
+    if (commissionPct < 0 || commissionPct > MAX_COMMISSION_PERCENT) return `Commission must be between 0 and ${MAX_COMMISSION_PERCENT} %`;
     return null;
   }
 
@@ -379,6 +384,8 @@ export default function NewAgreementModal({
   /** Average over the PRICED included stays — an unpriced row must not drag the average down. */
   const pricedNights = included.reduce((n, r, i) => n + (prices[i] !== null ? r.nights : 0), 0);
   const avgNight = pricedNights > 0 ? total / pricedNights : null;
+  /** What the company bills back on these prices — the same per-stay rounding the bookings get. */
+  const commissionTotal = prices.reduce<number>((s, p) => s + commissionCzk(p, commissionPct), 0);
   /** Included stays the agreed types cannot host — the operator's to-do list. */
   const blockedRows = rows.filter((r) => r.include && r.availability.kind === 'blocked');
 
@@ -455,6 +462,7 @@ export default function NewAgreementModal({
         pricingMode: form.pricingMode,
         flatNightPriceCzk: flatRate,
         discountPercent: discount,
+        commissionPercent: commissionPct,
         notes: form.notes,
         stays: rows.map((r) => {
           const { first, last } = splitGuestName(r.guestName);
@@ -766,6 +774,20 @@ export default function NewAgreementModal({
                     <input className={inputCls} type="number" min={0} max={100} step={0.5} value={form.discountPercent} onChange={(e) => set('discountPercent', e.target.value)} />
                   </Field>
                 )}
+                <Field
+                  label="Commission / rebate (%)"
+                  hint="Share of each booking's total the company invoices back (e.g. an agency's cut). Saved to Beds24 as the booking's commission, so reports count it like an OTA fee. 0 = none. Can be changed later."
+                >
+                  <input
+                    className={inputCls}
+                    type="number"
+                    min={0}
+                    max={MAX_COMMISSION_PERCENT}
+                    step={0.5}
+                    value={form.commissionPercent}
+                    onChange={(e) => set('commissionPercent', e.target.value)}
+                  />
+                </Field>
               </div>
             </Section>
 
@@ -923,17 +945,27 @@ export default function NewAgreementModal({
             </div>
 
             {/* Totals */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className={`grid grid-cols-2 sm:grid-cols-3 gap-3 ${commissionPct > 0 ? 'lg:grid-cols-6' : 'lg:grid-cols-5'}`}>
               {[
                 { label: 'Reservations', value: `${included.length}${included.length !== rows.length ? ` of ${rows.length}` : ''}` },
                 { label: 'Nights total', value: String(totalNights) },
                 { label: 'Price per reservation', value: perStayLabel },
                 { label: 'Average rate / night', value: avgNight === null ? '—' : formatCzk(avgNight) },
                 { label: 'Price total', value: allPriced || total > 0 ? formatCzk(total) : '—' },
-              ].map((t) => (
+                ...(commissionPct > 0
+                  ? [
+                      {
+                        label: `Commission ${commissionPct} %`,
+                        value: total > 0 ? `−${formatCzk(commissionTotal)}` : '—',
+                        sub: total > 0 ? `net ${formatCzk(total - commissionTotal)}` : undefined,
+                      },
+                    ]
+                  : []),
+              ].map((t: { label: string; value: string; sub?: string }) => (
                 <div key={t.label} className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-wide text-gray-400">{t.label}</div>
                   <div className="text-base font-semibold text-gray-900 mt-0.5">{t.value}</div>
+                  {t.sub && <div className="text-[11px] text-gray-500 mt-0.5">{t.sub}</div>}
                 </div>
               ))}
             </div>

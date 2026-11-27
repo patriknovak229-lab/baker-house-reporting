@@ -11,6 +11,10 @@
  *            whose effective guest changes — stays with their own guest keep
  *            it. The agreement is saved first; a Beds24 refusal is reported
  *            per stay in `guestPush.failed` (retry by editing that stay).
+ *            A change to the commission % is written to the Beds24
+ *            `commission` field of EVERY created stay (past ones too — the
+ *            company bills its % on all of them), as % × the live Beds24
+ *            price; reported in `commissionPush` (retry: POST …/commission).
  *   DELETE → only while nothing exists in Beds24 (no created or cancelled stay)
  *            and no invoice was issued. Scheduled invoices go with it.
  *
@@ -23,6 +27,7 @@ import { deleteAgreement, getAgreement, getAgreementDetail, listStays, updateAgr
 import { getAccessToken } from '@/utils/beds24Auth';
 import { modifyBookingGroup, staysNeedingGuestPush } from '@/utils/corporateBooking';
 import { agreementHasIssuedInvoices } from '@/data-access/corporateInvoices';
+import { syncAgreementCommission, type CommissionSyncResult } from '@/utils/corporateCommissionSync';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -51,7 +56,12 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   const before = await getAgreement(id);
   if (!before) return NextResponse.json({ error: 'Agreement not found' }, { status: 404 });
-  const updated = await updateAgreement(id, parsed.value);
+  // numeric columns take strings in Drizzle
+  const { commissionPercent, ...rest } = parsed.value;
+  const updated = await updateAgreement(id, {
+    ...rest,
+    ...(commissionPercent !== undefined ? { commissionPercent: String(commissionPercent) } : {}),
+  });
   if (!updated) return NextResponse.json({ error: 'Agreement not found' }, { status: 404 });
   const after = (await getAgreement(id)) ?? before;
 
@@ -86,8 +96,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
   }
 
+  // ── Re-apply the commission % to every booking in Beds24 ──
+  let commissionPush: CommissionSyncResult | null = null;
+  if (commissionPercent !== undefined && commissionPercent !== before.commissionPercent) {
+    commissionPush = await syncAgreementCommission(after.commissionPercent, await listStays(id), { apply: true });
+  }
+
   const agreement = await getAgreementDetail(id);
-  return NextResponse.json({ agreement, guestPush });
+  return NextResponse.json({ agreement, guestPush, commissionPush });
 }
 
 export async function DELETE(_req: NextRequest, ctx: Ctx) {

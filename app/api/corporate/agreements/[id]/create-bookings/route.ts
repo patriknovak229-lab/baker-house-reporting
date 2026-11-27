@@ -166,7 +166,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     `🏢 <b>Corporate bookings${failed.length > 0 && created.length === 0 ? ' — all failed' : ' created'}</b>`,
     `${escapeHtml(agreement.companyName)} · ${describeNights(agreement.nightWeekdays)} · ${formatStayDate(agreement.startDate)} → ${formatStayDate(agreement.endDate)}`,
     created.length > 0
-      ? `✅ ${created.length} created (${formatCzk(totalCreatedCzk)}): ${created
+      ? `✅ ${created.length} created (${formatCzk(totalCreatedCzk)}${
+          agreement.commissionPercent > 0 ? `, commission ${agreement.commissionPercent} %` : ''
+        }): ${created
           .map((o) => `${o.reservationNumber} ${formatStayDate(o.arrival)} ${escapeHtml(roomLabel(o.roomId))}`)
           .join(' · ')}`
       : '',

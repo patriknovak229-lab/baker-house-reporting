@@ -70,6 +70,7 @@ export function agreementRowToDto(r: CorporateAgreementRow): CorporateAgreement 
     pricingMode: r.pricingMode,
     flatNightPriceCzk: toNum(r.flatNightPriceCzk),
     discountPercent: toNum(r.discountPercent) ?? 0,
+    commissionPercent: toNum(r.commissionPercent) ?? 0,
     notes: r.notes,
     status: r.status,
     createdBy: r.createdBy,

@@ -145,6 +145,11 @@ export interface CorporateAgreement {
   flatNightPriceCzk: number | null;
   /** Percent off the web price in dynamic mode; ignored for flat. */
   discountPercent: number;
+  /**
+   * Commission / rebate the company invoices back, % of each booking's total
+   * price (0 = none). Pushed to Beds24's `commission` field on every booking.
+   */
+  commissionPercent: number;
   notes: string | null;
   status: AgreementStatus;
   createdBy: string;

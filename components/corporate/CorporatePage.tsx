@@ -220,6 +220,9 @@ export default function CorporatePage({ role }: { role?: Role }) {
                           : a.discountPercent > 0
                             ? `Web price −${a.discountPercent}%`
                             : 'Web price'}
+                        {a.commissionPercent > 0 && (
+                          <div className="text-[11px] text-rose-600">{a.commissionPercent} % commission</div>
+                        )}
                       </td>
                       <td className="px-3 py-3">
                         <AgreementStatusBadge status={a.status} />
