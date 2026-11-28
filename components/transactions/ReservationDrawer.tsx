@@ -1502,7 +1502,7 @@ function PerksControl({
 }: {
   rate: RateType | null;
   reservationDate?: string | null;
-  /** Booking.com Standard drops its perk for bookings made from 2026-11-27. */
+  /** Reservation channel; passed through to autoRatePerks (no rate depends on it today). */
   channel?: string | null;
   override: PerkOverrides | null | undefined;
   onOverride: (v: PerkOverrides) => void;

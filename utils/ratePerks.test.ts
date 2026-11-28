@@ -6,7 +6,7 @@ import {
   hasAnyPerk,
   WINE_TREATMENT_NOTE,
   STANDARD_PERK_CHANGE_DATE,
-  BOOKING_STANDARD_NO_PERK_DATE,
+  STANDARD_NO_PERK_DATE,
 } from "./ratePerks";
 
 describe("autoRatePerks", () => {
@@ -25,37 +25,33 @@ describe("autoRatePerks", () => {
   });
 
   it("date-gates the Standard perk on booking-made date", () => {
-    const oldPerk = { earlyCheckIn: false, lateCheckout: true, specialTreatment: null };
-    const newPerk = { earlyCheckIn: true, lateCheckout: false, specialTreatment: null };
-    // Booked before the change → keeps late check-out.
-    expect(autoRatePerks("Standard", "2000-01-01")).toEqual(oldPerk);
+    const late = { earlyCheckIn: false, lateCheckout: true, specialTreatment: null };
+    const early = { earlyCheckIn: true, lateCheckout: false, specialTreatment: null };
+    const none = { earlyCheckIn: false, lateCheckout: false, specialTreatment: null };
+    // Booked before the July switch → keeps late check-out.
+    expect(autoRatePerks("Standard", "2000-01-01")).toEqual(late);
     // Empty/unknown date → treated as pre-change.
-    expect(autoRatePerks("Standard", "")).toEqual(oldPerk);
-    // Booked on the cutoff (inclusive) or later → early check-in, no late check-out.
-    expect(autoRatePerks("Standard", STANDARD_PERK_CHANGE_DATE)).toEqual(newPerk);
-    expect(autoRatePerks("Standard", "2999-01-01")).toEqual(newPerk);
+    expect(autoRatePerks("Standard", "")).toEqual(late);
+    // July switch (inclusive) up to the day before the November cut-off → early check-in.
+    expect(autoRatePerks("Standard", STANDARD_PERK_CHANGE_DATE)).toEqual(early);
+    expect(autoRatePerks("Standard", "2026-11-26")).toEqual(early);
+    // November cut-off (inclusive) and later → nothing.
+    expect(autoRatePerks("Standard", STANDARD_NO_PERK_DATE)).toEqual(none);
+    expect(autoRatePerks("Standard", "2999-01-01")).toEqual(none);
   });
 
-  it("drops every perk from Booking.com Standard booked on/after the cut-off", () => {
+  it("drops Standard's perk on every channel from the cut-off", () => {
     const none = { earlyCheckIn: false, lateCheckout: false, specialTreatment: null };
     const early = { earlyCheckIn: true, lateCheckout: false, specialTreatment: null };
-    const late = { earlyCheckIn: false, lateCheckout: true, specialTreatment: null };
-    // Cut-off day itself (inclusive) and later → nothing.
-    expect(autoRatePerks("Standard", BOOKING_STANDARD_NO_PERK_DATE, "Booking.com")).toEqual(none);
-    expect(autoRatePerks("Standard", "2999-01-01", "Booking.com")).toEqual(none);
-    // Booked the day before → keeps the early check-in it was sold with.
-    expect(autoRatePerks("Standard", "2026-11-26", "Booking.com")).toEqual(early);
-    // Booked before the July switch → still the late check-out.
-    expect(autoRatePerks("Standard", "2026-07-01", "Booking.com")).toEqual(late);
-    // Unknown booking date → pre-change behaviour, as for every channel.
-    expect(autoRatePerks("Standard", "", "Booking.com")).toEqual(late);
+    for (const ch of ["Booking.com", "Direct-Web", "Direct-Phone", "Airbnb", "Corporate", null, undefined]) {
+      expect(autoRatePerks("Standard", STANDARD_NO_PERK_DATE, ch)).toEqual(none);
+      expect(autoRatePerks("Standard", "2026-11-26", ch)).toEqual(early);
+    }
   });
 
-  it("keeps early check-in on Standard for every other channel, or no channel", () => {
-    const early = { earlyCheckIn: true, lateCheckout: false, specialTreatment: null };
-    for (const ch of ["Direct-Web", "Direct-Phone", "Airbnb", "Corporate", null, undefined]) {
-      expect(autoRatePerks("Standard", "2999-01-01", ch)).toEqual(early);
-    }
+  it("keeps a manual early check-in on a post-cut-off Standard booking", () => {
+    const eff = effectiveRatePerks(autoRatePerks("Standard", "2999-01-01", "Direct-Web"), { earlyCheckIn: true });
+    expect(eff.earlyCheckIn).toBe(true);
   });
 
   it("leaves Booking.com Flexi and Weekly perks alone after the cut-off", () => {
