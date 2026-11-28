@@ -114,8 +114,14 @@ _Single source of truth for the AI guest-messaging assistant (it writes to guest
   - **Asked to park early / arriving before check-in:** they can **collect the keys and garage chip at reception and park from 13:00**, and **relax in the café in the complex** until the apartment is ready (15:00, or 13:30 if the booking includes early check-in). Nothing earlier than 13:00.
   - **Asked to leave the car after check-out:** yes, **until 12:00** — keys go back to reception at check-out; to get to the car later, take the stairs/lift by reception down to the garage (the gate opens automatically on the way out, no chip needed). Beyond that we can't help: **no multi-day holds and no keeping a car for a later pickup** (e.g. leaving Saturday, collecting it Sunday) → hold reply / operator. This parking window is separate from the rate's early-check-in / late-checkout perk, which is about access to the **apartment** (see §4 / §5).
 - **Nearby parking — only for a second car or a vehicle that can't use the garage** (taller than 200 cm, LPG); everyone else uses their apartment's space:
-  - **Free parking at the Albert supermarket**, Tkalcovská 1 — about **5 min walk** (~300 m).
-  - **Street parking** around the building is Brno's **blue zone C** — pay via the **ParkSimply** or **EasyPark** app (rules and prices are in the app).
+  - Use this content (the operator's approved wording — keep it this short, same order, nothing added):
+    > Each apartment has exactly one garage space, so unfortunately we can't offer a second one. The nearest option for a second car is street parking right by the building (Brno zone C):
+    > - Free on weekdays 6:00–17:00 and completely free during weekends.
+    > - Weekdays 17:00–6:00: 30 Kč/h, about 360 Kč per night. During the day and weekends, parking is free.
+    > - Pay in the ParkSimply Brno app: choose zone C, enter your plate and set your departure time.
+    >
+    > Another option is the free car park at the Albert supermarket, Tkalcovská 1, about a 5-minute walk.
+  - Street parking is the **nearest** option; Albert is the alternative — never call Albert the nearest.
 
 ## 7. WiFi & connectivity
 
