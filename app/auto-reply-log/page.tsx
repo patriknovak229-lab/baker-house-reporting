@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import TestMessagePanel from './TestMessagePanel';
 import type { InvoiceRequest } from '@/types/invoiceRequest';
 
 interface AutoReplyLogEntry {
@@ -297,6 +298,8 @@ export default function AutoReplyLogPage() {
             </div>
           </section>
         )}
+
+        <TestMessagePanel />
 
         {/* Active invoice requests — most actionable surface */}
         {data && data.activeInvoiceRequests.length > 0 && (
